@@ -1,8 +1,8 @@
 {{- if and .Values.instanceType (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" .Values.instanceType)) }}
-{{-   fail (printf "Specified instancetype not exists in cluster: %s" .Values.instanceType) }}
+{{-   fail (printf "Specified instanceType does not exist in the cluster: %s" .Values.instanceType) }}
 {{- end }}
 {{- if and .Values.instanceProfile (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterPreference" "" .Values.instanceProfile)) }}
-{{-   fail (printf "Specified profile not exists in cluster: %s" .Values.instanceProfile) }}
+{{-   fail (printf "Specified instanceProfile does not exist in the cluster: %s" .Values.instanceProfile) }}
 {{- end }}
 
 apiVersion: kubevirt.io/v1
@@ -75,6 +75,7 @@ spec:
             secret:
               secretName: {{ include "virtual-machine.fullname" $ }}-ssh-keys
           propagationMethod:
+            # keys will be injected into metadata part of cloud-init disk
             noCloud: {}
       {{- end }}
       terminationGracePeriodSeconds: 30
@@ -87,8 +88,14 @@ spec:
       {{- if or .Values.sshKeys .Values.cloudInit }}
       - name: cloudinitdisk
         cloudInitNoCloud:
+        {{- if .Values.cloudInit }}
           secretRef:
             name: {{ include "virtual-machine.fullname" . }}-cloud-init
+        {{- else }}
+          userData: |
+            #cloud-config
+            final_message: Cloud-init user-data was left blank intentionally.
+        {{- end }}
       {{- end }}
       networks:
       - name: default
