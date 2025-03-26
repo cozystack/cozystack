@@ -380,3 +380,8 @@ releases:
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
   dependsOn: [monitoring-agents]
+
+- name: reloader
+  releaseName: reloader
+  chart: cozy-reloader
+  namespace: cozy-reloader
