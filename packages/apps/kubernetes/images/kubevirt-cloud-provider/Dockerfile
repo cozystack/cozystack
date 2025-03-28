@@ -3,12 +3,11 @@ FROM --platform=linux/amd64 golang:1.20.6 AS builder
 
 RUN git clone https://github.com/kubevirt/cloud-provider-kubevirt /go/src/kubevirt.io/cloud-provider-kubevirt \
  && cd /go/src/kubevirt.io/cloud-provider-kubevirt \
- && git checkout da9e0cf
+ && git checkout 443a1fe
 
 WORKDIR /go/src/kubevirt.io/cloud-provider-kubevirt
 
 # see: https://github.com/kubevirt/cloud-provider-kubevirt/pull/335
-# see: https://github.com/kubevirt/cloud-provider-kubevirt/pull/336
 ADD patches /patches
 RUN git apply /patches/*.diff
 RUN go get 'k8s.io/endpointslice/util@v0.28' 'k8s.io/apiserver@v0.28'
