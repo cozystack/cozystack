@@ -218,3 +218,8 @@ releases:
   privileged: true
   optional: true
   dependsOn: [cilium]
+
+- name: reloader
+  releaseName: reloader
+  chart: cozy-reloader
+  namespace: cozy-reloader

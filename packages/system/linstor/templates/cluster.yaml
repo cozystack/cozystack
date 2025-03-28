@@ -43,3 +43,14 @@ spec:
           configMap:
             name: linstor-plunger
             defaultMode: 0755
+  patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        annotations:
+          secret.reloader.stakater.com/auto: "true"

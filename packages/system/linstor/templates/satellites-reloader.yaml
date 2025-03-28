@@ -1,0 +1,18 @@
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: cozystack-reloader
+spec:
+  patches:
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: linstor-satellite
+    patch: |
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: linstor-satellite
+        annotations:
+          secret.reloader.stakater.com/auto: "true"

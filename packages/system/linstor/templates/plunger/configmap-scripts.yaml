@@ -6,8 +6,4 @@ kind: ConfigMap
 metadata:
   name: linstor-plunger
   namespace: cozy-linstor
-data:
-{{- range $path, $file := $files }}
-  {{ $path | base }}: |
-    {{- $file | toString | nindent 4 }}
-{{- end -}}
+data: {{- $files.AsConfig | nindent 2 }}
