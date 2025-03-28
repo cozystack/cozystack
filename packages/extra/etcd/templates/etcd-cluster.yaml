@@ -46,6 +46,9 @@ spec:
         - name: metrics
           containerPort: 2381
           protocol: TCP
+        {{- with .Values.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
       topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: "kubernetes.io/hostname"

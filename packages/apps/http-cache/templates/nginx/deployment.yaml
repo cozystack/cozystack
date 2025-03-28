@@ -52,6 +52,11 @@ spec:
       shareProcessNamespace: true
       containers:
       - name: nginx
+        {{- if $.Values.nginx.resources }}
+        resources: {{- toYaml $.Values.nginx.resources | nindent 10 }}
+        {{- else if ne $.Values.nginx.resourcesPreset "none" }}
+        resources: {{- include "resources.preset" (dict "type" $.Values.nginx.resourcesPreset "Release" $.Release) | nindent 10 }}
+        {{- end }}
         image: "{{ $.Files.Get "images/nginx-cache.tag" | trim }}"
         readinessProbe:
           httpGet:
@@ -83,6 +88,13 @@ spec:
       - name: reloader
         image: "{{ $.Files.Get "images/nginx-cache.tag" | trim }}"
         command: ["/usr/bin/nginx-reloader.sh"]
+        resources:
+          limits:
+            cpu: 50m
+            memory: 50Mi
+          requests:
+            cpu: 50m
+            memory: 50Mi
         #command: ["sleep", "infinity"]
         volumeMounts:
         - mountPath: /etc/nginx/nginx.conf

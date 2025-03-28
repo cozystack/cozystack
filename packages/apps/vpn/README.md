@@ -22,8 +22,10 @@ The VPN Service is powered by the Outline Server, an advanced and user-friendly 
 
 ### Configuration parameters
 
-| Name          | Description                                 | Value |
-| ------------- | ------------------------------------------- | ----- |
-| `host`        | Host used to substitute into generated URLs | `""`  |
-| `users`       | Users configuration                         | `{}`  |
-| `externalIPs` | List of externalIPs for service.            | `[]`  |
+| Name              | Description                                                                                                                                                                                                       | Value  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `host`            | Host used to substitute into generated URLs                                                                                                                                                                       | `""`   |
+| `users`           | Users configuration                                                                                                                                                                                               | `{}`   |
+| `externalIPs`     | List of externalIPs for service.                                                                                                                                                                                  | `[]`   |
+| `resources`       | Resources                                                                                                                                                                                                         | `{}`   |
+| `resourcesPreset` | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano` |

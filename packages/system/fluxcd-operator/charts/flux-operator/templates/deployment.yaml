@@ -61,6 +61,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: REPORTING_INTERVAL
+              value: {{ .Values.reporting.interval }}
             {{- with .Values.marketplace.type }}
             - name: MARKETPLACE_TYPE
               value: {{ . }}
@@ -108,3 +110,8 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

@@ -5,6 +5,12 @@ metadata:
   name: {{ .Release.Name }}
 spec:
   instances: {{ .Values.replicas }}
+  {{- if .Values.resources }}
+  resources: {{- toYaml .Values.resources | nindent 4 }}
+  {{- else if ne .Values.resourcesPreset "none" }}
+  resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 4 }}
+  {{- end }}
+
   enableSuperuserAccess: true
   {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
   {{- if $configMap }}

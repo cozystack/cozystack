@@ -26,6 +26,13 @@ spec:
       containers:
       - image: "{{ $.Files.Get "images/cluster-autoscaler.tag" | trim }}"
         name: cluster-autoscaler
+        resources:
+          limits:
+            cpu: 512m
+            memory: 512Mi
+          requests:
+            cpu: 125m
+            memory: 128Mi
         command:
         - /cluster-autoscaler
         args:

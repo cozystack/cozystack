@@ -21,7 +21,8 @@ spec:
         namespace: cozy-system
   kubeConfig:
     secretRef:
-      name: {{ .Release.Name }}-kubeconfig
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
   targetNamespace: cozy-monitoring-agents
   storageNamespace: cozy-monitoring-agents
   install:

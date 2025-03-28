@@ -19,11 +19,13 @@ Managed TCP Load Balancer Service efficiently utilizes HAProxy for load balancin
 
 ### Configuration parameters
 
-| Name                             | Description                                                   | Value   |
-| -------------------------------- | ------------------------------------------------------------- | ------- |
-| `httpAndHttps.mode`              | Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy` | `tcp`   |
-| `httpAndHttps.targetPorts.http`  | HTTP port number.                                             | `80`    |
-| `httpAndHttps.targetPorts.https` | HTTPS port number.                                            | `443`   |
-| `httpAndHttps.endpoints`         | Endpoint addresses list                                       | `[]`    |
-| `whitelistHTTP`                  | Secure HTTP by enabling  client networks whitelisting         | `false` |
-| `whitelist`                      | List of client networks                                       | `[]`    |
+| Name                             | Description                                                                                                                                                                                                       | Value   |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `httpAndHttps.mode`              | Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`                                                                                                                                                     | `tcp`   |
+| `httpAndHttps.targetPorts.http`  | HTTP port number.                                                                                                                                                                                                 | `80`    |
+| `httpAndHttps.targetPorts.https` | HTTPS port number.                                                                                                                                                                                                | `443`   |
+| `httpAndHttps.endpoints`         | Endpoint addresses list                                                                                                                                                                                           | `[]`    |
+| `whitelistHTTP`                  | Secure HTTP by enabling  client networks whitelisting                                                                                                                                                             | `false` |
+| `whitelist`                      | List of client networks                                                                                                                                                                                           | `[]`    |
+| `resources`                      | Resources                                                                                                                                                                                                         | `{}`    |
+| `resourcesPreset`                | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano`  |

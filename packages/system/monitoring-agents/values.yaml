@@ -306,7 +306,9 @@ vmagent:
     cluster: cozystack
     tenant: tenant-root
   remoteWrite:
-    url: http://vminsert-shortterm.tenant-root.svc:8480/insert/0/prometheus
+    urls:
+      - http://vminsert-shortterm.tenant-root.svc:8480/insert/0/prometheus
+      - http://vminsert-longterm.tenant-root.svc:8480/insert/0/prometheus
 
 fluent-bit:
   readinessProbe:

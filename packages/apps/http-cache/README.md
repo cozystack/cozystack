@@ -60,13 +60,17 @@ VTS module shows wrong upstream resonse time
 
 ### Common parameters
 
-| Name               | Description                                     | Value   |
-| ------------------ | ----------------------------------------------- | ------- |
-| `external`         | Enable external access from outside the cluster | `false` |
-| `size`             | Persistent Volume size                          | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data             | `""`    |
-| `haproxy.replicas` | Number of HAProxy replicas                      | `2`     |
-| `nginx.replicas`   | Number of Nginx replicas                        | `2`     |
+| Name                      | Description                                                                                                                                                                                                       | Value   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `external`                | Enable external access from outside the cluster                                                                                                                                                                   | `false` |
+| `size`                    | Persistent Volume size                                                                                                                                                                                            | `10Gi`  |
+| `storageClass`            | StorageClass used to store the data                                                                                                                                                                               | `""`    |
+| `haproxy.replicas`        | Number of HAProxy replicas                                                                                                                                                                                        | `2`     |
+| `nginx.replicas`          | Number of Nginx replicas                                                                                                                                                                                          | `2`     |
+| `haproxy.resources`       | Resources                                                                                                                                                                                                         | `{}`    |
+| `haproxy.resourcesPreset` | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano`  |
+| `nginx.resources`         | Resources                                                                                                                                                                                                         | `{}`    |
+| `nginx.resourcesPreset`   | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano`  |
 
 ### Configuration parameters
 

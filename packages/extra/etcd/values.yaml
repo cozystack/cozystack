@@ -7,3 +7,12 @@
 size: 4Gi
 storageClass: ""
 replicas: 3
+
+## @param resources Resources
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 512Mi

@@ -20,16 +20,27 @@ spec:
   values:
     global:
       serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"
-
     seaweedfs:
-      
+      master:
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
       volume:
         replicas: {{ .Values.replicas }}
-
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
         # TODO: workaround for non-working online resize
         podAnnotations:
           volume-size: "{{ .Values.size }}"
-      
         dataDirs:
         - name: data1
           type: "persistentVolumeClaim"
@@ -38,11 +49,16 @@ spec:
           storageClass: {{ . }}
           {{- end }}
           maxVolumes: 0
-
       filer:
         s3:
           domainName: {{ .Values.host | default (printf "s3.%s" $host) }}
-      
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
       s3:
         ingress:
           className: {{ $ingress }}
@@ -56,10 +72,16 @@ spec:
             - hosts:
               - {{ .Values.host | default (printf "s3.%s" $host) }}
               secretName: {{ .Release.Name }}-s3-ingress-tls
-
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
         bucketClassName: "{{ .Release.Namespace }}"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor

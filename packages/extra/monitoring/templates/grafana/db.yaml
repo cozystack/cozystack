@@ -15,7 +15,13 @@ spec:
   {{- end }}
   monitoring:
     enablePodMonitor: true
-
+  resources:
+    limits:
+      cpu: "1"
+      memory: 2048Mi
+    requests:
+      cpu: 100m
+      memory: 512Mi
   inheritedMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"

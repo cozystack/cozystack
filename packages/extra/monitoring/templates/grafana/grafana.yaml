@@ -38,6 +38,7 @@ spec:
         spec:
           containers:
             - name: grafana
+              resources: {{- toYaml .Values.grafana.resources | nindent 16 }}
               image: "{{ $.Files.Get "images/grafana.tag" | trim }}"
               securityContext:
                 allowPrivilegeEscalation: false

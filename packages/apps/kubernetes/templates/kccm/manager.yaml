@@ -36,8 +36,12 @@ spec:
         #securityContext:
         #  privileged: true
         resources:
+          limits:
+            cpu: 512m
+            memory: 512Mi
           requests:
-            cpu: 100m
+            cpu: 125m
+            memory: 128Mi
         volumeMounts:
         - mountPath: /etc/kubernetes/kubeconfig
           name: kubeconfig

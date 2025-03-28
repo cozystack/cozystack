@@ -38,6 +38,17 @@ spec:
   timeout: 5m0s
   values:
     nats:
+      podTemplate:
+        merge:
+          spec:
+            containers:
+              - name: nats
+                image: nats:2.10.17-alpine
+                {{- if .Values.resources }}
+                resources: {{- toYaml .Values.resources | nindent 22 }}
+                {{- else if ne .Values.resourcesPreset "none" }}
+                resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 22 }}
+                {{- end }}
       fullnameOverride: {{ .Release.Name }}
       config:
         {{- if or (gt (len $passwords) 0) (gt (len .Values.config.merge) 0) }}

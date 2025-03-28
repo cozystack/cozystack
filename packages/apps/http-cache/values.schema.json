@@ -24,6 +24,16 @@
                     "type": "number",
                     "description": "Number of HAProxy replicas",
                     "default": 2
+                },
+                "resources": {
+                    "type": "object",
+                    "description": "Resources",
+                    "default": {}
+                },
+                "resourcesPreset": {
+                    "type": "string",
+                    "description": "Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).",
+                    "default": "nano"
                 }
             }
         },
@@ -34,6 +44,16 @@
                     "type": "number",
                     "description": "Number of Nginx replicas",
                     "default": 2
+                },
+                "resources": {
+                    "type": "object",
+                    "description": "Resources",
+                    "default": {}
+                },
+                "resourcesPreset": {
+                    "type": "string",
+                    "description": "Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).",
+                    "default": "nano"
                 }
             }
         },

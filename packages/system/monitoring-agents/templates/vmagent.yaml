@@ -10,7 +10,10 @@ spec:
     promscrape.streamParse: "true"
     promscrape.maxScrapeSize: 32MB
   remoteWrite:
-  - url: {{ .Values.vmagent.remoteWrite.url | quote }}
+  {{- range .Values.vmagent.remoteWrite.urls }}
+  - url: {{ . | quote }}
+  {{- end }}
+
   scrapeInterval: 30s
   selectAllByDefault: true
   additionalScrapeConfigs:

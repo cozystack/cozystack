@@ -121,6 +121,11 @@ spec:
           containers:
             - name: clickhouse
               image: clickhouse/clickhouse-server:24.9.2.42
+              {{- if .Values.resources }}
+              resources: {{- toYaml .Values.resources | nindent 16 }}
+              {{- else if ne .Values.resourcesPreset "none" }}
+              resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 16 }}
+              {{- end }}
               volumeMounts:
                 - name: data-volume-template
                   mountPath: /var/lib/clickhouse

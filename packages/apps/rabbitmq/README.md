@@ -22,7 +22,9 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 
 ### Configuration parameters
 
-| Name     | Description                 | Value |
-| -------- | --------------------------- | ----- |
-| `users`  | Users configuration         | `{}`  |
-| `vhosts` | Virtual Hosts configuration | `{}`  |
+| Name              | Description                                                                                                                                                                                                       | Value  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `users`           | Users configuration                                                                                                                                                                                               | `{}`   |
+| `vhosts`          | Virtual Hosts configuration                                                                                                                                                                                       | `{}`   |
+| `resources`       | Resources                                                                                                                                                                                                         | `{}`   |
+| `resourcesPreset` | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano` |

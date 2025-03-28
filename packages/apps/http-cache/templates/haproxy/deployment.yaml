@@ -33,6 +33,11 @@ spec:
       containers:
       - image: haproxy:latest
         name: haproxy
+        {{- if .Values.haproxy.resources }}
+        resources: {{- toYaml .Values.haproxy.resources | nindent 10 }}
+        {{- else if ne .Values.haproxy.resourcesPreset "none" }}
+        resources: {{- include "resources.preset" (dict "type" .Values.haproxy.resourcesPreset "Release" .Release) | nindent 10 }}
+        {{- end }}
         ports:
         - containerPort: 8080
           name: http

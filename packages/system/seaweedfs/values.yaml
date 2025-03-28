@@ -6,7 +6,6 @@ global:
     WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
 
 seaweedfs:
-  
   master:
     replicas: 3
     volumeSizeLimitMB: 100

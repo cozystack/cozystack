@@ -13,27 +13,10 @@ spec:
       # it's usually more than default 30
       maxLabelsPerTimeseries: "60"
     replicaCount: 2
-    resources:
-      limits:
-        {{- with . | dig "vminsert" "resources" "limits" "cpu" nil }}
-        cpu: {{ . | quote }}
-        {{- end }}
-        memory: {{ . | dig "vminsert" "resources" "limits" "memory" "1000Mi" }}
-      requests:
-        cpu: {{ . | dig "vminsert" "resources" "requests" "cpu" "500m" }}
-        memory: {{ . | dig "vminsert" "resources" "requests" "memory" "500Mi" }}
+    resources: {}
   vmselect:
     replicaCount: 2
-    resources:
-      limits:
-        # if we don't set the cpu limit, victoriametrics-operator will set 500m here, which is ridiculous small
-        # see internal/config/config.go in victoriametrics-operator
-        # 2 vcpu is the bare minimum for **single** Grafana user
-        cpu: {{ . | dig "vmselect" "resources" "limits" "cpu" "2000m" }}
-        memory: {{ . | dig "vmselect" "resources" "limits" "memory" "1000Mi" }}
-      requests:
-        cpu: {{ . | dig "vmselect" "resources" "requests" "cpu" "500m" }}
-        memory: {{ . | dig "vmselect" "resources" "requests" "memory" "500Mi" }}
+    resources: {}
     extraArgs:
       search.maxUniqueTimeseries: "600000"
       vmalert.proxyURL: http://vmalert-{{ .name }}.{{ $.Release.Namespace }}.svc:8080
@@ -50,15 +33,7 @@ spec:
               storage: 2Gi
   vmstorage:
     replicaCount: 2
-    resources:
-      limits:
-        {{- with . | dig "vmstorage" "resources" "limits" "cpu" nil }}
-        cpu: {{ . | quote }}
-        {{- end }}
-        memory: {{ . | dig "vmstorage" "resources" "limits" "memory" "2048Mi" }}
-      requests:
-        cpu: {{ . | dig "vmstorage" "resources" "requests" "cpu" "100m" }}
-        memory: {{ . | dig "vmstorage" "resources" "requests" "memory" "500Mi" }}
+    resources: {}
     storage:
       volumeClaimTemplate:
         spec:

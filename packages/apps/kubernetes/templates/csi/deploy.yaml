@@ -63,11 +63,21 @@ spec:
               mountPath: /etc/kubernetes/kubeconfig
               readOnly: true
           resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
             requests:
-              memory: 50Mi
-              cpu: 10m
+              cpu: 125m
+              memory: 128Mi
         - name: csi-provisioner
           image: quay.io/openshift/origin-csi-external-provisioner:latest
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
           args:
             - "--csi-address=$(ADDRESS)"
             - "--default-fstype=ext4"
@@ -102,9 +112,12 @@ spec:
               mountPath: /etc/kubernetes/kubeconfig
               readOnly: true
           resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
             requests:
-              memory: 50Mi
-              cpu: 10m
+              cpu: 125m
+              memory: 128Mi
         - name: csi-liveness-probe
           image: quay.io/openshift/origin-csi-livenessprobe:latest
           args:
@@ -115,9 +128,12 @@ spec:
             - name: socket-dir
               mountPath: /csi
           resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
             requests:
-              memory: 50Mi
-              cpu: 10m
+              cpu: 125m
+              memory: 128Mi
       volumes:
         - name: socket-dir
           emptyDir: {}

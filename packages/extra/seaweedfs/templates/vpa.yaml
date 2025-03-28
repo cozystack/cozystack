@@ -1,0 +1,66 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-filer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ .Release.Name }}-filer
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: seaweedfs
+        minAllowed:
+          cpu: 250m
+          memory: 256Mi
+        maxAllowed:
+          cpu: "1"
+          memory: 2048Mi
+
+---
+
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-master
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ .Release.Name }}-master
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: seaweedfs
+        minAllowed:
+          cpu: 250m
+          memory: 256Mi
+        maxAllowed:
+          cpu: "1"
+          memory: 2048Mi
+
+---
+
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-volume
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ .Release.Name }}-volume
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: seaweedfs
+        minAllowed:
+          cpu: 250m
+          memory: 256Mi
+        maxAllowed:
+          cpu: "1"
+          memory: 2048Mi

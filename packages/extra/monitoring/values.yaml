@@ -13,26 +13,26 @@ host: ""
 ##   storage: 10Gi
 ##   storageClassName: ""
 ##   vminsert:
-##     resources:
-##       limits:
-##         memory: 1024Mi
-##       requests:
-##         cpu: 200m
-##         memory: 512Mi
+##     minAllowed:
+##       cpu: 200m
+##       memory: 512Mi
+##     maxAllowed:
+##       cpu: 1500m
+##       memory: 3Gi
 ##   vmselect:
-##     resources:
-##       limits:
-##         memory: 2048Mi
-##       requests:
-##         cpu: 300m
-##         memory: 1Gi
+##     minAllowed:
+##       cpu: 300m
+##       memory: 1Gi
+##     maxAllowed:
+##       cpu: 3500m
+##       memory: 6Gi
 ##   vmstorage:
-##     resources:
-##       limits:
-##         memory: 4096Mi
-##       requests:
-##         cpu: 500m
-##         memory: 2Gi
+##     minAllowed:
+##       cpu: 500m
+##       memory: 2Gi
+##     maxAllowed:
+##       cpu: 4000m
+##       memory: 8Gi
 ##
 metricsStorages:
 - name: shortterm
@@ -40,24 +40,11 @@ metricsStorages:
   deduplicationInterval: "15s"
   storage: 10Gi
   storageClassName: ""
-  vminsert:
-    resources: {}
-  vmselect:
-    resources: {}
-  vmstorage:
-    resources: {}
 - name: longterm
   retentionPeriod: "14d"
   deduplicationInterval: "5m"
   storage: 10Gi
   storageClassName: ""
-  vminsert:
-    resources: {}
-  vmselect:
-    resources: {}
-  vmstorage:
-    resources: {}
-
 
 ## @param logsStorages [array] Configuration of logs storage instances
 ##
@@ -74,7 +61,13 @@ logsStorages:
 alerta:
   storage: 10Gi
   storageClassName: ""
-
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
   alerts:
     ## @param alerta.alerts.telegram.token telegram token for your bot
     ## @param alerta.alerts.telegram.chatID specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
@@ -95,3 +88,10 @@ alerta:
 grafana:
   db:
     size: 10Gi
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi

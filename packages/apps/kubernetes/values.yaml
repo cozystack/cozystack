@@ -69,3 +69,63 @@ addons:
     ##
     enabled: false
     valuesOverride: {}
+
+## @section Kamaji control plane
+##
+kamajiControlPlane:
+  apiServer:
+    ## @param kamajiControlPlane.apiServer.resources Resources
+    resources: {}
+    # resources:
+    #   limits:
+    #     cpu: 4000m
+    #     memory: 4Gi
+    #   requests:
+    #     cpu: 100m
+    #     memory: 512Mi
+    
+    ## @param kamajiControlPlane.apiServer.resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
+    resourcesPreset: "micro"
+
+  controllerManager:
+    ## @param kamajiControlPlane.controllerManager.resources Resources
+    resources: {}
+    # resources:
+    #   limits:
+    #     cpu: 4000m
+    #     memory: 4Gi
+    #   requests:
+    #     cpu: 100m
+    #     memory: 512Mi
+    
+    ## @param kamajiControlPlane.controllerManager.resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
+    resourcesPreset: "micro"
+  scheduler:
+    ## @param kamajiControlPlane.scheduler.resources Resources
+    resources: {}
+    # resources:
+    #   limits:
+    #     cpu: 4000m
+    #     memory: 4Gi
+    #   requests:
+    #     cpu: 100m
+    #     memory: 512Mi
+    
+    ## @param kamajiControlPlane.scheduler.resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
+    resourcesPreset: "micro"
+  addons:
+    konnectivity:
+      server:
+        ## @param kamajiControlPlane.addons.konnectivity.server.resources Resources
+        resources: {}
+        # resources:
+        #   limits:
+        #     cpu: 4000m
+        #     memory: 4Gi
+        #   requests:
+        #     cpu: 100m
+        #     memory: 512Mi
+        
+        ## @param kamajiControlPlane.addons.konnectivity.server.resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
+        resourcesPreset: "micro"
+            

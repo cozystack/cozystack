@@ -25,19 +25,18 @@ metadata:
 spec:
   sentinel:
     replicas: 3
-    resources:
-      requests:
-        cpu: 100m
-      limits:
-        memory: 100Mi
+    {{- if .Values.resources }}
+    resources: {{- toYaml .Values.resources | nindent 6 }}
+    {{- else if ne .Values.resourcesPreset "none" }}
+    resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 6 }}
+    {{- end }}
   redis:
     replicas: {{ .Values.replicas }}
-    resources:
-      requests:
-        cpu: 150m
-        memory: 400Mi
-      limits:
-        memory: 1000Mi
+    {{- if .Values.resources }}
+    resources: {{- toYaml .Values.resources | nindent 6 }}
+    {{- else if ne .Values.resourcesPreset "none" }}
+    resources: {{- include "resources.preset" (dict "type" .Values.resourcesPreset "Release" .Release) | nindent 6 }}
+    {{- end }}
     {{- with .Values.size }}
     storage:
       persistentVolumeClaim:

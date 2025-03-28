@@ -3,4 +3,4 @@ name: etcd
 description: Storage for Kubernetes clusters
 icon: /logos/etcd.svg
 type: application
-version: 2.6.1
+version: 2.7.0

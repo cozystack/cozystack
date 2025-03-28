@@ -102,12 +102,37 @@ metadata:
   annotations:
     kamaji.clastix.io/kubeconfig-secret-key: "super-admin.svc"
 spec:
+  apiServer:
+    {{- if .Values.kamajiControlPlane.apiServer.resources }}
+    resources: {{- toYaml .Values.kamajiControlPlane.apiServer.resources | nindent 6 }}
+    {{- else if ne .Values.kamajiControlPlane.apiServer.resourcesPreset "none" }}
+    resources: {{- include "resources.preset" (dict "type" .Values.kamajiControlPlane.apiServer.resourcesPreset "Release" .Release) | nindent 6 }}
+    {{- end }}
+  controllerManager:
+    {{- if .Values.kamajiControlPlane.controllerManager.resources }}
+    resources: {{- toYaml .Values.kamajiControlPlane.controllerManager.resources | nindent 6 }}
+    {{- else if ne .Values.kamajiControlPlane.controllerManager.resourcesPreset "none" }}
+    resources: {{- include "resources.preset" (dict "type" .Values.kamajiControlPlane.controllerManager.resourcesPreset "Release" .Release) | nindent 6 }}
+    {{- end }}
+  scheduler:
+    {{- if .Values.kamajiControlPlane.scheduler.resources }}
+    resources: {{- toYaml .Values.kamajiControlPlane.scheduler.resources | nindent 6 }}
+    {{- else if ne .Values.kamajiControlPlane.scheduler.resourcesPreset "none" }}
+    resources: {{- include "resources.preset" (dict "type" .Values.kamajiControlPlane.scheduler.resourcesPreset "Release" .Release) | nindent 6 }}
+    {{- end }}
   dataStoreName: "{{ $etcd }}"
   addons:
     coreDNS:
       dnsServiceIPs:
       - 10.95.0.10
-    konnectivity: {}
+    konnectivity:
+      server:
+        port: 8132
+        {{- if .Values.kamajiControlPlane.addons.konnectivity.server.resources }}
+        resources: {{- toYaml .Values.kamajiControlPlane.addons.konnectivity.server.resources | nindent 10 }}
+        {{- else if ne .Values.kamajiControlPlane.addons.konnectivity.server.resourcesPreset "none" }}
+        resources: {{- include "resources.preset" (dict "type" .Values.kamajiControlPlane.addons.konnectivity.server.resourcesPreset "Release" .Release) | nindent 10 }}
+        {{- end }}
   kubelet:
     cgroupfs: systemd
     preferredAddressTypes:

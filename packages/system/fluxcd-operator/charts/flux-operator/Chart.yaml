@@ -8,7 +8,7 @@ annotations:
     - name: Upstream Project
       url: https://github.com/controlplaneio-fluxcd/flux-operator
 apiVersion: v2
-appVersion: v0.17.0
+appVersion: v0.18.0
 description: 'A Helm chart for deploying the Flux Operator. '
 home: https://github.com/controlplaneio-fluxcd
 icon: https://raw.githubusercontent.com/cncf/artwork/main/projects/flux/icon/color/flux-icon-color.png
@@ -25,4 +25,4 @@ sources:
 - https://github.com/controlplaneio-fluxcd/flux-operator
 - https://github.com/controlplaneio-fluxcd/charts
 type: application
-version: 0.17.0
+version: 0.18.0

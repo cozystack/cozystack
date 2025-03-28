@@ -194,6 +194,12 @@
         "nameOverride": {
             "type": "string"
         },
+        "nodeSelector": {
+            "properties": {},
+            "type": [
+                "object"
+            ]
+        },
         "podSecurityContext": {
             "default": {
                 "fsGroup": 1337
@@ -244,6 +250,17 @@
                     "type": "integer"
                 }
             },
+            "type": "object"
+        },
+        "reporting": {
+            "properties": {
+                "interval": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "interval"
+            ],
             "type": "object"
         },
         "resources": {

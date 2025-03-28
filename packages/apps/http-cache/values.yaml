@@ -12,8 +12,32 @@ size: 10Gi
 storageClass: ""
 haproxy:
   replicas: 2
+  ## @param haproxy.resources Resources
+  resources: {}
+  # resources:
+  #   limits:
+  #     cpu: 4000m
+  #     memory: 4Gi
+  #   requests:
+  #     cpu: 100m
+  #     memory: 512Mi
+  
+  ## @param haproxy.resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
+  resourcesPreset: "nano"
 nginx:
   replicas: 2
+  ## @param nginx.resources Resources
+  resources: {}
+  # resources:
+  #   limits:
+  #     cpu: 4000m
+  #     memory: 4Gi
+  #   requests:
+  #     cpu: 100m
+  #     memory: 512Mi
+  
+  ## @param nginx.resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
+  resourcesPreset: "nano"
 
 ## @section Configuration parameters
 

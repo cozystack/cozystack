@@ -41,6 +41,7 @@ metadata:
     {{- end }}
     {{- end }}
     {{- include "cozystack.namespace-anotations" (list $ $existingNS) | nindent 4 }}
+    alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
   ownerReferences:
   - apiVersion: v1
     blockOwnerDeletion: true
