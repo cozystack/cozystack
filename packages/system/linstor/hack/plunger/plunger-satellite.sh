@@ -29,13 +29,34 @@ while true; do
     /usr/sbin/losetup --detach "${stale_device}"
   ); done
 
-  # Detect secondary volumes that lost connection and can be simply reconnected
+  # Detect secondary volumes that got suspended with force-io-failure
+  # As long as this is not a primary volume, it's somewhat safe to recreate the whole DRBD device.
+  # Backing block device is not touched.
   disconnected_secondaries=$(drbdadm status 2>/dev/null | awk '/pvc-.*role:Secondary.*force-io-failures:yes/ {print $1}')
   for secondary in $disconnected_secondaries; do (
-    echo "Trying to reconnect secondary volume ${secondary}"
+    echo "Trying to recreate secondary volume ${secondary}"
     set -x
     drbdadm down "${secondary}"
     drbdadm up "${secondary}"
+  ); done
+
+  # Detect secondary volumes that lost connection and can be simply reconnected
+  # This may be fixed in DRBD 9.2.13
+  # see https://github.com/LINBIT/drbd/blob/drbd-9.2/ChangeLog
+  disconnected_secondaries=$(drbdsetup status --json 2>/dev/null | jq -r '
+    .[]
+    | select(
+        .role == "Secondary"
+        and .suspended == false
+        and .connections[]."connection-state" == "Connecting"
+      )
+    | .name
+  ')
+  for secondary in $disconnected_secondaries; do (
+    echo "Trying to reconnect secondary volume ${secondary}"
+    set -x
+    drbdadm disconnect "${secondary}"
+    drbdadm connect "${secondary}"
   ); done
 
 done
