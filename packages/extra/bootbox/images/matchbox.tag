@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/matchbox:v0.28.1@sha256:59ae3b557161088d8add6497690c5dcb79a2d315b9de473641b5f3f9fd14a124
+ghcr.io/cozystack/cozystack/matchbox:v0.28.2@sha256:d63d18eb6f10dc298339523f9bbf22127a874b340111df129028a83e3ea94fef
