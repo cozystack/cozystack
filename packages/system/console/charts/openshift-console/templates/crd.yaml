@@ -1,0 +1,21 @@
+{{- if .Values.console.impersonateOpenShift }}
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: apps.apps.openshift.io
+spec:
+  group: apps.openshift.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties: {}
+  scope: Namespaced
+  names:
+    plural: apps
+    singular: app
+    kind: OpenShift
+{{- end }}
