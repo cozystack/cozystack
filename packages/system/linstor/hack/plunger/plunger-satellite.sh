@@ -26,16 +26,18 @@ while true; do
   for stale_device in $stale_loopbacks; do (
     echo "Detaching stuck loop device ${stale_device}"
     set -x
-    /usr/sbin/losetup --detach "${stale_device}"
+    /usr/sbin/losetup --detach "${stale_device}" || echo "Command failed"
   ); done
 
-  # Detect secondary volumes that lost connection and can be simply reconnected
+  # Detect secondary volumes that got suspended with force-io-failure
+  # As long as this is not a primary volume, it's somewhat safe to recreate the whole DRBD device.
+  # Backing block device is not touched.
   disconnected_secondaries=$(drbdadm status 2>/dev/null | awk '/pvc-.*role:Secondary.*force-io-failures:yes/ {print $1}')
   for secondary in $disconnected_secondaries; do (
     echo "Trying to reconnect secondary volume ${secondary}"
     set -x
-    drbdadm down "${secondary}"
-    drbdadm up "${secondary}"
+    drbdadm down "${secondary}" || echo "Command failed"
+    drbdadm up "${secondary}" || echo "Command failed"
   ); done
 
 done
