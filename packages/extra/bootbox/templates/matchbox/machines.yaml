@@ -17,7 +17,7 @@ spec:
   {{- range $mac := $m.mac }}
   - dhcp:
       hostname: {{ $m.hostname }}
-      mac: {{ $mac }}
+      mac: {{ lower $mac }}
       {{- with $m.arch }}
       arch: {{ . }}
       {{- end }}
