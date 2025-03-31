@@ -1,0 +1,8 @@
+apiVersion: helm.openshift.io/v1beta1
+kind: HelmChartRepository
+metadata:
+  name: cozystack
+spec:
+  name: cozystack
+  connectionConfig:
+    url: http://cozystack.cozy-system.svc/repos/apps 
