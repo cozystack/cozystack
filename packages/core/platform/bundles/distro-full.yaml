@@ -134,7 +134,7 @@ releases:
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
   optional: true
-  dependsOn: [cilium]
+  dependsOn: [cilium,victoria-metrics-operator]
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator

@@ -96,14 +96,14 @@ releases:
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
   optional: true
-  dependsOn: []
+  dependsOn: [victoria-metrics-operator]
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
   optional: true
-  dependsOn: []
+  dependsOn: [victoria-metrics-operator]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator

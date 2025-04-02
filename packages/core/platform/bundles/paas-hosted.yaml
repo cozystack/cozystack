@@ -103,13 +103,13 @@ releases:
   releaseName: kafka-operator
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
-  dependsOn: []
+  dependsOn: [victoria-metrics-operator]
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
-  dependsOn: []
+  dependsOn: [victoria-metrics-operator]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
