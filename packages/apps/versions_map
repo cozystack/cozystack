@@ -140,7 +140,8 @@ virtual-machine 0.7.1 0ab39f20
 virtual-machine 0.8.0 3fa4dd3a
 virtual-machine 0.8.1 93c46161
 virtual-machine 0.8.2 HEAD
-vm-disk 0.1.0 HEAD
+vm-disk 0.1.0 d971f2ff
+vm-disk 0.1.1 HEAD
 vm-instance 0.1.0 1ec10165
 vm-instance 0.2.0 84f3ccc0
 vm-instance 0.3.0 4e68e65c

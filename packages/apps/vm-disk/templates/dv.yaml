@@ -3,7 +3,9 @@ apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
   annotations:
+    {{- if hasKey .Values.source "upload" }}
     cdi.kubevirt.io/storage.bind.immediate.requested: ""
+    {{- end }}
     vm-disk.cozystack.io/optical: "{{ .Values.optical }}"
   name: {{ .Release.Name }}
 spec:
