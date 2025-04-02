@@ -1,12 +1,13 @@
 #!/bin/sh
 set -e
+
 file=versions_map
+
 charts=$(find . -mindepth 2 -maxdepth 2 -name Chart.yaml | awk 'sub("/Chart.yaml", "")')
 
-# <chart> <version> <commit> 
 new_map=$(
   for chart in $charts; do
-    awk '/^name:/ {chart=$2} /^version:/ {version=$2} END{printf "%s %s %s\n", chart, version, "HEAD"}' $chart/Chart.yaml
+    awk '/^name:/ {chart=$2} /^version:/ {version=$2} END{printf "%s %s %s\n", chart, version, "HEAD"}' "$chart/Chart.yaml"
   done
 )
 
@@ -15,47 +16,48 @@ if [ ! -f "$file" ] || [ ! -s "$file" ]; then
   exit 0
 fi
 
-miss_map=$(echo "$new_map" | awk 'NR==FNR { new_map[$1 " " $2] = $3; next } { if (!($1 " " $2 in new_map)) print $1, $2, $3}' - $file)
+miss_map=$(echo "$new_map" | awk 'NR==FNR { nm[$1 " " $2] = $3; next } { if (!($1 " " $2 in nm)) print $1, $2, $3}' - "$file")
+
+# search accross all tags sorted by version
+search_commits=$(git ls-remote --tags origin | grep 'refs/tags/v' | sort -k2,2 -rV | awk '{print $1}')
+# add latest main commit to search
+search_commits="${search_commits} $(git rev-parse "origin/main")"
 
 resolved_miss_map=$(
-  echo "$miss_map" | while read chart version commit; do
-    if [ "$commit" = HEAD ]; then
-      line=$(awk '/^version:/ {print NR; exit}' "./$chart/Chart.yaml")
-      change_commit=$(git --no-pager blame -L"$line",+1 -- "$chart/Chart.yaml" | awk '{print $1}')
-       
-      if [ "$change_commit" = "00000000" ]; then
-        # Not committed yet, use previous commit
-        line=$(git show HEAD:"./$chart/Chart.yaml" | awk '/^version:/ {print NR; exit}')
-        commit=$(git --no-pager blame -L"$line",+1 HEAD -- "$chart/Chart.yaml" | awk '{print $1}')
-        if [ $(echo $commit | cut -c1) = "^" ]; then
-          # Previous commit not exists
-          commit=$(echo $commit | cut -c2-)
-        fi
-      else
-        # Committed, but version_map wasn't updated
-        line=$(git show HEAD:"./$chart/Chart.yaml" | awk '/^version:/ {print NR; exit}')
-        change_commit=$(git --no-pager blame -L"$line",+1 HEAD -- "$chart/Chart.yaml" | awk '{print $1}')
-        if [ $(echo $change_commit | cut -c1) = "^" ]; then
-          # Previous commit not exists
-          commit=$(echo $change_commit | cut -c2-)
-        else
-          commit=$(git describe --always "$change_commit~1")
-        fi
+  echo "$miss_map" | while read -r chart version commit; do
+    # if version is found in HEAD, it's HEAD
+    if grep -q "^version: $version$" ./${chart}/Chart.yaml; then
+      echo "$chart $version HEAD"
+      continue
+    fi
+
+    # if commit is not HEAD, check if it's valid
+    if [ $commit != "HEAD" ]; then
+      if ! git show "${commit}:./${chart}/Chart.yaml" 2>/dev/null | grep -q "^version: $version$"; then
+        echo "Commit $commit for $chart $version is not valid" >&2
+        exit 1
       fi
 
-      # Check if the commit belongs to the main branch
-      if ! git merge-base --is-ancestor "$commit" main; then
-        # Find the closest parent commit that belongs to main
-        commit_in_main=$(git log --pretty=format:"%h" main -- "$chart" | head -n 1)
-        if [ -n "$commit_in_main" ]; then
-          commit="$commit_in_main"
-        else
-          # No valid commit found in main branch for $chart, skipping..."
-          continue
-        fi
-      fi
+      commit=$(git rev-parse --short "$commit")
+      echo "$chart $version $commit"
+      continue
     fi
-    echo "$chart $version $commit"
+
+    # if commit is HEAD, but version is not found in HEAD, check all tags
+    found_tag=""
+    for tag in $search_commits; do
+      if git show "${tag}:./${chart}/Chart.yaml" 2>/dev/null | grep -q "^version: $version$"; then
+        found_tag=$(git rev-parse --short "${tag}")
+        break
+      fi
+    done
+    
+    if [ -z "$found_tag" ]; then
+      echo "Can't find $chart $version in any version tag or in the latest main commit" >&2
+      exit 1
+    fi
+    
+    echo "$chart $version $found_tag"
   done
 )
 
