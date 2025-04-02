@@ -1,0 +1,27 @@
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: restrict-system-components
+spec:
+  ingressDeny:
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "2379"  # etcd
+      - port: "2380"  # etcd
+      - port: "3367"  # linstor
+      - port: "7473"  # frr-metrics (metallb)
+      - port: "8123"  # cozy assets server
+      - port: "9443"  # kube-rbac-proxy
+      - port: "10250" # kubelet
+      - port: "10257" # kube-controller-manager
+      - port: "10259" # kube-scheduler
+  ingress:
+  - fromEntities:
+    - world
+    - host
+    - cluster
+  nodeSelector:
+    matchLabels: {}

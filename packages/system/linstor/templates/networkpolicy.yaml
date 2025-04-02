@@ -1,0 +1,19 @@
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: restrict-drbd-reactor
+spec:
+  ingressDeny:
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "9942"
+  ingress:
+  - fromEntities:
+    - world
+    - host
+    - cluster
+  nodeSelector:
+    matchLabels: {}
