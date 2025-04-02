@@ -76,7 +76,7 @@ data:
       "kubeappsNamespace": {{ .Release.Namespace | quote }},
       "helmGlobalNamespace": {{ include "kubeapps.helmGlobalPackagingNamespace" . | quote }},
       "carvelGlobalNamespace": {{ .Values.kubeappsapis.pluginConfig.kappController.packages.v1alpha1.globalPackagingNamespace | quote }},
-      "appVersion": "v0.28.0",
+      "appVersion": "v0.29.0",
       "authProxyEnabled": {{ .Values.authProxy.enabled }},
       "oauthLoginURI": {{ .Values.authProxy.oauthLoginURI | quote }},
       "oauthLogoutURI": {{ .Values.authProxy.oauthLogoutURI | quote }},

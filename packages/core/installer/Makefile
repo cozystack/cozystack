@@ -22,7 +22,7 @@ update:
 	IMAGE=$$(yq '.input.baseInstaller.imageRef | sub("/installer:", "/imager:")' images/talos/profiles/installer.yaml) \
 		yq -i '.talos.imager.image = strenv(IMAGE)' ../builder/values.yaml
 
-image: pre-checks image-cozystack image-talos image-matchbox
+image: pre-checks image-matchbox image-cozystack image-talos
 
 image-cozystack: run-builder
 	make -C ../../.. repos
@@ -66,8 +66,10 @@ assets: talos-iso talos-nocloud talos-metal
 talos-initramfs talos-kernel talos-installer talos-iso talos-nocloud talos-metal:
 	mkdir -p ../../../_out/assets
 	cat images/talos/profiles/$(subst talos-,,$@).yaml | \
-		kubectl exec -i -n cozy-builder deploy/builder-talos-imager -- imager --tar-to-stdout - | \
-		tar -C ../../../_out/assets -xzf-
+		kubectl exec -i -n cozy-builder deploy/builder-talos-imager -- imager -
+	kubectl exec -n cozy-builder deploy/builder-talos-imager -- tar -C /out -czf- . | \
+	  tar -C ../../../_out/assets -xzf-
+	kubectl exec -n cozy-builder deploy/builder-talos-imager -- rm -rf /out
 
 run-builder:
 	make -C ../builder/ apply wait-for-builder
