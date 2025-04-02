@@ -20,8 +20,8 @@ build:
 	make manifests
 
 manifests:
-	(cd packages/core/installer/; helm template -n cozy-installer installer .) > manifests/cozystack-installer.yaml
-	sed -i 's|@sha256:[^"]\+||' manifests/cozystack-installer.yaml
+	mkdir -p _out/assets
+	(cd packages/core/installer/; helm template -n cozy-installer installer .) > _out/assets/cozystack-installer.yaml
 
 repos:
 	rm -rf _out
@@ -44,3 +44,6 @@ test:
 
 generate:
 	hack/update-codegen.sh
+
+upload_assets: assets
+	hack/upload-assets.sh
