@@ -194,7 +194,7 @@ releases:
   releaseName: clickhouse-operator
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator

@@ -141,7 +141,7 @@ releases:
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
   optional: true
-  dependsOn: [cilium]
+  dependsOn: [cilium,victoria-metrics-operator]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
