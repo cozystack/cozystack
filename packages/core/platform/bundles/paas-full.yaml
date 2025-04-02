@@ -34,6 +34,13 @@ releases:
   - values-talos.yaml
   - values-kubeovn.yaml
 
+- name: cilium-networkpolicy
+  releaseName: cilium-networkpolicy
+  chart: cozy-cilium-networkpolicy
+  namespace: cozy-cilium
+  privileged: true
+  dependsOn: [cilium]
+
 - name: kubeovn
   releaseName: kubeovn
   chart: cozy-kubeovn

@@ -31,6 +31,13 @@ releases:
       autoDirectNodeRoutes: true
       routingMode: native
 
+- name: cilium-networkpolicy
+  releaseName: cilium-networkpolicy
+  chart: cozy-cilium-networkpolicy
+  namespace: cozy-cilium
+  privileged: true
+  dependsOn: [cilium]
+
 - name: cozy-proxy
   releaseName: cozystack
   chart: cozy-cozy-proxy
@@ -154,7 +161,7 @@ releases:
   releaseName: piraeus-operator
   chart: cozy-piraeus-operator
   namespace: cozy-linstor
-  dependsOn: [cilium,cert-manager]
+  dependsOn: [cilium,cert-manager,victoria-metrics-operator]
 
 - name: snapshot-controller
   releaseName: snapshot-controller
