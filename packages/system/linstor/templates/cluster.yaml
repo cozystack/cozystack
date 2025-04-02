@@ -44,13 +44,24 @@ spec:
             name: linstor-plunger
             defaultMode: 0755
   patches:
-  - target:
-      group: apps
-      version: v1
-      kind: Deployment
-    patch: |
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        annotations:
-          secret.reloader.stakater.com/auto: "true"
+    - target:
+        kind: Deployment
+        name: linstor-controller
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
+    - target:
+        kind: Deployment
+        name: linstor-csi-controller
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
+    - target:
+        kind: DaemonSet
+        name: linstor-csi-node
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
