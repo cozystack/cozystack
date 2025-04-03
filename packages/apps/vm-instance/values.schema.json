@@ -88,7 +88,7 @@
     },
     "instanceProfile": {
       "type": "string",
-      "description": "Virtual Machine prefferences profile",
+      "description": "Virtual Machine preferences profile",
       "default": "ubuntu",
       "optional": true,
       "enum": [
@@ -171,7 +171,7 @@
     "cloudInit": {
       "type": "string",
       "description": "cloud-init user data config. See cloud-init documentation for more details.",
-      "default": "#cloud-config\n"
+      "default": ""
     }
   }
 }
