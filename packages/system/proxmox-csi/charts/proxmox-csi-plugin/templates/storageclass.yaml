@@ -1,0 +1,29 @@
+{{- range $storage := .Values.storageClass }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $storage.name | required "StorageClass name must be provided." }}
+  {{- with $storage.labels }}
+  labels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $storage.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+provisioner: {{ $.Values.provisionerName }}
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: {{ default "Delete" $storage.reclaimPolicy }}
+parameters:
+  {{- mustMergeOverwrite (default (dict) $storage.extraParameters) (include "storageClass.parameters" . | fromYaml) | toYaml | nindent 2 -}}
+{{- with $storage.mountOptions }}
+mountOptions:
+  {{- . | toYaml | nindent 2 }}
+{{- end }}
+{{- with $storage.allowedTopologies }}
+allowedTopologies:
+  {{- . | toYaml | nindent 2 }}
+{{- end }}
+---
+{{- end }}
