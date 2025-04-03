@@ -19,12 +19,10 @@ diff:
 
 update:
 	hack/gen-profiles.sh
-	IMAGE=$$(yq '.input.baseInstaller.imageRef | sub("/installer:", "/imager:")' images/talos/profiles/installer.yaml) \
-		yq -i '.talos.imager.image = strenv(IMAGE)' ../builder/values.yaml
 
 image: pre-checks image-matchbox image-cozystack image-talos
 
-image-cozystack: run-builder
+image-cozystack:
 	make -C ../../.. repos
 	docker buildx build -f images/cozystack/Dockerfile ../../.. \
 		--provenance false \
@@ -40,11 +38,11 @@ image-cozystack: run-builder
 		yq -i '.cozystack.image = strenv(IMAGE)' values.yaml
 	rm -f images/installer.json
 
-image-talos: run-builder
+image-talos:
 	test -f ../../../_out/assets/installer-amd64.tar || make talos-installer
 	skopeo copy docker-archive:../../../_out/assets/installer-amd64.tar docker://$(REGISTRY)/talos:$(call settag,$(TALOS_VERSION))
 
-image-matchbox: run-builder
+image-matchbox:
 	test -f ../../../_out/assets/kernel-amd64 || make talos-kernel
 	test -f ../../../_out/assets/initramfs-metal-amd64.xz || make talos-initramfs
 	docker buildx build -f images/matchbox/Dockerfile ../../.. \
@@ -66,10 +64,5 @@ assets: talos-iso talos-nocloud talos-metal
 talos-initramfs talos-kernel talos-installer talos-iso talos-nocloud talos-metal:
 	mkdir -p ../../../_out/assets
 	cat images/talos/profiles/$(subst talos-,,$@).yaml | \
-		kubectl exec -i -n cozy-builder deploy/builder-talos-imager -- imager -
-	kubectl exec -n cozy-builder deploy/builder-talos-imager -- tar -C /out -czf- . | \
-	  tar -C ../../../_out/assets -xzf-
-	kubectl exec -n cozy-builder deploy/builder-talos-imager -- rm -rf /out
-
-run-builder:
-	make -C ../builder/ apply wait-for-builder
+		docker run --rm -i -v /dev:/dev --privileged "ghcr.io/siderolabs/imager:$(TALOS_VERSION)" --tar-to-stdout - | \
+		tar -C ../../../_out/assets -xzf-

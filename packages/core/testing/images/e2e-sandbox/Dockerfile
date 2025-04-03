@@ -1,11 +1,11 @@
 FROM ubuntu:22.04
 
 ARG KUBECTL_VERSION=1.32.0
-ARG TALOSCTL_VERSION=1.8.4
+ARG TALOSCTL_VERSION=1.9.5
 ARG HELM_VERSION=3.16.4
 
 RUN apt-get update
-RUN apt-get -y install genisoimage qemu-kvm qemu-utils iproute2 iptables wget xz-utils netcat curl jq
+RUN apt-get -y install genisoimage qemu-kvm qemu-utils iproute2 iptables wget xz-utils netcat curl jq make git
 RUN curl -LO "https://github.com/siderolabs/talos/releases/download/v${TALOSCTL_VERSION}/talosctl-linux-amd64" \
  && chmod +x talosctl-linux-amd64 \
  && mv talosctl-linux-amd64 /usr/local/bin/talosctl

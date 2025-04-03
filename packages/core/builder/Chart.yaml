@@ -1,3 +1,0 @@
-apiVersion: v2
-name: builder
-version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process

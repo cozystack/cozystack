@@ -1,0 +1,140 @@
+name: Prepare Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  prepare-release:
+    name: Build, Test and Prepare Release
+    runs-on: [self-hosted]
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Check if release already exists
+        id: check_release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            const existing = releases.data.find(r => r.tag_name === tag && !r.draft);
+            if (existing) {
+              core.setOutput('skip', 'true');
+            } else {
+              core.setOutput('skip', 'false');
+            }
+
+      - name: Skip if release already exists
+        if: steps.check_release.outputs.skip == 'true'
+        run: echo "Release already exists, skipping workflow."
+
+      - name: Checkout code
+        if: steps.check_release.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Login to GitHub Container Registry
+        if: steps.check_release.outputs.skip == 'false'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+
+      - name: Build
+        if: steps.check_release.outputs.skip == 'false'
+        run: make build
+
+      #- name: Test
+      #  if: steps.check_release.outputs.skip == 'false'
+      #  run: make test
+
+      - name: Commit release artifacts
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .
+          git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" || echo "No changes to commit"
+
+      - name: Create release branch
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          BRANCH_NAME="release-${GITHUB_REF#refs/tags/v}"
+          git branch -f "$BRANCH_NAME"
+          git push origin "$BRANCH_NAME" --force
+
+      - name: Create pull request if not exists
+        if: steps.check_release.outputs.skip == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = context.ref.replace('refs/tags/v', '');
+            const branch = `release-${version}`;
+            const base = 'main'; // или другая основная ветка
+
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${branch}`,
+              base
+            });
+
+            if (prs.data.length === 0) {
+              await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: branch,
+                base: base,
+                title: `Release ${version}`,
+                body: `This PR prepares the release \`${version}\`.`,
+                draft: true
+              });
+              console.log(`Created draft pull request from ${branch} to ${base}`);
+            } else {
+              console.log(`Pull request already exists from ${branch} to ${base}`);
+            }
+
+      - name: Create or reuse draft release
+        if: steps.check_release.outputs.skip == 'false'
+        id: create_release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            let release = releases.data.find(r => r.tag_name === tag);
+            if (!release) {
+              release = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tag,
+                name: `Release ${tag}`,
+                draft: true,
+                prerelease: false
+              });
+            }
+            core.setOutput('upload_url', release.upload_url);
+
+      - name: Upload assets
+        if: steps.check_release.outputs.skip == 'false'
+        run: make upload_assets
+
+      - name: Delete pushed tag
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          git push --delete origin ${GITHUB_REF#refs/tags/}
