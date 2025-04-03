@@ -347,5 +347,5 @@ kubectl patch -n cozy-system cm/cozystack --type=merge -p '{"data":{
   "oidc-enabled": "true"
 }}'
 
-timeout 60 sh -c 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator; do sleep 1; done'
+timeout 120 sh -c 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator; do sleep 1; done'
 kubectl wait --timeout=10m --for=condition=ready -n cozy-keycloak hr keycloak keycloak-configure keycloak-operator

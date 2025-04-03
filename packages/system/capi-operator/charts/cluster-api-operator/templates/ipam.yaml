@@ -26,8 +26,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "1"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: {{ $ipamNamespace }}
 ---
@@ -37,8 +39,10 @@ metadata:
   name: {{ $ipamName }}
   namespace: {{ $ipamNamespace }}
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "2"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
 {{- if or $ipamVersion $.Values.configSecret.name $.Values.manager $.Values.additionalDeployments }}
 spec:
@@ -47,8 +51,8 @@ spec:
   version: {{ $ipamVersion }}
 {{- end }}
 {{- if $.Values.manager }}
-  manager:
 {{- if and (kindIs "map" $.Values.manager.featureGates) (hasKey $.Values.manager.featureGates $ipamName) }}
+  manager:
 {{- range $key, $value := $.Values.manager.featureGates }}
   {{- if eq $key $ipamName }}
     featureGates:

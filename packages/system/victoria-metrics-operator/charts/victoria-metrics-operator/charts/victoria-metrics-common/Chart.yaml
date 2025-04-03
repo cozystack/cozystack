@@ -1,11 +1,11 @@
 annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/changes: |
-    - Allow extract name prefix from app level fullnameOverride property
+    - Support custom case for list empty argument.
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: Sources
-      url: https://github.com/VictoriaMetrics/helm-charts
+      url: https://github.com/VictoriaMetrics/helm-charts/tree/master/charts/victoria-metrics-common
     - name: Charts repo
       url: https://victoriametrics.github.io/helm-charts/
 apiVersion: v2
@@ -25,4 +25,4 @@ name: victoria-metrics-common
 sources:
 - https://github.com/VictoriaMetrics/helm-charts
 type: library
-version: 0.0.16
+version: 0.0.42

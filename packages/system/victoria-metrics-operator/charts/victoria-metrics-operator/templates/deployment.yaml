@@ -1,39 +1,47 @@
+{{- $ctx := dict "helm" . "noEnterprise" true }}
+{{- $fullname := include "vm.plain.fullname" $ctx }}
+{{- $ns := include "vm.namespace" $ctx }}
 ---
-{{- if hasKey .Values "watchNamespace" }}
-  {{- fail "`watchNamespace` is deprecated Please use `watchNamespaces` slice instead" -}}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "vm-operator.fullname" . }}
-  namespace: {{ include "vm.namespace" . }}
-  {{- $ctx := dict "helm" . "extraLabels" .Values.extraLabels }}
-  labels: {{ include "vm-operator.labels" $ctx | nindent 4 }}
+  name: {{ $fullname }}
+  namespace: {{ $ns }}
+  {{- $_ := set $ctx "extraLabels" .Values.extraLabels }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
+  {{- $_ := unset $ctx "extraLabels" }}
   {{- with .Values.annotations }}
   annotations: {{ toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: {{.Values.replicaCount}}
+  replicas: {{.Values.replicaCount }}
   selector:
-    matchLabels: {{ include "vm-operator.selectorLabels" . | nindent 6 }}
+    matchLabels: {{ include "vm.selectorLabels" $ctx | nindent 6 }}
   template:
     metadata:
       {{- with .Values.annotations }}
       annotations: {{ toYaml . | nindent 8 }}
       {{- end }}
       {{- $_ := set $ctx "extraLabels" .Values.podLabels }}
-      labels: {{ include "vm-operator.selectorLabels" $ctx | nindent 8}}
+      labels: {{ include "vm.podLabels" $ctx | nindent 8 }}
+      {{- $_ := unset $ctx "extraLabels" }}
     spec:
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
       {{- if .Values.podSecurityContext.enabled }}
       securityContext: {{ include "vm.securityContext" (dict "securityContext" .Values.podSecurityContext "helm" .) | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "vm-operator.serviceAccountName" . }}
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      {{- end }}
+      {{- if or (.Values.serviceAccount).name (.Values.serviceAccount).create }}
+      serviceAccountName: {{ (.Values.serviceAccount).name | default $fullname }}
+      {{- end }}
       {{- with (.Values.imagePullSecrets | default .Values.global.imagePullSecrets) }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: operator
-          image: {{ include "vm.image" (dict "helm" . "app" .Values ) }}
+          image: {{ include "vm.image" $ctx }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.envFrom }}
           envFrom: {{ toYaml . | nindent 12 }}
@@ -128,6 +136,9 @@ spec:
       {{- with .Values.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.lifecycle }}
       lifecycle: {{ toYaml . | nindent 8 }}
@@ -141,7 +152,7 @@ spec:
         - {{ toYaml $constraint | nindent 10 | trim }}
           {{- if not $constraint.labelSelector }}
           labelSelector:
-            matchLabels: {{ include "vm-operator.selectorLabels" $ | nindent 14 }}
+            matchLabels: {{ include "vm.selectorLabels" $ctx | nindent 14 }}
           {{- end }}
         {{- end }}
       {{- end }}
@@ -153,7 +164,7 @@ spec:
         - name: cert
           secret:
             defaultMode: 420
-            secretName: {{ include "vm-operator.fullname" . }}-validation
+            secretName: {{ $fullname }}-validation
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml .| nindent 8 }}

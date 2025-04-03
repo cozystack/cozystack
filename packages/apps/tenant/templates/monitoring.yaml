@@ -46,4 +46,8 @@ spec:
         resources: {}
     oncall:
       enabled: false
+  {{- if .Values.ingress }}
+  dependsOn:
+    - name: ingress
+  {{- end }}
 {{- end }}

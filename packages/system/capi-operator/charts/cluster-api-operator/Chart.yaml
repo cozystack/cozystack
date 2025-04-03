@@ -1,6 +1,6 @@
 apiVersion: v2
-appVersion: 0.17.0
+appVersion: 0.18.1
 description: Cluster API Operator
 name: cluster-api-operator
 type: application
-version: 0.17.0
+version: 0.18.1

@@ -24,16 +24,13 @@ Usage:
 {{- include "vm.securityContext" (dict "securityContext" .Values.containerSecurityContext "helm" .) -}}
 */ -}}
 {{- define "vm.securityContext" -}}
-  {{- $securityContext := .securityContext -}}
+  {{- $securityContext := omit .securityContext "enabled" -}}
   {{- $Values := (.helm).Values | default .Values -}}
   {{- $adaptMode := (((($Values).global).compatibility).openshift).adaptSecurityContext | default "" -}}
   {{- if or (eq $adaptMode "force") (and (eq $adaptMode "auto") (include "vm.isOpenshift" .)) -}}
-    {{- $securityContext = omit $securityContext "fsGroup" "runAsUser" "runAsGroup" -}}
-    {{- if not $securityContext.seLinuxOptions -}}
-      {{- $securityContext = omit $securityContext "seLinuxOptions" -}}
-    {{- end -}}
+    {{- $securityContext = omit $securityContext "fsGroup" "runAsUser" "runAsGroup" "seLinuxOptions" -}}
   {{- end -}}
-  {{- omit $securityContext "enabled" | toYaml -}}
+  {{- toYaml $securityContext -}}
 {{- end -}}
 
 {{- /*
@@ -75,7 +72,11 @@ HTTP GET probe path
 HTTP GET probe scheme
 */ -}}
 {{- define "vm.probe.http.scheme" -}}
-  {{- ternary "HTTPS" "HTTP" (.app.extraArgs.tls | default false) -}}
+  {{- $isSecure := false -}}
+  {{- with ((.app).extraArgs).tls -}}
+    {{- $isSecure = eq (toString .) "true" -}}
+  {{- end -}}
+  {{- ternary "HTTPS" "HTTP" $isSecure -}}
 {{- end -}}
 
 {{- /*
@@ -86,12 +87,12 @@ Net probe port
 {{- end -}}
 
 {{- define "vm.arg" -}}
-  {{- if empty .value }}
+  {{- if and (empty .value) (kindIs "string" .value) (ne (toString .list) "true") }}
     {{- .key -}}
-  {{- else if and (kindIs "bool" .value) .value -}}
+  {{- else if eq (toString .value) "true" -}}
     -{{ ternary "" "-" (eq (len .key) 1) }}{{ .key }}
   {{- else -}}
-    -{{ ternary "" "-" (eq (len .key) 1) }}{{ .key }}={{ .value }}
+    -{{ ternary "" "-" (eq (len .key) 1) }}{{ .key }}={{ ternary (toJson .value | squote) .value (has (kindOf .value) (list "map" "slice")) }}
   {{- end -}}
 {{- end -}}
 
@@ -106,7 +107,7 @@ command line arguments
     {{- end -}}
     {{- if kindIs "slice" $value -}}
       {{- range $v := $value -}}
-        {{- $args = append $args (include "vm.arg" (dict "key" $key "value" $v)) -}}
+        {{- $args = append $args (include "vm.arg" (dict "key" $key "value" $v "list" true)) -}}
       {{- end -}}
     {{- else -}}
       {{- $args = append $args (include "vm.arg" (dict "key" $key "value" $value)) -}}

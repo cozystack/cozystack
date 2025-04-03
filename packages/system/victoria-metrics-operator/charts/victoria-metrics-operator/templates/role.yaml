@@ -20,18 +20,20 @@
 {{- end -}}
 
 {{- $ctx := dict "helm" . "extraLabels" .Values.extraLabels }}
+{{- $fullname := include "vm.plain.fullname" $ctx }}
+{{- $ns := include "vm.namespace" $ctx }}
 
 {{- if .Values.rbac.create }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "vm-operator.fullname" . }}
-  labels: {{ include "vm-operator.labels" $ctx | nindent 4 }}
+  name: {{ $fullname }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
   {{- with .Values.annotations }}
   annotations: {{ toYaml . | nindent 4 }}
   {{- end }}
-  namespace: {{ include "vm.namespace" . }}
+  namespace: {{ $ns }}
 rules:
 - apiGroups:
   - coordination.k8s.io
@@ -43,22 +45,20 @@ rules:
   - leases
 
 {{- $watchNamespaces := (fromYaml (tpl (toYaml (dict "ns" .Values.watchNamespaces)) .)).ns }}
-{{- $selfNamespace := (include "vm.namespace" .) }}
+{{- $selfNamespace := $ns }}
 {{- $watchSelfNamespace := (and (eq (len $watchNamespaces) 1) (eq (first $watchNamespaces) $selfNamespace)) }}
 {{- if not $watchSelfNamespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ template "vm-operator.fullname" . }}
-  labels: {{ include "vm-operator.labels" $ctx | nindent 4 }}
+  name: {{ $fullname }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
   {{- with .Values.annotations }}
   annotations: {{ toYaml . | nindent 4 }}
   {{- end }}
 rules:
-- nonResourceURLs:
-  - /metrics
-  - /metrics/resources
+- nonResourceURLs: {{ toYaml .Values.allowedMetricsEndpoints | nindent 2 }}
   verbs:
   - get
   - watch
@@ -97,6 +97,8 @@ rules:
 - apiGroups:
   - apps
   resources:
+  - daemonsets
+  - daemonsets/finalizers
   - deployments
   - deployments/finalizers
   - replicasets
@@ -177,14 +179,14 @@ rules:
 {{ toYaml . }}
 {{- end }}
 {{- end }}
-{{- if .Values.crds.cleanup.enabled }}
+{{- if and .Values.crds.enabled .Values.crds.cleanup.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "vm-operator.fullname" . }}-cleanup-hook
-  namespace: {{ include "vm.namespace" . }}
-  labels: {{ include "vm-operator.labels" . | nindent 4 }}
+  name: {{ $fullname }}-cleanup-hook
+  namespace: {{ $ns }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
   annotations: {{ include "vm-operator.cleanup.annotations" (dict "hookWeight" "-5") | nindent 4 }}
 rules: {{ toYaml $rules.admin | nindent 2 }}
 {{- end }}
@@ -195,22 +197,22 @@ rules: {{ toYaml $rules.admin | nindent 2 }}
 {{- /* kubernetes clusterrole aggregation feature to include these */ -}}
 {{- /* cluster roles into the default view and admin roles */ -}}
 {{- /* See https://kubernetes.io/docs/reference/access-authn-authz/rbac/#aggregated-clusterroles */}}
----
+--- 
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: victoriametrics:admin
+  name: {{ $fullname }}-victoriametrics-admin
   labels:
-    {{- include "vm-operator.labels" . | nindent 4 }}
+    {{- include "vm.labels" $ctx | nindent 4 }}
     {{- .Values.rbac.aggregatedClusterRoles.labels.admin | toYaml | nindent 4 }}
-rules: {{ toYaml $rules.admin | nindent 2 }}
+rules: {{ toYaml ($rules.admin | default list) | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: victoriametrics:view
+  name: {{ $fullname }}-victoriametrics-view
   labels:
-    {{- include "vm-operator.labels" . | nindent 4 }}
+    {{- include "vm.labels" $ctx | nindent 4 }}
     {{- .Values.rbac.aggregatedClusterRoles.labels.view | toYaml | nindent 4 }}
-rules: {{ toYaml $rules.view | nindent 2 }}
+rules: {{ toYaml ($rules.view | default list) | nindent 2 }}
 {{- end }}

@@ -21,7 +21,7 @@ leaderElection:
 image:
   manager:
     repository: registry.k8s.io/capi-operator/cluster-api-operator
-    tag: v0.17.0
+    tag: v0.18.1
     pullPolicy: IfNotPresent
 env:
   manager: []
@@ -69,3 +69,4 @@ volumeMounts:
     - mountPath: /tmp/k8s-webhook-server/serving-certs
       name: cert
       readOnly: true
+enableHelmHook: true

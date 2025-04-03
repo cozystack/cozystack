@@ -26,8 +26,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "1"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: {{ $addonNamespace }}
 ---
@@ -37,8 +39,10 @@ metadata:
   name: {{ $addonName }}
   namespace: {{ $addonNamespace }}
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "2"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
 {{- if or $addonVersion $.Values.secretName }}
 spec:

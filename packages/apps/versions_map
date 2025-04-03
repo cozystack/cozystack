@@ -127,7 +127,8 @@ tenant 1.6.8 bc95159a
 tenant 1.7.0 24fa7222
 tenant 1.8.0 160e4e2a
 tenant 1.9.0 728743db
-tenant 1.9.1 HEAD
+tenant 1.9.1 de19450f
+tenant 1.9.2 HEAD
 virtual-machine 0.1.4 f2015d65
 virtual-machine 0.1.5 263e47be
 virtual-machine 0.2.0 c0685f43

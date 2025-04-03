@@ -23,6 +23,14 @@ spec:
       jsonPath: .status.value
       name: Status
       type: string
+    - description: Keycloak realm name
+      jsonPath: .spec.realmName
+      name: Realm
+      type: boolean
+    - description: Keycloak instance name
+      jsonPath: .spec.keycloakRef
+      name: Keycloak
+      type: boolean
     name: v1
     schema:
       openAPIV3Schema:
@@ -124,6 +132,11 @@ spec:
                     description: AdminEventsEnabled indicates whether to enable admin
                       events.
                     type: boolean
+                  adminEventsExpiration:
+                    description: |-
+                      AdminEventsExpiration sets the expiration for events in seconds.
+                      Expired events are periodically deleted from the database.
+                    type: integer
                   enabledEventTypes:
                     description: EnabledEventTypes is a list of event types to enable.
                     items:
@@ -145,6 +158,140 @@ spec:
               realmName:
                 description: RealmName specifies the name of the realm.
                 type: string
+              smtp:
+                description: Smtp is the configuration for email in the realm.
+                nullable: true
+                properties:
+                  connection:
+                    description: Connection specifies the email connection configuration.
+                    properties:
+                      authentication:
+                        description: Authentication specifies the email authentication
+                          configuration.
+                        properties:
+                          password:
+                            description: Password specifies login password.
+                            properties:
+                              configMapKeyRef:
+                                description: Selects a key of a ConfigMap.
+                                properties:
+                                  key:
+                                    description: The key to select.
+                                    type: string
+                                  name:
+                                    description: |-
+                                      Name of the referent.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      TODO: Add other useful fields. apiVersion, kind, uid?
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              secretKeyRef:
+                                description: Selects a key of a secret.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.
+                                    type: string
+                                  name:
+                                    description: |-
+                                      Name of the referent.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      TODO: Add other useful fields. apiVersion, kind, uid?
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                            type: object
+                          username:
+                            description: Username specifies login username.
+                            properties:
+                              configMapKeyRef:
+                                description: Selects a key of a ConfigMap.
+                                properties:
+                                  key:
+                                    description: The key to select.
+                                    type: string
+                                  name:
+                                    description: |-
+                                      Name of the referent.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      TODO: Add other useful fields. apiVersion, kind, uid?
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              secretKeyRef:
+                                description: Selects a key of a secret.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.
+                                    type: string
+                                  name:
+                                    description: |-
+                                      Name of the referent.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      TODO: Add other useful fields. apiVersion, kind, uid?
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              value:
+                                description: Directly specifies a value.
+                                type: string
+                            type: object
+                        required:
+                        - password
+                        - username
+                        type: object
+                      enableSSL:
+                        description: EnableSSL specifies if SSL is enabled.
+                        type: boolean
+                      enableStartTLS:
+                        description: EnableStartTLS specifies if StartTLS is enabled.
+                        type: boolean
+                      host:
+                        description: Host specifies the email server host.
+                        type: string
+                      port:
+                        default: 25
+                        description: Port specifies the email server port.
+                        type: integer
+                    required:
+                    - host
+                    type: object
+                  template:
+                    description: Template specifies the email template configuration.
+                    properties:
+                      envelopeFrom:
+                        description: EnvelopeFrom is an email address used for bounces
+                          .
+                        type: string
+                      from:
+                        description: From specifies the sender email address.
+                        type: string
+                      fromDisplayName:
+                        description: FromDisplayName specifies the sender display
+                          for sender email address.
+                        type: string
+                      replyTo:
+                        description: ReplyTo specifies the reply-to email address.
+                        type: string
+                      replyToDisplayName:
+                        description: ReplyToDisplayName specifies display name for
+                          reply-to email address.
+                        type: string
+                    required:
+                    - from
+                    type: object
+                required:
+                - connection
+                - template
+                type: object
               themes:
                 description: Themes is a map of themes to apply to the realm.
                 nullable: true
@@ -244,6 +391,145 @@ spec:
                       is revoked when a different token is used.
                       Otherwise, refresh tokens are not revoked when used and can be used multiple times.
                     type: boolean
+                type: object
+              userProfileConfig:
+                description: |-
+                  UserProfileConfig is the configuration for user profiles in the realm.
+                  Attributes and groups will be added to the current realm configuration.
+                  Deletion of attributes and groups is not supported.
+                nullable: true
+                properties:
+                  attributes:
+                    description: Attributes specifies the list of user profile attributes.
+                    items:
+                      properties:
+                        annotations:
+                          additionalProperties:
+                            type: string
+                          description: Annotations specifies the annotations for the
+                            attribute.
+                          type: object
+                        displayName:
+                          description: Display name for the attribute.
+                          type: string
+                        group:
+                          description: Group to which the attribute belongs.
+                          type: string
+                        multivalued:
+                          description: |-
+                            Multivalued specifies if this attribute supports multiple values.
+                            This setting is an indicator and does not enable any validation
+                          type: boolean
+                        name:
+                          description: Name of the user attribute, used to uniquely
+                            identify an attribute.
+                          type: string
+                        permissions:
+                          description: Permissions specifies the permissions for the
+                            attribute.
+                          properties:
+                            edit:
+                              description: Edit specifies who can edit the attribute.
+                              items:
+                                type: string
+                              type: array
+                            view:
+                              description: View specifies who can view the attribute.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        required:
+                          description: Required indicates that the attribute must
+                            be set by users and administrators.
+                          properties:
+                            roles:
+                              description: Roles specifies the roles for whom the
+                                attribute is required.
+                              items:
+                                type: string
+                              type: array
+                            scopes:
+                              description: Scopes specifies the scopes when the attribute
+                                is required.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        selector:
+                          description: Selector specifies the scopes for which the
+                            attribute is available.
+                          properties:
+                            scopes:
+                              description: Scopes specifies the scopes for which the
+                                attribute is available.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        validations:
+                          additionalProperties:
+                            additionalProperties:
+                              properties:
+                                intVal:
+                                  type: integer
+                                mapVal:
+                                  additionalProperties:
+                                    type: string
+                                  nullable: true
+                                  type: object
+                                sliceVal:
+                                  items:
+                                    type: string
+                                  nullable: true
+                                  type: array
+                                stringVal:
+                                  type: string
+                              type: object
+                            type: object
+                          description: Validations specifies the validations for the
+                            attribute.
+                          type: object
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  groups:
+                    description: Groups specifies the list of user profile groups.
+                    items:
+                      properties:
+                        annotations:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Annotations specifies the annotations for the group.
+                            nullable
+                          type: object
+                        displayDescription:
+                          description: DisplayDescription specifies a user-friendly
+                            name for the group that should be used when rendering
+                            a group of attributes in user-facing forms.
+                          type: string
+                        displayHeader:
+                          description: DisplayHeader specifies a text that should
+                            be used as a header when rendering user-facing forms.
+                          type: string
+                        name:
+                          description: Name is unique name of the group.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  unmanagedAttributePolicy:
+                    description: |-
+                      UnmanagedAttributePolicy are user attributes not explicitly defined in the user profile configuration.
+                      Empty value means that unmanaged attributes are disabled.
+                      Possible values:
+                      ENABLED - unmanaged attributes are allowed.
+                      ADMIN_VIEW - unmanaged attributes are read-only and only available through the administration console and API.
+                      ADMIN_EDIT - unmanaged attributes can be managed only through the administration console and API.
+                    type: string
                 type: object
               users:
                 description: Users is a list of users to create in the realm.
