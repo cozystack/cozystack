@@ -7,8 +7,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "1"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: capi-kubeadm-bootstrap-system
 ---
@@ -18,8 +20,10 @@ metadata:
   name: kubeadm
   namespace: capi-kubeadm-bootstrap-system
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "2"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
 {{- with .Values.configSecret }}
 spec:
@@ -37,8 +41,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "1"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: capi-kubeadm-control-plane-system
 ---
@@ -48,14 +54,16 @@ metadata:
   name: kubeadm
   namespace: capi-kubeadm-control-plane-system
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "2"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
 {{- with .Values.configSecret }}
 spec:
 {{- if $.Values.manager }}
-  manager:
 {{- if and $.Values.manager.featureGates $.Values.manager.featureGates.kubeadm }}
+  manager:
     featureGates:
     {{- range $key, $value := $.Values.manager.featureGates.kubeadm }}
       {{ $key }}: {{ $value }}

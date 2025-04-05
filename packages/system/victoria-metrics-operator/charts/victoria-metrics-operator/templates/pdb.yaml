@@ -1,18 +1,23 @@
-{{- if .Values.podDisruptionBudget.enabled }}
+{{- $pdb := .Values.podDisruptionBudget }}
+{{- if $pdb.enabled }}
+{{- $ctx := dict "helm" . }}
+{{- $fullname := include "vm.plain.fullname" $ctx }}
+{{- $ns := include "vm.namespace" $ctx }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "vm-operator.fullname" . }}
-  namespace: {{ include "vm.namespace" . }}
-  {{- $ctx := dict "helm" . "extraLabels" .Values.podDisruptionBudget.labels }}
-  labels: {{ include "vm-operator.labels" $ctx | nindent 4 }}
+  name: {{ $fullname }}
+  namespace: {{ $ns }}
+  {{- $_ := set $ctx "extraLabels" $pdb.labels }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
+  {{- $_ := unset $ctx "extraLabels" }}
 spec:
-  {{- with .Values.podDisruptionBudget.minAvailable }}
+  {{- with $pdb.minAvailable }}
   minAvailable: {{ . }}
   {{- end }}
-  {{- with .Values.podDisruptionBudget.maxUnavailable }}
+  {{- with $pdb.maxUnavailable }}
   maxUnavailable: {{ . }}
   {{- end }}
   selector:
-    matchLabels: {{ include "vm-operator.selectorLabels" . | nindent 6 }}
+    matchLabels: {{ include "vm.selectorLabels" $ctx | nindent 6 }}
 {{- end }}

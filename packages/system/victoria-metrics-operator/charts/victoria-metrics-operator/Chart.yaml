@@ -1,18 +1,20 @@
 annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/changes: |
-    - replaced `crd.enabled` property to `crds.plain`. Instead of disabling CRDs it selects if CRDs should be rendered from template or as plain CRDs
+    - updates operator to [v0.55.0](https://github.com/VictoriaMetrics/operator/releases/tag/v0.55.0) version
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: Sources
-      url: https://github.com/VictoriaMetrics/helm-charts
+      url: https://github.com/VictoriaMetrics/helm-charts/tree/master/charts/victoria-metrics-operator
     - name: Charts repo
       url: https://victoriametrics.github.io/helm-charts/
     - name: Docs
       url: https://docs.victoriametrics.com/operator
+    - name: Changelog
+      url: https://docs.victoriametrics.com/operator/changelog
   artifacthub.io/operator: "true"
 apiVersion: v2
-appVersion: v0.48.4
+appVersion: v0.55.0
 dependencies:
 - name: victoria-metrics-common
   repository: https://victoriametrics.github.io/helm-charts
@@ -40,4 +42,4 @@ sources:
 - https://github.com/VictoriaMetrics/helm-charts
 - https://github.com/VictoriaMetrics/operator
 type: application
-version: 0.36.0
+version: 0.44.0

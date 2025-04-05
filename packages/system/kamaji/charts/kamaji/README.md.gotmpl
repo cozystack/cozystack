@@ -18,10 +18,15 @@ This Helm Chart starting from v0.1.1 provides the installation of an internal `e
 
 ## Install Kamaji
 
+To add clastix helm repository:
+
+
+        helm repo add clastix https://clastix.github.io/charts
+
 To install the Chart with the release name `kamaji`:
 
 
-        helm upgrade --install --namespace kamaji-system --create-namespace clastix/kamaji
+        helm upgrade --install --namespace kamaji-system --create-namespace kamaji clastix/kamaji
 
 Show the status:
 

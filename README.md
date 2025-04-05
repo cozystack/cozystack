@@ -68,3 +68,4 @@ The code is provided as-is with no warranties.
 ## Commercial Support
 
 A list of companies providing commercial support for this project can be found on [official site](https://cozystack.io/support/).
+

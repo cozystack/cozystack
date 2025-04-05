@@ -1,45 +1,50 @@
+{{- $service := .Values.service }}
+{{- $ctx := dict "helm" . }}
+{{- $fullname := include "vm.plain.fullname" $ctx }}
+{{- $ns := include "vm.namespace" $ctx }}
 apiVersion: v1
 kind: Service
 metadata:
-  namespace: {{ include "vm.namespace" . }}
-  {{- with .Values.service.annotations }}
+  namespace: {{ $ns }}
+  {{- with $service.annotations }}
   annotations: {{ toYaml . | nindent 4 }}
   {{- end }}
-  {{- $ctx := dict "helm" . "extraLabels" .Values.extraLabels }}
-  labels: {{ include "vm-operator.labels" $ctx | nindent 4 }}
-  name: {{ include "vm-operator.fullname" . }}
+  {{- $_ := set $ctx "extraLabels" .Values.extraLabels }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
+  {{- $_ := unset $ctx "extraLabels" }}
+  name: {{ $fullname }}
 spec:
-  {{- with .Values.service.clusterIP }}
+  {{- with $service.clusterIP }}
   clusterIP: {{ . }}
   {{- end }}
-  {{- with .Values.service.externalIPs }}
+  {{- with $service.externalIPs }}
   externalIPs: {{ toYaml . | nindent 4 }}
   {{- end }}
-  {{- with .Values.service.loadBalancerIP }}
+  {{- with $service.loadBalancerIP }}
   loadBalancerIP: {{ . }}
   {{- end }}
-  {{- with .Values.service.loadBalancerSourceRanges }}
+  {{- with $service.loadBalancerSourceRanges }}
   loadBalancerSourceRanges: {{ toYaml . | nindent 4 }}
   {{- end }}
-  type: {{ .Values.service.type }}
-  {{- with .Values.service.healthCheckNodePort }}
+  type: {{ $service.type }}
+  {{- with $service.healthCheckNodePort }}
   healthCheckNodePort: {{ . }}
   {{- end }}
-  {{- with .Values.service.externalTrafficPolicy }}
+  {{- with $service.externalTrafficPolicy }}
   externalTrafficPolicy: {{ . }}
   {{- end }}
-  {{- with .Values.service.ipFamilyPolicy }}
+  {{- with $service.ipFamilyPolicy }}
   ipFamilyPolicy: {{ . }}
   {{- end }}
-  {{- with .Values.service.ipFamilies }}
+  {{- with $service.ipFamilies }}
   ipFamilies: {{ toYaml . | nindent 4 }}
   {{- end }}
   ports:
     - name: http
-      port: {{ .Values.service.servicePort }}
+      port: {{ $service.servicePort }}
       targetPort: http
       protocol: TCP
     - name: webhook
-      port: {{ .Values.service.webhookPort }}
+      port: {{ $service.webhookPort }}
       targetPort: webhook
-  selector: {{ include "vm-operator.selectorLabels" . | nindent 4 }}
+  selector: {{ include "vm.selectorLabels" $ctx | nindent 4 }}

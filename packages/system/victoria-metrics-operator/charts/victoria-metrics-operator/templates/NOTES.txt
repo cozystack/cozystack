@@ -1,4 +1,4 @@
-{{ $.Chart.Name }} has been installed. Check its status by running:
+{{ include "vm.name" . }} has been installed. Check its status by running:
   kubectl --namespace {{ include "vm.namespace" . }} get pods -l "app.kubernetes.io/instance={{ $.Release.Name }}"
 
 Get more information on https://github.com/VictoriaMetrics/helm-charts/tree/master/charts/victoria-metrics-operator.

@@ -1,7 +1,7 @@
 # Build the manager binary
 FROM golang:1.23 as builder
 
-ARG VERSION=edge-24.12.1
+ARG VERSION=edge-25.3.2
 ARG TARGETOS TARGETARCH
 
 WORKDIR /workspace

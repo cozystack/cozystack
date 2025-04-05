@@ -2,11 +2,13 @@
 {{- define "vm.service" -}}
   {{- include "vm.validate.args" . -}}
   {{- $Values := (.helm).Values | default .Values -}}
-  {{- $nameTpl := "vm.fullname" }}
+  {{- $nameTpl := "" -}}
   {{- if eq .style "managed" -}}
     {{- $nameTpl = "vm.managed.fullname" }}
   {{- else if eq .style "plain" -}}
     {{- $nameTpl = "vm.plain.fullname" }}
+  {{- else -}}
+    {{- fail ".style argument should be either `plain` or `managed`"}}
   {{- end -}}
   {{- include $nameTpl . -}}
 {{- end }}
@@ -32,18 +34,26 @@
   {{- $Values := (.helm).Values | default .Values -}}
   {{- if .appKey -}}
     {{- $appKey := ternary (list .appKey) .appKey (kindIs "string" .appKey) -}}
-    {{- $spec := $Values -}}
+    {{- $values := $Values -}}
+    {{- $ctx := . -}}
     {{- range $ak := $appKey -}}
-      {{- if index $spec $ak -}}
-        {{- $spec = (index $spec $ak) -}}
-      {{- end -}}
-      {{- if and (kindIs "map" $spec) (hasKey $spec "spec") -}}
-        {{- $spec = $spec.spec -}}
-      {{- end -}}
+      {{- $values = ternary (default dict) (index $values $ak | default dict) (empty $values) -}}
+      {{- $ctx = ternary (default dict) (index $ctx $ak | default dict) (empty $ctx) -}}
     {{- end -}}
-    {{- $isSecure = (eq ($spec.extraArgs).tls "true") | default $isSecure -}}
+    {{- $spec := default dict -}}
+    {{- if $ctx -}}
+      {{- $spec = $ctx -}}
+    {{- else if $values -}}
+      {{- $spec = $values -}}
+    {{- end -}}
+    {{- with ($spec.extraArgs).tls -}}
+      {{- $isSecure = eq (toString .) "true" -}}
+    {{- end -}}
     {{- $port = (ternary 443 80 $isSecure) -}}
-    {{- $port = $spec.port | default ($spec.service).servicePort | default $port -}}
+    {{- $port = $spec.port | default ($spec.service).servicePort | default ($spec.service).port | default $port -}}
+    {{- if hasKey . "appIdx" -}}
+      {{- $port = (include "vm.port.from.flag" (dict "flag" ($spec.extraArgs).httpListenAddr "default" $port)) -}}
+    {{- end }}
   {{- end }}
   {{- $fqdn }}:{{ $port }}
 {{- end -}}
@@ -56,18 +66,23 @@
   {{- $isSecure := ternary false true (empty .appSecure) -}}
   {{- if .appKey -}}
     {{- $appKey := ternary (list .appKey) .appKey (kindIs "string" .appKey) -}}
-    {{- $spec := $Values -}}
+    {{- $values := $Values -}}
+    {{- $ctx := . -}}
     {{- range $ak := $appKey -}}
-      {{- if index $spec $ak -}}
-        {{- $spec = (index $spec $ak) -}}
-      {{- end -}}
-      {{- if and (kindIs "map" $spec) (hasKey $spec "spec") -}}
-        {{- $spec = $spec.spec -}}
-      {{- end -}}
+      {{- $values = ternary (default dict) (index $values $ak | default dict) (empty $values) -}}
+      {{- $ctx = ternary (default dict) (index $ctx $ak | default dict) (empty $ctx) -}}
     {{- end -}}
-    {{- $isSecure = (eq ($spec.extraArgs).tls "true") | default $isSecure -}}
+    {{- $spec := default dict -}}
+    {{- if $values -}}
+      {{- $spec = $values -}}
+    {{- else if $ctx -}}
+      {{- $spec = $ctx -}}
+    {{- end -}}
+    {{- with ($spec.extraArgs).tls -}}
+      {{- $isSecure = eq (toString .) "true" -}}
+    {{- end -}}
     {{- $proto = (ternary "https" "http" $isSecure) -}}
     {{- $path = dig "http.pathPrefix" $path ($spec.extraArgs | default dict) -}}
   {{- end -}}
-  {{- printf "%s://%s%s" $proto $host $path -}}
+  {{- printf "%s://%s%s" $proto $host (trimSuffix "/" $path) -}}
 {{- end -}}

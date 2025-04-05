@@ -22,7 +22,7 @@ Kubernetes: `>=1.21.0-0`
 
 | Repository | Name | Version |
 |------------|------|---------|
-| https://clastix.github.io/charts | kamaji-etcd | >=0.8.1 |
+| https://clastix.github.io/charts | kamaji-etcd | >=0.9.2 |
 
 [Kamaji](https://github.com/clastix/kamaji) requires a [multi-tenant `etcd`](https://github.com/clastix/kamaji-internal/blob/master/deploy/getting-started-with-kamaji.md#setup-internal-multi-tenant-etcd) cluster.
 This Helm Chart starting from v0.1.1 provides the installation of an internal `etcd` in order to streamline the local test. If you'd like to use an externally managed etcd instance, you can specify the overrides and by setting the value `etcd.deploy=false`.
@@ -31,9 +31,13 @@ This Helm Chart starting from v0.1.1 provides the installation of an internal `e
 
 ## Install Kamaji
 
+To add clastix helm repository:
+
+        helm repo add clastix https://clastix.github.io/charts
+
 To install the Chart with the release name `kamaji`:
 
-        helm upgrade --install --namespace kamaji-system --create-namespace clastix/kamaji
+        helm upgrade --install --namespace kamaji-system --create-namespace kamaji clastix/kamaji
 
 Show the status:
 

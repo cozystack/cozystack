@@ -12,6 +12,8 @@ spec:
   public: false
   secret: $client-secret-name:client-secret-key
   webUrl: https://argocd.example.com
+  adminUrl: https://admin.example.com
+  homeUrl: /home/
   defaultClientScopes:
     - groups
   redirectUris:
@@ -23,19 +25,28 @@ spec:
 apiVersion: v1.edp.epam.com/v1
 kind: KeycloakClient
 metadata:
-  name: keycloakclient-policy-sample
+  name: keycloakclient-authorization-sample
 spec:
   realmRef:
     name: keycloakrealm-sample
     kind: KeycloakRealm
-  clientId: policy-sample
-  secret: $client-secret-policy-sample:client-secret-key
-  webUrl: http://example.com
+  clientId: authorization-sample
+  secret: $client-secret-authorization-sample:client-secret-key
+  webUrl: https://example.com
   directAccess: true
   authorizationServicesEnabled: true
   serviceAccount:
     enabled: true
   authorization:
+    scopes:
+      - scope1
+    resources:
+      - name: resource1
+        displayName: Resource 1
+        type: test
+        iconUri: https://example.com/icon.png
+        scopes:
+          - scope1
     policies:
       - name: role-policy
         type: role
@@ -112,6 +123,6 @@ spec:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: client-secret-policy-sample
+  name: client-secret-authorization-sample
 data:
   client-secret-key: cGFzc3dvcmQ=

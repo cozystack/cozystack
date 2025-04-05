@@ -25,8 +25,11 @@ apiVersion: v1
 kind: Namespace
 metadata:
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
   name: {{ $coreNamespace }}
 ---
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
@@ -35,8 +38,10 @@ metadata:
   name: {{ $coreName }}
   namespace: {{ $coreNamespace }}
   annotations:
+    {{- if $.Values.enableHelmHook }}
     "helm.sh/hook": "post-install,post-upgrade"
     "helm.sh/hook-weight": "2"
+    {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
 {{- if or $coreVersion $.Values.configSecret.name $.Values.manager }}
 spec:
@@ -45,8 +50,8 @@ spec:
   version: {{ $coreVersion }}
 {{- end }}
 {{- if $.Values.manager }}
-  manager:
 {{- if and $.Values.manager.featureGates $.Values.manager.featureGates.core }}
+  manager:
     featureGates:
     {{- range $key, $value := $.Values.manager.featureGates.core }}
       {{ $key }}: {{ $value }}

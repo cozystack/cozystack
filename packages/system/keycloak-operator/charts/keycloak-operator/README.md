@@ -1,6 +1,6 @@
 # keycloak-operator
 
-![Version: 1.23.0](https://img.shields.io/badge/Version-1.23.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.23.0](https://img.shields.io/badge/AppVersion-1.23.0-informational?style=flat-square)
+![Version: 1.25.0](https://img.shields.io/badge/Version-1.25.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.25.0](https://img.shields.io/badge/AppVersion-1.25.0-informational?style=flat-square)
 
 A Helm chart for KubeRocketCI Keycloak Operator
 
@@ -32,7 +32,7 @@ To install the Keycloak Operator, follow the steps below:
      ```bash
      helm search repo epamedp/keycloak-operator -l
      NAME                           CHART VERSION   APP VERSION     DESCRIPTION
-     epamedp/keycloak-operator      1.22.0          1.22.0          A Helm chart for KRCI Keycloak Operator
+     epamedp/keycloak-operator      1.24.0          1.24.0          A Helm chart for KRCI Keycloak Operator
      ```
 
     _**NOTE:** It is highly recommended to use the latest stable version._

@@ -1,27 +1,31 @@
 {{- if .Values.admissionWebhooks.enabled }}
-{{- $tls := fromYaml (include "vm-operator.certs" .) }}
+{{- $ctx := dict "helm" . "extraLabels" .Values.extraLabels }}
+{{- $tls := fromYaml (include "vm-operator.certs" $ctx) }}
+{{- $fullname := include "vm.plain.fullname" $ctx }}
+{{- $domain := ((.Values.global).cluster).dnsDomain }}
+{{- $ns := include "vm.namespace" $ctx }}
+{{- $certManager := .Values.admissionWebhooks.certManager }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  name:  {{ include "vm-operator.fullname" . }}-admission
-  {{- if .Values.admissionWebhooks.certManager.enabled }}
+  name:  {{ $fullname }}-admission
+  {{- if $certManager.enabled }}
   annotations:
-    certmanager.k8s.io/inject-ca-from: {{ printf "%s/%s-validation" (include "vm.namespace" .) ( include "vm-operator.fullname" .) | quote }}
-    cert-manager.io/inject-ca-from: {{ printf "%s/%s-validation" (include "vm.namespace" .) (include "vm-operator.fullname" .) | quote }}
+    certmanager.k8s.io/inject-ca-from: {{ printf "%s/%s-validation" $ns $fullname | quote }}
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-validation" $ns $fullname | quote }}
   {{- end }}
-  {{- $ctx := dict "helm" . "extraLabels" .Values.extraLabels }}
-  labels: {{ include "vm-operator.labels" $ctx | nindent 4 }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
 webhooks:
 {{- range $name, $enabled := .Values.admissionWebhooks.enabledCRDValidation }}
 {{- if $enabled }}
   - clientConfig:
       service:
-        namespace: {{ include "vm.namespace" $ }}
-        name: {{ include "vm-operator.fullname" $ }}
+        namespace: {{ $ns }}
+        name: {{ $fullname }}
         path: /validate-operator-victoriametrics-com-v1beta1-{{ $name }}
         port: {{ $.Values.service.webhookPort }}
-      {{- if not $.Values.admissionWebhooks.certManager.enabled }}
+      {{- if not $certManager.enabled }}
       caBundle: {{ $tls.caCert }}
       {{- end }}
     failurePolicy: {{ $.Values.admissionWebhooks.policy }}
@@ -32,7 +36,7 @@ webhooks:
       matchExpressions:
         - key: app.kubernetes.io/name
           operator: NotIn
-          values: [{{ include "vm-operator.name" $ }}]
+          values: [{{ include "vm.name" $ }}]
     rules:
       - apiGroups:
           - operator.victoriametrics.com
@@ -45,69 +49,84 @@ webhooks:
           - {{ $name }}{{ ternary "" "s" (hasSuffix "s" $name) }}
 {{- end }}
 {{- end }}
-{{- if .Values.admissionWebhooks.certManager.enabled }}
-{{- if not .Values.admissionWebhooks.certManager.issuer }}
+{{- if $certManager.enabled }}
+{{- if not $certManager.issuer }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: {{ include "vm-operator.fullname" . }}-root
-  namespace: {{ include "vm.namespace" . }}
+  name: {{ $fullname }}-root
+  namespace: {{ $ns }}
 spec:
   selfSigned: {}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ include "vm-operator.fullname" . }}-root-ca
-  namespace: {{ include "vm.namespace" . }}
+  name: {{ $fullname }}-root-ca
+  namespace: {{ $ns }}
 spec:
-  secretName: {{ include "vm-operator.fullname" . }}-root-ca
-  duration: 63800h0m0s
+  secretName: {{ $fullname }}-root-ca
+  duration: {{ $certManager.ca.duration }}
+  {{- with $certManager.ca.secretTemplate }}
+  secretTemplate: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $certManager.ca.subject }}
+  subject: {{ toYaml . | nindent 4 }}
+  {{- end }}
   issuerRef:
-    name: {{ include "vm-operator.fullname" . }}-root
-  commonName: "ca.validation.victoriametrics"
+    name: {{ $fullname }}-root
+  commonName: {{ $certManager.ca.commonName }}
   isCA: true
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: {{ include "vm-operator.fullname" . }}-issuer
-  namespace: {{ include "vm.namespace" . }}
+  name: {{ $fullname }}-issuer
+  namespace: {{ $ns }}
 spec:
   ca:
-    secretName: {{ include "vm-operator.fullname" . }}-root-ca
+    secretName: {{ $fullname }}-root-ca
 {{- end }}
 ---
 # actual cert part for operator
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ include "vm-operator.fullname" . }}-validation
-  namespace: {{ include "vm.namespace" . }}
+  name: {{ $fullname }}-validation
+  namespace: {{ $ns }}
 spec:
-  secretName: {{ include "vm-operator.fullname" . }}-validation
-  duration: 45800h0m0s
-  issuerRef:
-    {{- if .Values.admissionWebhooks.certManager.issuer }}
-    {{- range $k, $v :=  .Values.admissionWebhooks.certManager.issuer }}
-     {{ $k}}: {{ $v}}
-    {{- end }}
-    {{- else }}
-    name: {{ include "vm-operator.fullname" . }}-issuer
+  secretName: {{ $fullname }}-validation
+  duration: {{ $certManager.cert.duration }}
+  {{- with $certManager.cert.secretTemplate }}
+  secretTemplate: {{ toYaml . | nindent 4 }}
   {{- end }}
+  {{- with $certManager.cert.commonName }}
+  commonName: {{ . }}
+  {{- end }}
+  {{- with $certManager.cert.subject }}
+  subject: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  {{- $issuerRef := $certManager.issuer | default dict }}
+  {{- if empty $issuerRef }}
+    {{- $_ := set $issuerRef "name" (printf "%s-issuer" $fullname) }}
+  {{- end }}
+  issuerRef: {{ toYaml $issuerRef | nindent 4 }}
   dnsNames:
-    - {{ include "vm-operator.fullname" . }}
-    - {{ include "vm-operator.fullname" . }}.{{ include "vm.namespace" . }}
-    - {{ include "vm-operator.fullname" . }}.{{ include "vm.namespace" . }}.svc
+    - {{ $fullname }}
+    - {{ $fullname }}.{{ $ns }}
+    - {{ $fullname }}.{{ $ns }}.svc
+    {{- with $domain }}
+    - {{ $fullname }}.{{ $ns }}.svc.{{ . }}
+    {{- end }}
 {{- else }}
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "vm-operator.fullname" . }}-validation
-  namespace: {{ include "vm.namespace" . }}
-  labels: {{ include "vm-operator.labels" . | nindent 4 }}
+  name: {{ $fullname }}-validation
+  namespace: {{ $ns }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
 type: kubernetes.io/tls
 data:
   ca.crt: {{ $tls.caCert }}

@@ -9,7 +9,8 @@ global:
     openshift:
       adaptSecurityContext: "auto"
   cluster:
-    dnsDomain: cluster.local
+    # -- K8s cluster domain suffix, uses for building storage pods' FQDN. Details are [here](https://kubernetes.io/docs/tasks/administer-cluster/dns-custom-nameservers/)
+    dnsDomain: cluster.local.
 # Default values for victoria-metrics.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
@@ -29,10 +30,14 @@ image:
   pullPolicy: IfNotPresent
 
 crds:
+  # -- manages CRD creation. Disables CRD creation only in combination with `crds.plain: false` due to helm dependency conditions limitation
+  enabled: true
   # -- check if plain or templated CRDs should be created.
   # with this option set to `false`, all CRDs will be rendered from templates.
   # with this option set to `true`, all CRDs are immutable and require manual upgrade.
   plain: false
+  # -- additional CRD annotations, when `.Values.crds.plain: false`
+  annotations: {}
   cleanup:
     # -- Tells helm to clean up all the vm resources under this release's namespace when uninstalling
     enabled: false
@@ -57,14 +62,18 @@ replicaCount: 1
 # -- Secret to pull images
 imagePullSecrets: []
 
-# -- VM operatror deployment name override
+# -- Override chart name
 nameOverride: ""
 
-# -- Overrides the full name of server component
+# -- Overrides the full name of server component resources
 fullnameOverride: ""
 
 # -- VM operator log level. Possible values: info and error.
 logLevel: "info"
+
+allowedMetricsEndpoints:
+  - /metrics
+  - /metrics/resources
 
 rbac:
   # -- Specifies whether the RBAC resources should be created
@@ -89,10 +98,18 @@ annotations: {}
 # -- Pod's security context. Details are [here](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/)
 podSecurityContext:
   enabled: true
+  fsGroup: 2000
+  runAsNonRoot: true
+  runAsUser: 1000
 
 # -- Security context to be added to server pods
 securityContext:
   enabled: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
 
 operator:
   # -- By default, operator converts prometheus-operator objects.
@@ -117,6 +134,9 @@ serviceAccount:
   # -- The name of the service account to use. If not set and create is true, a name is generated using the fullname template
   name: ""
 
+  # -- Whether to automount the service account token. Note that token needs to be mounted manually if this is disabled.
+  automountServiceAccountToken: true
+
 service:
   # -- Service annotations
   annotations: {}
@@ -126,7 +146,7 @@ service:
   clusterIP: ""
   # -- Service external IPs. Check [here](https://kubernetes.io/docs/user-guide/services/#external-ips) for details
   externalIPs: ""
-  # -- Service load balacner IP
+  # -- Service load balancer IP
   loadBalancerIP: ""
   # -- Load balancer source range
   loadBalancerSourceRanges: []
@@ -170,6 +190,9 @@ resources:
 
 # -- Pod's node selector. Details are [here](https://kubernetes.io/docs/user-guide/node-selection/)
 nodeSelector: {}
+
+# -- Name of Priority Class
+priorityClassName: ""
 
 # -- Array of tolerations object. Spec is [here](https://kubernetes.io/docs/concepts/configuration/assign-pod-node/)
 tolerations: []
@@ -223,6 +246,9 @@ extraContainers:
   # - name: config-reloader
   #   image: reloader-image
 
+# -- Enable hostNetwork on operator deployment
+hostNetwork: false
+
 # -- Configures resource validation
 admissionWebhooks:
   # -- Enables validation webhook.
@@ -246,6 +272,18 @@ admissionWebhooks:
     enabled: false
     # --If needed, provide own issuer. Operator will create self-signed if empty.
     issuer: {}
+    # -- Certificate Authority parameters
+    ca:
+      secretTemplate: {}
+      subject: {}
+      duration: 63800h0m0s
+      commonName: ca.validation.victoriametrics
+    # -- Certificate parameters
+    cert:
+      secretTemplate: {}
+      subject: {}
+      duration: 45800h0m0s
+      commonName: ""
   keepTLSSecret: true
   # tls specifies TLS cert/key for the webhook
   tls:
@@ -253,9 +291,11 @@ admissionWebhooks:
     cert:
     key:
 
-# -- Configures monitoring with serviceScrape. VMServiceScrape must be pre-installed
+# -- Configures monitoring with serviceScrape using either `VMServiceScrape` or `ServiceMonitor`. For latter [Prometheus Operator CRDs](https://artifacthub.io/packages/helm/prometheus-community/prometheus-operator-crds) should be preinstalled
 serviceMonitor:
   enabled: false
+  # -- Creates `VMServiceScrape` if `true` and `ServiceMonitor` otherwise. Make sure [Prometheus Operator CRDs](https://artifacthub.io/packages/helm/prometheus-community/prometheus-operator-crds) are installed if it's set to `false`
+  vm: true
   extraLabels: {}
   annotations: {}
   relabelings: []

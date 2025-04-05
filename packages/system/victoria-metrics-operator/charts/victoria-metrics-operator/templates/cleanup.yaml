@@ -1,4 +1,4 @@
-{{- if .Values.crds.cleanup.enabled }}
+{{- if and .Values.crds.enabled .Values.crds.cleanup.enabled }}
 {{- $app := .Values.crds.cleanup }}
 {{- if empty ($app.image).tag }}
   {{- $tag := (printf "%s.%s" .Capabilities.KubeVersion.Major .Capabilities.KubeVersion.Minor) | replace "+" "" -}}
@@ -6,27 +6,31 @@
 {{- else if not (kindIs "string" ($app.image).tag) }}
   {{- fail "`crd.cleanup.image.tag` is not string, most probably you need to enquote provided value" -}}
 {{- end }}
+{{- $ctx := dict "helm" . "noEnterprise" true }}
+{{- $fullname := include "vm.plain.fullname" $ctx }}
+{{- $ns := include "vm.namespace" $ctx }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "vm-operator.fullname" . }}-cleanup-hook
-  namespace: {{ include "vm.namespace" . }}
-  labels: {{ include "vm-operator.labels" . | nindent 4 }}
+  name: {{ $fullname }}-cleanup-hook
+  namespace: {{ $ns }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
   annotations: {{ include "vm-operator.cleanup.annotations" (dict "hookWeight" "-3") | nindent 4 }}
 spec:
   template:
     metadata:
-      name: {{ .Release.Name }}
-      labels: {{ include "vm-operator.labels" . | nindent 8 }}
+      name: {{ $fullname }}
+      labels: {{ include "vm.labels" $ctx | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "vm-operator.fullname" . }}-cleanup-hook
-      {{- with .Values.imagePullSecrets }}
+      serviceAccountName: {{ $fullname }}-cleanup-hook
+      {{- with (.Values.imagePullSecrets | default .Values.global.imagePullSecrets) }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: kubectl
-          image: {{ include "vm.image" (dict "helm" . "app" $app) }}
+          {{- $_ := set $ctx "appKey" (list "crds" "cleanup") }}
+          image: {{ include "vm.image" $ctx }}
           imagePullPolicy: {{ $app.image.pullPolicy }}
           resources: {{ toYaml $app.resources | nindent 12 }}
           args:

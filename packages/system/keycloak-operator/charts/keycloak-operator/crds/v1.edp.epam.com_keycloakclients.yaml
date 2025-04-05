@@ -44,6 +44,15 @@ spec:
           spec:
             description: KeycloakClientSpec defines the desired state of KeycloakClient.
             properties:
+              adminFineGrainedPermissionsEnabled:
+                description: AdminFineGrainedPermissionsEnabled enable/disable fine-grained
+                  admin permissions for a client.
+                type: boolean
+              adminUrl:
+                description: |-
+                  AdminUrl is client admin url.
+                  If empty - WebUrl will be used.
+                type: string
               advancedProtocolMappers:
                 description: AdvancedProtocolMappers is a flag to enable advanced
                   protocol mappers.
@@ -55,6 +64,14 @@ spec:
                   post.logout.redirect.uris: +
                 description: Attributes is a map of client attributes.
                 nullable: true
+                type: object
+              authenticationFlowBindingOverrides:
+                description: AuthenticationFlowBindingOverrides client auth flow overrides
+                properties:
+                  browser:
+                    type: string
+                  directGrant:
+                    type: string
                 type: object
               authorization:
                 description: Authorization is a client authorization configuration.
@@ -334,14 +351,61 @@ spec:
                       - type
                       type: object
                     type: array
+                  resources:
+                    items:
+                      properties:
+                        attributes:
+                          additionalProperties:
+                            items:
+                              type: string
+                            type: array
+                          description: Attributes is a map of resource attributes.
+                          nullable: true
+                          type: object
+                        displayName:
+                          description: DisplayName for Identity Providers.
+                          type: string
+                        iconUri:
+                          description: IconURI pointing to an icon.
+                          type: string
+                        name:
+                          description: Name is unique resource name.
+                          type: string
+                        ownerManagedAccess:
+                          description: OwnerManagedAccess if enabled, the access to
+                            this resource can be managed by the resource owner.
+                          type: boolean
+                        scopes:
+                          description: |-
+                            Scopes requested or assigned in advance to the client to determine whether the policy is applied to this client.
+                            Condition is evaluated during OpenID Connect authorization request and/or token request.
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                        type:
+                          description: Type of this resource. It can be used to group
+                            different resource instances with the same type.
+                          type: string
+                        uris:
+                          description: URIs which are protected by resource.
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                      required:
+                      - displayName
+                      - name
+                      type: object
+                    type: array
                   scopes:
                     items:
                       type: string
                     type: array
                 type: object
               authorizationServicesEnabled:
-                description: ServiceAccountsEnabled enable/disable fine-grained authorization
-                  support for a client.
+                description: AuthorizationServicesEnabled enable/disable fine-grained
+                  authorization support for a client.
                 type: boolean
               bearerOnly:
                 description: BearerOnly is a flag to enable bearer-only.
@@ -389,6 +453,9 @@ spec:
                 default: true
                 description: FullScopeAllowed is a flag to enable full scope.
                 type: boolean
+              homeUrl:
+                description: HomeUrl is a client home url.
+                type: string
               implicitFlowEnabled:
                 description: ImplicitFlowEnabled is a flag to enable support for OpenID
                   Connect redirect based authentication without authorization code.
@@ -403,6 +470,26 @@ spec:
                   type: string
                 nullable: true
                 type: array
+              permission:
+                description: Permission is a client permissions configuration
+                nullable: true
+                properties:
+                  scopePermissions:
+                    description: ScopePermissions mapping of scope and the policies
+                      attached
+                    items:
+                      properties:
+                        name:
+                          type: string
+                        policies:
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - name
+                      type: object
+                    type: array
+                type: object
               protocol:
                 description: Protocol is a client protocol.
                 nullable: true
