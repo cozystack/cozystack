@@ -15,6 +15,7 @@ spec:
       - ExpandDisks
       - LiveMigration
       - AutoResourceLimitsGate
+      - CPUManager
     evictionStrategy: LiveMigrate
   customizeComponents: {}
   imagePullPolicy: IfNotPresent
