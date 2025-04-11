@@ -70,6 +70,13 @@ addons:
     enabled: false
     valuesOverride: {}
 
+  ## VerticalPodAutoscaler
+  ##
+  verticalPodAutoscaler:
+    ## @param addons.verticalPodAutoscaler.valuesOverride Custom values to override
+    ##
+    valuesOverride: {}
+
 ## @section Kamaji control plane
 ##
 kamajiControlPlane:

@@ -1,0 +1,69 @@
+{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
+{{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
+{{- if .Values.addons.monitoringAgents.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-vertical-pod-autoscaler
+  labels:
+    cozystack.io/repository: system
+    coztstack.io/target-cluster-name: {{ .Release.Name }}
+spec:
+  interval: 5m
+  releaseName: vertical-pod-autoscaler
+  chart:
+    spec:
+      chart: cozy-vertical-pod-autoscaler
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-system
+        namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-vertical-pod-autoscaler
+  storageNamespace: cozy-vertical-pod-autoscaler
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  values:
+    vertical-pod-autoscaler:
+      recommender:
+        extraArgs:
+          container-name-label: container
+          container-namespace-label: namespace
+          container-pod-name-label: pod
+          storage: prometheus
+          memory-saver: true
+          pod-label-prefix: label_
+          metric-for-pod-labels: kube_pod_labels{job="kube-state-metrics", tenant="{{ .Release.Namespace }}", cluster="{{ .Release.Name }}"}[8d]
+          pod-name-label: pod
+          pod-namespace-label: namespace
+          prometheus-address: http://vmselect-shortterm.{{ $targetTenant }}.svc.cozy.local:8481/select/0/prometheus/
+          prometheus-cadvisor-job-name: cadvisor
+        resources:
+          limits:
+            memory: 1600Mi
+          requests:
+            cpu: 100m
+            memory: 1600Mi
+  {{- if .Values.addons.verticalPodAutoscaler.valuesOverride }}
+  valuesFrom:
+  - kind: Secret
+    name: {{ .Release.Name }}-vertical-pod-autoscaler-values-override
+    valuesKey: values
+  {{- end }}
+  dependsOn:
+  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
+  - name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  - name: {{ .Release.Name }}-monitoring-agents
+    namespace: {{ .Release.Namespace }}
+{{- end }}

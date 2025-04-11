@@ -38,9 +38,9 @@ spec:
   - name: {{ .Release.Name }}
     namespace: {{ .Release.Namespace }}
   {{- end }}
-  - name: {{ .Release.Name }}-cilium
-    namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-cozy-victoria-metrics-operator
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-vertical-pod-autoscaler-crds
     namespace: {{ .Release.Namespace }}
   values:
     vmagent:

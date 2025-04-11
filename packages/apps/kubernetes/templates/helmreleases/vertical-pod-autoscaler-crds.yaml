@@ -1,0 +1,41 @@
+{{- if .Values.addons.monitoringAgents.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-vertical-pod-autoscaler-crds
+  labels:
+    cozystack.io/repository: system
+    coztstack.io/target-cluster-name: {{ .Release.Name }}
+spec:
+  interval: 5m
+  releaseName: vertical-pod-autoscaler-crds
+  chart:
+    spec:
+      chart: cozy-vertical-pod-autoscaler-crds
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-system
+        namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-vertical-pod-autoscaler-crds
+  storageNamespace: cozy-vertical-pod-autoscaler-crds
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+
+  dependsOn:
+  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
+  - name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+{{- end }}
