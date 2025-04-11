@@ -52,11 +52,11 @@ jobs:
           script: |
             const branch = context.payload.pull_request.head.ref;
             const match = branch.match(/^release-(\d+\.\d+\.\d+(?:[-\w\.]+)?)$/);
-  
+
             if (!match) {
               core.setFailed(`Branch '${branch}' does not match expected format 'release-X.Y.Z[-suffix]'`);
             } else {
-              const tag = match[1];
+              const tag = `v${match[1]}`;
               core.setOutput('tag', tag);
               console.log(`✅ Extracted tag: ${tag}`);
             }
