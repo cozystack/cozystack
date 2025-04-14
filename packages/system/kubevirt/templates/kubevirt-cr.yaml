@@ -17,6 +17,7 @@ spec:
       - AutoResourceLimitsGate
       - CPUManager
       - GPU
+      - VMExport
     evictionStrategy: LiveMigrate
   customizeComponents: {}
   imagePullPolicy: IfNotPresent
