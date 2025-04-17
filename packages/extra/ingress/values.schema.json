@@ -35,6 +35,11 @@
             "type": "boolean",
             "description": "Should ingress serve CDI upload proxy",
             "default": false
+        },
+        "virtExportProxy": {
+            "type": "boolean",
+            "description": "Should ingress serve KubeVirt export proxy",
+            "default": false
         }
     }
 }
