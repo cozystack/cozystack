@@ -988,6 +988,18 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		},
 	}
 
+	valuesFromConfigMap := appsv1alpha1.CozyTenantConfigurationHashConfigMapName
+	if helmRelease.Name == "tenant-root" && helmRelease.Namespace == "tenant-root" {
+		valuesFromConfigMap = appsv1alpha1.CozySystemConfigurationHashConfigMapName
+	}
+	helmRelease.Spec.ValuesFrom = []helmv2.ValuesReference{{
+		Kind:       "ConfigMap",
+		Name:       valuesFromConfigMap,
+		ValuesKey:  appsv1alpha1.CozyTenantConfigurationHashKey,
+		TargetPath: appsv1alpha1.CozyTenantConfigurationHashKey,
+		Optional:   true,
+	}}
+
 	return helmRelease, nil
 }
 

@@ -21,6 +21,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	CozySystemConfigurationHashConfigMapName = "cozy-system-configuration-hash"
+	CozyTenantConfigurationHashConfigMapName = "cozy-tenant-configuration-hash"
+	CozyTenantConfigurationHashKey           = "cozyTenantConfigurationHash"
+)
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // ApplicationList is a list of Application objects.
