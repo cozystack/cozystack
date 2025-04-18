@@ -54,6 +54,12 @@ spec:
         namespace: cozy-public
   values:
     host: "{{ $host }}"
+  valuesFrom:
+  - kind: ConfigMap
+    name: "cozy-system-configuration-hash"
+    valuesKey: "cozyTenantConfigurationHash"
+    targetPath: "cozyTenantConfigurationHash"
+    optional: true
   dependsOn:
   {{- range $x := $bundle.releases }}
   {{- if has $x.name (list "cilium" "kubeovn") }}

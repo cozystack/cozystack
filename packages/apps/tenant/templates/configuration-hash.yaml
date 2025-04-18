@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozy-tenant-configuration-hash
+  namespace: {{ include "tenant.name" . }}
+data:
+  cozyTenantConfigurationHash: {{ sha256sum (toJson .Values) | quote }}

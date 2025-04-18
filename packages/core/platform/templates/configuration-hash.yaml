@@ -1,0 +1,14 @@
+{{- $rootTenantConfiguration := dict "values" .Values }}
+{{- $cozyConfig     := index (lookup "v1" "ConfigMap" "cozy-system" "cozystack"           ) "data" }}
+{{- $cozyScheduling := index (lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling") "data" }}
+{{- $cozyBranding   := index (lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding"  ) "data" }}
+{{- $_ := set $rootTenantConfiguration "config" $cozyConfig }}
+{{- $_ := set $rootTenantConfiguration "scheduling" $cozyScheduling }}
+{{- $_ := set $rootTenantConfiguration "branding" $cozyBranding }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozy-system-configuration-hash
+  namespace: tenant-root
+data:
+  cozyTenantConfigurationHash: {{ sha256sum (toJson $rootTenantConfiguration) | quote }}
