@@ -21,6 +21,9 @@ spec:
         limits:
           cpu: "1"
           memory: 1024Mi
+        requests:
+          cpu: "10m"
+          memory: 128Mi
 ---
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
 kind: BootstrapProvider
