@@ -1,4 +1,4 @@
-KUBEOVN_TAG = v1.13.8
+KUBEOVN_TAG=$(shell awk '$$1 == "version:" {print $$2}' charts/kube-ovn/Chart.yaml)
 
 export NAME=kubeovn
 export NAMESPACE=cozy-$(NAME)
