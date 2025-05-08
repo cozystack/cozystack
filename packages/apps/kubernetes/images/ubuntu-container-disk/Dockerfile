@@ -22,6 +22,9 @@ ARG KUBERNETES_VERSION
 
 RUN qemu-img resize image.img 5G \
  && eval "$(guestfish --listen --network)" \
+ && guestfish --remote set-backend direct \
+ && guestfish --remote set-memsize 2048 \
+ && guestfish --remote set-smp 4 \
  && guestfish --remote add-drive image.img \
  && guestfish --remote run \
  && guestfish --remote mount /dev/sda1 / \
@@ -42,6 +45,9 @@ RUN qemu-img resize image.img 5G \
  && guestfish --remote command "sed -i '/SystemdCgroup/ s/=.*/= true/' /etc/containerd/config.toml" \
 # install kubernetes
  && guestfish --remote command "apt-get install -y kubelet kubeadm" \
+# install nvidia driver
+ && guestfish --remote command "apt-get install -y nvidia-dkms-570-server-open" \
+ && guestfish --remote sh "printf 'blacklist %s\n' nvidia nvidia_uvm nvidia_drm nvidia_modeset > /etc/modprobe.d/blacklist-nvidia.conf" \
 # clean apt cache
  && guestfish --remote sh 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
 # write system configuration
