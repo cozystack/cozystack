@@ -4,15 +4,6 @@
 {{- $rootSaConfigMap := lookup "v1" "ConfigMap" "kube-system" "kube-root-ca.crt" }}
 {{- $k8sCa := index $rootSaConfigMap.data "ca.crt" | b64enc }}
 
-{{- $tenantRoot := dict }}
-{{- if .Capabilities.APIVersions.Has "helm.toolkit.fluxcd.io/v2" }}
-{{- $tenantRoot = lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" "tenant-root" "tenant-root" }}
-{{- end }}
-{{- if and $tenantRoot $tenantRoot.spec $tenantRoot.spec.values $tenantRoot.spec.values.host }}
-{{- $host = $tenantRoot.spec.values.host }}
-{{- else }}
-{{- end }}
-
 {{- $existingK8sSecret := lookup "v1" "Secret" .Release.Namespace "k8s-client" }}
 {{- $existingKubeappsSecret := lookup "v1" "Secret" .Release.Namespace "kubeapps-client" }}
 {{- $existingAuthConfig := lookup "v1" "Secret" "cozy-dashboard" "kubeapps-auth-config" }}

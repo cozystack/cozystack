@@ -334,8 +334,8 @@ if ! kubectl wait --timeout=2m --for=condition=ready -n tenant-root hr monitorin
   kubectl wait --timeout=2m --for=condition=ready -n tenant-root hr monitoring
 fi
 
-kubectl patch -n tenant-root ingresses.apps.cozystack.io ingress --type=merge -p '{"spec":{
-  "dashboard": true
+kubectl patch -n cozy-system cm cozystack --type=merge -p '{"data":{
+  "expose-services": "api,dashboard,cdi-uploadproxy,vm-exportproxy,keycloak"
 }}'
 
 # Wait for nginx-ingress-controller
