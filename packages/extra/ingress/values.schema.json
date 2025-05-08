@@ -25,21 +25,6 @@
             "type": "boolean",
             "description": "Restoring original visitor IPs when Cloudflare proxied is enabled",
             "default": false
-        },
-        "dashboard": {
-            "type": "boolean",
-            "description": "Should ingress serve Cozystack service dashboard",
-            "default": false
-        },
-        "cdiUploadProxy": {
-            "type": "boolean",
-            "description": "Should ingress serve CDI upload proxy",
-            "default": false
-        },
-        "virtExportProxy": {
-            "type": "boolean",
-            "description": "Should ingress serve KubeVirt export proxy",
-            "default": false
         }
     }
 }

@@ -1,19 +1,10 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
 {{- $issuerType := (index $cozyConfig.data "clusterissuer") | default "http01" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- $exposeServices := splitList "," ((index $cozyConfig.data "expose-services") | default "") }}
+{{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
 
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
-
-{{- $tenantRoot := dict }}
-{{- if .Capabilities.APIVersions.Has "helm.toolkit.fluxcd.io/v2" }}
-{{- $tenantRoot = lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" "tenant-root" "tenant-root" }}
-{{- end }}
-{{- if and $tenantRoot $tenantRoot.spec $tenantRoot.spec.values $tenantRoot.spec.values.host }}
-{{- $host = $tenantRoot.spec.values.host }}
-{{- else }}
-{{- end }}
-
-{{- if .Values.dashboard }}
+{{- if and (has "dashboard" $exposeServices) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -21,16 +12,16 @@ metadata:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     {{- if eq $issuerType "cloudflare" }}
     {{- else }}
-    acme.cert-manager.io/http01-ingress-class: {{ .Release.Namespace }}
+    acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
+    {{- end }}
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
     nginx.ingress.kubernetes.io/proxy-buffer-size: 100m
     nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
     nginx.ingress.kubernetes.io/client-max-body-size: 100m
-    {{- end }}
-  name: dashboard-{{ .Release.Namespace }}
+  name: dashboard
   namespace: cozy-dashboard
 spec:
-  ingressClassName: {{ .Release.Namespace }}
+  ingressClassName: {{ $exposeIngress }}
   rules:
   - host: dashboard.{{ $host }}
     http:
@@ -45,5 +36,5 @@ spec:
   tls:
   - hosts:
     - dashboard.{{ $host }}
-    secretName: dashboard-{{ .Release.Namespace }}-tls
+    secretName: dashboard-tls
 {{- end }}

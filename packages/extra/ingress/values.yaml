@@ -4,17 +4,6 @@
 ##
 replicas: 2
 
-## @param externalIPs [array] List of externalIPs for service.
-## Optional. If not specified will use LoadBalancer service by default.
-## 
-## e.g:
-## externalIPs:
-##   - "11.22.33.44"
-##   - "11.22.33.45"
-##   - "11.22.33.46"
-##
-externalIPs: []
-
 ## @param whitelist List of client networks
 ## Example:
 ## whitelist:
@@ -24,12 +13,3 @@ whitelist: []
 
 ## @param clouflareProxy Restoring original visitor IPs when Cloudflare proxied is enabled
 clouflareProxy: false
-
-## @param dashboard Should ingress serve Cozystack service dashboard
-dashboard: false
-
-## @param cdiUploadProxy Should ingress serve CDI upload proxy
-cdiUploadProxy: false
-
-## @param virtExportProxy Should ingress serve KubeVirt export proxy
-virtExportProxy: false
