@@ -9,6 +9,8 @@ image: image-cozystack-controller update-version
 image-cozystack-controller:
 	docker buildx build -f images/cozystack-controller/Dockerfile ../../.. \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/cozystack-controller:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/cozystack-controller:latest \
 		--cache-to type=inline \
