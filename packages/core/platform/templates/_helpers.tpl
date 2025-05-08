@@ -16,3 +16,57 @@ Get IP-addresses of master nodes
 {{- end -}}
 {{ join "," $ips }}
 {{- end -}}
+
+{{- define "cozystack.defaultDashboardValues" -}}
+kubeapps:
+{{- if .Capabilities.APIVersions.Has "source.toolkit.fluxcd.io/v1" }}
+{{- with (lookup "source.toolkit.fluxcd.io/v1" "HelmRepository" "cozy-public" "").items }}
+  redis:
+    master:
+      podAnnotations:
+        {{- range $index, $repo := . }}
+        {{- with (($repo.status).artifact).revision }}
+        repository.cozystack.io/{{ $repo.metadata.name }}: {{ quote . }}
+        {{- end }}
+        {{- end }}
+{{- end }}
+{{- end }}
+  frontend:
+    resourcesPreset: "none"
+  dashboard:
+    resourcesPreset: "none"
+    {{- $cozystackBranding:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
+    {{- $branding := dig "data" "branding" "" $cozystackBranding }}
+    {{- if $branding }}
+    customLocale:
+      "Kubeapps": {{ $branding }}
+    {{- end }}
+    customStyle: |
+      {{- $logoImage := dig "data" "logo" "" $cozystackBranding }}
+      {{- if $logoImage }}
+      .kubeapps-logo {
+        background-image: {{ $logoImage }}
+      }
+      {{- end }}
+      #serviceaccount-selector {
+        display: none;
+      }
+      .login-moreinfo {
+        display: none;
+      }
+      a[href="#/docs"] {
+        display: none;
+      }
+      .login-group .clr-form-control .clr-control-label {
+        display: none;
+      }
+      .appview-separator div.appview-first-row div.center {
+        display: none;
+      }
+      .appview-separator div.appview-first-row section[aria-labelledby="app-secrets"] {
+        display: none;
+      }
+      .appview-first-row section[aria-labelledby="access-urls-title"] {
+        width: 100%;
+      }
+{{- end }}

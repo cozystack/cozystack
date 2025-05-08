@@ -155,66 +155,9 @@ releases:
   chart: cozy-dashboard
   namespace: cozy-dashboard
   values:
-    kubeapps:
-    {{- if .Capabilities.APIVersions.Has "source.toolkit.fluxcd.io/v1" }}
-    {{- with (lookup "source.toolkit.fluxcd.io/v1" "HelmRepository" "cozy-public" "").items }}
-      redis:
-        master:
-          podAnnotations:
-            {{- range $index, $repo := . }}
-            {{- with (($repo.status).artifact).revision }}
-            repository.cozystack.io/{{ $repo.metadata.name }}: {{ quote . }}
-            {{- end }}
-            {{- end }}
-    {{- end }}
-    {{- end }}
-      frontend:
-        resourcesPreset: "none"
-      dashboard:
-        resourcesPreset: "none"
-        {{- $cozystackBranding:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
-        {{- $branding := dig "data" "branding" "" $cozystackBranding }}
-        {{- if $branding }}
-        customLocale:
-          "Kubeapps": {{ $branding }}
-        {{- end }}
-        customStyle: |
-          {{- $logoImage := dig "data" "logo" "" $cozystackBranding }}
-          {{- if $logoImage }}
-          .kubeapps-logo {
-            background-image: {{ $logoImage }}
-          }
-          {{- end }}
-          #serviceaccount-selector {
-            display: none;
-          }
-          .login-moreinfo {
-            display: none;
-          }
-          a[href="#/docs"] {
-            display: none;
-          }
-          .login-group .clr-form-control .clr-control-label {
-            display: none;
-          }
-          .appview-separator div.appview-first-row div.center {
-            display: none;
-          }
-          .appview-separator div.appview-first-row section[aria-labelledby="app-secrets"] {
-            display: none;
-          }
-          .appview-first-row section[aria-labelledby="access-urls-title"] {
-            width: 100%;
-          }
-  {{- $dashboardKCconfig := lookup "v1" "ConfigMap" "cozy-dashboard" "kubeapps-auth-config" }}
-  {{- $dashboardKCValues := dig "data" "values.yaml" "" $dashboardKCconfig }}
-  {{- if $dashboardKCValues }}
-  valuesFrom:
-  - kind: ConfigMap
-    name: kubeapps-auth-config
-    valuesKey: values.yaml
-  {{- end }}
-
+    {{- $dashboardKCconfig := lookup "v1" "ConfigMap" "cozy-dashboard" "kubeapps-auth-config" }}
+    {{- $dashboardKCValues := dig "data" "values.yaml" (dict) $dashboardKCconfig }}
+    {{- toYaml (deepCopy $dashboardKCValues | mergeOverwrite (fromYaml (include "cozystack.defaultDashboardValues" .))) | nindent 4 }}
   {{- if eq $oidcEnabled "true" }}
   dependsOn: [keycloak-configure]
   {{- else }}

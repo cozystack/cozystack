@@ -72,17 +72,6 @@ spec:
     {{- toYaml . | nindent 4}}
   {{- end }}
 
-  {{- if $x.valuesFrom }}
-  valuesFrom:
-  {{- range $source := $x.valuesFrom }}
-  - kind: {{ $source.kind }}
-    name: {{ $source.name }}
-    {{- if $source.valuesKey }}
-    valuesKey: {{ $source.valuesKey }}
-    {{- end }}
-  {{- end }}
-  {{- end }}
-
   {{- with $x.dependsOn }}
   dependsOn:
   {{-   range $dep := . }}
