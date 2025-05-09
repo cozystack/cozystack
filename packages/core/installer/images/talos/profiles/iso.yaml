@@ -3,24 +3,24 @@
 arch: amd64
 platform: metal
 secureboot: false
-version: v1.9.5
+version: v1.10.1
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
   initramfs:
     path: /usr/install/amd64/initramfs.xz
   baseInstaller:
-    imageRef: ghcr.io/siderolabs/installer:v1.9.5
+    imageRef: ghcr.io/siderolabs/installer:v1.10.1
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/amd-ucode:20250311
+    - imageRef: ghcr.io/siderolabs/amd-ucode:20250410
     - imageRef: ghcr.io/siderolabs/amdgpu-firmware:20241110
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20250311
+    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20250410
     - imageRef: ghcr.io/siderolabs/i915-ucode:20241110
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20250311
+    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20250410
     - imageRef: ghcr.io/siderolabs/intel-ucode:20250211
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250311
-    - imageRef: ghcr.io/siderolabs/drbd:9.2.12-v1.9.5
-    - imageRef: ghcr.io/siderolabs/zfs:2.2.7-v1.9.5
+    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250410
+    - imageRef: ghcr.io/siderolabs/drbd:9.2.13-v1.10.1
+    - imageRef: ghcr.io/siderolabs/zfs:2.3.1-v1.10.1
 output:
   kind: iso
   imageOptions: {}
