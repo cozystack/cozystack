@@ -20,7 +20,7 @@ fi
 set -x
 set -e
 
-kill `cat srv1/qemu.pid srv2/qemu.pid srv3/qemu.pid` || true
+kill `cat srv1/qemu.pid srv2/qemu.pid srv3/qemu.pid cat srv4/qemu.pid` || true
 
 ip link del cozy-br0 || true
 ip link add cozy-br0 type bridge
@@ -31,8 +31,8 @@ ip addr add 192.168.123.1/24 dev cozy-br0
 iptables -t nat -D POSTROUTING -s 192.168.123.0/24 ! -d 192.168.123.0/24 -j MASQUERADE 2>/dev/null || true
 iptables -t nat -A POSTROUTING -s 192.168.123.0/24 ! -d 192.168.123.0/24 -j MASQUERADE
 
-rm -rf srv1 srv2 srv3
-mkdir -p srv1 srv2 srv3
+rm -rf srv1 srv2 srv3 srv4
+mkdir -p srv1 srv2 srv3 srv4
 
 # Prepare cloud-init
 for i in 1 2 3; do
@@ -58,6 +58,38 @@ EOT
   )
 done
 
+  cat > "srv4/meta-data" <<EOT
+hostname: srv4
+instance-id: srv4
+local-hostname: srv4
+EOT
+
+  cat > "srv4/user-data" <<EOT
+#cloud-config
+password: mysecret
+chpasswd: { expire: False }
+ssh_pwauth: True
+EOT
+
+  cat > "srv4/network-config" <<EOT
+version: 2
+ethernets:
+  eth0:
+    dhcp4: false
+    addresses:
+      - "192.168.123.14/26"
+    gateway4: "192.168.123.1"
+    nameservers:
+      search: [cluster.local]
+      addresses: [8.8.8.8]
+EOT
+
+cd srv4 && genisoimage \
+      -output seed.img \
+      -volid cidata -rational-rock -joliet \
+      user-data meta-data network-config
+cd ..
+
 # Prepare system drive
 if [ ! -f nocloud-amd64.raw ]; then
   wget https://github.com/cozystack/cozystack/releases/latest/download/nocloud-amd64.raw.xz \
@@ -65,18 +97,26 @@ if [ ! -f nocloud-amd64.raw ]; then
   rm -f nocloud-amd64.raw
   xz --decompress nocloud-amd64.raw.xz
 fi
+
+ls -ld srv1 srv2 srv3 srv4
+
 for i in 1 2 3; do
   cp nocloud-amd64.raw srv$i/system.img
   qemu-img resize srv$i/system.img 20G
 done
 
+wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -O ubuntu.img
+qemu-img convert -f qcow2 -O raw ubuntu.img srv4/system.img
+qemu-img resize srv4/system.img 20G
+
 # Prepare data drives
 for i in 1 2 3; do
   qemu-img create srv$i/data.img 100G
 done
+qemu-img create srv4/data.img 100G
 
 # Prepare networking
-for i in 1 2 3; do
+for i in 1 2 3 4; do
   ip link del cozy-srv$i || true
   ip tuntap add dev cozy-srv$i mode tap
   ip link set cozy-srv$i up
@@ -84,7 +124,7 @@ for i in 1 2 3; do
 done
 
 # Start VMs
-for i in 1 2 3; do
+for i in 1 2 3 4; do
   qemu-system-x86_64 -machine type=pc,accel=kvm -cpu host -smp 8 -m 16384 \
     -device virtio-net,netdev=net0,mac=52:54:00:12:34:5$i \
     -netdev tap,id=net0,ifname=cozy-srv$i,script=no,downscript=no \
@@ -92,7 +132,12 @@ for i in 1 2 3; do
     -drive file=srv$i/seed.img,if=virtio,format=raw \
     -drive file=srv$i/data.img,if=virtio,format=raw \
     -display none -daemonize -pidfile srv$i/qemu.pid
+
+
+
 done
+
+exit 0
 
 sleep 5
 

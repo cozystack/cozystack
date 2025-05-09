@@ -2,7 +2,7 @@ NAMESPACE=cozy-e2e-tests
 NAME := sandbox
 CLEAN := 1
 TESTING_APPS := $(shell find ../../apps -maxdepth 1 -mindepth 1 -type d | awk -F/ '{print $$NF}')
-SANDBOX_NAME := cozy-e2e-sandbox-$(shell echo "$$(hostname):$$(pwd)" | sha256sum | cut -c -6)
+SANDBOX_NAME := cozy-e2e-sandbox-airgapped
 
 ROOT_DIR = $(dir $(abspath $(firstword $(MAKEFILE_LIST))/../../..))
 
