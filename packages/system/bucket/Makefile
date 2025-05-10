@@ -6,14 +6,15 @@ include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
 update:
-	rm -rf charts
-	helm pull oci://ghcr.io/aenix-io/charts/etcd-operator --untar --untardir charts
+	@echo Nothing to update
 
 image: image-s3manager
 
 image-s3manager:
-	docker buildx build --platform linux/amd64 --build-arg ARCH=amd64 images/s3manager \
+	docker buildx build images/s3manager \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/s3manager:$(call settag,$(S3MANAGER_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/s3manager:latest \
 		--cache-to type=inline \
