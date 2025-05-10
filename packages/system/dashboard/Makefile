@@ -17,7 +17,8 @@ update-chart:
 	patch --no-backup-if-mismatch charts/kubeapps/templates/frontend/configmap.yaml < patches/logos.patch
 
 update-dockerfiles:
-	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/vmware-tanzu/kubeapps  | awk -F'[/^]' 'END{print $$3}') && \
+	@echo Update dockerfiles manually
+	#tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/vmware-tanzu/kubeapps  | awk -F'[/^]' 'END{print $$3}') && \
 	wget https://github.com/vmware-tanzu/kubeapps/raw/$${tag}/cmd/kubeapps-apis/Dockerfile -O images/kubeapps-apis/Dockerfile && \
 	patch --no-backup-if-mismatch images/kubeapps-apis/Dockerfile < images/kubeapps-apis/dockerfile.diff && \
 	node_image=$$(wget -O- https://github.com/vmware-tanzu/kubeapps/raw/main/dashboard/Dockerfile | awk '/FROM bitnami\/node/ {print $$2}') && \
@@ -28,6 +29,8 @@ update-dockerfiles:
 image-dashboard: update-version
 	docker buildx build images/dashboard \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/dashboard:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/dashboard:latest \
 		--cache-to type=inline \
@@ -48,6 +51,8 @@ image-dashboard: update-version
 image-kubeapps-apis: update-version
 	docker buildx build images/kubeapps-apis \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/kubeapps-apis:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/kubeapps-apis:latest \
 		--cache-to type=inline \
