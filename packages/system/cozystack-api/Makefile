@@ -9,6 +9,8 @@ image: image-cozystack-api
 image-cozystack-api:
 	docker buildx build -f images/cozystack-api/Dockerfile ../../.. \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/cozystack-api:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/cozystack-api:latest \
 		--cache-to type=inline \

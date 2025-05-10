@@ -1,8 +1,9 @@
 # Build the manager binary
-FROM golang:1.23 as builder
+FROM golang:1.23 AS builder
 
 ARG VERSION=edge-25.3.2
-ARG TARGETOS TARGETARCH
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /workspace
 
@@ -11,7 +12,7 @@ RUN curl -sSL https://github.com/clastix/kamaji/archive/refs/tags/${VERSION}.tar
 COPY patches /patches
 RUN git apply /patches/*.diff
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build \
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build \
     -ldflags "-X github.com/clastix/kamaji/internal.GitRepo=$GIT_REPO -X github.com/clastix/kamaji/internal.GitTag=$GIT_LAST_TAG -X github.com/clastix/kamaji/internal.GitCommit=$GIT_HEAD_COMMIT -X github.com/clastix/kamaji/internal.GitDirty=$GIT_MODIFIED -X github.com/clastix/kamaji/internal.BuildTime=$BUILD_DATE" \
     -a -o kamaji main.go
 
