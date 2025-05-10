@@ -19,6 +19,8 @@ update:
 image:
 	docker buildx build images/kubeovn \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/kubeovn:$(call settag,$(KUBEOVN_TAG)) \
 		--tag $(REGISTRY)/kubeovn:$(call settag,$(KUBEOVN_TAG)-$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/kubeovn:latest \
