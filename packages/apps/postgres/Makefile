@@ -9,6 +9,8 @@ generate:
 image:
 	docker buildx build --platform linux/amd64 --build-arg ARCH=amd64 images/postgres-backup \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/postgres-backup:$(call settag,$(POSTGRES_BACKUP_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/postgres-backup:latest \
 		--cache-to type=inline \
