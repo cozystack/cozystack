@@ -26,9 +26,10 @@ image-cozystack:
 	make -C ../../.. repos
 	docker buildx build -f images/cozystack/Dockerfile ../../.. \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/installer:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/installer:latest \
-		--platform linux/amd64 \
 		--cache-to type=inline \
 		--metadata-file images/installer.json \
 		--push=$(PUSH) \
@@ -47,6 +48,8 @@ image-matchbox:
 	test -f ../../../_out/assets/initramfs-metal-amd64.xz || make talos-initramfs
 	docker buildx build -f images/matchbox/Dockerfile ../../.. \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/matchbox:$(call settag,$(TAG)) \
 		--tag $(REGISTRY)/matchbox:$(call settag,$(TALOS_VERSION)-$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/matchbox:latest \
