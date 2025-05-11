@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 as stage
+FROM ubuntu:22.04 AS stage
 
 ARG NGINX_VERSION=1.25.3
 ARG IP2LOCATION_C_VERSION=8.6.1
@@ -9,11 +9,15 @@ ARG FIFTYONEDEGREES_NGINX_VERSION=3.2.21.1
 ARG NGINX_CACHE_PURGE_VERSION=2.5.3
 ARG NGINX_VTS_VERSION=0.2.2
 
+ARG TARGETOS
+ARG TARGETARCH
+
 # Install required packages for development
-RUN apt-get update -q \
- && apt-get install -yq \
+RUN apt update -q \
+ && apt install -yq --no-install-recommends \
+    ca-certificates \
     unzip \
-    autoconf \
+    automake \
     build-essential \
     libtool \
     libpcre3 \
@@ -68,7 +72,7 @@ RUN checkinstall \
   --default \
   --pkgname=ip2location-c \
   --pkgversion=${IP2LOCATION_C_VERSION} \
-  --pkgarch=amd64 \
+  --pkgarch=${TARGETARCH} \
   --pkggroup=lib \
   --pkgsource="https://github.com/chrislim2888/IP2Location-C-Library" \
   --maintainer="Eduard Generalov <eduard@generalov.net>" \
@@ -97,7 +101,7 @@ RUN checkinstall \
   --default \
   --pkgname=ip2proxy-c \
   --pkgversion=${IP2PROXY_C_VERSION} \
-  --pkgarch=amd64 \
+  --pkgarch=${TARGETARCH} \
   --pkggroup=lib \
   --pkgsource="https://github.com/ip2location/ip2proxy-c" \
   --maintainer="Eduard Generalov <eduard@generalov.net>" \
@@ -144,7 +148,7 @@ RUN checkinstall \
   --default \
   --pkgname=nginx \
   --pkgversion=$VERS \
-  --pkgarch=amd64 \
+  --pkgarch=${TARGETARCH} \
   --pkggroup=web \
   --provides=nginx \
   --requires=ip2location-c,ip2proxy-c,libssl3,libc-bin,libc6,libzstd1,libpcre++0v5,libpcre16-3,libpcre2-8-0,libpcre3,libpcre32-3,libpcrecpp0v5,libmaxminddb0 \
@@ -165,10 +169,9 @@ COPY nginx-reloader.sh /usr/bin/nginx-reloader.sh
 RUN set -x \
  && groupadd --system --gid 101 nginx \
  && useradd --system --gid nginx --no-create-home --home /nonexistent --comment "nginx user" --shell /bin/false --uid 101 nginx \
- && apt update \
- && apt-get install --no-install-recommends --no-install-suggests -y gnupg1 ca-certificates inotify-tools \
- && apt -y install /packages/*.deb \
- && apt-get clean \
+ && apt update -q \
+ && apt install -yq --no-install-recommends --no-install-suggests gnupg1 ca-certificates inotify-tools \
+ && apt install -y /packages/*.deb \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /var/lib/nginx /var/log/nginx \
  && ln -sf /dev/stdout /var/log/nginx/access.log \
