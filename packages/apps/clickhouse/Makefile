@@ -9,6 +9,8 @@ generate:
 image:
 	docker buildx build --platform linux/amd64 --build-arg ARCH=amd64 images/clickhouse-backup \
 		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/clickhouse-backup:$(call settag,$(CLICKHOUSE_BACKUP_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/clickhouse-backup:latest \
 		--cache-to type=inline \
