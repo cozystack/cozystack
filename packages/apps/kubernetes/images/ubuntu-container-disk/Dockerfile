@@ -1,5 +1,5 @@
 # TODO: Here we use ubuntu:22.04, as guestfish has some network issues running in ubuntu:24.04
-FROM ubuntu:22.04 as guestfish
+FROM ubuntu:22.04 AS guestfish
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
@@ -8,15 +8,17 @@ RUN apt-get update \
      linux-image-generic \
      wget \
      make \
-     bash-completion \
- && apt-get clean
+     bash-completion
 
 WORKDIR /build
 
-FROM guestfish as builder
+FROM guestfish AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 # noble is a code name for the Ubuntu 24.04 LTS release
-RUN wget -O image.img https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img --show-progress --output-file /dev/stdout --progress=dot:giga 2>/dev/null
+RUN wget -O image.img https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-${TARGETARCH}.img --show-progress --output-file /dev/stdout --progress=dot:giga 2>/dev/null
 
 ARG KUBERNETES_VERSION
 
@@ -29,19 +31,21 @@ RUN qemu-img resize image.img 5G \
  && guestfish --remote command "resize2fs /dev/sda1" \
 # docker repo
  && guestfish --remote sh "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg" \
- && guestfish --remote sh 'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list' \
+ && guestfish --remote sh 'echo "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list' \
 # kubernetes repo
  && guestfish --remote sh "curl -fsSL https://pkgs.k8s.io/core:/stable:/${KUBERNETES_VERSION}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg" \
  && guestfish --remote sh "echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${KUBERNETES_VERSION}/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list" \
+ && guestfish --remote command "apt-get check -q" \
 # install containerd
- && guestfish --remote command "apt-get update -y" \
- && guestfish --remote command "apt-get install -y containerd.io" \
+ && guestfish --remote command "apt-get update -q" \
+ && guestfish --remote command "apt-get install -yq containerd.io" \
 # configure containerd
  && guestfish --remote command "mkdir -p /etc/containerd" \
  && guestfish --remote sh "containerd config default | tee /etc/containerd/config.toml" \
  && guestfish --remote command "sed -i '/SystemdCgroup/ s/=.*/= true/' /etc/containerd/config.toml" \
+ && guestfish --remote command "containerd config dump >/dev/null" \
 # install kubernetes
- && guestfish --remote command "apt-get install -y kubelet kubeadm" \
+ && guestfish --remote command "apt-get install -yq kubelet kubeadm" \
 # clean apt cache
  && guestfish --remote sh 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
 # write system configuration

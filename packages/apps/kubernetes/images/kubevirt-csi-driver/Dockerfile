@@ -5,6 +5,11 @@ RUN git clone https://github.com/kubevirt/csi-driver /src/kubevirt-csi-driver \
  && cd /src/kubevirt-csi-driver \
  && git checkout 35836e0c8b68d9916d29a838ea60cdd3fc6199cf
 
+ARG TARGETOS
+ARG TARGETARCH
+ENV GOOS=$TARGETOS
+ENV GOARCH=$TARGETARCH
+
 WORKDIR /src/kubevirt-csi-driver
 RUN make build
 
