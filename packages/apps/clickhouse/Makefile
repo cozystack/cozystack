@@ -7,7 +7,7 @@ generate:
 	readme-generator -v values.yaml -s values.schema.json -r README.md
 
 image:
-	docker buildx build --platform linux/amd64 --build-arg ARCH=amd64 images/clickhouse-backup \
+	docker buildx build images/clickhouse-backup \
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=$(PLATFORM) \
