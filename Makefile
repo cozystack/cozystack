@@ -28,8 +28,10 @@ build: build-deps
 
 repos:
 	rm -rf _out
+	make -C packages/library check-version-map
 	make -C packages/apps check-version-map
 	make -C packages/extra check-version-map
+	make -C packages/library repo
 	make -C packages/system repo
 	make -C packages/apps repo
 	make -C packages/extra repo
