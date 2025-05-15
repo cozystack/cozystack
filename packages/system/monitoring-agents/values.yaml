@@ -343,15 +343,15 @@ fluent-bit:
           Mem_Buf_Limit 5MB
           Skip_Long_Lines On
       [INPUT]
-          name            kubernetes_events
-          tag             k8s_events.*
-          kube_url        https://kubernetes.default.svc
+          Name kubernetes_events
+          Tag k8s_events.*
+          Kube_url https://kubernetes.default.svc
       [INPUT]
-          Name          tail
-          Alias         audit
-          Path          /var/log/audit/kube/*.log
-          Parser        audit
-          Tag           audit.* 
+          Name tail
+          Alias audit
+          Path /var/log/audit/kube/*.log
+          Parser audit
+          Tag audit.* 
     outputs: |
       [OUTPUT]
           Name http
