@@ -2,5 +2,12 @@ metallb:
   crds:
     enabled: true
 
-  #speaker:
-  #  tolerateMaster: false
+  controller:
+    image:
+      repository: ghcr.io/cozystack/cozystack/metallb/controller
+      tag: v0.14.9@sha256:c86418d1072d6037341d731917d11a2f281fb17559d5bb650962512f9894fd50
+
+  speaker:
+    image:
+      repository: ghcr.io/cozystack/cozystack/metallb/speaker
+      tag: v0.14.9@sha256:60fddc8fd6c125180186db31990993b4ebea5023ad410bf08ca9537a956e8279

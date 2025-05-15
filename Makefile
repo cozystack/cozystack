@@ -20,6 +20,7 @@ build: build-deps
 	make -C packages/system/kubeovn image
 	make -C packages/system/kubeovn-webhook image
 	make -C packages/system/dashboard image
+	make -C packages/system/metallb image
 	make -C packages/system/kamaji image
 	make -C packages/system/bucket image
 	make -C packages/core/testing image

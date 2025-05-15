@@ -1,14 +1,14 @@
 apiVersion: v2
-appVersion: v0.14.8
+appVersion: v0.14.9
 dependencies:
 - condition: crds.enabled
   name: crds
   repository: ""
-  version: 0.14.8
+  version: 0.14.9
 - condition: frrk8s.enabled
   name: frr-k8s
   repository: https://metallb.github.io/frr-k8s
-  version: 0.0.14
+  version: 0.0.16
 description: A network load-balancer implementation for Kubernetes using standard
   routing protocols
 home: https://metallb.universe.tf
@@ -18,4 +18,4 @@ name: metallb
 sources:
 - https://github.com/metallb/metallb
 type: application
-version: 0.14.8
+version: 0.14.9
