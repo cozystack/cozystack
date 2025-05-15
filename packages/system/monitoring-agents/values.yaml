@@ -398,15 +398,15 @@ fluent-bit:
           K8S-Logging.Parser On
           K8S-Logging.Exclude On
       [FILTER]
-          Name kubernetes
-          Match k8s_events.*
-      [FILTER]
           Name nest
           Match kube.*
           Wildcard pod_name
           Operation lift
           Nested_under kubernetes
           Add_prefix   kubernetes_
+      [FILTER]
+          Name kubernetes
+          Match k8s_events.*
       [FILTER]
           Name modify
           Match *
