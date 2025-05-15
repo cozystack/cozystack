@@ -328,6 +328,30 @@ fluent-bit:
       mountPath: /var/lib/docker/containers
       readOnly: true
   config:
+    customParsers: |
+      [PARSER]
+          Name audit
+          Format json
+          Time_Key requestReceivedTimestamp
+          Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+    inputs: |
+      [INPUT]
+          Name tail
+          Path /var/log/containers/*.log
+          multiline.parser docker, cri
+          Tag kube.*
+          Mem_Buf_Limit 5MB
+          Skip_Long_Lines On
+      [INPUT]
+          name            kubernetes_events
+          tag             k8s_events.*
+          kube_url        https://kubernetes.default.svc
+      [INPUT]
+          Name          tail
+          Alias         audit
+          Path          /var/log/audit/kube/*.log
+          Parser        audit
+          Tag           audit.* 
     outputs: |
       [OUTPUT]
           Name http
@@ -340,6 +364,31 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+      [OUTPUT]
+          Name http
+          Match k8s_events.*
+          Host vlogs-generic.tenant-root.svc
+          port 9428
+          compress gzip
+          uri /api/v1/write
+          format json
+          json_date_key timestamp
+          json_date_format iso8601
+          header Content-Type application/json
+          header AccountID 0
+          header ProjectID 0
+      [OUTPUT]
+          Name http
+          Match audit.*
+          Host vlogs-generic.tenant-root.svc
+          port 9428
+          compress gzip
+          uri /api/v1/write
+          format json
+          json_date_format iso8601
+          header Content-Type application/json
+          header AccountID 0
+          header ProjectID 0
     filters: |
       [FILTER]
           Name kubernetes
@@ -349,9 +398,12 @@ fluent-bit:
           K8S-Logging.Parser On
           K8S-Logging.Exclude On
       [FILTER]
-          Name                nest
-          Match               *
-          Wildcard            pod_name
+          Name kubernetes
+          Match k8s_events.*
+      [FILTER]
+          Name nest
+          Match kube.*
+          Wildcard pod_name
           Operation lift
           Nested_under kubernetes
           Add_prefix   kubernetes_
