@@ -1,7 +1,6 @@
 apiVersion: v2
-name: clickhouse
-description: Managed ClickHouse service
-icon: /logos/clickhouse.svg
+name: cozy-lib
+description: Common Cozystack templates
 
 # A chart can be either an 'application' or a 'library' chart.
 #
@@ -11,20 +10,9 @@ icon: /logos/clickhouse.svg
 # Library charts provide useful utilities or functions for the chart developer. They're included as
 # a dependency of application charts to inject those utilities and functions into the rendering
 # pipeline. Library charts do not define any templates and therefore cannot be deployed.
-type: application
+type: library
 
 # This is the chart version. This version number should be incremented each time you make changes
 # to the chart and its templates, including the app version.
 # Versions are expected to follow Semantic Versioning (https://semver.org/)
-version: 0.9.0
-
-# This is the version number of the application being deployed. This version number should be
-# incremented each time you make changes to the application. Versions are not expected to
-# follow Semantic Versioning. They should reflect the version the application is using.
-# It is recommended to use it with quotes.
-appVersion: "24.9.2"
-
-dependencies:
-  - name: cozy-lib
-    version: 0.1.0
-    repository: "http://cozystack.cozy-system.svc/repos/library"
+version: 0.1.0

@@ -9,7 +9,7 @@ clickhouse 0.6.0 1ec10165
 clickhouse 0.6.1 c62a83a7
 clickhouse 0.6.2 8267072d
 clickhouse 0.7.0 93bdf411
-clickhouse 0.8.0 HEAD
+clickhouse 0.9.0 HEAD
 ferretdb 0.1.0 e9716091
 ferretdb 0.1.1 91b0499a
 ferretdb 0.2.0 6c5cf5bf
