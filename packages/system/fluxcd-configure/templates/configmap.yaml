@@ -1,0 +1,18 @@
+{{- $fluxcdAirgapped := lookup "v1" "ConfigMap" "cozy-system" "cozy-airgapped" }}
+{{- $artifact := "" }}
+{{- $artifactPullSecret := "" }}
+{{- if $fluxcdAirgapped }}
+  {{- $artifact = index $fluxcdAirgapped.data "artifact" | default "" }}
+  {{- $artifactPullSecret = index $fluxcdAirgapped.data "artifactPullSecret" | default "" }}
+{{- end }}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluxcd-instance-values-override
+  namespace: cozy-fluxcd
+data:
+  {{- if $artifact }}
+  artifact: {{ $artifact | quote }}
+  {{- end }}
+  artifactPullSecret: {{ $artifactPullSecret | quote }}
