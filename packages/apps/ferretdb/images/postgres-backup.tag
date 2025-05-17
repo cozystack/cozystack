@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/postgres-backup:0.10.1@sha256:10179ed56457460d95cd5708db2a00130901255fa30c4dd76c65d2ef5622b61f
+ghcr.io/cozystack/cozystack/postgres-backup:0.11.0@sha256:10179ed56457460d95cd5708db2a00130901255fa30c4dd76c65d2ef5622b61f
