@@ -17,11 +17,28 @@ releases:
   privileged: true
   dependsOn: []
 
+- name: fluxcd-configure
+  releaseName: fluxcd-configure
+  chart: cozy-fluxcd-configure
+  namespace: cozy-fluxcd
+  dependsOn: [fluxcd-operator]
+
 - name: fluxcd
   releaseName: fluxcd
   chart: cozy-fluxcd
   namespace: cozy-fluxcd
-  dependsOn: [fluxcd-operator,cilium,kubeovn]
+  dependsOn: [fluxcd-configure,cilium,kubeovn]
+  valuesFrom:
+  - kind: ConfigMap
+    name: fluxcd-instance-values-override
+    valuesKey: artifact
+    targetPath: "flux-instance.instance.distribution.artifact"
+    optional: true
+  - kind: ConfigMap
+    name: fluxcd-instance-values-override
+    valuesKey: artifactPullSecret
+    targetPath: "flux-instance.instance.distribution.artifactPullSecret"
+    optional: true
 
 - name: cilium
   releaseName: cilium
