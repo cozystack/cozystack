@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: patch-containerd
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  patch-containerd.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "Patching /etc/containerd/config.toml..."
+
+    mkdir -p /etc/containerd/patch.d
+
+    cat <<EOF >> /etc/containerd/patch.d/registry-patch.toml
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
+    {{- range $reg, $val := .Values.containerdRegistryPatches.mirrors }}
+      [plugins."io.containerd.grpc.v1.cri".registry.mirrors."{{ $reg }}"]
+        endpoint = [{{ range $i, $ep := $val }}"{{ $ep }}"{{ if ne (add1 $i) (len $val) }}, {{ end }}{{ end }}]
+    {{- end }}
+
+    [plugins."io.containerd.grpc.v1.cri".registry.configs]
+    {{- range $host, $cfg := .Values.containerdRegistryPatches.configs }}
+      [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ $host }}"]
+        {{- if $cfg.username }}username = "{{ $cfg.username }}"{{ end }}
+        {{- if $cfg.password }}password = "{{ $cfg.password }}"{{ end }}
+        {{- if $cfg.auth }}auth = "{{ $cfg.auth }}"{{ end }}
+        {{- if $cfg.tls }}
+        [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ $host }}".tls]
+          insecure_skip_verify = {{ $cfg.tls.insecure_skip_verify | default false }}
+        {{- end }}
+    {{- end }}
+    EOF
+
+    # Merge patch into main config
+    if ! grep -q '\[plugins."io.containerd.grpc.v1.cri"\]' /etc/containerd/config.toml; then
+      echo '[plugins."io.containerd.grpc.v1.cri"]' >> /etc/containerd/config.toml
+    fi
+
+    cat /etc/containerd/patch.d/registry-patch.toml >> /etc/containerd/config.toml
