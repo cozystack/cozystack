@@ -142,3 +142,14 @@ controlPlane:
       ## @param controlPlane.konnectivity.server.resources Resources
       resourcesPreset: "micro"
       resources: {}
+
+containerdRegistryPatches:
+  mirrors:
+    docker.io:
+      - http://10.0.0.1:8082
+  configs:
+    "10.0.0.1:8082":
+      username: "user"
+      password: "pass"
+      tls:
+        insecure_skip_verify: true

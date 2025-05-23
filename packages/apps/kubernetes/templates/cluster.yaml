@@ -201,12 +201,20 @@ spec:
       - ["LABEL=ephemeral", "/ephemeral"]
       - ["/ephemeral/kubelet", "/var/lib/kubelet", "none", "bind,nofail"]
       - ["/ephemeral/containerd", "/var/lib/containerd", "none", "bind,nofail"]
+      files:
+      - path: /usr/local/bin/patch-containerd.sh
+        contentFrom:
+          secret:
+            name: patch-containerd-script
+            key: patch-containerd.sh
+        permissions: "0755"
       preKubeadmCommands:
       - sed -i 's|root:x:|root::|' /etc/passwd
       - systemctl stop containerd.service
       - mkdir -p /ephemeral/kubelet /ephemeral/containerd
       - mount -o bind /ephemeral/kubelet /var/lib/kubelet
       - mount -o bind /ephemeral/containerd /var/lib/containerd
+      - /usr/local/bin/patch-containerd.sh
       - systemctl start containerd.service
       joinConfiguration:
         nodeRegistration:
