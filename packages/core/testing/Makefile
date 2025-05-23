@@ -31,7 +31,7 @@ image-e2e-sandbox:
 	rm -f images/e2e-sandbox.json
 
 test: ## Run the end-to-end tests in existing sandbox.
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && export COZYSTACK_INSTALLER_YAML=$$(helm template -n cozy-system installer ./packages/core/installer) && hack/e2e.sh'
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && export COZYSTACK_INSTALLER_YAML=$$(helm template -n cozy-system installer ./packages/core/installer) && hack/run_test.sh hack/e2e.bats'
 
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true
