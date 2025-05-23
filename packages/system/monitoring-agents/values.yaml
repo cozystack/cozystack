@@ -311,6 +311,8 @@ vmagent:
       - http://vminsert-longterm.tenant-root.svc:8480/insert/0/prometheus
 
 fluent-bit:
+  rbac:
+    eventsAccess: true
   readinessProbe:
     httpGet:
       path: /
@@ -328,6 +330,42 @@ fluent-bit:
       mountPath: /var/lib/docker/containers
       readOnly: true
   config:
+    inputs: |
+      [INPUT]
+          Name tail
+          Path /var/log/containers/*.log
+          multiline.parser docker, cri
+          Tag kube.*
+          Mem_Buf_Limit 5MB
+          Skip_Long_Lines On
+      [INPUT]
+          Name kubernetes_events
+          Tag events.*
+          Kube_url https://kubernetes.default.svc
+      [INPUT]
+          Name tail
+          Alias audit
+          Path /var/log/audit/kube/*.log
+          Parser audit
+          Tag audit.*
+    customParsers: |
+      [PARSER]
+          Name docker_no_time
+          Format json
+          Time_Keep Off
+          Time_Key time
+          Time_Format %Y-%m-%dT%H:%M:%S.%L
+      [PARSER]
+          Name          audit
+          Format        json
+          Time_Key      requestReceivedTimestamp
+          Time_Format   %Y-%m-%dT%H:%M:%S.%L%z
+      [PARSER]
+          Name          containerd
+          Format        regex
+          Regex         ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<event>.*)$
+          Time_Key      time
+          Time_Format   %Y-%m-%dT%H:%M:%S.%L%z
     outputs: |
       [OUTPUT]
           Name http
@@ -335,7 +373,29 @@ fluent-bit:
           Host vlogs-generic.tenant-root.svc
           port 9428
           compress gzip
-          uri /insert/jsonline?_stream_fields=stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      [OUTPUT]
+          Name http
+          Match events.*
+          Host vlogs-generic.tenant-root.svc
+          port 9428
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,reason,meatdata_namespace,metadata_name&_msg_field=message&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      [OUTPUT]
+          Name http
+          Match audit.*
+          Host vlogs-generic.tenant-root.svc
+          port 9428
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,stage,user_username,verb,requestUri&_msg_field=requestURI&_time_field=date
           format json_lines
           json_date_format iso8601
           header AccountID 0
@@ -349,12 +409,38 @@ fluent-bit:
           K8S-Logging.Parser On
           K8S-Logging.Exclude On
       [FILTER]
-          Name                nest
-          Match               *
-          Wildcard            pod_name
+          Name nest
+          Match kube.*
+          Wildcard pod_name
           Operation lift
           Nested_under kubernetes
           Add_prefix   kubernetes_
+      [FILTER]
+          Name modify
+          Match kube.*
+          Add log_source container_log
+      [FILTER]
+          Name nest
+          Match events.*
+          Wildcard metadata.*
+          Operation lift
+          Nested_under metadata
+          Add_prefix   metadata_
+      [FILTER]
+          Name nest
+          Match audit.*
+          Wildcard user.*
+          Operation lift
+          Nested_under user
+          Add_prefix   user_
+      [FILTER]
+          Name modify
+          Match events.*
+          Add log_source kube_events
+      [FILTER]
+          Name modify
+          Match audit.*
+          Add log_source audit_log
       [FILTER]
           Name modify
           Match *
@@ -363,7 +449,6 @@ fluent-bit:
           Name modify
           Match *
           Add cluster root-cluster
-
 scrapeRules:
   etcd:
     enabled: false
