@@ -2,7 +2,7 @@
 set -e
 set -u
 
-case $1 in
+case ${1:-} in
   amd64|arm64) ARCH=$1; talos_version="";;
   *) ARCH=${2:-"amd64"}; talos_version=${1:-""};; #this supports previously available script call syntax
 esac
