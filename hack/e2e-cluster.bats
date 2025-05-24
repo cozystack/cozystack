@@ -3,9 +3,6 @@
 # Cozystack end‑to‑end provisioning test (Bats)
 # -----------------------------------------------------------------------------
 
-export TALOSCONFIG=$PWD/talosconfig
-export KUBECONFIG=$PWD/kubeconfig
-
 @test "Environment variable COZYSTACK_INSTALLER_YAML is defined" {
   if [ -z "${COZYSTACK_INSTALLER_YAML:-}" ]; then
     echo 'COZYSTACK_INSTALLER_YAML environment variable is not set!' >&2
@@ -376,7 +373,10 @@ EOF
 
   # Verify Grafana via ingress
   ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-  curl -sS -k "https://${ingress_ip}" -H 'Host: grafana.example.org' | grep -q Found
+  if ! curl -sS -k "https://${ingress_ip}" -H 'Host: grafana.example.org' --max-time 30 | grep -q Found; then
+    echo "Failed to access Grafana via ingress at ${ingress_ip}" >&2
+    exit 1
+  fi
 }
 
 @test "Keycloak OIDC stack is healthy" {
