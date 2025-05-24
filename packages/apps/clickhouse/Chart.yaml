@@ -23,3 +23,8 @@ version: 0.9.0
 # follow Semantic Versioning. They should reflect the version the application is using.
 # It is recommended to use it with quotes.
 appVersion: "24.9.2"
+
+dependencies:
+  - name: cozy-lib
+    version: 0.1.0
+    repository: "http://cozystack.cozy-system.svc/repos/library"
