@@ -11,6 +11,9 @@ spec:
   {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}
   {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
+    labelSelector:
+      matchLabels:
+        cnpg.io/cluster: {{ .Release.Name }}-postgres
   {{- end }}
   {{- end }}
   minSyncReplicas: {{ .Values.quorum.minSyncReplicas }}

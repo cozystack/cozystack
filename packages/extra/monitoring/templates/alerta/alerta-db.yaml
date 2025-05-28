@@ -10,6 +10,9 @@ spec:
   {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}
   {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
+    labelSelector:
+      matchLabels:
+        cnpg.io/cluster: alerta-db
   {{- end }}
   {{- end }}
   storage:

@@ -31,6 +31,16 @@ spec:
             {{- end }}
             cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ .groupName }}
         spec:
+          {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
+          {{- if $configMap }}
+          {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
+          {{- if $rawConstraints }}
+          {{- $rawConstraints | fromYaml | toYaml | nindent 10 }}
+            labelSelector:
+              matchLabels:
+                cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
+          {{- end }}
+          {{- end }}
           domain:
             {{- if and .group.resources .group.resources.cpu }}
             cpu:
