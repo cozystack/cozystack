@@ -135,14 +135,10 @@ spec:
         cloudInitNoCloud:
           userData: |
             {{ printf "%s" "#cloud-config" }}
-            users:
-              - name: ubuntu
-                ssh_authorized_keys: |
-                  {{- range .Values.sshKeys }}
-                  {{ . }}
-                  {{- end }}
-            chpasswd:
-              expire: false
+            ssh_authorized_keys:
+              {{- range .Values.sshKeys }}
+              -  {{ . }}
+              {{- end }}
       {{- end }}
 
       networks:
