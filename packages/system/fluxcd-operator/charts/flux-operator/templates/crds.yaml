@@ -484,6 +484,9 @@ spec:
                 type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: the only accepted name for a FluxInstance is 'flux'
+          rule: self.metadata.name == 'flux'
     served: true
     storage: true
     subresources:
@@ -553,6 +556,22 @@ spec:
           spec:
             description: FluxReportSpec defines the observed state of a Flux installation.
             properties:
+              cluster:
+                description: Cluster is the version information of the Kubernetes
+                  cluster.
+                properties:
+                  nodes:
+                    description: Nodes is the number of nodes in the Kubernetes cluster.
+                    type: integer
+                  platform:
+                    description: Platform is the os/arch of the Kubernetes control
+                      plane.
+                    type: string
+                  serverVersion:
+                    description: ServerVersion is the version of the Kubernetes API
+                      server.
+                    type: string
+                type: object
               components:
                 description: ComponentsStatus is the status of the Flux controller
                   deployments.
@@ -748,6 +767,9 @@ spec:
                 type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: the only accepted name for a FluxReport is 'flux'
+          rule: self.metadata.name == 'flux'
     served: true
     storage: true
     subresources:
@@ -893,6 +915,7 @@ spec:
               type:
                 description: Type specifies the type of the input provider.
                 enum:
+                - Static
                 - GitHubBranch
                 - GitHubPullRequest
                 - GitLabBranch
@@ -902,12 +925,16 @@ spec:
                 description: |-
                   URL specifies the HTTP/S address of the input provider API.
                   When connecting to a Git provider, the URL should point to the repository address.
-                pattern: ^(http|https)://.*$
+                pattern: ^((http|https)://.*){0,1}$
                 type: string
             required:
             - type
-            - url
             type: object
+            x-kubernetes-validations:
+            - message: spec.url must be empty when spec.type is 'Static'
+              rule: self.type != 'Static' || !has(self.url)
+            - message: spec.url must not be empty when spec.type is not 'Static'
+              rule: self.type == 'Static' || has(self.url)
           status:
             description: ResourceSetInputProviderStatus defines the observed state
               of ResourceSetInputProvider.
@@ -1136,12 +1163,68 @@ spec:
                       - ResourceSetInputProvider
                       type: string
                     name:
-                      description: Name of the input provider resource.
+                      description: |-
+                        Name of the input provider resource. Cannot be set
+                        when the Selector field is set.
                       type: string
+                    selector:
+                      description: |-
+                        Selector is a label selector to filter the input provider resources
+                        as an alternative to the Name field.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
                   required:
                   - kind
-                  - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: at least one of name or selector must be set for input
+                      provider references
+                    rule: has(self.name) || has(self.selector)
+                  - message: cannot set both name and selector for input provider
+                      references
+                    rule: '!has(self.name) || !has(self.selector)'
                 type: array
               resources:
                 description: Resources contains the list of Kubernetes resources to
