@@ -13,6 +13,7 @@ metadata:
     {{- include "virtual-machine.labels" . | nindent 4 }}
 spec:
   running: {{ .Values.running | default "true" }}
+
   {{- with .Values.instanceType }}
   instancetype:
     kind: VirtualMachineClusterInstancetype
@@ -23,6 +24,7 @@ spec:
     kind: VirtualMachineClusterPreference
     name: {{ . }}
   {{- end }}
+
   dataVolumeTemplates:
   - metadata:
       name: {{ include "virtual-machine.fullname" . }}
@@ -75,21 +77,25 @@ spec:
             deviceName: {{ $gpu.name }}
           {{- end }}
           {{- end }}
+
           disks:
           - disk:
               bus: scsi
             name: systemdisk
-          {{- if or .Values.sshKeys .Values.cloudInit }}
+          {{- if .Values.sshKeys }}
           - disk:
               bus: virtio
             name: cloudinitdisk
           {{- end }}
+
           interfaces:
           - name: default
             bridge: {}
+
         machine:
           type: ""
-      {{- with .Values.sshKeys }}
+
+      {{- if .Values.sshKeys }}
       accessCredentials:
       - sshPublicKey:
           source:
@@ -99,23 +105,42 @@ spec:
             # keys will be injected into metadata part of cloud-init disk
             noCloud: {}
       {{- end }}
+
       terminationGracePeriodSeconds: 30
+
       volumes:
       - name: systemdisk
         dataVolume:
           name: {{ include "virtual-machine.fullname" . }}
-      {{- if or .Values.sshKeys .Values.cloudInit }}
+
+      {{- if and .Values.sshKeys .Values.cloudInit }}
       - name: cloudinitdisk
         cloudInitNoCloud:
-        {{- if .Values.cloudInit }}
           secretRef:
             name: {{ include "virtual-machine.fullname" . }}-cloud-init
-        {{- else }}
           userData: |
-            #cloud-config
-            final_message: Cloud-init user-data was left blank intentionally.
-        {{- end }}
+            {{ printf "%s" "#cloud-config" }}
+            users:
+              - name: ubuntu
+                ssh_authorized_keys: |
+                  {{- range .Values.sshKeys }}
+                  {{ . }}
+                  {{- end }}
+            chpasswd:
+              expire: false
       {{- end }}
+
+      {{- if and .Values.sshKeys (not .Values.cloudInit) }}
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            {{ printf "%s" "#cloud-config" }}
+            ssh_authorized_keys:
+              {{- range .Values.sshKeys }}
+              -  {{ . }}
+              {{- end }}
+      {{- end }}
+
       networks:
       - name: default
         pod: {}
