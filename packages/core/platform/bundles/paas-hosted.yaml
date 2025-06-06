@@ -129,6 +129,12 @@ releases:
   namespace: cozy-linstor
   dependsOn: [cert-manager]
 
+- name: objectstorage-controller
+  releaseName: objectstorage-controller
+  chart: cozy-objectstorage-controller
+  namespace: cozy-objectstorage-controller
+  dependsOn: []
+
 - name: telepresence
   releaseName: traffic-manager
   chart: cozy-telepresence
@@ -141,7 +147,7 @@ releases:
   chart: cozy-external-dns
   namespace: cozy-external-dns
   optional: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: []
 
 - name: external-secrets-operator
   releaseName: external-secrets-operator
@@ -206,4 +212,4 @@ releases:
   chart: cozy-vertical-pod-autoscaler-crds
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
-  dependsOn: [cilium, kubeovn]
+  dependsOn: []
