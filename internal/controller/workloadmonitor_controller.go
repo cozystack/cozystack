@@ -21,6 +21,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+
+	kubevirtv1 "kubevirt.io/api/core/v1"
 )
 
 // WorkloadMonitorReconciler reconciles a WorkloadMonitor object
@@ -248,15 +250,29 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("pod-%s", pod.Name),
 			Namespace: pod.Namespace,
+			Labels:    map[string]string{},
 		},
 	}
 
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+	metaLabels, err := r.getWorkloadMetadata(ctx, &pod)
+	if err != nil {
+		logger.Error(err, "Failed to get metadata for workload", "name", workload.Name, "namespace", workload.Namespace)
+		return err
+	}
+
+	_, err = ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), monitor)
 
 		// Copy labels from the Pod if needed
-		workload.Labels = pod.Labels
+		for k, v := range pod.Labels {
+			workload.Labels[k] = v
+		}
+
+		// Add workload meta to labels
+		for k, v := range metaLabels {
+			workload.Labels[k] = v
+		}
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -432,4 +448,49 @@ func mapObjectToMonitor[T client.Object](_ T, c client.Client) func(ctx context.
 		}
 		return requests
 	}
+}
+
+func (r *WorkloadMonitorReconciler) getWorkloadMetadata(ctx context.Context, obj client.Object) (map[string]string, error) {
+	logger := log.FromContext(ctx)
+	refs := obj.GetOwnerReferences()
+	if refs == nil || len(refs) == 0 {
+		return nil, nil
+	}
+	labels := make(map[string]string)
+	for _, ref := range refs {
+		addLabels, err := r.getWorkloadMetadataFromOwnerReference(ctx, ref, obj.GetNamespace())
+		if err != nil {
+			logger.Error(err, "Failed to get metadata from owner reference", "kind", ref.Kind, "name", ref.Name, "error")
+			return nil, err
+		}
+		for k, v := range addLabels {
+			labels[k] = v
+		}
+	}
+	return labels, nil
+}
+
+func (r *WorkloadMonitorReconciler) getWorkloadMetadataFromOwnerReference(ctx context.Context, ref metav1.OwnerReference, ns string) (map[string]string, error) {
+	labels := make(map[string]string)
+	switch {
+	case ref.APIVersion == "kubevirt.io/v1" && ref.Kind == "VirtualMachineInstance":
+		vmi := &kubevirtv1.VirtualMachineInstance{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, vmi)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return labels, nil
+			}
+			return nil, err
+		}
+		labels = getWorkloadMetadataFromVMI(vmi)
+	}
+	return labels, nil
+}
+
+func getWorkloadMetadataFromVMI(vmi *kubevirtv1.VirtualMachineInstance) map[string]string {
+	labels := make(map[string]string)
+	if instanceType, ok := vmi.Annotations["kubevirt.io/cluster-instancetype-name"]; ok {
+		labels["workloads.cozystack.io/kubevirt-vmi-instance-type"] = instanceType
+	}
+	return labels
 }
