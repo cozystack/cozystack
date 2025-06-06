@@ -94,17 +94,27 @@ spec:
         dataVolume:
           name: vm-disk-{{ .name }}
       {{- end }}
-      {{- if or .Values.sshKeys .Values.cloudInit }}
+      {{- if and .Values.sshKeys .Values.cloudInit }}
       - name: cloudinitdisk
         cloudInitNoCloud:
-        {{- if .Values.cloudInit }}
           secretRef:
             name: {{ include "virtual-machine.fullname" . }}-cloud-init
-        {{- else }}
+      {{- else if .Values.sshKeys }}
+      - name: cloudinitdisk
+        cloudInitNoCloud:
           userData: |
-            #cloud-config
-            final_message: Cloud-init user-data was left blank intentionally.
-        {{- end }}
+            {{ printf "%s" "#cloud-config" }}
+            ssh_authorized_keys:
+              {{- range .Values.sshKeys }}
+              - {{ . }}
+              {{- end }}
+            chpasswd:
+              expire: false
+      {{- else }}
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            {{ printf "%s" "#cloud-config" }}
       {{- end }}
       networks:
       - name: default
