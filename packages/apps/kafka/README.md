@@ -14,9 +14,9 @@
 | `zookeeper.replicas`        | Number of ZooKeeper replicas                                                                                                                                                                                      | `3`     |
 | `zookeeper.storageClass`    | StorageClass used to store the ZooKeeper data                                                                                                                                                                     | `""`    |
 | `kafka.resources`           | Resources                                                                                                                                                                                                         | `{}`    |
-| `kafka.resourcesPreset`     | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano`  |
+| `kafka.resourcesPreset`     | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `small` |
 | `zookeeper.resources`       | Resources                                                                                                                                                                                                         | `{}`    |
-| `zookeeper.resourcesPreset` | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `nano`  |
+| `zookeeper.resourcesPreset` | Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production). | `micro` |
 
 ### Configuration parameters
 
