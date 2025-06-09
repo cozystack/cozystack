@@ -17,11 +17,21 @@ releases:
   privileged: true
   dependsOn: []
 
+- name: fluxcd-configure
+  releaseName: fluxcd-configure
+  chart: cozy-fluxcd-configure
+  namespace: cozy-fluxcd
+  dependsOn: [fluxcd-operator]
+
 - name: fluxcd
   releaseName: fluxcd
   chart: cozy-fluxcd
   namespace: cozy-fluxcd
-  dependsOn: [fluxcd-operator]
+  dependsOn: [fluxcd-configure]
+  valuesFrom:
+  - kind: ConfigMap
+    name: fluxcd-instance-values
+    valuesKey: values.yaml
 
 - name: cert-manager-crds
   releaseName: cert-manager-crds
