@@ -15,7 +15,7 @@ concurrency:
 jobs:
   prepare-release:
     name: Prepare Release
-    runs-on: [self-hosted]
+    runs-on: [oracle-4cpu-16gb-x86-64]
     permissions:
       contents: write
       packages: write
