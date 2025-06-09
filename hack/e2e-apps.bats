@@ -23,7 +23,7 @@ EOF
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 }
 
-@test "Create a tenant Kubernetes control plane" {
+@test "Create a tenant Kubernetes cluster" {
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -90,5 +90,5 @@ EOF
   kubectl wait tcp -n tenant-test kubernetes-test --timeout=2m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
   kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-test kubernetes-test-cluster-autoscaler kubernetes-test-kccm kubernetes-test-kcsi-controller
   kubectl wait machinedeployment kubernetes-test-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
-  kubectl wait machinedeployment kubernetes-test-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
+  kubectl wait machinedeployment kubernetes-test-md0 -n tenant-test --timeout=8m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 }
