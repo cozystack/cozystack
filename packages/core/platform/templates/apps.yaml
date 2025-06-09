@@ -16,6 +16,19 @@
 {{- $host = $tenantRoot.spec.values.host }}
 {{- else }}
 {{- end }}
+
+{{/* Handle tenant-root features */}}
+{{- $features := dict "ingress" false "monitoring" false "etcd" false "isolated" false }}
+{{- if and $cozyConfig.data (hasKey $cozyConfig.data "tenant-root") }}
+  {{- $enabledFeatures := splitList "," (index $cozyConfig.data "tenant-root") }}
+  {{- range $feature := $enabledFeatures }}
+    {{- $feature = trim $feature }}
+    {{- if hasKey $features $feature }}
+      {{- $_ := set $features $feature true }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
 ---
 apiVersion: v1
 kind: Namespace
@@ -54,6 +67,7 @@ spec:
         namespace: cozy-public
   values:
     host: "{{ $host }}"
+    {{- toYaml $features | nindent 4 }}
   dependsOn:
   {{- range $x := $bundle.releases }}
   {{- if has $x.name (list "cilium" "kubeovn") }}
