@@ -16,6 +16,49 @@ kube-ovn:
   OPENVSWITCH_DIR: "/var/lib/openvswitch"
   OVN_DIR: "/var/lib/ovn"
   DISABLE_MODULES_MANAGEMENT: true
+  ovn-central:
+    requests:
+      cpu: "50m"
+      memory: "100Mi"
+    limits:
+      cpu: "3"
+      memory: "4Gi"
+  ovs-ovn:
+    requests:
+      cpu: "10m"
+      memory: "50Mi"
+    limits:
+      cpu: "2"
+      memory: "1000Mi"
+  kube-ovn-controller:
+    requests:
+      cpu: "10m"
+      memory: "100Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  kube-ovn-cni:
+    requests:
+      cpu: "50m"
+      memory: "50Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  kube-ovn-pinger:
+    requests:
+      cpu: "10m"
+      memory: "50Mi"
+    limits:
+      cpu: "200m"
+      memory: "400Mi"
+  kube-ovn-monitor:
+    requests:
+      cpu: "10m"
+      memory: "50Mi"
+    limits:
+      cpu: "200m"
+      memory: "200Mi"
+
 global:
   registry:
     address: ghcr.io/cozystack/cozystack

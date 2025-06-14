@@ -18,8 +18,8 @@ spec:
           {{- if and .vminsert .vminsert.minAllowed }}
           {{- toYaml .vminsert.minAllowed | nindent 10 }}
           {{- else }}
-          cpu: 250m
-          memory: 256Mi
+          cpu: 25m
+          memory: 64Mi
           {{- end }}
         maxAllowed:
           {{- if and .vminsert .vminsert.maxAllowed }}
@@ -47,8 +47,8 @@ spec:
           {{- if and .vmselect .vmselect.minAllowed }}
           {{- toYaml .vmselect.minAllowed | nindent 10 }}
           {{- else }}
-          cpu: 250m
-          memory: 256Mi
+          cpu: 25m
+          memory: 64Mi
           {{- end }}
         maxAllowed:
           {{- if and .vmselect .vmselect.maxAllowed }}
@@ -76,8 +76,8 @@ spec:
           {{- if and .vmstorage .vmstorage.minAllowed }}
           {{- toYaml .vmstorage.minAllowed | nindent 10 }}
           {{- else }}
-          cpu: 100m
-          memory: 512Mi
+          cpu: 25m
+          memory: 64Mi
           {{- end }}
         maxAllowed:
           {{- if and .vmstorage .vmstorage.maxAllowed }}

@@ -5,3 +5,10 @@ flux-operator:
       operator: Exists
       effect: NoSchedule
   hostNetwork: true
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 10m
+      memory: 64Mi

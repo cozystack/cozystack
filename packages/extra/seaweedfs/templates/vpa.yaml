@@ -13,8 +13,8 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: 250m
-          memory: 256Mi
+          cpu: 25m
+          memory: 64Mi
         maxAllowed:
           cpu: "1"
           memory: 2048Mi
@@ -36,8 +36,8 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: 250m
-          memory: 256Mi
+          cpu: 25m
+          memory: 64Mi
         maxAllowed:
           cpu: "1"
           memory: 2048Mi
@@ -59,8 +59,8 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: 250m
-          memory: 256Mi
+          cpu: 25m
+          memory: 64Mi
         maxAllowed:
           cpu: "1"
           memory: 2048Mi

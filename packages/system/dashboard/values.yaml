@@ -26,8 +26,8 @@ kubeapps:
       resourcesPreset: "none"
       resources:
         requests:
-          cpu: 200m
-          memory: 256Mi
+          cpu: 20m
+          memory: 32Mi
         limits:
           memory: 256Mi
   kubeappsapis:
