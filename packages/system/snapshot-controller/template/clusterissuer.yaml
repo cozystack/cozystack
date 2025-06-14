@@ -1,0 +1,8 @@
+{{- if not (lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" "cozy-cert-manager" "cert-manager-issuers") }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-cluster-issuer
+spec:
+  selfSigned: {}
+{{- end }}
