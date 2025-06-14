@@ -121,21 +121,21 @@ metadata:
 spec:
   apiServer:
     {{- if .Values.controlPlane.apiServer.resources }}
-    resources: {{- toYaml .Values.controlPlane.apiServer.resources | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.sanitize" (list .Values.controlPlane.apiServer.resources $) | nindent 6 }}
     {{- else if ne .Values.controlPlane.apiServer.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.apiServer.resourcesPreset "Release" .Release) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.preset" (list .Values.controlPlane.apiServer.resourcesPreset $) | nindent 6 }}
     {{- end }}
   controllerManager:
     {{- if .Values.controlPlane.controllerManager.resources }}
-    resources: {{- toYaml .Values.controlPlane.controllerManager.resources | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.sanitize" (list .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
     {{- else if ne .Values.controlPlane.controllerManager.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.controllerManager.resourcesPreset "Release" .Release) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.preset" (list .Values.controlPlane.controllerManager.resourcesPreset $) | nindent 6 }}
     {{- end }}
   scheduler:
     {{- if .Values.controlPlane.scheduler.resources }}
-    resources: {{- toYaml .Values.controlPlane.scheduler.resources | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.sanitize" (list .Values.controlPlane.scheduler.resources $) | nindent 6 }}
     {{- else if ne .Values.controlPlane.scheduler.resourcesPreset "none" }}
-    resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.scheduler.resourcesPreset "Release" .Release) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.preset" (list .Values.controlPlane.scheduler.resourcesPreset $) | nindent 6 }}
     {{- end }}
   dataStoreName: "{{ $etcd }}"
   addons:
@@ -146,9 +146,9 @@ spec:
       server:
         port: 8132
         {{- if .Values.controlPlane.konnectivity.server.resources }}
-        resources: {{- toYaml .Values.controlPlane.konnectivity.server.resources | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.sanitize" (list .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
         {{- else if ne .Values.controlPlane.konnectivity.server.resourcesPreset "none" }}
-        resources: {{- include "resources.preset" (dict "type" .Values.controlPlane.konnectivity.server.resourcesPreset "Release" .Release) | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.preset" (list .Values.controlPlane.konnectivity.server.resourcesPreset $) | nindent 10 }}
         {{- end }}
   kubelet:
     cgroupfs: systemd
