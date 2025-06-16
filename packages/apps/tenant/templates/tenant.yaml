@@ -23,8 +23,8 @@ metadata:
   namespace: {{ include "tenant.name" . }}
 rules:
 - apiGroups: [""]
-  resources: ["*"]
-  verbs: ["get", "list", "watch", "create", "update", "patch"]
+  resources: ["pods", "services", "persistentvolumes", "endpoints", "events", "resourcequotas"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingresses"]
   verbs: ["get", "list", "watch"]
@@ -94,7 +94,12 @@ rules:
   - apiGroups:
       - ""
     resources:
-      - "*"
+      - pods
+      - services
+      - persistentvolumes
+      - endpoints
+      - events
+      - resourcequotas
     verbs:
       - get
       - list
@@ -119,24 +124,7 @@ metadata:
   name: {{ include "tenant.name" . }}-view
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{- if ne .Release.Namespace "tenant-root" }}
-- kind: Group
-  name: tenant-root-view
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-- kind: Group
-  name: {{ include "tenant.name" . }}-view
-  apiGroup: rbac.authorization.k8s.io
-{{- if hasPrefix "tenant-" .Release.Namespace }}
-{{- $parts := splitList "-" .Release.Namespace }}
-{{- range $i, $v := $parts }}
-{{- if ne $i 0 }}
-- kind: Group
-  name: {{ join "-" (slice $parts 0 (add $i 1)) }}-view
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-{{- end }}
-{{- end }}
+{{ include "cozy-lib.rbac.subjectsForTenant" (list "view" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-view
@@ -165,7 +153,12 @@ rules:
     - watch
   - apiGroups: [""]
     resources:
-    - "*"
+      - pods
+      - services
+      - persistentvolumes
+      - endpoints
+      - events
+      - resourcequotas
     verbs:
     - get
     - list
@@ -184,6 +177,12 @@ rules:
     verbs:
     - get
     - list
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources:
+      - virtualmachineinstances/portforward
+    verbs:
+      - get
+      - update
   - apiGroups:
     - cozystack.io
     resources:
@@ -196,24 +195,7 @@ metadata:
   name: {{ include "tenant.name" . }}-use
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{- if ne .Release.Namespace "tenant-root" }}
-- kind: Group
-  name: tenant-root-use
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-- kind: Group
-  name: {{ include "tenant.name" . }}-use
-  apiGroup: rbac.authorization.k8s.io
-{{- if hasPrefix "tenant-" .Release.Namespace }}
-{{- $parts := splitList "-" .Release.Namespace }}
-{{- range $i, $v := $parts }}
-{{- if ne $i 0 }}
-- kind: Group
-  name: {{ join "-" (slice $parts 0 (add $i 1)) }}-use
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-{{- end }}
-{{- end }}
+{{ include "cozy-lib.rbac.subjectsForTenant" (list "use" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-use
@@ -234,7 +216,12 @@ rules:
     - get
   - apiGroups: [""]
     resources:
-    - "*"
+      - pods
+      - services
+      - persistentvolumes
+      - endpoints
+      - events
+      - resourcequotas
     verbs:
     - get
     - list
@@ -253,6 +240,12 @@ rules:
     verbs:
     - get
     - list
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources:
+      - virtualmachineinstances/portforward
+    verbs:
+      - get
+      - update
   - apiGroups: ["apps.cozystack.io"]
     resources:
     - buckets
@@ -293,24 +286,7 @@ metadata:
   name: {{ include "tenant.name" . }}-admin
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{- if ne .Release.Namespace "tenant-root" }}
-- kind: Group
-  name: tenant-root-admin
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-- kind: Group
-  name: {{ include "tenant.name" . }}-admin
-  apiGroup: rbac.authorization.k8s.io
-{{- if hasPrefix "tenant-" .Release.Namespace }}
-{{- $parts := splitList "-" .Release.Namespace }}
-{{- range $i, $v := $parts }}
-{{- if ne $i 0 }}
-- kind: Group
-  name: {{ join "-" (slice $parts 0 (add $i 1)) }}-admin
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-{{- end }}
-{{- end }}
+{{ include "cozy-lib.rbac.subjectsForTenant" (list "admin" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-admin
@@ -331,7 +307,12 @@ rules:
     - get
   - apiGroups: [""]
     resources:
-    - "*"
+      - pods
+      - services
+      - persistentvolumes
+      - endpoints
+      - events
+      - resourcequotas
     verbs:
     - get
     - list
@@ -349,6 +330,12 @@ rules:
     verbs:
     - get
     - list
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources:
+      - virtualmachineinstances/portforward
+    verbs:
+      - get
+      - update
   - apiGroups: ["apps.cozystack.io"]
     resources:
     - '*'
@@ -366,24 +353,7 @@ metadata:
   name: {{ include "tenant.name" . }}-super-admin
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{- if ne .Release.Namespace "tenant-root" }}
-- kind: Group
-  name: tenant-root-super-admin
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-- kind: Group
-  name: {{ include "tenant.name" . }}-super-admin
-  apiGroup: rbac.authorization.k8s.io
-{{- if hasPrefix "tenant-" .Release.Namespace }}
-{{- $parts := splitList "-" .Release.Namespace }}
-{{- range $i, $v := $parts }}
-{{- if ne $i 0 }}
-- kind: Group
-  name: {{ join "-" (slice $parts 0 (add $i 1)) }}-super-admin
-  apiGroup: rbac.authorization.k8s.io
-{{- end }}
-{{- end }}
-{{- end }}
+{{ include "cozy-lib.rbac.subjectsForTenant" (list "super-admin" (include "tenant.name" .) ) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-super-admin
