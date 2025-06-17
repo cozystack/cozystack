@@ -337,3 +337,72 @@ EOF
   timeout 100 sh -ec "until kubectl -n tenant-test get svc chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.spec.ports[0].port}' | grep -q '9000 8123 9009'; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-1 --timeout=140s --for=jsonpath='{.status.replicas}'=2
 }
+
+@test "Create Kafka" {
+  name='test'
+  kubectl create -f- <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kafka
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  external: false
+  kafka:
+    size: 10Gi
+    replicas: 2
+    storageClass: ""
+    resources: {}
+    resourcesPreset: "nano"
+  zookeeper:
+    size: 5Gi
+    replicas: 2
+    storageClass: ""
+    resources:
+    resourcesPreset: "nano"
+  topics:
+    - name: testResults
+      partitions: 1
+      replicas: 2
+      config:
+        min.insync.replicas: 2
+    - name: testOrders
+      config:
+        cleanup.policy: compact
+        segment.ms: 3600000
+        max.compaction.lag.ms: 5400000
+        min.insync.replicas: 2
+      partitions: 1
+      replicas: 2
+EOF
+  sleep 5
+  kubectl -n tenant-test wait hr kafka-$name --timeout=30s --for=condition=ready
+  kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-0 --timeout=30s --for=jsonpath='{.status.phase}'=Bound
+  timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-client -o jsonpath='{.spec.ports[0].port}' | grep -q '2181'; do sleep 10; done"
+  timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-nodes -o jsonpath='{.spec.ports[*].port}' | grep -q '2181 2888 3888'; do sleep 10; done"
+  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints kafka-$name-zookeeper-nodes -o jsonpath='{.subsets[*].addresses[0].ip}' | grep -q '[0-9]'; do sleep 10; done"
+}
+
+@test "Create Redis" {
+  name='test'
+  kubectl create -f- <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Redis
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  external: false
+  size: 1Gi
+  replicas: 2
+  storageClass: ""
+  authEnabled: true
+  resources: {}
+  resourcesPreset: "nano"
+EOF
+  sleep 5
+  kubectl -n tenant-test wait hr redis-$name --timeout=20s --for=condition=ready
+  kubectl -n tenant-test wait pvc redisfailover-persistent-data-rfr-redis-$name-0 --timeout=20s --for=jsonpath='{.status.phase}'=Bound
+  kubectl -n tenant-test wait deploy rfs-redis-$name --timeout=70s --for=condition=available
+  kubectl -n tenant-test wait sts rfr-redis-$name --timeout=70s --for=jsonpath='{.status.replicas}'=2
+}
