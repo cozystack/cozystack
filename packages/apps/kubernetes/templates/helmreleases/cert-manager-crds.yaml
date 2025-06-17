@@ -1,3 +1,4 @@
+{{- if .Values.addons.certManager.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -53,4 +54,5 @@ metadata:
 stringData:
   values: |
     {{- toYaml .Values.addons.certManager.valuesOverride | nindent 4 }}
+{{- end }}
 {{- end }}
