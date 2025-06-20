@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.1
+    controller-gen.kubebuilder.io/version: v0.18.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -69,13 +69,21 @@ spec:
                       Defaults to 'cluster.local'.
                     type: string
                   multitenant:
-                    description: Multitenant enables the multitenancy lockdown.
+                    default: false
+                    description: Multitenant enables the multitenancy lockdown. Defaults
+                      to false.
                     type: boolean
                   networkPolicy:
                     default: true
                     description: |-
                       NetworkPolicy restricts network access to the current namespace.
                       Defaults to true.
+                    type: boolean
+                  objectLevelWorkloadIdentity:
+                    description: |-
+                      ObjectLevelWorkloadIdentity enables the feature gate
+                      required for object-level workload identity.
+                      This feature is only available in Flux v2.6.0 and later.
                     type: boolean
                   tenantDefaultServiceAccount:
                     description: |-
@@ -95,9 +103,6 @@ spec:
                     - azure
                     - gcp
                     type: string
-                required:
-                - domain
-                - networkPolicy
                 type: object
               commonMetadata:
                 description: |-
@@ -119,7 +124,7 @@ spec:
               components:
                 description: |-
                   Components is the list of controllers to install.
-                  Defaults to all controllers.
+                  Defaults to a commonly used subset.
                 items:
                   description: Component is the name of a controller to install.
                   enum:
@@ -250,6 +255,16 @@ spec:
                       type: string
                     minItems: 1
                     type: array
+                  storage:
+                    description: |-
+                      Storage defines if the source-controller shards
+                      should use an emptyDir or a persistent volume claim for storage.
+                      Accepted values are 'ephemeral' or 'persistent', defaults to 'ephemeral'.
+                      For 'persistent' to take effect, the '.spec.storage' field must be set.
+                    enum:
+                    - ephemeral
+                    - persistent
+                    type: string
                 required:
                 - shards
                 type: object
@@ -496,7 +511,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.1
+    controller-gen.kubebuilder.io/version: v0.18.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -779,7 +794,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.1
+    controller-gen.kubebuilder.io/version: v0.18.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -885,7 +900,36 @@ spec:
                       Limit specifies the maximum number of input sets to return.
                       When not set, the default limit is 100.
                     type: integer
+                  semver:
+                    description: Semver specifies the semantic version range to filter
+                      and order the tags.
+                    type: string
                 type: object
+              schedule:
+                description: Schedule defines the schedules for the input provider
+                  to run.
+                items:
+                  description: Schedule defines a schedule for something to run.
+                  properties:
+                    cron:
+                      description: Cron specifies the cron expression for the schedule.
+                      type: string
+                    timeZone:
+                      default: UTC
+                      description: TimeZone specifies the time zone for the cron schedule.
+                        Defaults to UTC.
+                      type: string
+                    window:
+                      default: 0s
+                      description: |-
+                        Window defines the time window during which the execution is allowed.
+                        Defaults to 0s, meaning no window is applied.
+                      pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                      type: string
+                  required:
+                  - cron
+                  type: object
+                type: array
               secretRef:
                 description: |-
                   SecretRef specifies the Kubernetes Secret containing the basic-auth credentials
@@ -917,8 +961,10 @@ spec:
                 enum:
                 - Static
                 - GitHubBranch
+                - GitHubTag
                 - GitHubPullRequest
                 - GitLabBranch
+                - GitLabTag
                 - GitLabMergeRequest
                 type: string
               url:
@@ -1011,12 +1057,45 @@ spec:
                   LastExportedRevision is the digest of the
                   inputs that were last reconcile.
                 type: string
+              lastHandledForceAt:
+                description: |-
+                  LastHandledForceAt holds the value of the most recent
+                  force request value, so a change of the annotation value
+                  can be detected.
+                type: string
               lastHandledReconcileAt:
                 description: |-
                   LastHandledReconcileAt holds the value of the most recent
                   reconcile request value, so a change of the annotation value
                   can be detected.
                 type: string
+              nextSchedule:
+                description: NextSchedule is the next schedule when the input provider
+                  will run.
+                properties:
+                  cron:
+                    description: Cron specifies the cron expression for the schedule.
+                    type: string
+                  timeZone:
+                    default: UTC
+                    description: TimeZone specifies the time zone for the cron schedule.
+                      Defaults to UTC.
+                    type: string
+                  when:
+                    description: When is the next time the schedule will run.
+                    format: date-time
+                    type: string
+                  window:
+                    default: 0s
+                    description: |-
+                      Window defines the time window during which the execution is allowed.
+                      Defaults to 0s, meaning no window is applied.
+                    pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                    type: string
+                required:
+                - cron
+                - when
+                type: object
             type: object
         type: object
     served: true
@@ -1028,7 +1107,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.1
+    controller-gen.kubebuilder.io/version: v0.18.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -1151,6 +1230,9 @@ spec:
                   When set, the inputs are fetched from the providers and concatenated
                   with the in-line inputs defined in the ResourceSet.
                 items:
+                  description: |-
+                    InputProviderReference defines a reference to an input provider resource
+                    in the same namespace as the ResourceSet.
                   properties:
                     apiVersion:
                       description: |-
