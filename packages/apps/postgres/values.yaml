@@ -60,22 +60,32 @@ databases: {}
 ## @section Backup parameters
 
 ## @param backup.enabled Enable pereiodic backups
-## @param backup.s3Region The AWS S3 region where backups are stored
-## @param backup.s3Bucket The S3 bucket used for storing backups
 ## @param backup.schedule Cron schedule for automated backups
-## @param backup.cleanupStrategy The strategy for cleaning up old backups
+## @param backup.retentionPolicy The retention policy
+## @param backup.destinationPath The path where to store the backup (i.e. s3://bucket/path/to/folder)
+## @param backup.endpointURL Endpoint to be used to upload data to the cloud
 ## @param backup.s3AccessKey The access key for S3, used for authentication
 ## @param backup.s3SecretKey The secret key for S3, used for authentication
-## @param backup.resticPassword The password for Restic backup encryption
 backup:
   enabled: false
-  s3Region: us-east-1
-  s3Bucket: s3.example.org/postgres-backups
-  schedule: "0 2 * * *"
-  cleanupStrategy: "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
+  retentionPolicy: 30d
+  destinationPath: s3://BUCKET_NAME/
+  endpointURL: http://minio-gateway-service:9000
+  schedule: "0 2 * * * *"
   s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
   s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
-  resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
+
+## @section Bootstrap parameters
+
+## @param bootstrap.enabled Restore cluster from backup
+## @param bootstrap.recoveryTime Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest
+## @param bootstrap.oldName Name of cluster before deleting
+##
+bootstrap:
+  enabled: false
+  # example: 2020-11-26 15:22:00.00000+00
+  recoveryTime: ""
+  oldName: ""
 
 ## @param resources Resources
 resources: {}
@@ -88,4 +98,4 @@ resources: {}
  #     memory: 512Mi
  
 ## @param resourcesPreset Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).
-resourcesPreset: "nano"
+resourcesPreset: "micro"
