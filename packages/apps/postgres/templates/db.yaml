@@ -5,6 +5,43 @@ metadata:
   name: {{ .Release.Name }}
 spec:
   instances: {{ .Values.replicas }}
+  {{- if .Values.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.destinationPath }}
+      endpointURL: {{ .Values.backup.endpointURL }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Release.Name }}-s3-creds
+          key: AWS_ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ .Release.Name }}-s3-creds
+          key: AWS_SECRET_ACCESS_KEY
+    retentionPolicy: {{ .Values.backup.retentionPolicy }}
+  {{- end }}
+  
+  {{- if .Values.bootstrap.enabled }}
+  bootstrap:
+    recovery:
+      source: {{ .Values.bootstrap.oldName }}
+      {{- if .Values.bootstrap.recoveryTime }}
+      recoveryTarget:
+        targetTime: {{ .Values.bootstrap.recoveryTime }}
+      {{- end }}
+  externalClusters:
+    - name: {{ .Values.bootstrap.oldName }}
+      barmanObjectStore:
+        destinationPath: {{ .Values.backup.destinationPath }}
+        endpointURL: {{ .Values.backup.endpointURL }}
+        s3Credentials:
+          accessKeyId:
+            name: {{ .Release.Name }}-s3-creds
+            key: AWS_ACCESS_KEY_ID
+          secretAccessKey:
+            name: {{ .Release.Name }}-s3-creds
+            key: AWS_SECRET_ACCESS_KEY
+  {{- end }}
+
   {{- if .Values.resources }}
   resources: {{- include "cozy-lib.resources.sanitize" (list .Values.resources $) | nindent 4 }}
   {{- else if ne .Values.resourcesPreset "none" }}

@@ -65,25 +65,25 @@
                     "description": "Enable pereiodic backups",
                     "default": false
                 },
-                "s3Region": {
-                    "type": "string",
-                    "description": "The AWS S3 region where backups are stored",
-                    "default": "us-east-1"
-                },
-                "s3Bucket": {
-                    "type": "string",
-                    "description": "The S3 bucket used for storing backups",
-                    "default": "s3.example.org/postgres-backups"
-                },
                 "schedule": {
                     "type": "string",
                     "description": "Cron schedule for automated backups",
-                    "default": "0 2 * * *"
+                    "default": "0 2 * * * *"
                 },
-                "cleanupStrategy": {
+                "retentionPolicy": {
                     "type": "string",
-                    "description": "The strategy for cleaning up old backups",
-                    "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
+                    "description": "The retention policy",
+                    "default": "30d"
+                },
+                "destinationPath": {
+                    "type": "string",
+                    "description": "The path where to store the backup (i.e. s3://bucket/path/to/folder)",
+                    "default": "s3://BUCKET_NAME/"
+                },
+                "endpointURL": {
+                    "type": "string",
+                    "description": "Endpoint to be used to upload data to the cloud",
+                    "default": "http://minio-gateway-service:9000"
                 },
                 "s3AccessKey": {
                     "type": "string",
@@ -94,11 +94,26 @@
                     "type": "string",
                     "description": "The secret key for S3, used for authentication",
                     "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
+                }
+            }
+        },
+        "bootstrap": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Restore cluster from backup",
+                    "default": false
                 },
-                "resticPassword": {
+                "recoveryTime": {
                     "type": "string",
-                    "description": "The password for Restic backup encryption",
-                    "default": "ChaXoveekoh6eigh4siesheeda2quai0"
+                    "description": "Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest",
+                    "default": ""
+                },
+                "oldName": {
+                    "type": "string",
+                    "description": "Name of cluster before deleting",
+                    "default": ""
                 }
             }
         },
@@ -110,7 +125,7 @@
         "resourcesPreset": {
             "type": "string",
             "description": "Set container resources according to one common preset (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge). This is ignored if resources is set (resources is recommended for production).",
-            "default": "nano"
+            "default": "micro"
         }
     }
 }
