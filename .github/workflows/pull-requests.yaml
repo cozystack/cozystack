@@ -153,5 +153,8 @@ jobs:
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
-      - name: E2E Apps
+      - name: List images used
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME list-images
+
+      - name: Delete environment
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete
