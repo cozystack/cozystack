@@ -41,10 +41,10 @@ stringData:
     {{- if .Values.users }}
     psql -v ON_ERROR_STOP=1 <<\EOT
     {{- range $user, $u := .Values.users }}
-    SELECT 'CREATE ROLE {{ $user }} LOGIN INHERIT;'
+    SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
-    ALTER ROLE {{ $user }} WITH PASSWORD '{{ index $passwords $user }}' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
-    COMMENT ON ROLE {{ $user }} IS 'user managed by helm';
+    ALTER ROLE "{{ $user }}" WITH PASSWORD '{{ index $passwords $user }}' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
+    COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
     {{- end }}
     EOT
     {{- end }}
@@ -68,15 +68,15 @@ stringData:
     {{- if .Values.databases }}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
     {{- range $database, $d := .Values.databases }}
-    SELECT 'CREATE DATABASE {{ $database }}'
+    SELECT 'CREATE DATABASE "{{ $database }}"'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ $database }}')\gexec
-    COMMENT ON DATABASE {{ $database }} IS 'database managed by helm';
-    SELECT 'CREATE ROLE {{ $database }}_admin NOINHERIT;'
+    COMMENT ON DATABASE "{{ $database }}" IS 'database managed by helm';
+    SELECT 'CREATE ROLE "{{ $database }}_admin" NOINHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $database }}_admin')\gexec
-    COMMENT ON ROLE {{ $database }}_admin IS 'role managed by helm';
-    SELECT 'CREATE ROLE {{ $database }}_readonly NOINHERIT;'
+    COMMENT ON ROLE "{{ $database }}_admin" IS 'role managed by helm';
+    SELECT 'CREATE ROLE "{{ $database }}_readonly" NOINHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $database }}_readonly')\gexec
-    COMMENT ON ROLE {{ $database }}_readonly IS 'role managed by helm';
+    COMMENT ON ROLE "{{ $database }}_readonly" IS 'role managed by helm';
     {{- end }}
     EOT
     {{- end }}
@@ -84,8 +84,8 @@ stringData:
     echo "== grant privileges on databases to roles"
     {{- range $database, $d := .Values.databases }}
     psql -v ON_ERROR_STOP=1 --echo-all -d "{{ $database }}" <<\EOT
-    ALTER DATABASE {{ $database }} OWNER TO {{ $database }}_admin;
-    GRANT CONNECT ON DATABASE {{ $database }} TO {{ $database }}_readonly;
+    ALTER DATABASE "{{ $database }}" OWNER TO "{{ $database }}_admin";
+    GRANT CONNECT ON DATABASE "{{ $database }}" TO "{{ $database }}_readonly";
 
     DO $$
     DECLARE
@@ -165,14 +165,14 @@ stringData:
     {{- range $database, $d := .Values.databases }}
     {{- range $user, $u := $.Values.users }}
     {{- if has $user $d.roles.admin }}
-    GRANT {{ $database }}_admin TO {{ $user }};
+    GRANT "{{ $database }}_admin" TO "{{ $user }}";
     {{- else }}
-    REVOKE {{ $database }}_admin FROM {{ $user }};
+    REVOKE "{{ $database }}_admin" FROM "{{ $user }}";
     {{- end }}
     {{- if has $user $d.roles.readonly }}
-    GRANT {{ $database }}_readonly TO {{ $user }};
+    GRANT "{{ $database }}_readonly" TO "{{ $user }}";
     {{- else }}
-    REVOKE {{ $database }}_readonly FROM {{ $user }};
+    REVOKE "{{ $database }}_readonly" FROM "{{ $user }}";
     {{- end }}
     {{- end }}
     {{- end }}
