@@ -1,0 +1,12 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: guacamole-db
+spec:
+  instances: 2
+  storage:
+    size: 10Gi
+
+  inheritedMetadata:
+    labels:
+      policy.cozystack.io/allow-to-apiserver: "true"
