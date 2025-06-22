@@ -61,4 +61,4 @@ resolved_miss_map=$(
   done < $miss_map
 )
 
-printf "%s\n" "$new_map" "$resolved_miss_map" | sort -k1,1 -k2,2 -V | awk '$1' > "$file"
+printf "%s\n" "$new_map" "$resolved_miss_map" | sort -k1,1 -k2,2 -V | awk '!seen[$1, $2]++' > "$file"
