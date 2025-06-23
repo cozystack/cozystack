@@ -1,3 +1,7 @@
+{{- define "monitoring-agents.vmagent.defaultExtraArgs" }}
+promscrape.streamParse: "true"
+promscrape.maxScrapeSize: 32MB
+{{- end }}
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMAgent
 metadata:
@@ -8,8 +12,7 @@ spec:
     cluster: {{ .Values.vmagent.externalLabels.cluster }}
     tenant: {{ .Values.vmagent.externalLabels.tenant }}
   extraArgs:
-    promscrape.streamParse: "true"
-    promscrape.maxScrapeSize: 32MB
+    {{- toYaml (deepCopy .Values.vmagent.extraArgs | mergeOverwrite (fromYaml (include "monitoring-agents.vmagent.defaultExtraArgs" .))) | nindent 4 }}
   remoteWrite:
   {{- range .Values.vmagent.remoteWrite.urls }}
   - url: {{ . | quote }}

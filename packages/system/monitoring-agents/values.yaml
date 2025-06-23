@@ -309,6 +309,7 @@ vmagent:
     urls:
       - http://vminsert-shortterm.tenant-root.svc:8480/insert/0/prometheus
       - http://vminsert-longterm.tenant-root.svc:8480/insert/0/prometheus
+  extraArgs: {}
 
 fluent-bit:
   rbac:
