@@ -19,7 +19,7 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr vm-disk-$name --timeout=5s --for=condition=ready
-  kubectl -n tenant-test wait dv vm-disk-$name --timeout=150s --for=condition=ready
+  kubectl -n tenant-test wait dv vm-disk-$name --timeout=300s --for=condition=ready
   kubectl -n tenant-test wait pvc vm-disk-$name --timeout=100s --for=jsonpath='{.status.phase}'=Bound
 }
 

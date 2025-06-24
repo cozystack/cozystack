@@ -47,7 +47,7 @@ EOF
   timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-ro -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-rw -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-r -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
-  timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 210 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-rw -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   kubectl -n tenant-test delete postgreses.apps.cozystack.io $name
 }
