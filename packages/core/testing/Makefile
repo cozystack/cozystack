@@ -67,7 +67,7 @@ apply: delete
 		-v /tmp:/workspace/hosttmp \
 		"$$(yq .e2e.image values.yaml)" \
 		sleep infinity
-	docker cp "${ROOT_DIR}" "${SANDBOX_NAME}":/workspace
+	docker cp "${ROOT_DIR}/." "${SANDBOX_NAME}":/workspace
 
 list-images:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/list-images.sh'
