@@ -64,10 +64,10 @@ apply: delete
 		-e TALOSCONFIG=/workspace/talosconfig \
 		-e KUBECONFIG=/workspace/kubeconfig \
 		-e SANDBOX_NAME=${SANDBOX_NAME} \
-		-v /tmp:/workspace/hosttmp \
 		"$$(yq .e2e.image values.yaml)" \
 		sleep infinity
 	docker cp "${ROOT_DIR}/." "${SANDBOX_NAME}":/workspace
 
 list-images:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/list-images.sh'
+	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../images.txt
