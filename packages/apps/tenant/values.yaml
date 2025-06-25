@@ -15,9 +15,7 @@ seaweedfs: false
 isolated: true
 resourceQuotas: {}
 # resourceQuotas:
-#   requests.cpu: "1"
-#   requests.memory: "1Gi"
-#   limits.cpu: "2"
-#   limits.memory: "2Gi"
-#   requests.nvidia.com/gpu: 4
-#   requests.storage: 100Gi
+#   cpu: "1"
+#   memory: "1Gi"
+#   nvidia.com/gpu: 4
+#   storage: 100Gi
