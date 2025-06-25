@@ -1,8 +1,9 @@
-# Managed Nginx Caching Service
+# Managed Nginx-based HTTP Cache Service
 
-The Nginx Caching Service is designed to optimize web traffic and enhance web application performance. This service combines custom-built Nginx instances with HAproxy for efficient caching and load balancing.
+The Nginx-based HTTP caching service is designed to optimize web traffic and enhance web application performance.
+This service combines custom-built Nginx instances with HAProxy for efficient caching and load balancing.
 
-## Deployment infromation
+## Deployment information
 
 The Nginx instances include the following modules and features:
 
@@ -53,27 +54,49 @@ The deployment architecture is illustrated in the diagram below:
 
 ## Known issues
 
-VTS module shows wrong upstream resonse time
-- https://github.com/vozlt/nginx-module-vts/issues/198
+- VTS module shows wrong upstream response time, [github.com/vozlt/nginx-module-vts#198](https://github.com/vozlt/nginx-module-vts/issues/198)
 
 ## Parameters
 
 ### Common parameters
 
-| Name                      | Description                                                                                                                                      | Value   |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| `external`                | Enable external access from outside the cluster                                                                                                  | `false` |
-| `size`                    | Persistent Volume size                                                                                                                           | `10Gi`  |
-| `storageClass`            | StorageClass used to store the data                                                                                                              | `""`    |
-| `haproxy.replicas`        | Number of HAProxy replicas                                                                                                                       | `2`     |
-| `nginx.replicas`          | Number of Nginx replicas                                                                                                                         | `2`     |
-| `haproxy.resources`       |                                                                                                                                                  | `{}`    |
-| `haproxy.resourcesPreset` | Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge) | `nano`  |
-| `nginx.resources`         | Resources                                                                                                                                        | `{}`    |
-| `nginx.resourcesPreset`   | Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge) | `nano`  |
+| Name                      | Description                                                                                                                          | Value   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `external`                | Enable external access from outside the cluster                                                                                      | `false` |
+| `size`                    | Persistent Volume size                                                                                                               | `10Gi`  |
+| `storageClass`            | StorageClass used to store the data                                                                                                  | `""`    |
+| `haproxy.replicas`        | Number of HAProxy replicas                                                                                                           | `2`     |
+| `nginx.replicas`          | Number of Nginx replicas                                                                                                             | `2`     |
+| `haproxy.resources`       | Explicit CPU and memory configuration for each HAProxy replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
+| `haproxy.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.    | `nano`  |
+| `nginx.resources`         | Explicit CPU and memory configuration for each nginx replica. When left empty, the preset defined in `resourcesPreset` is applied.   | `{}`    |
+| `nginx.resourcesPreset`   | Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.    | `nano`  |
+
+Example of `resources`:
+
+```yaml
+resources:
+  cpu: 4000m
+  memory: 4Gi
+```
+
+Allowed values for `resourcesPreset` are `none`, `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+This value is ignored if the corresponding `resources` value is set.
 
 ### Configuration parameters
 
 | Name        | Description             | Value |
 | ----------- | ----------------------- | ----- |
 | `endpoints` | Endpoints configuration | `[]`  |
+
+Example of `endpoints`:
+
+```yaml
+endpoints:
+  - 10.100.3.1:80
+  - 10.100.3.11:80
+  - 10.100.3.2:80
+  - 10.100.3.12:80
+  - 10.100.3.3:80
+  - 10.100.3.13:80
+```

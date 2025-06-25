@@ -27,12 +27,12 @@
                 },
                 "resources": {
                     "type": "object",
-                    "description": "",
+                    "description": "Explicit CPU and memory configuration for each HAProxy replica. When left empty, the preset defined in `resourcesPreset` is applied.",
                     "default": {}
                 },
                 "resourcesPreset": {
                     "type": "string",
-                    "description": "Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)",
+                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
                     "default": "nano",
                     "enum": [
                         "none",
@@ -57,12 +57,12 @@
                 },
                 "resources": {
                     "type": "object",
-                    "description": "Resources",
+                    "description": "Explicit CPU and memory configuration for each nginx replica. When left empty, the preset defined in `resourcesPreset` is applied.",
                     "default": {}
                 },
                 "resourcesPreset": {
                     "type": "string",
-                    "description": "Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)",
+                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
                     "default": "nano",
                     "enum": [
                         "none",

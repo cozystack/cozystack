@@ -1,6 +1,7 @@
 ## Managed MariaDB Service
 
-The Managed MariaDB Service offers a powerful and widely used relational database solution. This service allows you to create and manage a replicated MariaDB cluster seamlessly.
+The Managed MariaDB Service offers a powerful and widely used relational database solution.
+This service allows you to create and manage a replicated MariaDB cluster seamlessly.
 
 ## Deployment Details
 
@@ -46,7 +47,7 @@ restic -r s3:s3.example.org/mariadb-backups/database_name restore latest --targe
 ```
 
 more details:
-- https://itnext.io/restic-effective-backup-from-stdin-4bc1e8f083c1
+- https://blog.aenix.io/restic-effective-backup-from-stdin-4bc1e8f083c1
 
 ### Known issues
 
@@ -81,18 +82,52 @@ more details:
 | `users`     | Users configuration     | `{}`  |
 | `databases` | Databases configuration | `{}`  |
 
+Example of `users`:
+
+```yaml
+users:
+  user1:
+    maxUserConnections: 1000
+    password: hackme
+  user2:
+    maxUserConnections: 1000
+    password: hackme
+```
+
+Example of `databases`:
+
+```yaml
+databases:
+  myapp1:
+    roles:
+      admin:
+      - user1
+      readonly:
+      - user2
+```
+
 ### Backup parameters
 
-| Name                     | Description                                                                                                                                      | Value                                                  |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
-| `backup.enabled`         | Enable pereiodic backups                                                                                                                         | `false`                                                |
-| `backup.s3Region`        | The AWS S3 region where backups are stored                                                                                                       | `us-east-1`                                            |
-| `backup.s3Bucket`        | The S3 bucket used for storing backups                                                                                                           | `s3.example.org/postgres-backups`                      |
-| `backup.schedule`        | Cron schedule for automated backups                                                                                                              | `0 2 * * *`                                            |
-| `backup.cleanupStrategy` | The strategy for cleaning up old backups                                                                                                         | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | The access key for S3, used for authentication                                                                                                   | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`                     |
-| `backup.s3SecretKey`     | The secret key for S3, used for authentication                                                                                                   | `ju3eum4dekeich9ahM1te8waeGai0oog`                     |
-| `backup.resticPassword`  | The password for Restic backup encryption                                                                                                        | `ChaXoveekoh6eigh4siesheeda2quai0`                     |
-| `resources`              | Resources                                                                                                                                        | `{}`                                                   |
-| `resourcesPreset`        | Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge) | `nano`                                                 |
+| Name                     | Description                                                                                                                          | Value                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| `backup.enabled`         | Enable periodic backups                                                                                                              | `false`                                                |
+| `backup.s3Region`        | The AWS S3 region where backups are stored                                                                                           | `us-east-1`                                            |
+| `backup.s3Bucket`        | The S3 bucket used for storing backups                                                                                               | `s3.example.org/postgres-backups`                      |
+| `backup.schedule`        | Cron schedule for automated backups                                                                                                  | `0 2 * * *`                                            |
+| `backup.cleanupStrategy` | The strategy for cleaning up old backups                                                                                             | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
+| `backup.s3AccessKey`     | The access key for S3, used for authentication                                                                                       | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`                     |
+| `backup.s3SecretKey`     | The secret key for S3, used for authentication                                                                                       | `ju3eum4dekeich9ahM1te8waeGai0oog`                     |
+| `backup.resticPassword`  | The password for Restic backup encryption                                                                                            | `ChaXoveekoh6eigh4siesheeda2quai0`                     |
+| `resources`              | Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`                                                   |
+| `resourcesPreset`        | Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.    | `nano`                                                 |
 
+Example of `resources`:
+
+```yaml
+resources:
+  cpu: 4000m
+  memory: 4Gi
+```
+
+Allowed values for `resourcesPreset` are `none`, `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+This value is ignored if the corresponding `resources` value is set.

@@ -20,12 +20,12 @@
           "properties": {
             "resources": {
               "type": "object",
-              "description": "Explicit CPU/memory resource requests and limits for the API server.",
+              "description": "Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.",
               "default": {}
             },
             "resourcesPreset": {
               "type": "string",
-              "description": "Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
               "default": "medium",
               "enum": [
                 "none",
@@ -45,12 +45,12 @@
           "properties": {
             "resources": {
               "type": "object",
-              "description": "Explicit CPU/memory resource requests and limits for the controller manager.",
+              "description": "Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.",
               "default": {}
             },
             "resourcesPreset": {
               "type": "string",
-              "description": "Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
               "default": "micro",
               "enum": [
                 "none",
@@ -70,12 +70,12 @@
           "properties": {
             "resources": {
               "type": "object",
-              "description": "Explicit CPU/memory resource requests and limits for the scheduler.",
+              "description": "Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.",
               "default": {}
             },
             "resourcesPreset": {
               "type": "string",
-              "description": "Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
               "default": "micro",
               "enum": [
                 "none",
@@ -98,12 +98,12 @@
               "properties": {
                 "resources": {
                   "type": "object",
-                  "description": "Explicit CPU/memory resource requests and limits for the Konnectivity.",
+                  "description": "Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.",
                   "default": {}
                 },
                 "resourcesPreset": {
                   "type": "string",
-                  "description": "Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)",
+                  "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
                   "default": "micro",
                   "enum": [
                     "none",

@@ -14,7 +14,7 @@
         },
         "replicas": {
             "type": "number",
-            "description": "Number of Postgres replicas",
+            "description": "Number of replicas",
             "default": 2
         },
         "storageClass": {
@@ -27,12 +27,12 @@
             "properties": {
                 "minSyncReplicas": {
                     "type": "number",
-                    "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.",
+                    "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed",
                     "default": 0
                 },
                 "maxSyncReplicas": {
                     "type": "number",
-                    "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).",
+                    "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)",
                     "default": 0
                 }
             }
@@ -42,7 +42,7 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Enable pereiodic backups",
+                    "description": "Enable periodic backups",
                     "default": false
                 },
                 "s3Region": {
@@ -84,12 +84,12 @@
         },
         "resources": {
             "type": "object",
-            "description": "Resources",
+            "description": "Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.",
             "default": {}
         },
         "resourcesPreset": {
             "type": "string",
-            "description": "Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "nano",
             "enum": [
                 "none",

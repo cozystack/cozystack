@@ -12,23 +12,23 @@ size: 10Gi
 storageClass: ""
 haproxy:
   replicas: 2
-  ## @param haproxy.resources 
+  ## @param haproxy.resources Explicit CPU and memory configuration for each HAProxy replica. When left empty, the preset defined in `resourcesPreset` is applied.
   resources: {}
   # resources:
   #   cpu: 4000m
   #   memory: 4Gi
-  
-  ## @param haproxy.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+
+  ## @param haproxy.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
   resourcesPreset: "nano"
 nginx:
   replicas: 2
-  ## @param nginx.resources Resources
+  ## @param nginx.resources Explicit CPU and memory configuration for each nginx replica. When left empty, the preset defined in `resourcesPreset` is applied.
   resources: {}
   # resources:
   #   cpu: 4000m
   #   memory: 4Gi
-  
-  ## @param nginx.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+
+  ## @param nginx.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
   resourcesPreset: "nano"
 
 ## @section Configuration parameters

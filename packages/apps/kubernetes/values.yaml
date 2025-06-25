@@ -110,8 +110,8 @@ controlPlane:
   replicas: 2
 
   apiServer:
-    ## @param controlPlane.apiServer.resources Explicit CPU/memory resource requests and limits for the API server.
-    ## @param controlPlane.apiServer.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+    ## @param controlPlane.apiServer.resources Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.
+    ## @param controlPlane.apiServer.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
     ## e.g:
     ## resources:
     ##   cpu: 4000m
@@ -121,20 +121,20 @@ controlPlane:
     resources: {}
 
   controllerManager:
-    ## @param controlPlane.controllerManager.resources Explicit CPU/memory resource requests and limits for the controller manager.
-    ## @param controlPlane.controllerManager.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+    ## @param controlPlane.controllerManager.resources Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.
+    ## @param controlPlane.controllerManager.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
     resourcesPreset: "micro"
     resources: {}
 
   scheduler:
-    ## @param controlPlane.scheduler.resources Explicit CPU/memory resource requests and limits for the scheduler.
-    ## @param controlPlane.scheduler.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+    ## @param controlPlane.scheduler.resources Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.
+    ## @param controlPlane.scheduler.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
     resourcesPreset: "micro"
     resources: {}
 
   konnectivity:
     server:
-      ## @param controlPlane.konnectivity.server.resources Explicit CPU/memory resource requests and limits for the Konnectivity.
-      ## @param controlPlane.konnectivity.server.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+      ## @param controlPlane.konnectivity.server.resources Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.
+      ## @param controlPlane.konnectivity.server.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
       resourcesPreset: "micro"
       resources: {}

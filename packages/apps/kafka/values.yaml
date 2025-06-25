@@ -14,26 +14,24 @@ kafka:
   size: 10Gi
   replicas: 3
   storageClass: ""
-  ## @param kafka.resources Resources
+  ## @param kafka.resources Explicit CPU and memory configuration for each Kafka replica. When left empty, the preset defined in `resourcesPreset` is applied.
   resources: {}
   # resources:
   #   cpu: 4000m
   #   memory: 4Gi
-  
-  ## @param kafka.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+  ## @param kafka.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
   resourcesPreset: "small"
 
 zookeeper:
   size: 5Gi
   replicas: 3
   storageClass: ""
-  ## @param zookeeper.resources Resources
+  ## @param zookeeper.resources Explicit CPU and memory configuration for each Zookeeper replica. When left empty, the preset defined in `resourcesPreset` is applied.
   resources: {}
   # resources:
   #   cpu: 4000m
   #   memory: 4Gi
-  
-  ## @param zookeeper.resourcesPreset Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge)
+  ## @param zookeeper.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
   resourcesPreset: "small"
 
 ## @section Configuration parameters

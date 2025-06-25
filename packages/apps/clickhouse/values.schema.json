@@ -79,12 +79,12 @@
         },
         "resources": {
             "type": "object",
-            "description": "Explicit CPU/memory resource requests and limits for the Clickhouse service",
+            "description": "Explicit CPU and memory configuration for each ClickHouse replica. When left empty, the preset defined in `resourcesPreset` is applied.",
             "default": {}
         },
         "resourcesPreset": {
             "type": "string",
-            "description": "Use a common resources preset when `resources` is not set explicitly.",
+            "description": "Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.",
             "default": "small",
             "enum": [
                 "none",

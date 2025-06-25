@@ -22,9 +22,19 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 
 ### Configuration parameters
 
-| Name              | Description                                                                                                                                      | Value  |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
-| `users`           | Users configuration                                                                                                                              | `{}`   |
-| `vhosts`          | Virtual Hosts configuration                                                                                                                      | `{}`   |
-| `resources`       | Resources                                                                                                                                        | `{}`   |
-| `resourcesPreset` | Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge) | `nano` |
+| Name              | Description                                                                                                                           | Value  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `users`           | Users configuration                                                                                                                   | `{}`   |
+| `vhosts`          | Virtual Hosts configuration                                                                                                           | `{}`   |
+| `resources`       | Explicit CPU and memory configuration for each RabbitMQ replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`   |
+| `resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.     | `nano` |
+
+Example of `resources`:
+```yaml
+resources:
+  cpu: 4000m
+  memory: 4Gi
+```
+
+Allowed values for `resourcesPreset` are `none`, `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+This value is ignored if the corresponding `resources` value is set.
