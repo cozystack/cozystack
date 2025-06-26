@@ -1,13 +1,7 @@
-{{/*
-Copyright Broadcom, Inc. All Rights Reserved.
-SPDX-License-Identifier: APACHE-2.0
-*/}}
-
 {{/* vim: set filetype=mustache: */}}
 
 {{/*
 Return a resource request/limit object based on a given preset.
-These presets are for basic testing and not meant to be used in production
 {{ include "cozy-lib.resources.preset" "nano" -}}
 */}}
 {{- define "cozy-lib.resources.preset" -}}
@@ -16,13 +10,13 @@ These presets are for basic testing and not meant to be used in production
 {{-   $global := index . 1 }}
 
 {{-   $baseCPU := dict
-        "nano"    (dict "cpu" "100m" )
-        "micro"   (dict "cpu" "250m" )
-        "small"   (dict "cpu" "500m" )
-        "medium"  (dict "cpu" "500m" )
-        "large"   (dict "cpu" "1"    )
-        "xlarge"  (dict "cpu" "2"    )
-        "2xlarge" (dict "cpu" "4"    )
+        "nano"    (dict "cpu" "250m" )
+        "micro"   (dict "cpu" "500m" )
+        "small"   (dict "cpu" "1"    )
+        "medium"  (dict "cpu" "1"    )
+        "large"   (dict "cpu" "2"    )
+        "xlarge"  (dict "cpu" "4"    )
+        "2xlarge" (dict "cpu" "8"    )
 }}
 {{-   $baseMemory := dict
         "nano"    (dict "memory" "128Mi" )
