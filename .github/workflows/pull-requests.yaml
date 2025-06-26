@@ -165,7 +165,9 @@ jobs:
       - name: Prepare environment
         run: |
           cd /tmp/$SANDBOX_NAME
-          make SANDBOX_NAME=$SANDBOX_NAME prepare-env
+          for {1..3}; do
+            make SANDBOX_NAME=$SANDBOX_NAME prepare-env && break || sleep 5
+          done
 
   install_cozystack:
     name: "Install Cozystack"
@@ -205,7 +207,9 @@ jobs:
       - name: Install Cozystack into sandbox
         run: |
           cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
+          for {1..3}; do
+            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack && break || sleep 5
+          done
 
   detect_test_matrix:
     name: "Detect e2e test matrix"
@@ -236,7 +240,9 @@ jobs:
       - name: E2E Apps
         run: |
           cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-${{ matrix.app }}
+          for {1..3}; do
+            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-${{ matrix.app }} && break || sleep 5
+          done
 
   cleanup:
     name: Tear down environment
