@@ -2,8 +2,7 @@
 
 @test "Create a Virtual Machine" {
   name='test'
-  kubectl -n tenant-test get virtualmachines.apps.cozystack.io $name || 
-  kubectl create -f - <<EOF
+  kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VirtualMachine
 metadata:

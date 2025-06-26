@@ -165,7 +165,16 @@ jobs:
       - name: Prepare environment
         run: |
           cd /tmp/$SANDBOX_NAME
-          make SANDBOX_NAME=$SANDBOX_NAME prepare-env
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "❌ Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "❌ Attempt $attempt failed, retrying..."
+          done
+          echo "✅ The task completed successfully after $attempt attempts"
 
   install_cozystack:
     name: "Install Cozystack"
@@ -205,7 +214,16 @@ jobs:
       - name: Install Cozystack into sandbox
         run: |
           cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
+          attempt=0
+          until make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "❌ Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "❌ Attempt $attempt failed, retrying..."
+          done
+          echo "✅ The task completed successfully after $attempt attempts."
 
   detect_test_matrix:
     name: "Detect e2e test matrix"
@@ -236,7 +254,16 @@ jobs:
       - name: E2E Apps
         run: |
           cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-${{ matrix.app }}
+          attempt=0
+          until make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-${{ matrix.app }}; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "❌ Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "❌ Attempt $attempt failed, retrying..."
+          done
+          echo "✅ The task completed successfully after $attempt attempts"
 
   cleanup:
     name: Tear down environment

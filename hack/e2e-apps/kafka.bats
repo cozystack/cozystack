@@ -2,7 +2,7 @@
 
 @test "Create Kafka" {
   name='test'
-  kubectl create -f- <<EOF
+  kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kafka
 metadata:

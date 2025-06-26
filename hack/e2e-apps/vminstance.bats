@@ -2,8 +2,7 @@
 
 @test "Create a VM Disk" {
   name='test'
-  kubectl -n tenant-test get vmdisks.apps.cozystack.io $name || 
-  kubectl create -f - <<EOF
+  kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMDisk
 metadata:
@@ -26,8 +25,7 @@ EOF
 @test "Create a VM Instance" {
   diskName='test'
   name='test'
-  kubectl -n tenant-test get vminstances.apps.cozystack.io $name || 
-  kubectl create -f - <<EOF
+  kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMInstance
 metadata:
