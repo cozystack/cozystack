@@ -27,38 +27,17 @@ Return a resource request/limit object based on a given preset.
         "xlarge"  (dict "memory" "4Gi"   )
         "2xlarge" (dict "memory" "8Gi"   )
 }}
+{{-   $baseEphemeralStorage := dict
+        "nano"    (dict "ephemeral-storage" "2Gi" )
+        "micro"   (dict "ephemeral-storage" "2Gi" )
+        "small"   (dict "ephemeral-storage" "2Gi" )
+        "medium"  (dict "ephemeral-storage" "2Gi" )
+        "large"   (dict "ephemeral-storage" "2Gi" )
+        "xlarge"  (dict "ephemeral-storage" "2Gi" )
+        "2xlarge" (dict "ephemeral-storage" "2Gi" )
+}}
 
-{{- $presets := dict 
-  "nano" (dict 
-      "requests" (dict "ephemeral-storage" "50Mi")
-      "limits" (dict "ephemeral-storage" "2Gi")
-   )
-  "micro" (dict 
-      "requests" (dict "ephemeral-storage" "50Mi")
-      "limits" (dict "ephemeral-storage" "2Gi")
-   )
-  "small" (dict 
-      "requests" (dict "ephemeral-storage" "50Mi")
-      "limits" (dict "ephemeral-storage" "2Gi")
-   )
-  "medium" (dict 
-      "requests" (dict "ephemeral-storage" "50Mi")
-      "limits" (dict "ephemeral-storage" "2Gi")
-   )
-  "large" (dict 
-      "requests" (dict "ephemeral-storage" "50Mi")
-      "limits" (dict "ephemeral-storage" "2Gi")
-   )
-  "xlarge" (dict 
-      "requests" (dict "ephemeral-storage" "50Mi")
-      "limits" (dict "ephemeral-storage" "2Gi")
-   )
-  "2xlarge" (dict 
-      "requests" (dict "ephemeral-storage" "50Mi")
-      "limits" (dict "ephemeral-storage" "2Gi")
-   )
- }}
-{{- $_ := merge $presets $baseCPU $baseMemory }}
+{{- $presets := merge $baseCPU $baseMemory $baseEphemeralStorage }}
 {{- if hasKey $presets $args -}}
 {{- $flatDict := index $presets $args }}
 {{- include "cozy-lib.resources.sanitize" (list $flatDict $global) }}

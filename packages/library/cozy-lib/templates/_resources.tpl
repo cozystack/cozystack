@@ -1,6 +1,12 @@
 {{- define "cozy-lib.resources.defaultCpuAllocationRatio" }}
 {{-   `10` }}
 {{- end }}
+{{- define "cozy-lib.resources.defaultMemoryAllocationRatio" }}
+{{-   `1` }}
+{{- end }}
+{{- define "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" }}
+{{-   `40` }}
+{{- end }}
 
 {{- define "cozy-lib.resources.cpuAllocationRatio" }}
 {{-   include "cozy-lib.loadCozyConfig" . }}
@@ -11,6 +17,27 @@
 {{-     dig "data" "cpu-allocation-ratio" (include "cozy-lib.resources.defaultCpuAllocationRatio" dict) $cozyConfig }}
 {{-   end }}
 {{- end }}
+
+{{- define "cozy-lib.resources.memoryAllocationRatio" }}
+{{-   include "cozy-lib.loadCozyConfig" . }}
+{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   if not $cozyConfig }}
+{{-     include "cozy-lib.resources.defaultMemoryAllocationRatio" . }}
+{{-   else }}
+{{-     dig "data" "memory-allocation-ratio" (include "cozy-lib.resources.defaultMemoryAllocationRatio" dict) $cozyConfig }}
+{{-   end }}
+{{- end }}
+
+{{- define "cozy-lib.resources.ephemeralStorageAllocationRatio" }}
+{{-   include "cozy-lib.loadCozyConfig" . }}
+{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   if not $cozyConfig }}
+{{-     include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" . }}
+{{-   else }}
+{{-     dig "data" "ephemeral-storage-allocation-ratio" (include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" dict) $cozyConfig }}
+{{-   end }}
+{{- end }}
+
 
 {{- define "cozy-lib.resources.toFloat" -}}
     {{- $value := . -}}
@@ -59,19 +86,31 @@
 */}}
 {{- define "cozy-lib.resources.sanitize" }}
 {{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
+{{-   $memoryAllocationRatio := include "cozy-lib.resources.memoryAllocationRatio" . | float64 }}
+{{-   $ephemeralStorageAllocationRatio := include "cozy-lib.resources.ephemeralStorageAllocationRatio" . | float64 }}
 {{-   $args := index . 0 }}
 {{-   $output := dict "requests" dict "limits" dict }}
 {{-   if or (hasKey $args "limits") (hasKey $args "requests") }}
 {{-     fail "ERROR: A flat map of resources expected, not nested `requests:` or `limits:` sections." -}}
 {{-   end }}
 {{-   range $k, $v := $args }}
-{{-     if not (eq $k "cpu") }}
-{{-       $_ := set $output.requests $k $v }}
-{{-       $_ := set $output.limits $k $v }}
-{{-     else }}
+{{-     if eq $k "cpu" }}
 {{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
 {{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{-       $_ := set $output.limits $k $v }}
+{{-     else if eq $k "memory" }}
+{{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
+{{-       $memoryRequestF64 := divf $vMemoryRequestF64 $memoryAllocationRatio }}
+{{-       $_ := set $output.requests $k ($memoryRequestF64 | int) }}
+{{-       $_ := set $output.limits $k $v }}
+{{-     else if eq $k "ephemeral-storage" }}
+{{-       $vEphemeralStorageRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
+{{-       $ephemeralStorageRequestF64 := divf $vEphemeralStorageRequestF64 $ephemeralStorageAllocationRatio }}
+{{-       $_ := set $output.requests $k ($ephemeralStorageRequestF64 | int) }}
+{{-       $_ := set $output.limits $k $v }}
+{{-     else }}
+{{-       $_ := set $output.requests $k $v }}
 {{-       $_ := set $output.limits $k $v }}
 {{-     end }}
 {{-   end }}
