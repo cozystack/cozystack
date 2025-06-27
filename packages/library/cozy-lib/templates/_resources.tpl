@@ -34,7 +34,7 @@
   to have equal requests and limits, except CPU, where the limit is increased
   by a factor of the CPU allocation ratio. The template expects to receive a
   dict {"requests":{...}, "limits":{...}} as input, e.g.
-  {{ include "cozy-lib.resources.sanitize" .Values.resources }}.
+  {{ include "cozy-lib.resources.sanitize" list (.Values.resources $) }}.
   Example input:
   ==============
   limits:
