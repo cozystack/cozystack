@@ -1,6 +1,12 @@
 {{- define "cozy-lib.resources.defaultCpuAllocationRatio" }}
 {{-   `10` }}
 {{- end }}
+{{- define "cozy-lib.resources.defaultMemoryAllocationRatio" }}
+{{-   `1` }}
+{{- end }}
+{{- define "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" }}
+{{-   `40` }}
+{{- end }}
 
 {{- define "cozy-lib.resources.cpuAllocationRatio" }}
 {{-   include "cozy-lib.loadCozyConfig" . }}
@@ -11,6 +17,27 @@
 {{-     dig "data" "cpu-allocation-ratio" (include "cozy-lib.resources.defaultCpuAllocationRatio" dict) $cozyConfig }}
 {{-   end }}
 {{- end }}
+
+{{- define "cozy-lib.resources.memoryAllocationRatio" }}
+{{-   include "cozy-lib.loadCozyConfig" . }}
+{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   if not $cozyConfig }}
+{{-     include "cozy-lib.resources.defaultMemoryAllocationRatio" . }}
+{{-   else }}
+{{-     dig "data" "memory-allocation-ratio" (include "cozy-lib.resources.defaultMemoryAllocationRatio" dict) $cozyConfig }}
+{{-   end }}
+{{- end }}
+
+{{- define "cozy-lib.resources.ephemeralStorageAllocationRatio" }}
+{{-   include "cozy-lib.loadCozyConfig" . }}
+{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   if not $cozyConfig }}
+{{-     include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" . }}
+{{-   else }}
+{{-     dig "data" "ephemeral-storage-allocation-ratio" (include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" dict) $cozyConfig }}
+{{-   end }}
+{{- end }}
+
 
 {{- define "cozy-lib.resources.toFloat" -}}
     {{- $value := . -}}
@@ -29,62 +56,61 @@
 {{- end -}}
 
 {{- /*
-  A sanitized resource map is a dict with resource-name => resource-quantity.
-  If not in such a form, requests are used, then limits. All resources are set
-  to have equal requests and limits, except CPU, where the limit is increased
-  by a factor of the CPU allocation ratio. The template expects to receive a
-  dict {"requests":{...}, "limits":{...}} as input, e.g.
-  {{ include "cozy-lib.resources.sanitize" .Values.resources }}.
+  A sanitized resource map is a dict with resource-name to resource-quantity.
+  All resources are returned with equal **requests** and **limits**, except for
+  **cpu**, whose *request* is reduced by the CPU-allocation ratio obtained from
+  `cozy-lib.resources.cpuAllocationRatio`.
+
+  The template now expects **one flat map** as input (no nested `requests:` /
+  `limits:` sections).  Each value in that map is taken as the *limit* for the
+  corresponding resource.  Usage example:
+
+      {{ include "cozy-lib.resources.sanitize" list (.Values.resources $) }}
+
   Example input:
   ==============
-  limits:
-    cpu: "1"
-    memory: 1024Mi
-  requests:
-    cpu: "2"
-    memory: 512Mi
+  cpu: "2"
   memory: 256Mi
   devices.com/nvidia: "1"
 
-  Example output:
-  ===============
+  Example output (cpuAllocationRatio = 10):
+  =========================================
   limits:
-    devices.com/nvidia: "1" # only present in top level key
-    memory: 256Mi # value from top level key has priority over all others
-    cpu: "2" # value from .requests.cpu has priority over .limits.cpu
+    cpu: "2"
+    memory: 256Mi
+    devices.com/nvidia: "1"
   requests:
-    cpu: 200m # .limits.cpu divided by CPU allocation ratio
-    devices.com/nvidia: "1" # .requests == .limits
-    memory: 256Mi # .requests == .limits
+    cpu: 200m                 # 2 / 10
+    memory: 256Mi             # = limit
+    devices.com/nvidia: "1"   # = limit
 */}}
 {{- define "cozy-lib.resources.sanitize" }}
 {{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
-{{-   $sanitizedMap := dict }}
+{{-   $memoryAllocationRatio := include "cozy-lib.resources.memoryAllocationRatio" . | float64 }}
+{{-   $ephemeralStorageAllocationRatio := include "cozy-lib.resources.ephemeralStorageAllocationRatio" . | float64 }}
 {{-   $args := index . 0 }}
-{{-   if hasKey $args "limits" }}
-{{-     range $k, $v := $args.limits }}
-{{-       $_ := set $sanitizedMap $k $v }}
-{{-     end }}
-{{-   end }}
-{{-   if hasKey $args "requests" }}
-{{-     range $k, $v := $args.requests }}
-{{-       $_ := set $sanitizedMap $k $v }}
-{{-     end }}
+{{-   $output := dict "requests" dict "limits" dict }}
+{{-   if or (hasKey $args "limits") (hasKey $args "requests") }}
+{{-     fail "ERROR: A flat map of resources expected, not nested `requests:` or `limits:` sections." -}}
 {{-   end }}
 {{-   range $k, $v := $args }}
-{{-     if not (or (eq $k "requests") (eq $k "limits")) }}
-{{-       $_ := set $sanitizedMap $k $v }}
-{{-     end }}
-{{-   end }}
-{{-   $output := dict "requests" dict "limits" dict }}
-{{-   range $k, $v := $sanitizedMap }}
-{{-     if not (eq $k "cpu") }}
-{{-       $_ := set $output.requests $k $v }}
-{{-       $_ := set $output.limits $k $v }}
-{{-     else }}
+{{-     if eq $k "cpu" }}
 {{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
 {{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{-       $_ := set $output.limits $k $v }}
+{{-     else if eq $k "memory" }}
+{{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
+{{-       $memoryRequestF64 := divf $vMemoryRequestF64 $memoryAllocationRatio }}
+{{-       $_ := set $output.requests $k ($memoryRequestF64 | int) }}
+{{-       $_ := set $output.limits $k $v }}
+{{-     else if eq $k "ephemeral-storage" }}
+{{-       $vEphemeralStorageRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
+{{-       $ephemeralStorageRequestF64 := divf $vEphemeralStorageRequestF64 $ephemeralStorageAllocationRatio }}
+{{-       $_ := set $output.requests $k ($ephemeralStorageRequestF64 | int) }}
+{{-       $_ := set $output.limits $k $v }}
+{{-     else }}
+{{-       $_ := set $output.requests $k $v }}
 {{-       $_ := set $output.limits $k $v }}
 {{-     end }}
 {{-   end }}

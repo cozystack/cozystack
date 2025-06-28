@@ -7,8 +7,8 @@ flux-operator:
   hostNetwork: true
   resources:
     limits:
-      cpu: 1000m
-      memory: 1Gi
+      cpu: 100m
+      memory: 350Mi
     requests:
-      cpu: 10m
-      memory: 64Mi
+      cpu: 100m
+      memory: 350Mi

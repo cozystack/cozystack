@@ -5,10 +5,10 @@ vertical-pod-autoscaler:
   updater:
     resources:
       limits:
-        memory: 1100Mi
+        memory: 110Mi
       requests:
         cpu: 200m
-        memory: 1100Mi
+        memory: 110Mi
 
   recommender:
     extraArgs:
@@ -25,10 +25,10 @@ vertical-pod-autoscaler:
       prometheus-cadvisor-job-name: cadvisor
     resources:
       limits:
-        memory: 1600Mi
+        memory: 160Mi
       requests:
         cpu: 100m
-        memory: 1600Mi
+        memory: 160Mi
 
   admissionController:
     resources:
