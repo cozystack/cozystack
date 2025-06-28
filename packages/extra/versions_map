@@ -45,7 +45,8 @@ monitoring 1.9.1 fd240701
 monitoring 1.9.2 f9f8bb2f
 monitoring 1.10.0 632224a3
 monitoring 1.10.1 8c86905b
-monitoring 1.11.0 HEAD
+monitoring 1.11.0 4369b031
+monitoring 1.12.0 HEAD
 seaweedfs 0.1.0 71514249
 seaweedfs 0.2.0 5fb9cfe3
 seaweedfs 0.2.1 fde4bcfa

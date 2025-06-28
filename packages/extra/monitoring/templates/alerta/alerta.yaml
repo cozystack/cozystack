@@ -104,7 +104,8 @@ spec:
                 secretKeyRef:
                   name: alerta-db-app
                   key: uri
-
+            - name: SIGNUP_ENABLED
+              value: "False"
             - name: AUTH_REQUIRED
               value: "True"
 
