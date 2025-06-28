@@ -1,8 +1,7 @@
 #!/usr/bin/env bats
 
 @test "Create a tenant Kubernetes control plane" {
-  kubectl -n tenant-test get kuberneteses.apps.cozystack.io test || 
-  kubectl create -f - <<EOF
+  kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
 metadata:

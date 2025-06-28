@@ -2,7 +2,7 @@
 
 @test "Create Redis" {
   name='test'
-  kubectl create -f- <<EOF
+  kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Redis
 metadata:

@@ -2,8 +2,7 @@
 
 @test "Create DB MySQL" {
   name='test'
-  kubectl -n tenant-test get mysqls.apps.cozystack.io $name || 
-  kubectl create -f- <<EOF
+  kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: MySQL
 metadata:
