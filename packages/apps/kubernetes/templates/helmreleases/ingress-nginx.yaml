@@ -3,9 +3,11 @@ ingress-nginx:
   fullnameOverride: ingress-nginx
   controller:
     kind: DaemonSet
+    {{- if eq .Values.addons.ingressNginx.exposeMethod "Proxied" }}
     hostNetwork: true
     service:
       enabled: false
+    {{- end }}
     {{- if not .Values.addons.certManager.enabled }}
     admissionWebhooks:
       certManager:

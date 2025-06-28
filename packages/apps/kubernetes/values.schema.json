@@ -178,9 +178,18 @@
               "description": "Custom values to override",
               "default": {}
             },
+            "exposeMethod": {
+              "type": "string",
+              "description": "Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)",
+              "default": "Proxied",
+              "enum": [
+                "Proxied",
+                "LoadBalancer"
+              ]
+            },
             "hosts": {
               "type": "array",
-              "description": "List of domain names that the parent cluster should route to this tenant cluster.",
+              "description": "List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.",
               "default": [],
               "items": {}
             }

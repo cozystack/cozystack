@@ -61,12 +61,14 @@ addons:
     ## @param addons.ingressNginx.valuesOverride Custom values to override
     ##
     enabled: false
-    ## @param addons.ingressNginx.hosts List of domain names that the parent cluster should route to this tenant cluster.
+    ## @param addons.ingressNginx.exposeMethod Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)
+    ## @param addons.ingressNginx.hosts List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.
     ## e.g:
     ## hosts:
     ## - example.org
     ## - foo.example.net
     ##
+    exposeMethod: Proxied
     hosts: []
     valuesOverride: {}
 
