@@ -6,5 +6,5 @@ metadata:
   namespace: {{ include "tenant.name" . }}
 spec:
   hard:
-    {{- toYaml .Values.resourceQuotas | nindent 4 }}
+    {{- include "cozy-lib.resources.flatten" (list .Values.resourceQuotas $) | nindent 6 }}
 {{- end }}

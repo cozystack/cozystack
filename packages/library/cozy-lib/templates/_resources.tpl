@@ -90,3 +90,13 @@
 {{-   end }}
 {{-   $output | toYaml }}
 {{- end  }}
+
+{{- define "cozy-lib.resources.flatten" -}}
+{{-   $out := dict -}}
+{{-   $res := include "cozy-lib.resources.sanitize" $ | fromYaml -}}
+{{-   range $k, $v := $res.requests }}
+{{-     $key := printf "requests.%s" $k }}
+{{-     $_ := set $out $key $v }}
+{{-   end }}
+{{-   dict "resourceQuotas" $out | toYaml }}
+{{- end }}
