@@ -1,6 +1,8 @@
 # Managed PostgreSQL Service
 
-PostgreSQL is currently the leading choice among relational databases, known for its robust features and performance. Our Managed PostgreSQL Service takes advantage of platform-side implementation to provide a self-healing replicated cluster. This cluster is efficiently managed using the highly acclaimed CloudNativePG operator, which has gained popularity within the community.
+PostgreSQL is currently the leading choice among relational databases, known for its robust features and performance.
+The Managed PostgreSQL Service takes advantage of platform-side implementation to provide a self-healing replicated cluster.
+This cluster is efficiently managed using the highly acclaimed CloudNativePG operator, which has gained popularity within the community.
 
 ## Deployment Details
 
@@ -11,7 +13,7 @@ This managed service is controlled by the CloudNativePG operator, ensuring effic
 
 ## HowTos
 
-### How to switch master/slave replica
+### How to switch primary/secondary replica
 
 See:
 
@@ -33,7 +35,7 @@ restic -r s3:s3.example.org/postgres-backups/database_name restore latest --targ
 
 more details:
 
-- <https://itnext.io/restic-effective-backup-from-stdin-4bc1e8f083c1>
+- <https://blog.aenix.io/restic-effective-backup-from-stdin-4bc1e8f083c1>
 
 ## Parameters
 
@@ -56,6 +58,39 @@ more details:
 | `users`     | Users configuration     | `{}`  |
 | `databases` | Databases configuration | `{}`  |
 
+Example of `users`:
+
+```yaml
+users:
+  user1:
+    password: strongpassword
+  user2:
+    password: hackme
+  airflow:
+    password: qwerty123
+  debezium:
+    replication: true
+```
+
+Example of `databases`:
+
+```yaml
+databases:          
+  myapp:            
+    roles:          
+      admin:        
+      - user1       
+      - debezium    
+      readonly:     
+      - user2       
+  airflow:          
+    roles:          
+      admin:        
+      - airflow     
+    extensions:     
+    - hstore        
+```
+
 ### Backup parameters
 
 | Name                     | Description                                                          | Value                               |
@@ -70,10 +105,20 @@ more details:
 
 ### Bootstrap parameters
 
-| Name                     | Description                                                                                                                                      | Value   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| `bootstrap.enabled`      | Restore cluster from backup                                                                                                                      | `false` |
-| `bootstrap.recoveryTime` | Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest                                        | `""`    |
-| `bootstrap.oldName`      | Name of cluster before deleting                                                                                                                  | `""`    |
-| `resources`              | Resources                                                                                                                                        | `{}`    |
-| `resourcesPreset`        | Use a common resources preset when `resources` is not set explicitly. (allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge) | `micro` |
+| Name                     | Description                                                                                                                           | Value   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `bootstrap.enabled`      | Restore cluster from backup                                                                                                           | `false` |
+| `bootstrap.recoveryTime` | Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest                             | `""`    |
+| `bootstrap.oldName`      | Name of cluster before deleting                                                                                                       | `""`    |
+| `resources`              | Explicit CPU and memory configuration for each Postgres replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
+| `resourcesPreset`        | Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.     | `micro` |
+
+Example of `resources`:
+```yaml
+resources:
+  cpu: 4000m
+  memory: 4Gi
+```
+
+Allowed values for `resourcesPreset` are `none`, `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+This value is ignored if the corresponding `resources` value is set.
