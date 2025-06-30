@@ -50,6 +50,7 @@ virtctl ssh <user>@<vm>
 | `gpus`                    | List of GPUs to attach                                                                                     | `[]`         |
 | `resources.cpu`           | The number of CPU cores allocated to the virtual machine                                                   | `""`         |
 | `resources.memory`        | The amount of memory allocated to the virtual machine                                                      | `""`         |
+| `resources.sockets`       | The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)                  | `""`         |
 | `sshKeys`                 | List of SSH public keys for authentication. Can be a single key or a list of keys.                         | `[]`         |
 | `cloudInit`               | cloud-init user data config. See cloud-init documentation for more details.                                | `""`         |
 | `cloudInitSeed`           | A seed string to generate an SMBIOS UUID for the VM.                                                       | `""`         |
