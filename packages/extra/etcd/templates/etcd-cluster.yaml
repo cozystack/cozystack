@@ -47,7 +47,7 @@ spec:
           containerPort: 2381
           protocol: TCP
         {{- with .Values.resources }}
-        resources: {{- toYaml . | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 10 }}
         {{- end }}
       topologySpreadConstraints:
       - maxSkew: 1
@@ -152,6 +152,8 @@ spec:
     - "signing"
     - "key encipherment"
   dnsNames:
+  - etcd
+  - etcd.{{ $.Release.Namespace }}.svc
   {{- range $i := until (int $.Values.replicas) }}
   - etcd-{{ $i }}
   - etcd-{{ $i }}.etcd-headless
@@ -186,6 +188,8 @@ spec:
     - "signing"
     - "key encipherment"
   dnsNames:
+  - etcd
+  - etcd.{{ $.Release.Namespace }}.svc
   {{- range $i := until (int $.Values.replicas) }}
   - etcd-{{ $i }}
   - etcd-{{ $i }}.etcd-headless
