@@ -2,6 +2,22 @@
 
 @test "Create Redis" {
   name='test'
+  withResources='true'
+  if [ "$withResources" == 'true' ]; then
+    resources=$(cat <<EOF
+resources:
+  requests:
+    cpu: 500m
+    memory: 768Mi
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"
+EOF
+  )
+  else
+    resources='resources: {}'
+  fi
+  kubectl -n tenant-test get redis.apps.cozystack.io $name || 
   kubectl create -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Redis
@@ -14,7 +30,7 @@ spec:
   replicas: 2
   storageClass: ""
   authEnabled: true
-  resources: {}
+  $resources
   resourcesPreset: "nano"
 EOF
   sleep 5
