@@ -60,9 +60,10 @@ spec:
         {{- include "virtual-machine.labels" . | nindent 8 }}
     spec:
       domain:
-        {{- if and .Values.resources .Values.resources.cpu }}
+        {{- if and .Values.resources .Values.resources.cpu .Values.resources.sockets }}
         cpu:
           cores: {{ .Values.resources.cpu }}
+          sockets: {{ .Values.resources.sockets }}
         {{- end }}
         {{- if and .Values.resources .Values.resources.memory }}
         resources:

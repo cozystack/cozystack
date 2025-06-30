@@ -34,9 +34,11 @@ gpus: []
 
 ## @param resources.cpu The number of CPU cores allocated to the virtual machine
 ## @param resources.memory The amount of memory allocated to the virtual machine
+## @param resources.sockets The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)
 resources:
   cpu: ""
   memory: ""
+  sockets: ""
 
 ## @param sshKeys [array] List of SSH public keys for authentication. Can be a single key or a list of keys.
 ## Example:
