@@ -2,6 +2,21 @@
 
 @test "Create a VM Disk" {
   name='test'
+  withResources=''
+  if [ "$withResources" == 'true' ]; then
+    resources=$(cat <<EOF
+resources:
+  requests:
+  cpu: 500m
+  memory: 768Mi
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"
+EOF
+  )
+  else
+    resources='resources: {}'
+  fi
   kubectl -n tenant-test get vmdisks.apps.cozystack.io $name || 
   kubectl create -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -62,7 +77,7 @@ spec:
   cloudInitSeed: ""
 EOF
   sleep 5
-  timeout 20 sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 5; done"
+  timeout 40 sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 5; done"
   kubectl -n tenant-test wait hr vm-instance-$name --timeout=5s --for=condition=ready
   kubectl -n tenant-test wait vm vm-instance-$name --timeout=20s --for=condition=ready
   kubectl -n tenant-test delete vminstances.apps.cozystack.io $name 

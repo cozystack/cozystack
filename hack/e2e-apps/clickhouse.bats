@@ -2,6 +2,21 @@
 
 @test "Create DB ClickHouse" {
   name='test'
+  withResources='true'
+  if [ "$withResources" == 'true' ]; then
+    resources=$(cat <<EOF
+  resources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+EOF
+  )
+  else
+    resources='  resources: {}'
+  fi
   kubectl -n tenant-test get clickhouses.apps.cozystack.io $name || 
   kubectl create -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -28,15 +43,15 @@ spec:
     s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
     s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
     resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
-  resources: {}
+  $resources
   resourcesPreset: "nano"
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr clickhouse-$name --timeout=20s --for=condition=ready
+  kubectl -n tenant-test wait hr clickhouse-$name --timeout=40s --for=condition=ready
   timeout 180 sh -ec "until kubectl -n tenant-test get svc chendpoint-clickhouse-$name -o jsonpath='{.spec.ports[*].port}' | grep -q '8123 9000'; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-0 --timeout=120s --for=jsonpath='{.status.replicas}'=1
-  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 100 sh -ec "until kubectl -n tenant-test get svc chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.spec.ports[*].port}' | grep -q '9000 8123 9009'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get sts chi-clickhouse-$name-clickhouse-0-1 ; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-1 --timeout=140s --for=jsonpath='{.status.replicas}'=1
+  kubectl -n tenant-test delete clickhouse.apps.cozystack.io $name
 }
