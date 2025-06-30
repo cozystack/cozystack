@@ -1,6 +1,10 @@
 ## @section Common parameters
 
-## @param source The source image location used to create a disk
+## @param source The golden image disk name to use
+## Example using golden image:
+## source:
+##   image: ubuntu
+##
 ## Example upload local image:
 ## source:
 ##   upload: {}

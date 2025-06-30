@@ -20,7 +20,13 @@ spec:
     {{- fail "Exactly one type of source is expected!" }}
   {{- end }}
   source:
-    {{- if hasKey .Values.source "http" }}
+    {{- $goldenImageName := .Values.source.image }}
+    {{- if $goldenImageName }}
+    {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" (printf "goldenimage-%s" $goldenImageName) }}
+    pvc:
+      name: goldenimage-{{ $goldenImageName }}
+      namespace: cozy-public
+    {{- else if hasKey .Values.source "http" }}
     http:
       url: {{ required "A valid .Values.source.http.url entry required!" .Values.source.http.url }}
     {{- else if hasKey .Values.source "upload" }}
