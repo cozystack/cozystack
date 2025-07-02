@@ -38,7 +38,7 @@ stringData:
     until pg_isready ; do sleep 5; done
 
     echo "== create users"
-    {{- if .Values.users }}
+    {{- if and .Values.users (not (hasKey .Values.users "postgres")) }}
     psql -v ON_ERROR_STOP=1 <<\EOT
     {{- range $user, $u := .Values.users }}
     SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
