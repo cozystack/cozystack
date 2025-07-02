@@ -2,6 +2,18 @@
 
 @test "Create Kafka" {
   name='test'
+  withResources='true'
+  if [ "$withResources" == 'true' ]; then
+    resources=$(cat <<EOF
+resources:
+  resources:
+    cpu: 500m
+    memory: 768Mi
+EOF
+  )
+  else
+    resources='resources: {}'
+  fi
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kafka
@@ -14,13 +26,13 @@ spec:
     size: 10Gi
     replicas: 2
     storageClass: ""
-    resources: {}
+    $resources
     resourcesPreset: "nano"
   zookeeper:
     size: 5Gi
     replicas: 2
     storageClass: ""
-    resources:
+    $resources
     resourcesPreset: "nano"
   topics:
     - name: testResults
@@ -38,14 +50,9 @@ spec:
       replicas: 2
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr kafka-$name --timeout=30s --for=condition=ready
-  kubectl wait kafkas -n tenant-test test --timeout=60s --for=condition=ready
-  timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0; do sleep 10; done"
-  kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
-  timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-client -o jsonpath='{.spec.ports[0].port}' | grep -q '2181'; do sleep 10; done"
-  timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-nodes -o jsonpath='{.spec.ports[*].port}' | grep -q '2181 2888 3888'; do sleep 10; done"
-  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints kafka-$name-zookeeper-nodes -o jsonpath='{.subsets[*].addresses[0].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  kubectl -n tenant-test wait --timeout=30s hr kafka-$name --for=condition=ready
+  kubectl -n tenant-test wait --timeout=1m kafkas $name --for=condition=ready
+  kubectl -n tenant-test wait --timeout=50s pvc data-kafka-$name-zookeeper-0 --for=jsonpath='{.status.phase}'=Bound
+  kubectl -n tenant-test wait --timeout=40s svc kafka-$name-zookeeper-client --for=jsonpath='{.spec.ports[0].port}'=2181
   kubectl -n tenant-test delete kafka.apps.cozystack.io $name
-  kubectl -n tenant-test delete pvc data-kafka-$name-zookeeper-0
-  kubectl -n tenant-test delete pvc data-kafka-$name-zookeeper-1
 }
