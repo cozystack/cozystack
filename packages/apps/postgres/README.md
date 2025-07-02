@@ -21,14 +21,17 @@ See:
 
 find snapshot:
 
-```bash
-restic -r s3:s3.example.org/postgres-backups/database_name snapshots
-```
-
-restore:
-
-```bash
-restic -r s3:s3.example.org/postgres-backups/database_name restore latest --target /tmp/
+Create new app postgres with another name and old values and add to new cluster values:
+```yaml
+## @param bootstrap.enabled Restore cluster from backup
+## @param bootstrap.recoveryTime Time stamp up to which recovery will proceed, expressed in RFC 3339 format, if empty, will restore latest
+## @param bootstrap.oldName Name of cluster before deleting
+##
+bootstrap:
+  enabled: false
+  # example: 2020-11-26 15:22:00.00000+00
+  recoveryTime: ""
+  oldName: ""
 ```
 
 more details:
