@@ -1,0 +1,51 @@
+kind: DaemonSet
+
+monitoring:
+  podMonitor:
+    labels:
+      environment: staging
+    annotations:
+      release: kube-prometheus-stack
+
+additionalTolerations:
+  - key: "example-key"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+nodeSelector:
+  foo: bar
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values:
+                - antarctica-east1
+                - antarctica-west1
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+            - key: another-node-label-key
+              operator: In
+              values:
+                - another-node-label-value
+
+podLabels:
+  pod-label: pod-label
+
+podAnnotations:
+  pod-annotation: pod-annotation
+
+extraVolumeMounts:
+  - name: token-volume
+    readOnly: true
+    mountPath: /var/run/secrets/hcloud
+
+extraVolumes:
+  - name: token-volume
+    secret:
+      secretName: hcloud-token
