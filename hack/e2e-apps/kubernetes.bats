@@ -1,11 +1,12 @@
 #!/usr/bin/env bats
 
 @test "Create a tenant Kubernetes control plane" {
+  name='test'
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
 metadata:
-  name: test
+  name: $name
   namespace: tenant-test
 spec:
   addons:
@@ -61,12 +62,12 @@ spec:
       - ingress-nginx
   storageClass: replicated
 EOF
-  kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
-  timeout 10 sh -ec 'until kubectl get kamajicontrolplane -n tenant-test kubernetes-test; do sleep 1; done'
-  kubectl wait --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-test --timeout=4m
-  kubectl wait tcp -n tenant-test kubernetes-test --timeout=2m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
-  kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-test kubernetes-test-cluster-autoscaler kubernetes-test-kccm kubernetes-test-kcsi-controller
-  kubectl wait machinedeployment kubernetes-test-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
-  kubectl wait machinedeployment kubernetes-test-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io test
+  kubectl wait --timeout=20s namespace tenant-test --for=jsonpath='{.status.phase}'=Active
+  kubectl -n tenant-test wait --timeout=10s kamajicontrolplane kubernetes-$name --for=jsonpath='{.status.conditions[0].status}'=True
+  kubectl -n tenant-test wait --timeout=4m kamajicontrolplane kubernetes-$name --for=condition=TenantControlPlaneCreated
+  kubectl -n tenant-test wait --timeout=210s tcp kubernetes-$name --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+  kubectl -n tenant-test wait --timeout=4m deploy kubernetes-$name kubernetes-$name-cluster-autoscaler kubernetes-$name-kccm kubernetes-$name-kcsi-controller --for=condition=available
+  kubectl -n tenant-test wait --timeout=1m machinedeployment kubernetes-$name-md0 --for=jsonpath='{.status.replicas}'=2
+  kubectl -n tenant-test wait --timeout=10m machinedeployment kubernetes-$name-md0 --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $name
 }

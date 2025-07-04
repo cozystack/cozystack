@@ -2,6 +2,18 @@
 
 @test "Create DB MySQL" {
   name='test'
+  withResources='true'
+  if [ "$withResources" == 'true' ]; then
+    resources=$(cat <<EOF
+  resources:
+    resources:
+      cpu: 3000m
+      memory: 3Gi
+EOF
+  )
+  else
+    resources='  resources: {}'
+  fi
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: MySQL
@@ -31,16 +43,15 @@ spec:
     s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
     s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
     resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
-  resources: {}
+  $resources
   resourcesPreset: "nano"
 EOF
-  sleep 5
-  kubectl -n tenant-test wait hr mysql-$name --timeout=30s --for=condition=ready
-  timeout 80 sh -ec "until kubectl -n tenant-test get svc mysql-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
-  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mysql-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
-  kubectl -n tenant-test wait statefulset.apps/mysql-$name --timeout=110s --for=jsonpath='{.status.replicas}'=2
-  timeout 80 sh -ec "until kubectl -n tenant-test get svc mysql-$name-metrics -o jsonpath='{.spec.ports[0].port}' | grep -q '9104'; do sleep 10; done"
-  timeout 40 sh -ec "until kubectl -n tenant-test get endpoints mysql-$name-metrics -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
-  kubectl -n tenant-test wait deployment.apps/mysql-$name-metrics --timeout=90s --for=jsonpath='{.status.replicas}'=1
+  sleep 10
+  kubectl -n tenant-test wait --timeout=30s hr mysql-$name --for=condition=ready
+  kubectl -n tenant-test wait --timeout=130s mysqls $name --for=condition=ready
+  kubectl -n tenant-test wait --timeout=110s sts mysql-$name --for=jsonpath='{.status.replicas}'=2
+  sleep 60
+  kubectl -n tenant-test wait --timeout=60s deploy mysql-$name-metrics --for=jsonpath='{.status.replicas}'=1
+  kubectl -n tenant-test wait --timeout=100s svc mysql-$name --for=jsonpath='{.spec.ports[0].port}'=3306
   kubectl -n tenant-test delete mysqls.apps.cozystack.io $name
 }
