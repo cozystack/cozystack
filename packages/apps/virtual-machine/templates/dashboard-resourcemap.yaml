@@ -4,6 +4,13 @@ metadata:
   name: {{ .Release.Name }}-dashboard-resources
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - services
+  resourceNames:
+  - {{ include "virtual-machine.fullname" . }}
+  verbs: ["get", "list", "watch"]
+- apiGroups:
   - cozystack.io
   resources:
   - workloadmonitors
