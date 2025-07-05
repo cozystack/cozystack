@@ -4,8 +4,6 @@ kind: HelmRelease
 metadata:
   name: ingress
   namespace: {{ include "tenant.name" . }}
-  annotations:
-    helm.sh/resource-policy: keep
   labels:
     cozystack.io/ui: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}
