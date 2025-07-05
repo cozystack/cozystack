@@ -182,7 +182,7 @@ releases:
   dependsOn: []
   {{- end }}
 
-{{- if $oidcEnabled }}
+{{- if eq $oidcEnabled "true" }}
 - name: keycloak
   releaseName: keycloak
   chart: cozy-keycloak
