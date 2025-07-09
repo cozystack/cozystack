@@ -137,7 +137,8 @@ tcp-balancer 0.4.1 62cb694d
 tcp-balancer 0.4.2 4369b031
 tcp-balancer 0.5.0 HEAD
 tenant 1.10.0 4369b031
-tenant 1.11.0 HEAD
+tenant 1.11.0 70f82667
+tenant 1.11.1 HEAD
 virtual-machine 0.1.4 f2015d65
 virtual-machine 0.1.5 263e47be
 virtual-machine 0.2.0 c0685f43
