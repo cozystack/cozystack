@@ -76,7 +76,7 @@ input:
   initramfs:
     path: /usr/install/amd64/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer:v1.10.3"
+    imageRef: "ghcr.io/siderolabs/installer:${TALOS_VERSION}"
   systemExtensions:
     - imageRef: ghcr.io/siderolabs/amd-ucode:${AMD_UCODE_VERSION}
     - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:${BNX2_BNX2X_VERSION}

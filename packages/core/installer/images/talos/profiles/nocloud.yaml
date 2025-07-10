@@ -3,22 +3,22 @@
 arch: amd64
 platform: nocloud
 secureboot: false
-version: v1.10.3
+version: v1.10.5
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
   initramfs:
     path: /usr/install/amd64/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer:v1.10.3"
+    imageRef: "ghcr.io/siderolabs/installer:v1.10.5"
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/amd-ucode:20250509
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20250509
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20250509
-    - imageRef: ghcr.io/siderolabs/intel-ucode:20250211
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250509
-    - imageRef: ghcr.io/siderolabs/drbd:9.2.13-v1.10.3
-    - imageRef: ghcr.io/siderolabs/zfs:2.3.2-v1.10.3
+    - imageRef: ghcr.io/siderolabs/amd-ucode:20250708
+    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20250708
+    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20250708
+    - imageRef: ghcr.io/siderolabs/intel-ucode:20250512
+    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250708
+    - imageRef: ghcr.io/siderolabs/drbd:9.2.14-v1.10.5
+    - imageRef: ghcr.io/siderolabs/zfs:2.3.3-v1.10.5
 output:
   kind: image
   imageOptions: { diskSize: 1306525696, diskFormat: raw }
