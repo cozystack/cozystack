@@ -1,4 +1,4 @@
-{{- if and .Values.rbac.enabled .Values.certController.enabled (not .Values.webhook.cert.certManager.enabled) -}}
+{{- if and (not .Values.currentNamespaceOnly) .Values.rbac.enabled .Values.certController.enabled (not .Values.webhook.cert.certManager.enabled) -}}
 {{ $fullName := include "mariadb-operator.fullname" . }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

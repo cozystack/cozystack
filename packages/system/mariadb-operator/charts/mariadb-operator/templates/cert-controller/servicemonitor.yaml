@@ -1,4 +1,4 @@
-{{ if and .Values.certController.enabled (not .Values.webhook.cert.certManager.enabled) .Values.metrics.enabled  .Values.certController.serviceMonitor.enabled }}
+{{ if and (not .Values.currentNamespaceOnly) .Values.certController.enabled (not .Values.webhook.cert.certManager.enabled) .Values.metrics.enabled  .Values.certController.serviceMonitor.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -33,4 +33,12 @@ spec:
   - port: metrics
     interval: {{ .Values.certController.serviceMonitor.interval }}
     scrapeTimeout: {{ .Values.certController.serviceMonitor.scrapeTimeout }}
+    {{- if .Values.certController.serviceMonitor.metricRelabelings }}
+    metricRelabelings:
+      {{- toYaml .Values.certController.serviceMonitor.metricRelabelings | nindent 6 }}
+    {{- end }}
+    {{- if .Values.certController.serviceMonitor.relabelings }}
+    relabelings:
+      {{- toYaml .Values.certController.serviceMonitor.relabelings | nindent 6 }}
+    {{- end }}
 {{ end }}

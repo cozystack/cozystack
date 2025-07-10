@@ -1,4 +1,4 @@
-{{ if .Values.webhook.cert.certManager.enabled }}
+{{ if and (not .Values.currentNamespaceOnly) .Values.webhook.enabled .Values.webhook.cert.certManager.enabled }}
 {{ if not .Values.webhook.cert.certManager.issuerRef }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
@@ -51,4 +51,4 @@ spec:
       {{- toYaml . | nindent 6 }}
     {{- end }}
   {{- end }}
-{{ end }}
+{{- end }}

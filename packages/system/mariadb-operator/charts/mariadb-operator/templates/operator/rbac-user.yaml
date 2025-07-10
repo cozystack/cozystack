@@ -1,4 +1,4 @@
-{{- if .Values.rbac.enabled -}}
+{{- if and (not .Values.currentNamespaceOnly) .Values.rbac.enabled -}}
 {{ $fullName := include "mariadb-operator.fullname" . }}
 # the mariadb-view ClusterRole allows viewing all k8s.mariadb.com resources
 apiVersion: rbac.authorization.k8s.io/v1

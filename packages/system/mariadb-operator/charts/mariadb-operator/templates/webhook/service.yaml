@@ -1,0 +1,15 @@
+{{- if and (not .Values.currentNamespaceOnly) .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-webhook
+  labels:
+    {{- include "mariadb-operator-webhook.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: {{ .Values.webhook.port }}
+  selector:
+    {{- include "mariadb-operator-webhook.selectorLabels" . | nindent 4 }}
+{{- end }}

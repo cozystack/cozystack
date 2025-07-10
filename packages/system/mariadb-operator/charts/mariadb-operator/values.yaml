@@ -1,25 +1,32 @@
 nameOverride: ""
 fullnameOverride: ""
-
+# --- CRDs
+crds:
+  # -- Whether the helm chart should create and update the CRDs. It is false by default, which implies that the CRDs must be
+  # managed independently with the mariadb-operator-crds helm chart.
+  # **WARNING** This should only be set to true during the initial deployment. If this chart manages the CRDs
+  # and is later uninstalled, all MariaDB instances will be DELETED.
+  enabled: false
 image:
   repository: docker-registry3.mariadb.com/mariadb-operator/mariadb-operator
   pullPolicy: IfNotPresent
   # -- Image tag to use. By default the chart appVersion is used
   tag: ""
+  # Setting a digest will override any tag
+  # digest: sha256:084a927ee9f3918a5c85d283f73822ae205757df352218de0b935853a0765060
 imagePullSecrets: []
-
 # -- Controller log level
 logLevel: INFO
-
 # -- Cluster DNS name
 clusterName: cluster.local
-
+# -- Whether the operator should watch CRDs only in its own namespace or not.
+currentNamespaceOnly: false
 ha:
-  # -- Enable high availability
+  # -- Enable high availability of the controller.
+  # If you enable it we recommend to set `affinity` and `pdb`
   enabled: false
   # -- Number of replicas
   replicas: 3
-
 metrics:
   # -- Enable operator internal metrics. Prometheus must be installed in the cluster
   enabled: false
@@ -33,7 +40,10 @@ metrics:
     interval: 30s
     # -- Timeout if metrics can't be retrieved in given time interval
     scrapeTimeout: 25s
-
+    # MetricRelabelConfigs to apply to samples before ingestion.
+    metricRelabelings: []
+    # RelabelConfigs to apply to samples before scraping.
+    relabelings: []
 serviceAccount:
   # -- Specifies whether a service account should be created
   enabled: true
@@ -46,40 +56,28 @@ serviceAccount:
   # -- The name of the service account to use.
   # If not set and enabled is true, a name is generated using the fullname template
   name: ""
-
 rbac:
   # -- Specifies whether RBAC resources should be created
   enabled: true
-
   aggregation:
-
     # -- Specifies whether the cluster roles aggrate to view and edit predefinied roles
     enabled: true
-
 # -- Extra arguments to be passed to the controller entrypoint
 extrArgs: []
-
 # -- Extra environment variables to be passed to the controller
 extraEnv: []
-
 # -- Extra environment variables from preexiting ConfigMap / Secret objects used by the controller using envFrom
 extraEnvFrom: []
-
 # -- Extra volumes to pass to pod.
 extraVolumes: []
-
 # -- Extra volumes to mount to the container.
 extraVolumeMounts: []
-
 # -- Annotations to add to controller Pod
 podAnnotations: {}
-
 # -- Security context to add to controller Pod
 podSecurityContext: {}
-
 # -- Security context to add to controller container
 securityContext: {}
-
 # -- Resources to add to controller container
 resources: {}
 # requests:
@@ -88,19 +86,50 @@ resources: {}
 
 # -- Node selectors to add to controller Pod
 nodeSelector: {}
-
 # -- Tolerations to add to controller Pod
 tolerations: []
-
+# -- topologySpreadConstraints to add to controller Pod
+topologySpreadConstraints: []
+# -- priorityClassName to add to controller Pod
+priorityClassName: ""
 # -- Affinity to add to controller Pod
 affinity: {}
+#  Sample on how to create an antiAffinity rule that place
+#  the pods on different nodes, to be used together with `ha.enabled: true`
+# podAntiAffinity:
+#   requiredDuringSchedulingIgnoredDuringExecution:
+#   - labelSelector:
+#       matchExpressions:
+#       - key: app.kubernetes.io/name
+#         operator: In
+#         values:
+#         - mariadb-operator
+#       - key: app.kubernetes.io/instance
+#         operator: In
+#         values:
+#         - mariadb-operator
+#     topologyKey: kubernetes.io/hostname
 
+pdb:
+  # -- Enable PodDisruptionBudget for the controller.
+  enabled: false
+  # -- Maximum number of unavailable Pods. You may also give a percentage, like `50%`
+  maxUnavailable: 1
+pprof:
+  # -- Enable the pprof HTTP server.
+  enabled: false
+  # -- The port where the pprof HTTP server listens.
+  port: 6060
 webhook:
+  # -- Specifies whether the webhook should be created.
+  enabled: true
   image:
     repository: docker-registry3.mariadb.com/mariadb-operator/mariadb-operator
     pullPolicy: IfNotPresent
     # -- Image tag to use. By default the chart appVersion is used
     tag: ""
+    # Setting a digest will override any tag
+    # digest: sha256:084a927ee9f3918a5c85d283f73822ae205757df352218de0b935853a0765060
   imagePullSecrets: []
   ha:
     # -- Enable high availability
@@ -144,6 +173,10 @@ webhook:
     interval: 30s
     # -- Timeout if metrics can't be retrieved in given time interval
     scrapeTimeout: 25s
+    # MetricRelabelConfigs to apply to samples before ingestion.
+    metricRelabelings: []
+    # RelabelConfigs to apply to samples before scraping.
+    relabelings: []
   serviceAccount:
     # -- Specifies whether a service account should be created
     enabled: true
@@ -175,13 +208,21 @@ webhook:
   # requests:
   #   cpu: 10m
   #   memory: 32Mi
-  # -- Node selectors to add to controller Pod
+  # -- Node selectors to add to webhook Pod
   nodeSelector: {}
-  # -- Tolerations to add to controller Pod
+  # -- Tolerations to add to webhook Pod
   tolerations: []
-  # -- Affinity to add to controller Pod
+  # -- topologySpreadConstraints to add to webhook Pod
+  topologySpreadConstraints: []
+  # -- priorityClassName to add to webhook Pod
+  priorityClassName: ""
+  # -- Affinity to add to webhook Pod
   affinity: {}
-
+  pdb:
+    # -- Enable PodDisruptionBudget for the webhook.
+    enabled: false
+    # -- Maximum number of unavailable Pods. You may also give a percentage, like `50%`
+    maxUnavailable: 1
 certController:
   # -- Specifies whether the cert-controller should be created.
   enabled: true
@@ -190,18 +231,20 @@ certController:
     pullPolicy: IfNotPresent
     # -- Image tag to use. By default the chart appVersion is used
     tag: ""
+    # Setting a digest will override any tag
+    # digest: sha256:084a927ee9f3918a5c85d283f73822ae205757df352218de0b935853a0765060
   imagePullSecrets: []
   ha:
     # -- Enable high availability
     enabled: false
     # -- Number of replicas
     replicas: 3
-  # -- CA certificate validity. It must be greater than certValidity.
-  caValidity: 35064h
-  # -- Certificate validity.
-  certValidity: 8766h
-  # -- Duration used to verify whether a certificate is valid or not.
-  lookaheadValidity: 2160h
+  # -- CA certificate lifetime. It must be greater than certLifetime.
+  caLifetime: 26280h
+  # -- Certificate lifetime.
+  certLifetime: 2160h
+  # -- How long before the certificate expiration should the renewal process be triggered. For example, if a certificate is valid for 60 minutes, and renewBeforePercentage=25, cert-controller will begin to attempt to renew the certificate 45 minutes after it was issued (i.e. when there are 15 minutes (25%) remaining until the certificate is no longer valid).
+  renewBeforePercentage: 33
   # -- Requeue duration to ensure that certificate gets renewed.
   requeueDuration: 5m
   serviceMonitor:
@@ -214,6 +257,10 @@ certController:
     interval: 30s
     # -- Timeout if metrics can't be retrieved in given time interval
     scrapeTimeout: 25s
+    # MetricRelabelConfigs to apply to samples before ingestion.
+    metricRelabelings: []
+    # RelabelConfigs to apply to samples before scraping.
+    relabelings: []
   serviceAccount:
     # -- Specifies whether a service account should be created
     enabled: true
@@ -236,16 +283,39 @@ certController:
   podAnnotations: {}
   # -- Security context to add to cert-controller Pod
   podSecurityContext: {}
-  # -- Security context to add to cert-controller container
+  # -- Security context to add to cert-controller Pod
   securityContext: {}
   # -- Resources to add to cert-controller container
   resources: {}
   # requests:
   #   cpu: 10m
   #   memory: 32Mi
-  # -- Node selectors to add to controller Pod
+  # -- Node selectors to add to cert-controller container
   nodeSelector: {}
-  # -- Tolerations to add to controller Pod
+  # -- Tolerations to add to cert-controller container
   tolerations: []
-  # -- Affinity to add to controller Pod
+  # -- topologySpreadConstraints to add to cert-controller container
+  topologySpreadConstraints: []
+  # -- priorityClassName to add to cert-controller container
+  priorityClassName: ""
+  # -- Affinity to add to cert-controller container
   affinity: {}
+  pdb:
+    # -- Enable PodDisruptionBudget for the cert-controller.
+    enabled: false
+    # -- Maximum number of unavailable Pods. You may also give a percentage, like `50%`
+    maxUnavailable: 1
+# -- Operator configuration
+config:
+  # -- Galera library path to be used with MariaDB Galera
+  galeraLibPath: /usr/lib/galera/libgalera_smm.so
+  # -- Default MariaDB version to be used when unable to infer it via image tag
+  mariadbDefaultVersion: "11.4"
+  # -- Default MariaDB image
+  mariadbImage: docker-registry1.mariadb.com/library/mariadb:11.4.5
+  # -- Default MaxScale image
+  maxscaleImage: docker-registry2.mariadb.com/mariadb/maxscale:23.08.5
+  # -- Default MariaDB exporter image
+  exporterImage: prom/mysqld-exporter:v0.15.1
+  # -- Default MaxScale exporter image
+  exporterMaxscaleImage: docker-registry2.mariadb.com/mariadb/maxscale-prometheus-exporter-ubi:v0.0.1

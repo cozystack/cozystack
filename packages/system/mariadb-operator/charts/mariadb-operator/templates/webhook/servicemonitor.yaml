@@ -1,4 +1,4 @@
-{{ if and .Values.metrics.enabled .Values.webhook.serviceMonitor.enabled }}
+{{ if and (not .Values.currentNamespaceOnly) .Values.webhook.enabled .Values.metrics.enabled .Values.webhook.serviceMonitor.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -33,4 +33,12 @@ spec:
   - port: metrics
     interval: {{ .Values.webhook.serviceMonitor.interval }}
     scrapeTimeout: {{ .Values.webhook.serviceMonitor.scrapeTimeout }}
-{{ end }}
+    {{- if .Values.webhook.serviceMonitor.metricRelabelings }}
+    metricRelabelings:
+      {{- toYaml .Values.webhook.serviceMonitor.metricRelabelings | nindent 6 }}
+    {{- end }}
+    {{- if .Values.webhook.serviceMonitor.relabelings }}
+    relabelings:
+      {{- toYaml .Values.webhook.serviceMonitor.relabelings | nindent 6 }}
+    {{- end }}
+{{- end }}

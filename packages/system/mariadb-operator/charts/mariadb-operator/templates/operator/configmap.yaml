@@ -1,0 +1,13 @@
+apiVersion: v1
+data:
+  MARIADB_OPERATOR_IMAGE: "{{ template "image" (tuple .Values.image $.Chart.AppVersion) }}"
+  MARIADB_GALERA_LIB_PATH: "{{ .Values.config.galeraLibPath }}"
+  MARIADB_DEFAULT_VERSION: "{{ .Values.config.mariadbDefaultVersion }}"
+  RELATED_IMAGE_MARIADB: "{{ .Values.config.mariadbImage }}"
+  RELATED_IMAGE_MAXSCALE: "{{ .Values.config.maxscaleImage }}"
+  RELATED_IMAGE_EXPORTER: "{{ .Values.config.exporterImage }}"
+  RELATED_IMAGE_EXPORTER_MAXSCALE: "{{ .Values.config.exporterMaxscaleImage }}"
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: mariadb-operator-env

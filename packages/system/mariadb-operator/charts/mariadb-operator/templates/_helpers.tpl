@@ -56,9 +56,9 @@ Webhook common labels
 {{- define "mariadb-operator-webhook.labels" -}}
 helm.sh/chart: {{ include "mariadb-operator.chart" . }}
 {{ include "mariadb-operator-webhook.selectorLabels" . }}
-{{ if .Chart.AppVersion }}
+{{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{ end }}
+{{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
@@ -104,9 +104,9 @@ Cert-controller common labels
 {{- define "mariadb-operator-cert-controller.labels" -}}
 helm.sh/chart: {{ include "mariadb-operator.chart" . }}
 {{ include "mariadb-operator-cert-controller.selectorLabels" . }}
-{{ if .Chart.AppVersion }}
+{{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{ end }}
+{{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
@@ -149,4 +149,22 @@ Create the name of the cert-controller service account to use
 {{- else }}
 {{- default "default" .Values.certController.serviceAccount.name }}
 {{- end }}
+{{- end }}
+
+{{/*
+Util function for generating the image URL based on the provided options.
+*/}}
+{{- define "image" -}}
+  {{- $defaultTag := index . 1 -}}
+  {{- with index . 0 -}}
+    {{- $repository := .repository | default "" -}}
+    {{- $digest := .digest -}}
+    {{- $tag := default $defaultTag .tag -}}
+    {{- printf "%s" $repository }}
+    {{- if $digest -}}
+      {{ printf "@%s" $digest }}
+    {{- else -}}
+      {{ printf ":%s" $tag }}
+    {{- end -}}
+  {{- end }}
 {{- end }}

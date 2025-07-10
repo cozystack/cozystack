@@ -3,22 +3,22 @@ kind: Deployment
 metadata:
   name: {{ include "mariadb-operator.fullname" . }}
   labels:
-    {{ include "mariadb-operator.labels" . | nindent 4 }}
+    {{- include "mariadb-operator.labels" . | nindent 4 }}
 spec:
-  {{ if .Values.ha.enabled }}
+  {{- if .Values.ha.enabled }}
   replicas: {{ .Values.ha.replicas}}
-  {{ end }}
+  {{- end }}
   selector:
     matchLabels:
-      {{ include "mariadb-operator.selectorLabels" . | nindent 6 }}
+      {{- include "mariadb-operator.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{ with .Values.podAnnotations }}
+      {{- with .Values.podAnnotations }}
       annotations:
         {{ toYaml . | nindent 8 }}
-      {{ end }}
+      {{- end }}
       labels:
-        {{ include "mariadb-operator.selectorLabels" . | nindent 8 }}
+        {{- include "mariadb-operator.selectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -27,24 +27,31 @@ spec:
       serviceAccountName: {{ include "mariadb-operator.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
       terminationGracePeriodSeconds: 10
-      {{ with .Values.nodeSelector }}
+      {{- with .Values.nodeSelector }}
       nodeSelector:
         {{ toYaml . | nindent 8 }}
-      {{ end }}
-      {{ with .Values.tolerations }}
+      {{- end }}
+      {{- with .Values.tolerations }}
       tolerations:
         {{ toYaml . | nindent 8 }}
-      {{ end }}
-      {{ with .Values.affinity }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName  }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.affinity }}
       affinity:
         {{ toYaml . | nindent 8 }}
-      {{ end }}
-      {{ with .Values.podSecurityContext }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
       securityContext:
         {{ toYaml . | nindent 8 }}
-      {{ end }}
+      {{- end }}
       containers:
-        - image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        - image: "{{ template "image" (tuple .Values.image $.Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           name: controller
           args:
@@ -53,6 +60,10 @@ spec:
             {{- if .Values.ha.enabled }}
             - --leader-elect
             {{- end }}
+            {{- if .Values.pprof.enabled }}
+            - --pprof
+            - --pprof-addr=:{{ .Values.pprof.port | int }}
+            {{- end }}
             {{- range .Values.extraArgs }}
             - {{ . }}
             {{- end }}
@@ -60,6 +71,11 @@ spec:
             - containerPort: 8080
               protocol: TCP
               name: metrics
+          {{- if .Values.pprof.enabled }}
+            - containerPort: {{ .Values.pprof.port }}
+              protocol: TCP
+              name: pprof
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: mariadb-operator-env
@@ -69,6 +85,10 @@ spec:
           env:
             - name: CLUSTER_NAME
               value: {{ .Values.clusterName }}
+            {{- if .Values.currentNamespaceOnly }}
+            - name: WATCH_NAMESPACE
+              value: {{ .Release.Namespace }}
+            {{- end }}
             - name: MARIADB_OPERATOR_NAME
               valueFrom:
                 fieldRef:
