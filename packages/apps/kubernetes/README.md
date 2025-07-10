@@ -86,6 +86,7 @@ See the reference for components utilized in this service:
 | `host`                  | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `""`         |
 | `controlPlane.replicas` | Number of replicas for Kubernetes control-plane components.                                                       | `2`          |
 | `storageClass`          | StorageClass used to store user data.                                                                             | `replicated` |
+| `version`               | Kubernetes version given as vMAJOR.MINOR                                                                          | `v1.32`      |
 | `nodeGroups`            | nodeGroups configuration                                                                                          | `{}`         |
 
 ### Cluster Addons

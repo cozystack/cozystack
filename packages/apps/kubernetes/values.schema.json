@@ -127,6 +127,19 @@
       "description": "StorageClass used to store user data.",
       "default": "replicated"
     },
+    "version": {
+      "type": "string",
+      "description": "Kubernetes version given as vMAJOR.MINOR",
+      "default": "v1.32",
+      "enum": [
+        "v1.28",
+        "v1.29",
+        "v1.30",
+        "v1.31",
+        "v1.32",
+        "v1.33"
+      ]
+    },
     "addons": {
       "type": "object",
       "properties": {

@@ -151,7 +151,7 @@ spec:
       labels:
         policy.cozystack.io/allow-to-etcd: "true"
   replicas: 2
-  version: {{ $.Chart.AppVersion }}
+  version: {{ include "kubernetes.versionMap" $.Values.version }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -290,7 +290,7 @@ spec:
         kind: KubevirtMachineTemplate
         name: {{ $.Release.Name }}-{{ $groupName }}-{{ $kubevirtmachinetemplateHash }}
         namespace: {{ $.Release.Namespace }}
-      version: v{{ $.Chart.AppVersion }}
+      version: {{ include "kubernetes.versionMap" $.Values.version }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineHealthCheck
