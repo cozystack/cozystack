@@ -1,0 +1,4 @@
+The RobotLB Operator was successfully installed.
+Please follow the readme to create loadbalanced services.
+
+README: https://github.com/intreecom/robotlb
