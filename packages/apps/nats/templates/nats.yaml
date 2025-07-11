@@ -49,9 +49,6 @@ spec:
                 resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 22 }}
       fullnameOverride: {{ .Release.Name }}
       config:
-        cluster:
-          routeURLs:
-            k8sClusterDomain: {{ $clusterDomain }}
         {{- if or (gt (len $passwords) 0) (gt (len .Values.config.merge) 0) }}
         merge:
           {{- if gt (len $passwords) 0 }}
@@ -73,6 +70,8 @@ spec:
         {{- end }}
         cluster:
           enabled: true
+          routeURLs:
+            k8sClusterDomain: {{ $clusterDomain }}
           replicas: {{ .Values.replicas }}
         monitor:
           enabled: true
