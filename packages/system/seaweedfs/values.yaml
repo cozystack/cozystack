@@ -32,6 +32,17 @@ seaweedfs:
       size: "10Gi"
       maxVolumes: 0
   
+      #volumes:
+      #- replicas: 2
+      #  # minimum free disk space(in percents). If free disk space lower this value - all volumes marks as ReadOnly
+      #  minFreeSpacePercent: 5
+      #
+      #  dataDirs:
+      #  - name: data1
+      #    type: "persistentVolumeClaim"
+      #    size: "10Gi"
+      #    maxVolumes: 0
+
   filer:
     replicas: 2
     #  replication type is XYZ:

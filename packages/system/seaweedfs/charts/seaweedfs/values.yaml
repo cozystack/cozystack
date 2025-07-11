@@ -471,6 +471,8 @@ volume:
     failureThreshold: 100
     timeoutSeconds: 30
 
+volumes: []
+
 filer:
   enabled: true
   imageOverride: null
