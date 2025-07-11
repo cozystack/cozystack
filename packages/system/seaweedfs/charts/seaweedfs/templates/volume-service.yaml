@@ -1,14 +1,10 @@
-{{ $volumes := (list .Values.volume) }}
-{{- range .Values.volumes }}
-{{ $volumes = append $volumes (deepCopy . | mergeOverwrite $.Values.volume) }}
-{{- end }}
+{{ $volumes := deepCopy .Values.volumes | mergeOverwrite (dict "" .Values.volume)  }}
+{{- range $vname, $volume := $volumes }}
+{{- $volumeName := trimSuffix "-" (printf "volume-%s" $vname) }}
+{{- $volume := deepCopy $volume | mergeOverwrite $.Values.volume (dict "enabled" true) }}
 
-{{- range $index, $volume := $volumes }}
-{{- $volumeName := printf "volume%d" $index }}
-{{- if eq $index 0 }}
-{{- $volumeName = "volume" }}
-{{- end }}
 {{- if $volume.enabled }}
+---
 apiVersion: v1
 kind: Service
 metadata:

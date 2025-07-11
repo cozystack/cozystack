@@ -471,7 +471,7 @@ volume:
     failureThreshold: 100
     timeoutSeconds: 30
 
-volumes: []
+volumes: {}
 
 filer:
   enabled: true
