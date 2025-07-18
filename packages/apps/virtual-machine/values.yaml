@@ -1,46 +1,53 @@
+
 ## @section Common parameters
-
-## @param external Enable external access from outside the cluster
-## @param externalMethod specify method to passthrough the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`
-## @param externalPorts [array] Specify ports to forward from outside the cluster
+##
+## @param external {bool} Enable external access from outside the cluster
 external: false
-externalMethod: PortList
+## @param externalMethod {string enum:"PortList,WholeIP"} Specify method to pass through the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`
+externalMethod: "PortList"
+## @param externalPorts {[]int} Specify ports to forward from outside the cluster
 externalPorts:
-- 22
+  - 22
 
-## @param running Determines if the virtual machine should be running
+## @param running {bool} if the virtual machine should be running
 running: true
 
-## @param instanceType Virtual Machine instance type
-## @param instanceProfile Virtual Machine preferences profile
+## @param instanceType {string} Virtual Machine instance type
+## @param instanceProfile {string} Virtual Machine preferences profile
 ##
 instanceType: "u1.medium"
 instanceProfile: ubuntu
 
-## @param systemDisk.image The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos`
-## @param systemDisk.storage The size of the disk allocated for the virtual machine
-## @param systemDisk.storageClass StorageClass used to store the data
-## 
+## @param systemDisk {systemDisk} System disk configuration
+## @field systemDisk.image {string enum:"ubuntu,cirros,alpine,fedora,talos"} The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos`
+## @field systemDisk.storage {string} The size of the disk allocated for the virtual machine
+## @field systemDisk.storageClass {*string} StorageClass used to store the data
+##
 systemDisk:
   image: ubuntu
   storage: 5Gi
   storageClass: replicated
 
-## @param gpus [array] List of GPUs to attach
+## @param gpus {[]gpu} List of GPUs to attach
+## @field gpu.name {string} The name of the GPU to attach. This should match the GPU resource name in the cluster.
 ## Example:
 ## gpus:
 ## - name: nvidia.com/GA102GL_A10
 gpus: []
 
-## @param resources.cpu The number of CPU cores allocated to the virtual machine
-## @param resources.memory The amount of memory allocated to the virtual machine
-## @param resources.sockets The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)
-resources:
-  cpu: ""
-  memory: ""
-  sockets: ""
 
-## @param sshKeys [array] List of SSH public keys for authentication. Can be a single key or a list of keys.
+## @param resources {resources} Resources
+## @field resources.cpu {*quantity} The number of CPU cores allocated to the virtual machine
+## @field resources.sockets {*quantity} The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)
+## @field resources.memory {*quantity} The amount of memory allocated to the virtual machine
+## Example:
+## resources:
+##  cpu: "4"
+##  sockets: "1"
+##  memory: "8Gi"
+resources: {}
+
+## @param sshKeys {[]string} List of SSH public keys for authentication. Can be a single key or a list of keys.
 ## Example:
 ## sshKeys:
 ##   - ssh-rsa ...
@@ -48,7 +55,7 @@ resources:
 ##
 sshKeys: []
 
-## @param cloudInit cloud-init user data config. See cloud-init documentation for more details.
+## @param cloudInit {string} cloud-init user data config. See cloud-init documentation for more details.
 ## - https://cloudinit.readthedocs.io/en/latest/explanation/format.html
 ## - https://cloudinit.readthedocs.io/en/latest/reference/examples.html
 ## Example:
@@ -59,11 +66,11 @@ sshKeys: []
 ##
 cloudInit: ""
 
-## @param cloudInitSeed A seed string to generate an SMBIOS UUID for the VM.
-cloudInitSeed: ""
+## @param cloudInitSeed {string} A seed string to generate an SMBIOS UUID for the VM.
 ## Change it to any new value to force a full cloud-init reconfiguration. Change it when you want to apply
 ## to an existing VM settings that are usually written only once, like new SSH keys or new network configuration.
 ## An empty value does nothing (and the existing UUID is not reverted). Please note that changing this value
 ## does not trigger a VM restart. You must perform the restart separately.
 ## Example:
 ## cloudInitSeed: "upd1"
+cloudInitSeed: ""

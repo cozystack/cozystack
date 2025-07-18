@@ -1,49 +1,60 @@
 {
+  "title": "Chart Values",
+  "type": "object",
   "properties": {
     "cloudInit": {
-      "default": "",
       "description": "cloud-init user data config. See cloud-init documentation for more details.",
       "type": "string"
     },
     "cloudInitSeed": {
-      "default": "",
       "description": "A seed string to generate an SMBIOS UUID for the VM.",
       "type": "string"
     },
     "external": {
-      "default": false,
       "description": "Enable external access from outside the cluster",
-      "type": "boolean"
+      "type": "boolean",
+      "default": false
     },
     "externalMethod": {
-      "default": "PortList",
-      "description": "specify method to passthrough the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`",
+      "description": "Specify method to pass through the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`",
       "type": "string",
+      "default": "PortList",
       "enum": [
         "PortList",
         "WholeIP"
       ]
     },
     "externalPorts": {
-      "default": [],
       "description": "Specify ports to forward from outside the cluster",
+      "type": "array",
+      "default": [
+        22
+      ],
       "items": {
         "type": "integer"
-      },
-      "type": "array"
+      }
     },
     "gpus": {
-      "default": [],
       "description": "List of GPUs to attach",
+      "type": "array",
+      "default": [],
       "items": {
-        "type": "object"
-      },
-      "type": "array"
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "description": "The name of the GPU to attach. This should match the GPU resource name in the cluster.",
+            "type": "string"
+          }
+        }
+      }
     },
     "instanceProfile": {
-      "default": "ubuntu",
       "description": "Virtual Machine preferences profile",
       "type": "string",
+      "default": "ubuntu",
       "enum": [
         "alpine",
         "centos.7",
@@ -91,47 +102,65 @@
       ]
     },
     "instanceType": {
-      "default": "u1.medium",
       "description": "Virtual Machine instance type",
-      "type": "string"
+      "type": "string",
+      "default": "u1.medium"
     },
     "resources": {
+      "description": "Resources",
+      "type": "object",
+      "default": {},
       "properties": {
         "cpu": {
-          "default": "",
           "description": "The number of CPU cores allocated to the virtual machine",
-          "type": "string"
+          "type": "string",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "default": "",
           "description": "The amount of memory allocated to the virtual machine",
-          "type": "string"
+          "type": "string",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
         },
         "sockets": {
-          "default": "",
           "description": "The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)",
-          "type": "string"
+          "type": "string",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
         }
-      },
-      "type": "object"
+      }
     },
     "running": {
-      "default": true,
-      "description": "Determines if the virtual machine should be running",
-      "type": "boolean"
+      "description": "if the virtual machine should be running",
+      "type": "boolean",
+      "default": true
     },
     "sshKeys": {
-      "default": [],
       "description": "List of SSH public keys for authentication. Can be a single key or a list of keys.",
-      "items": {},
-      "type": "array"
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
     },
     "systemDisk": {
+      "description": "System disk configuration",
+      "type": "object",
+      "default": {
+        "image": "ubuntu",
+        "storage": "5Gi",
+        "storageClass": "replicated"
+      },
+      "required": [
+        "image",
+        "storage"
+      ],
       "properties": {
         "image": {
-          "default": "ubuntu",
           "description": "The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos`",
           "type": "string",
+          "default": "ubuntu",
           "enum": [
             "ubuntu",
             "cirros",
@@ -141,19 +170,16 @@
           ]
         },
         "storage": {
-          "default": "5Gi",
           "description": "The size of the disk allocated for the virtual machine",
-          "type": "string"
+          "type": "string",
+          "default": "5Gi"
         },
         "storageClass": {
-          "default": "replicated",
           "description": "StorageClass used to store the data",
-          "type": "string"
+          "type": "string",
+          "default": "replicated"
         }
-      },
-      "type": "object"
+      }
     }
-  },
-  "title": "Chart Values",
-  "type": "object"
+  }
 }

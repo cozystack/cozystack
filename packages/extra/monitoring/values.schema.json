@@ -1,152 +1,487 @@
 {
+  "title": "Chart Values",
+  "type": "object",
   "properties": {
     "alerta": {
+      "description": "Configuration for Alerta service",
+      "type": "object",
+      "default": {
+        "alerts": {
+          "telegram": {
+            "chatID": "",
+            "disabledSeverity": "",
+            "token": ""
+          }
+        },
+        "resources": {
+          "limits": {
+            "cpu": "1",
+            "memory": "1Gi"
+          },
+          "requests": {
+            "cpu": "100m",
+            "memory": "256Mi"
+          }
+        },
+        "storage": "10Gi",
+        "storageClassName": ""
+      },
+      "required": [
+        "alerts",
+        "storage",
+        "storageClassName"
+      ],
       "properties": {
         "alerts": {
+          "description": "Configuration for alerts",
+          "type": "object",
+          "default": {
+            "telegram": {
+              "chatID": "",
+              "disabledSeverity": "",
+              "token": ""
+            }
+          },
+          "required": [
+            "telegram"
+          ],
           "properties": {
             "telegram": {
+              "description": "Configuration for Telegram alerts",
+              "type": "object",
+              "default": {
+                "chatID": "",
+                "disabledSeverity": "",
+                "token": ""
+              },
+              "required": [
+                "chatID",
+                "disabledSeverity",
+                "token"
+              ],
               "properties": {
                 "chatID": {
-                  "default": "",
-                  "description": "specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot",
+                  "description": "Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot",
                   "type": "string"
                 },
                 "disabledSeverity": {
-                  "default": "",
-                  "description": "list of severity without alerts, separated comma like: \"informational,warning\"",
+                  "description": "List of severity without alerts, separated by comma like: \"informational,warning\"",
                   "type": "string"
                 },
                 "token": {
-                  "default": "",
-                  "description": "telegram token for your bot",
+                  "description": "Telegram token for your bot",
                   "type": "string"
                 }
-              },
-              "type": "object"
+              }
             }
-          },
-          "type": "object"
+          }
         },
         "resources": {
-          "properties": {
+          "description": "Resources configuration",
+          "type": "object",
+          "default": {
             "limits": {
-              "properties": {
-                "cpu": {
-                  "default": "1",
-                  "description": "The maximum amount of CPU allowed for alerta",
-                  "type": "string"
-                },
-                "memory": {
-                  "default": "1Gi",
-                  "description": "The maximum amount of memory allowed for alerta",
-                  "type": "string"
-                }
-              },
-              "type": "object"
+              "cpu": "1",
+              "memory": "1Gi"
             },
             "requests": {
-              "properties": {
-                "cpu": {
-                  "default": "100m",
-                  "description": "The minimum amount of CPU required for alerta",
-                  "type": "string"
-                },
-                "memory": {
-                  "default": "256Mi",
-                  "description": "The minimum amount of memory required for alerta",
-                  "type": "string"
-                }
-              },
-              "type": "object"
+              "cpu": "100m",
+              "memory": "256Mi"
             }
           },
-          "type": "object"
+          "properties": {
+            "limits": {
+              "type": "object",
+              "default": {
+                "cpu": "1",
+                "memory": "1Gi"
+              },
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit (maximum available CPU)",
+                  "type": "string",
+                  "default": "1",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit (maximum available memory)",
+                  "type": "string",
+                  "default": "1Gi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "default": {
+                "cpu": "100m",
+                "memory": "256Mi"
+              },
+              "properties": {
+                "cpu": {
+                  "description": "CPU request (minimum available CPU)",
+                  "type": "string",
+                  "default": "100m",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request (minimum available memory)",
+                  "type": "string",
+                  "default": "256Mi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
         },
         "storage": {
-          "default": "10Gi",
-          "description": "Persistent Volume size for alerta database",
-          "type": "string"
+          "description": "Persistent Volume size for the database",
+          "type": "string",
+          "default": "10Gi"
         },
         "storageClassName": {
-          "default": "",
           "description": "StorageClass used to store the data",
           "type": "string"
         }
-      },
-      "type": "object"
+      }
     },
     "grafana": {
-      "properties": {
+      "description": "Configuration for Grafana",
+      "type": "object",
+      "default": {
         "db": {
-          "properties": {
-            "size": {
-              "default": "10Gi",
-              "description": "Persistent Volume size for grafana database",
-              "type": "string"
-            }
-          },
-          "type": "object"
+          "size": "10Gi"
         },
         "resources": {
-          "properties": {
-            "limits": {
-              "properties": {
-                "cpu": {
-                  "default": "1",
-                  "description": "The maximum amount of CPU allowed for grafana",
-                  "type": "string"
-                },
-                "memory": {
-                  "default": "1Gi",
-                  "description": "The maximum amount of memory allowed for grafana",
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            },
-            "requests": {
-              "properties": {
-                "cpu": {
-                  "default": "100m",
-                  "description": "The minimum amount of CPU required for grafana",
-                  "type": "string"
-                },
-                "memory": {
-                  "default": "256Mi",
-                  "description": "The minimum amount of memory required for grafana",
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            }
+          "limits": {
+            "cpu": "1",
+            "memory": "1Gi"
           },
-          "type": "object"
+          "requests": {
+            "cpu": "100m",
+            "memory": "256Mi"
+          }
         }
       },
-      "type": "object"
+      "required": [
+        "db"
+      ],
+      "properties": {
+        "db": {
+          "description": "Database configuration",
+          "type": "object",
+          "default": {
+            "size": "10Gi"
+          },
+          "required": [
+            "size"
+          ],
+          "properties": {
+            "size": {
+              "description": "Persistent Volume size for the database",
+              "type": "string",
+              "default": "10Gi"
+            }
+          }
+        },
+        "resources": {
+          "description": "Resources configuration",
+          "type": "object",
+          "default": {
+            "limits": {
+              "cpu": "1",
+              "memory": "1Gi"
+            },
+            "requests": {
+              "cpu": "100m",
+              "memory": "256Mi"
+            }
+          },
+          "properties": {
+            "limits": {
+              "type": "object",
+              "default": {
+                "cpu": "1",
+                "memory": "1Gi"
+              },
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit (maximum available CPU)",
+                  "type": "string",
+                  "default": "1",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit (maximum available memory)",
+                  "type": "string",
+                  "default": "1Gi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "default": {
+                "cpu": "100m",
+                "memory": "256Mi"
+              },
+              "properties": {
+                "cpu": {
+                  "description": "CPU request (minimum available CPU)",
+                  "type": "string",
+                  "default": "100m",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request (minimum available memory)",
+                  "type": "string",
+                  "default": "256Mi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "host": {
-      "default": "",
       "description": "The hostname used to access the grafana externally (defaults to 'grafana' subdomain for the tenant host).",
       "type": "string"
     },
     "logsStorages": {
-      "default": [],
       "description": "Configuration of logs storage instances",
+      "type": "array",
+      "default": [
+        {
+          "name": "generic",
+          "retentionPeriod": "1",
+          "storage": "10Gi",
+          "storageClassName": "replicated"
+        }
+      ],
       "items": {
-        "type": "object"
-      },
-      "type": "array"
+        "type": "object",
+        "required": [
+          "name",
+          "retentionPeriod",
+          "storage"
+        ],
+        "properties": {
+          "name": {
+            "description": "Name of the storage instance",
+            "type": "string"
+          },
+          "retentionPeriod": {
+            "description": "Retention period for the logs in the storage instance",
+            "type": "string"
+          },
+          "storage": {
+            "description": "Persistent Volume size for the storage instance",
+            "type": "string"
+          },
+          "storageClassName": {
+            "description": "StorageClass used to store the data",
+            "type": "string"
+          }
+        }
+      }
     },
     "metricsStorages": {
-      "default": [],
       "description": "Configuration of metrics storage instances",
+      "type": "array",
+      "default": [
+        {
+          "deduplicationInterval": "15s",
+          "name": "shortterm",
+          "retentionPeriod": "3d",
+          "storage": "10Gi",
+          "storageClassName": ""
+        },
+        {
+          "deduplicationInterval": "5m",
+          "name": "longterm",
+          "retentionPeriod": "14d",
+          "storage": "10Gi",
+          "storageClassName": ""
+        }
+      ],
       "items": {
-        "type": "object"
-      },
-      "type": "array"
+        "type": "object",
+        "required": [
+          "deduplicationInterval",
+          "name",
+          "retentionPeriod",
+          "storage"
+        ],
+        "properties": {
+          "deduplicationInterval": {
+            "description": "Deduplication interval for the metrics in the storage instance",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name of the storage instance",
+            "type": "string"
+          },
+          "retentionPeriod": {
+            "description": "Retention period for the metrics in the storage instance",
+            "type": "string"
+          },
+          "storage": {
+            "description": "Persistent Volume size for the storage instance",
+            "type": "string"
+          },
+          "storageClassName": {
+            "description": "StorageClass used to store the data",
+            "type": "string"
+          },
+          "vminsert": {
+            "description": "Configuration for vminsert component of the storage instance",
+            "type": "object",
+            "properties": {
+              "maxAllowed": {
+                "description": "Limits (maximum allowed/available resources )",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU limit (maximum available CPU)",
+                    "type": "string",
+                    "default": "1",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory limit (maximum available memory)",
+                    "type": "string",
+                    "default": "1Gi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "minAllowed": {
+                "description": "Requests (minimum allowed/available resources)",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU request (minimum available CPU)",
+                    "type": "string",
+                    "default": "100m",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory request (minimum available memory)",
+                    "type": "string",
+                    "default": "256Mi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              }
+            }
+          },
+          "vmselect": {
+            "description": "Configuration for vmselect component of the storage instance",
+            "type": "object",
+            "properties": {
+              "maxAllowed": {
+                "description": "Limits (maximum allowed/available resources )",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU limit (maximum available CPU)",
+                    "type": "string",
+                    "default": "1",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory limit (maximum available memory)",
+                    "type": "string",
+                    "default": "1Gi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "minAllowed": {
+                "description": "Requests (minimum allowed/available resources)",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU request (minimum available CPU)",
+                    "type": "string",
+                    "default": "100m",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory request (minimum available memory)",
+                    "type": "string",
+                    "default": "256Mi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              }
+            }
+          },
+          "vmstorage": {
+            "description": "Configuration for vmstorage component of the storage instance",
+            "type": "object",
+            "properties": {
+              "maxAllowed": {
+                "description": "Limits (maximum allowed/available resources )",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU limit (maximum available CPU)",
+                    "type": "string",
+                    "default": "1",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory limit (maximum available memory)",
+                    "type": "string",
+                    "default": "1Gi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "minAllowed": {
+                "description": "Requests (minimum allowed/available resources)",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "CPU request (minimum available CPU)",
+                    "type": "string",
+                    "default": "100m",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Memory request (minimum available memory)",
+                    "type": "string",
+                    "default": "256Mi",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
-  },
-  "title": "Chart Values",
-  "type": "object"
+  }
 }
