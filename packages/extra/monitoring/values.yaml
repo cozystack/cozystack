@@ -1,10 +1,31 @@
 ## @section Common parameters
 
-## @param host The hostname used to access the grafana externally (defaults to 'grafana' subdomain for the tenant host).
+## @param host {string} The hostname used to access the grafana externally (defaults to 'grafana' subdomain for the tenant host).
 host: ""
 
-## @param metricsStorages [array] Configuration of metrics storage instances
-##
+## @section Metrics storage configuration
+
+## @param metricsStorages {[]metricsStorage} Configuration of metrics storage instances
+## @field metricsStorage.name {string} Name of the storage instance
+## @field metricsStorage.retentionPeriod {string} Retention period for the metrics in the storage instance
+## @field metricsStorage.deduplicationInterval {string} Deduplication interval for the metrics in the storage instance
+## @field metricsStorage.storage {string} Persistent Volume size for the storage instance
+## @field metricsStorage.storageClassName {*string} StorageClass used to store the data
+## @field metricsStorage.vminsert {*vmcomponent} Configuration for vminsert component of the storage instance
+## @field metricsStorage.vmselect {*vmcomponent} Configuration for vmselect component of the storage instance
+## @field metricsStorage.vmstorage {*vmcomponent} Configuration for vmstorage component of the storage instance
+
+## @field request.cpu {*quantity} CPU request (minimal available value)
+## @field request.memory {*quantity} Memory request (minimal available value)
+## @field limit.cpu {*quantity} CPU limit (maximum available value)
+## @field limit.memory {*quantity} Memory limit (maximum available value)
+## @field vmcomponent.minAllowed {*limit} Minimum allowed resources (requests) for each component
+## @field vmcomponent.maxAllowed {*request} Maximum allowed resources (limits) for each component
+## @field resources.requests {*request}
+## @field resources.limits {*limit}
+## @field minmax.minAllowed {*request}
+## @field minmax.Allowed {*request}
+
 ## Example:
 ## metricsStorages:
 ## - name: shortterm
@@ -46,7 +67,13 @@ metricsStorages:
   storage: 10Gi
   storageClassName: ""
 
-## @param logsStorages [array] Configuration of logs storage instances
+## @section Logs storage configuration
+
+## @param logsStorages {[]logsStorage} Configuration of logs storage instances
+## @field logsStorage.name {string} Name of the storage instance
+## @field logsStorage.retentionPeriod {string} Retention period for the logs in the storage instance
+## @field logsStorage.storage {string} Persistent Volume size for the storage instance
+## @field logsStorage.storageClassName {*string} StorageClass used to store the data
 ##
 logsStorages:
 - name: generic
@@ -54,14 +81,12 @@ logsStorages:
   storage: 10Gi
   storageClassName: replicated
 
-## Configuration for Alerta
-## @param alerta.storage Persistent Volume size for alerta database
-## @param alerta.storageClassName StorageClass used to store the data
-## @param alerta.resources.requests.cpu The minimum amount of CPU required for alerta
-## @param alerta.resources.requests.memory  The minimum amount of memory required for alerta
-## @param alerta.resources.limits.cpu The maximum amount of CPU allowed for alerta
-## @param alerta.resources.limits.memory The maximum amount of memory allowed for alerta
-##
+## @section Alerta configuration
+
+## @param alerta {alerta} Configuration for Alerta service
+## @field alerta.storage {string} Persistent Volume size for the database
+## @field alerta.storageClassName {string} StorageClass used to store the data
+## @field alerta.resources {*resources} Resources configuration
 alerta:
   storage: 10Gi
   storageClassName: ""
@@ -73,9 +98,11 @@ alerta:
       cpu: 100m
       memory: 256Mi
   alerts:
-    ## @param alerta.alerts.telegram.token telegram token for your bot
-    ## @param alerta.alerts.telegram.chatID specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
-    ## @param alerta.alerts.telegram.disabledSeverity list of severity without alerts, separated comma like: "informational,warning"
+    ## @field alerta.alerts {alerts} Configuration for alerts
+    ## @field alerts.telegram {telegramAlerts} Configuration for Telegram alerts
+    ## @field telegramAlerts.token {string} Telegram token for your bot
+    ## @field telegramAlerts.chatID {string} Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
+    ## @field telegramAlerts.disabledSeverity {string} List of severity without alerts, separated by comma like: "informational,warning"
     ## example:
     ##   telegram:
     ##     token: "7262461387:AAGtwq16iwuVtWtzoN6TUEMpF00fpC9Xz34"
@@ -87,12 +114,14 @@ alerta:
       chatID: ""
       disabledSeverity: ""
 
-## Configuration for Grafana
-## @param grafana.db.size Persistent Volume size for grafana database
-## @param grafana.resources.requests.cpu The minimum amount of CPU required for grafana
-## @param grafana.resources.requests.memory  The minimum amount of memory required for grafana
-## @param grafana.resources.limits.cpu The maximum amount of CPU allowed for grafana
-## @param grafana.resources.limits.memory The maximum amount of memory allowed for grafana
+## @section Grafana configuration
+
+## @param grafana {grafana} Configuration for Grafana
+## @field grafana.db {grafanaDB} Database configuration
+## @field grafanaDB.size {string} Persistent Volume size for the database
+## @field grafana.resources {*resources} Resources configuration
+
+
 grafana:
   db:
     size: 10Gi
