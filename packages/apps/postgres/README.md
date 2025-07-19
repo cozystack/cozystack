@@ -66,44 +66,57 @@ See:
 
 ### Common parameters
 
-| Name              | Description                                                                                                                             | Value   |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `replicas`        | Number of Postgres replicas                                                                                                             | `2`     |
-| `resources`       | Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
-| `resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.             | `micro` |
-| `size`            | Persistent Volume size                                                                                                                  | `10Gi`  |
-| `storageClass`    | StorageClass used to store the data                                                                                                     | `""`    |
-| `external`        | Enable external access from outside the cluster                                                                                         | `false` |
+| Name                                    | Description                                                                                                              | Type     | Value   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- | ------- |
+| `external`                              | Enable external access from outside the cluster                                                                          | `bool`   | `false` |
+| `size`                                  | Persistent Volume size                                                                                                   | `string` | `10Gi`  |
+| `replicas`                              | Number of Postgres replicas                                                                                              | `int`    | `2`     |
+| `storageClass`                          | StorageClass used to store the data                                                                                      | `string` | ``      |
+| `postgresql`                            | PostgreSQL server configuration                                                                                          | `object` | `null`  |
+| `postgresql.parameters`                 | PostgreSQL server parameters                                                                                             | `object` |         |
+| `postgresql.parameters.max_connections` | Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections | `int`    |         |
+| `quorum`                                | Quorum configuration for synchronous replication                                                                         | `object` | `null`  |
+| `quorum.minSyncReplicas`                | Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.            | `int`    |         |
+| `quorum.maxSyncReplicas`                | Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).  | `int`    |         |
 
-### Application-specific parameters
+### Configuration parameters
 
-| Name                                    | Description                                                                                                              | Value |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----- |
-| `postgresql.parameters.max_connections` | Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections | `100` |
-| `quorum.minSyncReplicas`                | Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.            | `0`   |
-| `quorum.maxSyncReplicas`                | Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).  | `0`   |
-| `users`                                 | Users configuration                                                                                                      | `{}`  |
-| `databases`                             | Databases configuration                                                                                                  | `{}`  |
+| Name                             | Description                                 | Type                  | Value |
+| -------------------------------- | ------------------------------------------- | --------------------- | ----- |
+| `users`                          | Users configuration                         | `map[string]user`     | `{}`  |
+| `users[name].password`           | Password for the user                       | `*string`             |       |
+| `users[name].replication`        | Whether the user has replication privileges | `*bool`               |       |
+| `databases`                      | Databases configuration                     | `map[string]database` | `{}`  |
+| `databases[name].roles`          | Roles for the database                      | `object`              |       |
+| `databases[name].roles.admin`    | List of users with admin privileges         | `[]string`            |       |
+| `databases[name].roles.readonly` | List of users with read-only privileges     | `[]string`            |       |
+| `databases[name].extensions`     | Extensions enabled for the database         | `[]string`            |       |
 
 ### Backup parameters
 
-| Name                     | Description                                                | Value                               |
-| ------------------------ | ---------------------------------------------------------- | ----------------------------------- |
-| `backup.enabled`         | Enable regular backups                                     | `false`                             |
-| `backup.schedule`        | Cron schedule for automated backups                        | `0 2 * * * *`                       |
-| `backup.retentionPolicy` | Retention policy                                           | `30d`                               |
-| `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `s3://bucket/path/to/folder/`       |
-| `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `http://minio-gateway-service:9000` |
-| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`  |
-| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `ju3eum4dekeich9ahM1te8waeGai0oog`  |
+| Name                     | Description                                                | Type     | Value  |
+| ------------------------ | ---------------------------------------------------------- | -------- | ------ |
+| `backup`                 | Backup configuration                                       | `object` | `null` |
+| `backup.enabled`         | Enable regular backups                                     | `bool`   |        |
+| `backup.schedule`        | Cron schedule for automated backups                        | `string` |        |
+| `backup.retentionPolicy` | Retention policy                                           | `string` |        |
+| `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `string` |        |
+| `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `string` |        |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `string` |        |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `string` |        |
 
-### Bootstrap (recovery) parameters
+### Bootstrap parameters
 
-| Name                     | Description                                                                                                          | Value   |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------- |
-| `bootstrap.enabled`      | Restore database cluster from a backup                                                                               | `false` |
-| `bootstrap.recoveryTime` | Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest | `""`    |
-| `bootstrap.oldName`      | Name of database cluster before deleting                                                                             | `""`    |
+| Name                     | Description                                                                                                          | Type        | Value   |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `bootstrap`              | Bootstrap configuration                                                                                              | `object`    | `null`  |
+| `bootstrap.enabled`      | Restore database cluster from a backup                                                                               | `bool`      |         |
+| `bootstrap.recoveryTime` | Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest | `string`    |         |
+| `bootstrap.oldName`      | Name of database cluster before deleting                                                                             | `string`    |         |
+| `resources`              | Resources                                                                                                            | `object`    | `{}`    |
+| `resources.cpu`          | CPU                                                                                                                  | `*quantity` |         |
+| `resources.memory`       | Memory                                                                                                               | `*quantity` |         |
+| `resourcesPreset`        | Default sizing preset used when `resources` is omitted.                                                              | `string`    | `micro` |
 
 ## Parameter examples and reference
 

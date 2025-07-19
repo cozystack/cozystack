@@ -1,119 +1,192 @@
 {
+    "title": "Chart Values",
+    "type": "object",
     "properties": {
         "backup": {
+            "description": "Backup configuration",
+            "type": "object",
+            "required": [
+                "destinationPath",
+                "enabled",
+                "endpointURL",
+                "retentionPolicy",
+                "s3AccessKey",
+                "s3SecretKey",
+                "schedule"
+            ],
             "properties": {
                 "destinationPath": {
-                    "default": "s3://bucket/path/to/folder/",
                     "description": "Path to store the backup (i.e. s3://bucket/path/to/folder)",
-                    "type": "string"
+                    "type": "string",
+                    "default": "s3://bucket/path/to/folder/"
                 },
                 "enabled": {
-                    "default": false,
                     "description": "Enable regular backups",
-                    "type": "boolean"
+                    "type": "boolean",
+                    "default": false
                 },
                 "endpointURL": {
-                    "default": "http://minio-gateway-service:9000",
                     "description": "S3 Endpoint used to upload data to the cloud",
-                    "type": "string"
+                    "type": "string",
+                    "default": "http://minio-gateway-service:9000"
                 },
                 "retentionPolicy": {
-                    "default": "30d",
                     "description": "Retention policy",
-                    "type": "string"
+                    "type": "string",
+                    "default": "30d"
                 },
                 "s3AccessKey": {
-                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu",
                     "description": "Access key for S3, used for authentication",
-                    "type": "string"
+                    "type": "string",
+                    "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
                 },
                 "s3SecretKey": {
-                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog",
                     "description": "Secret key for S3, used for authentication",
-                    "type": "string"
+                    "type": "string",
+                    "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
                 },
                 "schedule": {
-                    "default": "0 2 * * * *",
                     "description": "Cron schedule for automated backups",
-                    "type": "string"
+                    "type": "string",
+                    "default": "0 2 * * * *"
                 }
-            },
-            "type": "object"
+            }
         },
         "bootstrap": {
+            "description": "Bootstrap configuration",
+            "type": "object",
+            "required": [
+                "enabled",
+                "oldName",
+                "recoveryTime"
+            ],
             "properties": {
                 "enabled": {
-                    "default": false,
                     "description": "Restore database cluster from a backup",
-                    "type": "boolean"
+                    "type": "boolean",
+                    "default": false
                 },
                 "oldName": {
-                    "default": "",
                     "description": "Name of database cluster before deleting",
                     "type": "string"
                 },
                 "recoveryTime": {
-                    "default": "",
                     "description": "Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest",
                     "type": "string"
                 }
-            },
-            "type": "object"
+            }
         },
         "databases": {
-            "default": {},
             "description": "Databases configuration",
-            "type": "object"
-        },
-        "external": {
-            "default": false,
-            "description": "Enable external access from outside the cluster",
-            "type": "boolean"
-        },
-        "postgresql": {
-            "properties": {
-                "parameters": {
-                    "properties": {
-                        "max_connections": {
-                            "default": 100,
-                            "description": "Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections",
-                            "type": "number"
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "extensions": {
+                        "description": "Extensions enabled for the database",
+                        "type": "array",
+                        "items": {
+                            "type": "string"
                         }
                     },
-                    "type": "object"
+                    "roles": {
+                        "description": "Roles for the database",
+                        "type": "object",
+                        "properties": {
+                            "admin": {
+                                "description": "List of users with admin privileges",
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+                            "readonly": {
+                                "description": "List of users with read-only privileges",
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
                 }
-            },
-            "type": "object"
+            }
+        },
+        "external": {
+            "description": "Enable external access from outside the cluster",
+            "type": "boolean",
+            "default": false
+        },
+        "postgresql": {
+            "description": "PostgreSQL server configuration",
+            "type": "object",
+            "required": [
+                "parameters"
+            ],
+            "properties": {
+                "parameters": {
+                    "description": "PostgreSQL server parameters",
+                    "type": "object",
+                    "required": [
+                        "max_connections"
+                    ],
+                    "properties": {
+                        "max_connections": {
+                            "description": "Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections",
+                            "type": "integer",
+                            "default": 100
+                        }
+                    }
+                }
+            }
         },
         "quorum": {
+            "description": "Quorum configuration for synchronous replication",
+            "type": "object",
+            "required": [
+                "maxSyncReplicas",
+                "minSyncReplicas"
+            ],
             "properties": {
                 "maxSyncReplicas": {
-                    "default": 0,
                     "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).",
-                    "type": "number"
+                    "type": "integer",
+                    "default": 0
                 },
                 "minSyncReplicas": {
-                    "default": 0,
                     "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.",
-                    "type": "number"
+                    "type": "integer",
+                    "default": 0
                 }
-            },
-            "type": "object"
+            }
         },
         "replicas": {
-            "default": 2,
             "description": "Number of Postgres replicas",
-            "type": "number"
+            "type": "integer",
+            "default": 2
         },
         "resources": {
-            "default": {},
-            "description": "Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-            "type": "object"
+            "description": "Resources",
+            "type": "object",
+            "properties": {
+                "cpu": {
+                    "description": "CPU",
+                    "type": "string",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                    "description": "Memory",
+                    "type": "string",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "x-kubernetes-int-or-string": true
+                }
+            }
         },
         "resourcesPreset": {
-            "default": "micro",
-            "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+            "description": "Default sizing preset used when `resources` is omitted.",
             "type": "string",
+            "default": "micro",
             "enum": [
                 "nano",
                 "micro",
@@ -125,16 +198,30 @@
             ]
         },
         "size": {
-            "default": "10Gi",
             "description": "Persistent Volume size",
-            "type": "string"
+            "type": "string",
+            "default": "10Gi"
         },
         "storageClass": {
-            "default": "",
             "description": "StorageClass used to store the data",
             "type": "string"
+        },
+        "users": {
+            "description": "Users configuration",
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "password": {
+                        "description": "Password for the user",
+                        "type": "string"
+                    },
+                    "replication": {
+                        "description": "Whether the user has replication privileges",
+                        "type": "boolean"
+                    }
+                }
+            }
         }
-    },
-    "title": "Chart Values",
-    "type": "object"
+    }
 }

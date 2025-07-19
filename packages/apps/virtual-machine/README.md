@@ -36,24 +36,59 @@ virtctl ssh <user>@<vm>
 
 ### Common parameters
 
-| Name                      | Description                                                                                                | Value        |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------ |
-| `external`                | Enable external access from outside the cluster                                                            | `false`      |
-| `externalMethod`          | specify method to passthrough the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList` | `PortList`   |
-| `externalPorts`           | Specify ports to forward from outside the cluster                                                          | `[]`         |
-| `running`                 | Determines if the virtual machine should be running                                                        | `true`       |
-| `instanceType`            | Virtual Machine instance type                                                                              | `u1.medium`  |
-| `instanceProfile`         | Virtual Machine preferences profile                                                                        | `ubuntu`     |
-| `systemDisk.image`        | The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos` | `ubuntu`     |
-| `systemDisk.storage`      | The size of the disk allocated for the virtual machine                                                     | `5Gi`        |
-| `systemDisk.storageClass` | StorageClass used to store the data                                                                        | `replicated` |
-| `gpus`                    | List of GPUs to attach                                                                                     | `[]`         |
-| `resources.cpu`           | The number of CPU cores allocated to the virtual machine                                                   | `""`         |
-| `resources.memory`        | The amount of memory allocated to the virtual machine                                                      | `""`         |
-| `resources.sockets`       | The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)                  | `""`         |
-| `sshKeys`                 | List of SSH public keys for authentication. Can be a single key or a list of keys.                         | `[]`         |
-| `cloudInit`               | cloud-init user data config. See cloud-init documentation for more details.                                | `""`         |
-| `cloudInitSeed`           | A seed string to generate an SMBIOS UUID for the VM.                                                       | `""`         |
+| Name                                    | Description                                                                                                              | Type     | Value   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | -------- | ------- |
+| `external`                              | Enable external access from outside the cluster                                                                          | `bool`   | `false` |
+| `size`                                  | Persistent Volume size                                                                                                   | `string` | `10Gi`  |
+| `replicas`                              | Number of Postgres replicas                                                                                              | `int`    | `2`     |
+| `storageClass`                          | StorageClass used to store the data                                                                                      | `string` | ``      |
+| `postgresql`                            | PostgreSQL server configuration                                                                                          | `object` | `null`  |
+| `postgresql.parameters`                 | PostgreSQL server parameters                                                                                             | `object` |         |
+| `postgresql.parameters.max_connections` | Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections | `int`    |         |
+| `quorum`                                | Quorum configuration for synchronous replication                                                                         | `object` | `null`  |
+| `quorum.minSyncReplicas`                | Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.            | `int`    |         |
+| `quorum.maxSyncReplicas`                | Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).  | `int`    |         |
+
+### Configuration parameters
+
+| Name                             | Description                                 | Type                  | Value  |
+| -------------------------------- | ------------------------------------------- | --------------------- | ------ |
+| `users`                          | Users configuration                         | `map[string]user`     | `{}`   |
+| `users[name].password`           | Password for the user                       | `string`              |        |
+| `users[name].replication`        | Whether the user has replication privileges | `bool`                |        |
+| `databases`                      | Databases configuration                     | `map[string]database` | `null` |
+| `databases[name].roles`          | Roles for the database                      | `object`              |        |
+| `databases[name].roles.admin`    | List of users with admin privileges         | `[]string`            |        |
+| `databases[name].roles.readonly` | List of users with read-only privileges     | `[]string`            |        |
+| `databases[name].extensions`     | Extensions enabled for the database         | `[]string`            |        |
+
+### Backup parameters
+
+| Name                     | Description                                                | Type     | Value  |
+| ------------------------ | ---------------------------------------------------------- | -------- | ------ |
+| `backup`                 | Backup configuration                                       | `object` | `null` |
+| `backup.enabled`         | Enable regular backups                                     | `bool`   |        |
+| `backup.schedule`        | Cron schedule for automated backups                        | `string` |        |
+| `backup.retentionPolicy` | Retention policy                                           | `string` |        |
+| `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `string` |        |
+| `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `string` |        |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `string` |        |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `string` |        |
+
+### Bootstrap parameters
+
+| Name                     | Description                                                                                                          | Type        | Value   |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `bootstrap`              | Bootstrap configuration                                                                                              | `object`    | `null`  |
+| `bootstrap.enabled`      | Restore database cluster from a backup                                                                               | `bool`      |         |
+| `bootstrap.recoveryTime` | Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest | `string`    |         |
+| `bootstrap.oldName`      | Name of database cluster before deleting                                                                             | `string`    |         |
+| `resources`              | Resources                                                                                                            | `object`    | `{}`    |
+| `resources.cpu`          | CPU                                                                                                                  | `*quantity` |         |
+| `resources.memory`       | Memory                                                                                                               | `*quantity` |         |
+| `resourcesPreset`        | Default sizing preset used when `resources` is omitted.                                                              | `string`    | `micro` |
+| `gpus`                   | List of GPUs to attach                                                                                               | `[]gpu`     | `[]`    |
+| `gpus[].name`            | The name of the GPU to attach. This should match the GPU resource name in the cluster.                               | `string`    |         |
 
 ## U Series
 

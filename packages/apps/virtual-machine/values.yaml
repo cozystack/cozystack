@@ -1,69 +1,124 @@
+
 ## @section Common parameters
 
-## @param external Enable external access from outside the cluster
-## @param externalMethod specify method to passthrough the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`
-## @param externalPorts [array] Specify ports to forward from outside the cluster
-external: false
-externalMethod: PortList
-externalPorts:
-- 22
-
-## @param running Determines if the virtual machine should be running
-running: true
-
-## @param instanceType Virtual Machine instance type
-## @param instanceProfile Virtual Machine preferences profile
+## @param external {bool} Enable external access from outside the cluster
+## @param size {string} Persistent Volume size
+## @param replicas {int} Number of Postgres replicas
+## @param storageClass {string} StorageClass used to store the data
 ##
-instanceType: "u1.medium"
-instanceProfile: ubuntu
+external: false
+size: 10Gi
+replicas: 2
+storageClass: ""
 
-## @param systemDisk.image The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos`
-## @param systemDisk.storage The size of the disk allocated for the virtual machine
-## @param systemDisk.storageClass StorageClass used to store the data
-## 
-systemDisk:
-  image: ubuntu
-  storage: 5Gi
-  storageClass: replicated
+## @param postgresql {postgresql} PostgreSQL server configuration
+## @field postgresql/parameters {postgresqlParameters} PostgreSQL server parameters
+## @field postgresqlParameters/max_connections {int} Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections
+##
+postgresql:
+  parameters:
+    max_connections: 100
 
-## @param gpus [array] List of GPUs to attach
+## Configuration for the quorum-based synchronous replication
+## @param quorum {quorum} Quorum configuration for synchronous replication
+## @field quorum/minSyncReplicas {int} Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.
+## @field quorum/maxSyncReplicas {int} Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).
+quorum:
+  minSyncReplicas: 0
+  maxSyncReplicas: 0
+
+## @section Configuration parameters
+
+## @param users {map[string]user} Users configuration
+## @field user/password {string} Password for the user
+## @field user/replication {bool} Whether the user has replication privileges
+##
+## Example:
+## users:
+##   user1:
+##     password: strongpassword
+##   user2:
+##     password: hackme
+##   airflow:
+##     password: qwerty123
+##   debezium:
+##     replication: true
+##
+users: {}
+
+## @param databases {map[string]database} Databases configuration
+## @field database/roles {databaseRoles} Roles for the database
+## @field databaseRoles/admin {[]string} List of users with admin privileges
+## @field databaseRoles/readonly {[]string} List of users with read-only privileges
+## @field database/extensions {[]string} Extensions enabled for the database
+##
+## Example:
+## databases:
+##   myapp:
+##     roles:
+##       admin:
+##       - user1
+##       - debezium
+##       readonly:
+##       - user2
+##   airflow:
+##     roles:
+##       admin:
+##       - airflow
+##     extensions:
+##     - hstore
+databases:
+  asd:
+    roles: {}
+  assg: {}
+
+## @section Backup parameters
+
+## @param backup {backup} Backup configuration
+## @field backup/enabled {bool} Enable regular backups
+## @field backup/schedule {string} Cron schedule for automated backups
+## @field backup/retentionPolicy {string} Retention policy
+## @field backup/destinationPath {string} Path to store the backup (i.e. s3://bucket/path/to/folder)
+## @field backup/endpointURL {string} S3 Endpoint used to upload data to the cloud
+## @field backup/s3AccessKey {string} Access key for S3, used for authentication
+## @field backup/s3SecretKey {string} Secret key for S3, used for authentication
+backup:
+  enabled: false
+  retentionPolicy: 30d
+  destinationPath: s3://bucket/path/to/folder/
+  endpointURL: http://minio-gateway-service:9000
+  schedule: "0 2 * * * *"
+  s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
+  s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
+
+## @section Bootstrap parameters
+
+## @param bootstrap {bootstrap} Bootstrap configuration
+## @field bootstrap/enabled {bool} Restore database cluster from a backup
+## @field bootstrap/recoveryTime {string} Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest
+## @field bootstrap/oldName {string} Name of database cluster before deleting
+##
+bootstrap:
+  enabled: false
+  # example: 2020-11-26 15:22:00.00000+00
+  recoveryTime: ""
+  oldName: ""
+
+## @param resources {resources} Resources
+## @field resources/cpu {*quantity} CPU
+## @field resources/memory {*quantity} Memory
+resources: {}
+ # resources:
+ #   cpu: 4000m
+ #   memory: 4Gi
+ 
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted.
+resourcesPreset: "micro"
+
+
+## @param gpus {[]gpu} List of GPUs to attach
+## @field gpu/name {string} The name of the GPU to attach. This should match the GPU resource name in the cluster.
 ## Example:
 ## gpus:
 ## - name: nvidia.com/GA102GL_A10
 gpus: []
-
-## @param resources.cpu The number of CPU cores allocated to the virtual machine
-## @param resources.memory The amount of memory allocated to the virtual machine
-## @param resources.sockets The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)
-resources:
-  cpu: ""
-  memory: ""
-  sockets: ""
-
-## @param sshKeys [array] List of SSH public keys for authentication. Can be a single key or a list of keys.
-## Example:
-## sshKeys:
-##   - ssh-rsa ...
-##   - ssh-ed25519 ...
-##
-sshKeys: []
-
-## @param cloudInit cloud-init user data config. See cloud-init documentation for more details.
-## - https://cloudinit.readthedocs.io/en/latest/explanation/format.html
-## - https://cloudinit.readthedocs.io/en/latest/reference/examples.html
-## Example:
-## cloudInit: |
-##   #cloud-config
-##   password: ubuntu
-##   chpasswd: { expire: False }
-##
-cloudInit: ""
-
-## @param cloudInitSeed A seed string to generate an SMBIOS UUID for the VM.
-cloudInitSeed: ""
-## Change it to any new value to force a full cloud-init reconfiguration. Change it when you want to apply
-## to an existing VM settings that are usually written only once, like new SSH keys or new network configuration.
-## An empty value does nothing (and the existing UUID is not reverted). Please note that changing this value
-## does not trigger a VM restart. You must perform the restart separately.
-## Example:
-## cloudInitSeed: "upd1"

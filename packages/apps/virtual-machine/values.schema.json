@@ -1,100 +1,253 @@
 {
+  "title": "Chart Values",
+  "type": "object",
   "properties": {
-    "cloudInit": {
-      "default": "",
-      "description": "cloud-init user data config. See cloud-init documentation for more details.",
-      "type": "string"
+    "backup": {
+      "description": "Backup configuration",
+      "type": "object",
+      "required": [
+        "destinationPath",
+        "enabled",
+        "endpointURL",
+        "retentionPolicy",
+        "s3AccessKey",
+        "s3SecretKey",
+        "schedule"
+      ],
+      "properties": {
+        "destinationPath": {
+          "description": "Path to store the backup (i.e. s3://bucket/path/to/folder)",
+          "type": "string",
+          "default": "s3://bucket/path/to/folder/"
+        },
+        "enabled": {
+          "description": "Enable regular backups",
+          "type": "boolean",
+          "default": false
+        },
+        "endpointURL": {
+          "description": "S3 Endpoint used to upload data to the cloud",
+          "type": "string",
+          "default": "http://minio-gateway-service:9000"
+        },
+        "retentionPolicy": {
+          "description": "Retention policy",
+          "type": "string",
+          "default": "30d"
+        },
+        "s3AccessKey": {
+          "description": "Access key for S3, used for authentication",
+          "type": "string",
+          "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
+        },
+        "s3SecretKey": {
+          "description": "Secret key for S3, used for authentication",
+          "type": "string",
+          "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
+        },
+        "schedule": {
+          "description": "Cron schedule for automated backups",
+          "type": "string",
+          "default": "0 2 * * * *"
+        }
+      }
     },
-    "cloudInitSeed": {
-      "default": "",
-      "description": "A seed string to generate an SMBIOS UUID for the VM.",
-      "type": "string"
+    "bootstrap": {
+      "description": "Bootstrap configuration",
+      "type": "object",
+      "required": [
+        "enabled",
+        "oldName",
+        "recoveryTime"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Restore database cluster from a backup",
+          "type": "boolean",
+          "default": false
+        },
+        "oldName": {
+          "description": "Name of database cluster before deleting",
+          "type": "string"
+        },
+        "recoveryTime": {
+          "description": "Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest",
+          "type": "string"
+        }
+      }
+    },
+    "databases": {
+      "description": "Databases configuration",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "roles"
+        ],
+        "properties": {
+          "extensions": {
+            "description": "Extensions enabled for the database",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "roles": {
+            "description": "Roles for the database",
+            "type": "object",
+            "properties": {
+              "admin": {
+                "description": "List of users with admin privileges",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "readonly": {
+                "description": "List of users with read-only privileges",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "external": {
-      "default": false,
       "description": "Enable external access from outside the cluster",
-      "type": "boolean"
-    },
-    "externalMethod": {
-      "default": "PortList",
-      "description": "specify method to passthrough the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`",
-      "type": "string",
-      "enum": [
-        "PortList",
-        "WholeIP"
-      ]
-    },
-    "externalPorts": {
-      "default": [],
-      "description": "Specify ports to forward from outside the cluster",
-      "items": {
-        "type": "integer"
-      },
-      "type": "array"
+      "type": "boolean",
+      "default": false
     },
     "gpus": {
-      "default": [],
       "description": "List of GPUs to attach",
+      "type": "array",
       "items": {
-        "type": "object"
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "description": "The name of the GPU to attach. This should match the GPU resource name in the cluster.",
+            "type": "string"
+          }
+        }
       },
-      "type": "array"
+      "default": []
     },
-    "instanceProfile": {
-      "default": "ubuntu",
-      "description": "Virtual Machine preferences profile",
+    "postgresql": {
+      "description": "PostgreSQL server configuration",
+      "type": "object",
+      "required": [
+        "parameters"
+      ],
+      "properties": {
+        "parameters": {
+          "description": "PostgreSQL server parameters",
+          "type": "object",
+          "required": [
+            "max_connections"
+          ],
+          "properties": {
+            "max_connections": {
+              "description": "Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections",
+              "type": "integer",
+              "default": 100
+            }
+          }
+        }
+      }
+    },
+    "quorum": {
+      "description": "Quorum configuration for synchronous replication",
+      "type": "object",
+      "required": [
+        "maxSyncReplicas",
+        "minSyncReplicas"
+      ],
+      "properties": {
+        "maxSyncReplicas": {
+          "description": "Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).",
+          "type": "integer",
+          "default": 0
+        },
+        "minSyncReplicas": {
+          "description": "Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.",
+          "type": "integer",
+          "default": 0
+        }
+      }
+    },
+    "replicas": {
+      "description": "Number of Postgres replicas",
+      "type": "integer",
+      "default": 2
+    },
+    "resources": {
+      "description": "Resources",
+      "type": "object",
+      "properties": {
+        "cpu": {
+          "description": "CPU",
+          "type": "string",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory",
+          "type": "string",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "resourcesPreset": {
+      "description": "Default sizing preset used when `resources` is omitted.",
       "type": "string",
-      "optional": true,
+      "default": "micro",
       "enum": [
-        "alpine",
-        "centos.7",
-        "centos.7.desktop",
-        "centos.stream10",
-        "centos.stream10.desktop",
-        "centos.stream8",
-        "centos.stream8.desktop",
-        "centos.stream8.dpdk",
-        "centos.stream9",
-        "centos.stream9.desktop",
-        "centos.stream9.dpdk",
-        "cirros",
-        "fedora",
-        "fedora.arm64",
-        "opensuse.leap",
-        "opensuse.tumbleweed",
-        "rhel.10",
-        "rhel.10.arm64",
-        "rhel.7",
-        "rhel.7.desktop",
-        "rhel.8",
-        "rhel.8.desktop",
-        "rhel.8.dpdk",
-        "rhel.9",
-        "rhel.9.arm64",
-        "rhel.9.desktop",
-        "rhel.9.dpdk",
-        "rhel.9.realtime",
-        "sles",
-        "ubuntu",
-        "windows.10",
-        "windows.10.virtio",
-        "windows.11",
-        "windows.11.virtio",
-        "windows.2k16",
-        "windows.2k16.virtio",
-        "windows.2k19",
-        "windows.2k19.virtio",
-        "windows.2k22",
-        "windows.2k22.virtio",
-        "windows.2k25",
-        "windows.2k25.virtio",
-        ""
+        "nano",
+        "micro",
+        "small",
+        "medium",
+        "large",
+        "xlarge",
+        "2xlarge"
       ]
     },
-    "instanceType": {
-      "default": "u1.medium",
-      "description": "Virtual Machine instance type",
+    "size": {
+      "description": "Persistent Volume size",
       "type": "string",
+      "default": "10Gi"
+    },
+    "storageClass": {
+      "description": "StorageClass used to store the data",
+      "type": "string"
+    },
+    "users": {
+      "description": "Users configuration",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "password",
+          "replication"
+        ],
+        "properties": {
+          "password": {
+            "description": "Password for the user",
+            "type": "string"
+          },
+          "replication": {
+            "description": "Whether the user has replication privileges",
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "instanceType": {
       "optional": true,
       "enum": [
         "cx1.2xlarge",
@@ -148,43 +301,62 @@
         ""
       ]
     },
-    "resources": {
-      "properties": {
-        "cpu": {
-          "default": "",
-          "description": "The number of CPU cores allocated to the virtual machine",
-          "type": "string"
-        },
-        "memory": {
-          "default": "",
-          "description": "The amount of memory allocated to the virtual machine",
-          "type": "string"
-        },
-        "sockets": {
-          "default": "",
-          "description": "The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)",
-          "type": "string"
-        }
-      },
-      "type": "object"
+    "instanceProfile": {
+      "optional": true,
+      "enum": [
+        "alpine",
+        "centos.7",
+        "centos.7.desktop",
+        "centos.stream10",
+        "centos.stream10.desktop",
+        "centos.stream8",
+        "centos.stream8.desktop",
+        "centos.stream8.dpdk",
+        "centos.stream9",
+        "centos.stream9.desktop",
+        "centos.stream9.dpdk",
+        "cirros",
+        "fedora",
+        "fedora.arm64",
+        "opensuse.leap",
+        "opensuse.tumbleweed",
+        "rhel.10",
+        "rhel.10.arm64",
+        "rhel.7",
+        "rhel.7.desktop",
+        "rhel.8",
+        "rhel.8.desktop",
+        "rhel.8.dpdk",
+        "rhel.9",
+        "rhel.9.arm64",
+        "rhel.9.desktop",
+        "rhel.9.dpdk",
+        "rhel.9.realtime",
+        "sles",
+        "ubuntu",
+        "windows.10",
+        "windows.10.virtio",
+        "windows.11",
+        "windows.11.virtio",
+        "windows.2k16",
+        "windows.2k16.virtio",
+        "windows.2k19",
+        "windows.2k19.virtio",
+        "windows.2k22",
+        "windows.2k22.virtio",
+        "windows.2k25",
+        "windows.2k25.virtio",
+        ""
+      ]
     },
-    "running": {
-      "default": true,
-      "description": "Determines if the virtual machine should be running",
-      "type": "boolean"
-    },
-    "sshKeys": {
-      "default": [],
-      "description": "List of SSH public keys for authentication. Can be a single key or a list of keys.",
-      "items": {},
-      "type": "array"
+    "externalPorts": {
+      "items": {
+        "type": "integer"
+      }
     },
     "systemDisk": {
       "properties": {
         "image": {
-          "default": "ubuntu",
-          "description": "The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos`",
-          "type": "string",
           "enum": [
             "ubuntu",
             "cirros",
@@ -192,21 +364,14 @@
             "fedora",
             "talos"
           ]
-        },
-        "storage": {
-          "default": "5Gi",
-          "description": "The size of the disk allocated for the virtual machine",
-          "type": "string"
-        },
-        "storageClass": {
-          "default": "replicated",
-          "description": "StorageClass used to store the data",
-          "type": "string"
         }
-      },
-      "type": "object"
+      }
+    },
+    "externalMethod": {
+      "enum": [
+        "PortList",
+        "WholeIP"
+      ]
     }
-  },
-  "title": "Chart Values",
-  "type": "object"
+  }
 }
