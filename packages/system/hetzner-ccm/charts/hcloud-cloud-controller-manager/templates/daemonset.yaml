@@ -1,0 +1,108 @@
+{{- if eq $.Values.kind "DaemonSet" }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "hcloud-cloud-controller-manager.name" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "hcloud-cloud-controller-manager.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hcloud-cloud-controller-manager.selectorLabels" . | nindent 8 }}
+        {{- if .Values.podLabels }}
+        {{- toYaml .Values.podLabels | nindent 8 }}
+        {{- end }}
+      {{- if .Values.podAnnotations }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+      {{- end }}
+    spec:
+    {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ include "hcloud-cloud-controller-manager.name" . }}
+      dnsPolicy: Default
+      tolerations:
+        # Allow HCCM itself to schedule on nodes that have not yet been initialized by HCCM.
+        - key: "node.cloudprovider.kubernetes.io/uninitialized"
+          value: "true"
+          effect: "NoSchedule"
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+
+        # Allow HCCM to schedule on control plane nodes.
+        - key: "node-role.kubernetes.io/master"
+          effect: NoSchedule
+          operator: Exists
+        - key: "node-role.kubernetes.io/control-plane"
+          effect: NoSchedule
+          operator: Exists
+
+        - key: "node.kubernetes.io/not-ready"
+          effect: "NoExecute"
+
+        {{- if gt (len .Values.additionalTolerations) 0 }}
+        {{ toYaml .Values.additionalTolerations | nindent 8 }}
+        {{- end }}
+
+      {{- if gt (len .Values.nodeSelector) 0 }}
+      nodeSelector:
+        {{ toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+
+      {{- if $.Values.networking.enabled }}
+      hostNetwork: true
+      {{- end }}
+      containers:
+        - name: hcloud-cloud-controller-manager
+          command:
+            - "/bin/hcloud-cloud-controller-manager"
+            {{- range $key, $value := $.Values.args }}
+            {{- if not (eq $value nil) }}
+            - "--{{ $key }}{{ if $value }}={{ $value }}{{ end }}"
+            {{- end }}
+            {{- end }}
+            {{- if $.Values.networking.enabled }}
+            - "--allocate-node-cidrs=true"
+            - "--cluster-cidr={{ $.Values.networking.clusterCIDR }}"
+            {{- end }}
+          env:
+            {{- range $key, $value := $.Values.env }}
+            - name: {{ $key }}
+              {{- tpl (toYaml $value) $ | nindent 14 }}
+            {{- end }}
+            {{- if $.Values.networking.enabled }}
+            - name: HCLOUD_NETWORK
+              {{- tpl (toYaml $.Values.networking.network) $ | nindent 14 }}
+            {{- end }}
+            {{- if not $.Values.monitoring.enabled }}
+            - name: HCLOUD_METRICS_ENABLED
+              value: "false"
+            {{- end }}
+            {{- if $.Values.robot.enabled }}
+            - name: ROBOT_ENABLED
+              value: "true"
+            {{- end }}
+          image: {{ $.Values.image.repository }}:{{ tpl $.Values.image.tag . }} # x-releaser-pleaser-version
+          ports:
+            {{- if $.Values.monitoring.enabled }}
+            - name: metrics
+              containerPort: 8233
+            {{- end }}
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          {{- with .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      priorityClassName: system-cluster-critical
+      {{- with .Values.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

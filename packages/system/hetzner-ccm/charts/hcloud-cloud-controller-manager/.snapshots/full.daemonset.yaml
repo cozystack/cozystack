@@ -1,0 +1,113 @@
+---
+# Source: hcloud-cloud-controller-manager/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hcloud-cloud-controller-manager
+  namespace: kube-system
+---
+# Source: hcloud-cloud-controller-manager/templates/clusterrolebinding.yaml
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: "system:hcloud-cloud-controller-manager"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: hcloud-cloud-controller-manager
+    namespace: kube-system
+---
+# Source: hcloud-cloud-controller-manager/templates/daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hcloud-cloud-controller-manager
+  namespace: kube-system
+spec:
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: 'hcloud-hccm'
+      app.kubernetes.io/name: 'hcloud-cloud-controller-manager'
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: 'hcloud-hccm'
+        app.kubernetes.io/name: 'hcloud-cloud-controller-manager'
+        pod-label: pod-label
+      annotations:
+        pod-annotation: pod-annotation
+    spec:
+      serviceAccountName: hcloud-cloud-controller-manager
+      dnsPolicy: Default
+      tolerations:
+        # Allow HCCM itself to schedule on nodes that have not yet been initialized by HCCM.
+        - key: "node.cloudprovider.kubernetes.io/uninitialized"
+          value: "true"
+          effect: "NoSchedule"
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+
+        # Allow HCCM to schedule on control plane nodes.
+        - key: "node-role.kubernetes.io/master"
+          effect: NoSchedule
+          operator: Exists
+        - key: "node-role.kubernetes.io/control-plane"
+          effect: NoSchedule
+          operator: Exists
+
+        - key: "node.kubernetes.io/not-ready"
+          effect: "NoExecute"
+        
+        - effect: NoSchedule
+          key: example-key
+          operator: Exists
+      nodeSelector:
+        
+        foo: bar
+      containers:
+        - name: hcloud-cloud-controller-manager
+          command:
+            - "/bin/hcloud-cloud-controller-manager"
+            - "--allow-untagged-cloud"
+            - "--cloud-provider=hcloud"
+            - "--route-reconciliation-period=30s"
+            - "--webhook-secure-port=0"
+          env:
+            - name: HCLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  key: token
+                  name: hcloud
+            - name: ROBOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: robot-password
+                  name: hcloud
+                  optional: true
+            - name: ROBOT_USER
+              valueFrom:
+                secretKeyRef:
+                  key: robot-user
+                  name: hcloud
+                  optional: true
+          image: docker.io/hetznercloud/hcloud-cloud-controller-manager:v1.26.0 # x-releaser-pleaser-version
+          ports:
+            - name: metrics
+              containerPort: 8233
+          resources:
+            requests:
+              cpu: 100m
+              memory: 50Mi
+          volumeMounts:
+            - mountPath: /var/run/secrets/hcloud
+              name: token-volume
+              readOnly: true
+      priorityClassName: system-cluster-critical
+      volumes:
+        - name: token-volume
+          secret:
+            secretName: hcloud-token

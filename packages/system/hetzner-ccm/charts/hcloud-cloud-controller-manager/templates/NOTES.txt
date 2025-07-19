@@ -1,0 +1,5 @@
+{{ if (and $.Values.monitoring.enabled $.Values.monitoring.podMonitor.enabled) }}
+{{ if not ($.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") }}
+WARNING: monitoring.podMonitoring.enabled=true but PodMonitor could not be installed: the CRD was not detected.
+{{ end }}
+{{ end }}

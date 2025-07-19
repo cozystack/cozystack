@@ -1,0 +1,172 @@
+# hccm program command line arguments.
+# The following flags are managed by the chart and should *not* be set directly here:
+# --allocate-node-cidrs
+# --cluster-cidr
+# --leader-elect
+args:
+  cloud-provider: hcloud
+  allow-untagged-cloud: ""
+
+  # Read issue #395 to understand how changes to this value affect you.
+  # https://github.com/hetznercloud/hcloud-cloud-controller-manager/issues/395
+  route-reconciliation-period: 30s
+
+  # We do not use the webhooks feature and there is no need to bind a port that is unused.
+  # https://github.com/kubernetes/kubernetes/issues/120043
+  # https://github.com/hetznercloud/hcloud-cloud-controller-manager/issues/492
+  webhook-secure-port: "0"
+
+
+# Change deployment kind from "Deployment" to "DaemonSet"
+kind: Deployment
+
+
+# change replicaCount (only used when kind is "Deployment")
+replicaCount: 1
+
+
+# hccm environment variables
+env:
+  # The following variables are managed by the chart and should *not* be set here:
+  # HCLOUD_METRICS_ENABLED - see monitoring.enabled
+  # HCLOUD_NETWORK - see networking.enabled
+  # ROBOT_ENABLED - see robot.enabled
+
+  # You can also use a file to provide secrets to the hcloud-cloud-controller-manager.
+  # This is currently possible for HCLOUD_TOKEN, ROBOT_USER, and ROBOT_PASSWORD.
+  # Use the env var appended with _FILE (e.g. HCLOUD_TOKEN_FILE) and set the value to the file path that should be read
+  # The file must be provided externally (e.g. via secret injection).
+  # Example:
+  # HCLOUD_TOKEN_FILE:
+  #   value: "/etc/hetzner/token"
+  # to disable reading the token from the secret you have to disable the original env var:
+  # HCLOUD_TOKEN: null
+
+  HCLOUD_TOKEN:
+    valueFrom:
+      secretKeyRef:
+        name: hcloud
+        key: token
+
+  ROBOT_USER:
+    valueFrom:
+      secretKeyRef:
+        name: hcloud
+        key: robot-user
+        optional: true
+  ROBOT_PASSWORD:
+    valueFrom:
+      secretKeyRef:
+        name: hcloud
+        key: robot-password
+        optional: true
+
+
+image:
+  repository: docker.io/hetznercloud/hcloud-cloud-controller-manager
+  tag: "v{{ $.Chart.Version }}"
+  # Optionally specify an array of imagePullSecrets.
+  # Secrets must be manually created in the namespace.
+  # ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+  # e.g:
+  # pullSecrets:
+  #   - myRegistryKeySecretName
+  #
+  pullSecrets: []
+
+
+monitoring:
+  # When enabled, the hccm Pod will serve metrics on port :8233
+  enabled: false
+  podMonitor:
+    # When enabled (and metrics.enabled=true), a PodMonitor will be deployed to scrape metrics.
+    # The PodMonitor [1] CRD must already exist in the target cluster.
+    enabled: false
+    # PodMonitor Labels
+    labels: {}
+    #   release: kube-prometheus-stack
+    # PodMonitor Annotations
+    annotations: {}
+    # PodMonitorSpec to be deployed. The "selector" field is set elsewhere and should *not* be used here.
+    # https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.PodMonitorSpec
+    spec:
+      podMetricsEndpoints:
+        - port: metrics
+
+
+nameOverride: "hetzner-ccm"
+
+
+networking:
+  # If enabled, hcloud-ccm will be deployed with networking support.
+  enabled: false
+  # If networking is enabled, clusterCIDR must match the PodCIDR subnet your cluster has been configured with.
+  # The default "10.244.0.0/16" assumes you're using Flannel with default configuration.
+  clusterCIDR: 10.244.0.0/16
+  network:
+    valueFrom:
+      secretKeyRef:
+        name: hcloud
+        key: network
+
+
+# Resource requests for the deployed hccm Pod.
+resources:
+  cpu: ""
+  memory: ""
+
+
+selectorLabels:
+  app.kubernetes.io/name: '{{ include "hcloud-cloud-controller-manager.name" $ }}'
+  app.kubernetes.io/instance: "{{ $.Release.Name }}"
+
+
+additionalTolerations: []
+
+
+# nodeSelector:
+#   node-role.kubernetes.io/control-plane: ""
+nodeSelector: {}
+
+
+# Set the affinity for pods. (Only works with kind=Deployment)
+affinity: {}
+
+
+# pods priorityClassName
+# ref: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption
+priorityClassName: "system-cluster-critical"
+
+
+robot:
+  # Set to true to enable support for Robot (Dedicated) servers.
+  enabled: false
+
+
+rbac:
+  # Create a cluster role binding with admin access for the service account.
+  create: true
+
+
+podLabels: {}
+
+
+podAnnotations: {}
+
+
+# Mounts the specified volume to the hcloud-cloud-controller-manager container.
+extraVolumeMounts: []
+# # Example
+# extraVolumeMounts:
+#   - name: token-volume
+#     readOnly: true
+#     mountPath: /var/run/secrets/hcloud
+
+
+# Adds extra volumes to the pod.
+extraVolumes: []
+# # Example
+# extraVolumes:
+#   - name: token-volume
+#     secret:
+#       secretName: hcloud-token
