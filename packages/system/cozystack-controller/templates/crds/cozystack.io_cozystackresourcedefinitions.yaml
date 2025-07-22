@@ -1,0 +1,115 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: cozystackresourcedefinitions.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: CozystackResourceDefinition
+    listKind: CozystackResourceDefinitionList
+    plural: cozystackresourcedefinitions
+    singular: cozystackresourcedefinition
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CozystackResourceDefinition is the Schema for the cozystackresourcedefinitions
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              application:
+                description: Application configuration
+                properties:
+                  kind:
+                    description: Kind of the application, used for UI and API
+                    type: string
+                  openAPISchema:
+                    description: OpenAPI schema for the application, used for API
+                      validation
+                    type: string
+                  plural:
+                    description: Plural name of the application, used for UI and API
+                    type: string
+                  singular:
+                    description: Singular name of the application, used for UI and
+                      API
+                    type: string
+                required:
+                - kind
+                - openAPISchema
+                - plural
+                - singular
+                type: object
+              release:
+                description: Release configuration
+                properties:
+                  chart:
+                    description: Helm chart configuration
+                    properties:
+                      name:
+                        description: Name of the Helm chart
+                        type: string
+                      sourceRef:
+                        description: Source reference for the Helm chart
+                        properties:
+                          kind:
+                            default: HelmRepository
+                            description: Kind of the source reference
+                            type: string
+                          name:
+                            description: Name of the source reference
+                            type: string
+                          namespace:
+                            default: cozy-public
+                            description: Namespace of the source reference
+                            type: string
+                        required:
+                        - kind
+                        - name
+                        - namespace
+                        type: object
+                    required:
+                    - name
+                    - sourceRef
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: Labels for the release
+                    type: object
+                  prefix:
+                    description: Prefix for the release name
+                    type: string
+                required:
+                - chart
+                - prefix
+                type: object
+            required:
+            - application
+            - release
+            type: object
+        type: object
+    served: true
+    storage: true

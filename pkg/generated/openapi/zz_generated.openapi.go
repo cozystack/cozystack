@@ -30,9 +30,9 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.Application":                           schema_pkg_apis_apps_v1alpha1_Application(ref),
-		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationList":                       schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
-		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationStatus":                     schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
+		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.Application":                          schema_pkg_apis_apps_v1alpha1_Application(ref),
+		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationList":                      schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
+		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationStatus":                    schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
 		"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1.ConversionRequest":                 schema_pkg_apis_apiextensions_v1_ConversionRequest(ref),
 		"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1.ConversionResponse":                schema_pkg_apis_apiextensions_v1_ConversionResponse(ref),
 		"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1.ConversionReview":                  schema_pkg_apis_apiextensions_v1_ConversionReview(ref),
