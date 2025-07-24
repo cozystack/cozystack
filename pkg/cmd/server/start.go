@@ -168,7 +168,10 @@ func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 		return nil, fmt.Errorf("error creating self-signed certificates: %v", err)
 	}
 
-	// First, register the dynamic types
+	// Register *compile-time* resources first.
+	v1alpha1.RegisterStaticTypes(apiserver.Scheme)
+
+	// Register *run-time* resources (from the user’s config file).
 	err := v1alpha1.RegisterDynamicTypes(apiserver.Scheme, o.ResourceConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to register dynamic types: %v", err)
