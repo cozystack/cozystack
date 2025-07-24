@@ -18,6 +18,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -41,6 +42,10 @@ import (
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	schemadefault "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 
 	// Importing API errors package to construct appropriate error responses
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -78,10 +83,19 @@ type REST struct {
 	kindName      string
 	singularName  string
 	releaseConfig config.ReleaseConfig
+	specSchema    *structuralschema.Structural
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
 func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
+	var specSchema *structuralschema.Structural
+	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
+		var js internalapiext.JSONSchemaProps
+		if err := json.Unmarshal([]byte(raw), &js); err == nil {
+			specSchema, _ = structuralschema.NewStructural(&js)
+		}
+	}
+
 	return &REST{
 		dynamicClient: dynamicClient,
 		gvr: schema.GroupVersionResource{
@@ -96,6 +110,7 @@ func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
 		kindName:      config.Application.Kind,
 		singularName:  config.Application.Singular,
 		releaseConfig: config.Release,
+		specSchema:    specSchema,
 	}
 }
 
@@ -918,6 +933,10 @@ func (r *REST) ConvertHelmReleaseToApplication(hr *unstructured.Unstructured) (a
 		return appsv1alpha1.Application{}, err
 	}
 
+	if err := r.applySpecDefaults(&app); err != nil {
+		return app, fmt.Errorf("defaulting error: %w", err)
+	}
+
 	klog.V(6).Infof("Successfully converted HelmRelease %s to Application", hr.GetName())
 	return app, nil
 }
@@ -1169,4 +1188,26 @@ func (e errNotAcceptable) Status() metav1.Status {
 		Reason:  metav1.StatusReason("NotAcceptable"),
 		Message: e.Error(),
 	}
+}
+
+// applySpecDefaults applies default values to the Application spec based on the schema
+func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
+	var m map[string]any
+	if app.Spec != nil && len(app.Spec.Raw) > 0 {
+		if err := json.Unmarshal(app.Spec.Raw, &m); err != nil {
+			return err
+		}
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+
+	schemadefault.Default(m, r.specSchema)
+
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	app.Spec = &apiextv1.JSON{Raw: raw}
+	return nil
 }

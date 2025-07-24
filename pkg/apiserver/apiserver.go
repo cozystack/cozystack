@@ -34,6 +34,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 	appsregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
+	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/apps/tenantnamespace"
 )
 
 var (
@@ -123,6 +124,17 @@ func (c completedConfig) New() (*AppsServer, error) {
 	}
 
 	v1alpha1storage := map[string]rest.Storage{}
+
+	// --- static, cluster-scoped resource ---
+	v1alpha1storage["tenantnamespaces"] = appsregistry.RESTInPeace(
+		tenantnamespacestorage.NewREST(dynamicClient),
+	)
+
+	// --- dynamically-configured, per-tenant resources ---
+	for _, resConfig := range c.ResourceConfig.Resources {
+		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
+		v1alpha1storage[resConfig.Application.Plural] = appsregistry.RESTInPeace(storage)
+	}
 
 	for _, resConfig := range c.ResourceConfig.Resources {
 		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
