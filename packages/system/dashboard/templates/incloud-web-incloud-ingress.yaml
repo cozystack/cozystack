@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    acme.cert-manager.io/http01-ingress-class: tenant-root
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  labels:
+    chart: helm-inserter-0.2.5
+    heritage: Helm
+    release: incloud-web
+  name: incloud-web-incloud-ingress
+  namespace: incloud-web
+spec:
+  ingressClassName: tenant-root
+  rules:
+    - host: dashboard.dev5.infra.aenix.org
+      http:
+        paths:
+          - backend:
+              service:
+                name: incloud-web-gatekeeper
+                port:
+                  number: 8000
+            path: /
+            pathType: Prefix
+  tls:
+    - hosts:
+        - dashboard.dev5.infra.aenix.org
+      secretName: incloud-web-tls
