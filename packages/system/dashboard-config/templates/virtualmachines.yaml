@@ -1,0 +1,468 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: TableUriMapping
+metadata:
+  name: virtualmachine-detail
+spec:
+  id: "default-/apps.cozystack.io/v1alpha1/virtualmachines"
+  pathToNavigate: "/openapi-ui/{clusterName}/{namespace}/factory/virtualmachine-detail/~recordValue~"
+  keysToParse:
+    - metadata
+    - name
+
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: apps-cozystack-virtualmachine-detail
+spec:
+  id: "default-/apps.cozystack.io/v1alpha1/virtualmachines"
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: string
+    - jsonPath: .metadata.namespace
+      name: Namespace
+      type: string
+    - jsonPath: .spec.running
+      name: Running
+      type: boolean
+    - jsonPath: .spec.instanceType
+      name: InstanceType
+      type: string
+    - jsonPath: .spec.instanceProfile
+      name: Profile
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: virtualmachine-status-conditions
+spec:
+  id: "factory-virtualmachine-detail-status-conditions"
+  additionalPrinterColumns:
+    - jsonPath: .type
+      name: Type
+      type: string
+    - jsonPath: .status
+      name: Status
+      type: string
+    - jsonPath: .lastTransitionTime
+      name: LastTransitionTime
+      type: string
+    - jsonPath: .message
+      name: Message
+      type: string
+  additionalPrinterColumnsUndefinedValues:
+    - key: Message
+      value: "-"
+
+
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: Factory
+metadata:
+  name: virtualmachine-detail
+spec:
+  key: virtualmachine-detail
+  withScrollableMainContentCard: true
+  urlsToFetch:
+    - "/api/clusters/{2}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{3}/virtualmachines/{6}"
+  data:
+    - type: antdTabs
+      data:
+        id: 30
+        defaultActiveKey: "details"
+        items:
+          - key: "details"
+            label: "Details"
+            children:
+              - type: ContentCard
+                data:
+                  id: 2100
+                  style:
+                    marginBottom: 24px
+                children:
+                  - type: antdText
+                    data:
+                      id: 2101
+                      text: "VirtualMachine details"
+                      strong: true
+                      style:
+                        fontSize: 20
+                        marginBottom: 12px
+                  - type: Spacer
+                    data:
+                      id: 2101-spacer
+                      "$space": 16
+                  - type: antdRow
+                    data:
+                      id: 2102
+                      gutter: [48, 12]
+                    children:
+                      - type: antdCol
+                        data:
+                          id: 2103
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: 2104
+                              vertical: true
+                              gap: 24
+                            children:
+                              - type: antdFlex
+                                data:
+                                  id: 2105
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21051
+                                      strong: true
+                                      text: "Name"
+                                  - type: parsedText
+                                    data:
+                                      id: 21052
+                                      text: "{reqs[0]['metadata','name']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2106
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21061
+                                      strong: true
+                                      text: "Namespace"
+                                  - type: parsedText
+                                    data:
+                                      id: 21062
+                                      text: "{reqs[0]['metadata','namespace']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2107
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21071
+                                      strong: true
+                                      text: "Running"
+                                  - type: parsedText
+                                    data:
+                                      id: 21072
+                                      text: "{reqs[0]['spec','running']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2108
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21081
+                                      strong: true
+                                      text: "Instance Type"
+                                  - type: parsedText
+                                    data:
+                                      id: 21082
+                                      text: "{reqs[0]['spec','instanceType']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2109
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21091
+                                      strong: true
+                                      text: "Profile"
+                                  - type: parsedText
+                                    data:
+                                      id: 21092
+                                      text: "{reqs[0]['spec','instanceProfile']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2110
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21101
+                                      strong: true
+                                      text: "External"
+                                  - type: parsedText
+                                    data:
+                                      id: 21102
+                                      text: "{reqs[0]['spec','external']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2111
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21111
+                                      strong: true
+                                      text: "External Method"
+                                  - type: parsedText
+                                    data:
+                                      id: 21112
+                                      text: "{reqs[0]['spec','externalMethod']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2112
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21121
+                                      strong: true
+                                      text: "External Ports"
+                                  - type: parsedText
+                                    data:
+                                      id: 21122
+                                      text: "{reqs[0]['spec','externalPorts']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2113
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21131
+                                      strong: true
+                                      text: "GPUs"
+                                  - type: parsedText
+                                    data:
+                                      id: 21132
+                                      text: "{reqs[0]['spec','gpus']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2114
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21141
+                                      strong: true
+                                      text: "SSH Keys"
+                                  - type: parsedText
+                                    data:
+                                      id: 21142
+                                      text: "{reqs[0]['spec','sshKeys']}"
+                      - type: antdCol
+                        data:
+                          id: 2120
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: 2121
+                              vertical: true
+                              gap: 24
+                            children:
+                              - type: antdFlex
+                                data:
+                                  id: 2122
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21221
+                                      strong: true
+                                      text: "CloudInit"
+                                  - type: parsedText
+                                    data:
+                                      id: 21222
+                                      text: "{reqs[0]['spec','cloudInit']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2123
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21231
+                                      strong: true
+                                      text: "CPU"
+                                  - type: parsedText
+                                    data:
+                                      id: 21232
+                                      text: "{reqs[0]['spec','resources','cpu']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2124
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21241
+                                      strong: true
+                                      text: "Memory"
+                                  - type: parsedText
+                                    data:
+                                      id: 21242
+                                      text: "{reqs[0]['spec','resources','memory']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2125
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21251
+                                      strong: true
+                                      text: "Sockets"
+                                  - type: parsedText
+                                    data:
+                                      id: 21252
+                                      text: "{reqs[0]['spec','resources','sockets']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2126
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21261
+                                      strong: true
+                                      text: "System Disk"
+                                  - type: antdFlex
+                                    data:
+                                      id: 21262
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      - type: antdFlex
+                                        data:
+                                          id: 212621
+                                          vertical: true
+                                          gap: 4
+                                        children:
+                                          - type: antdText
+                                            data:
+                                              id: 2126211
+                                              strong: true
+                                              text: "Image"
+                                          - type: parsedText
+                                            data:
+                                              id: 2126212
+                                              text: "{reqs[0]['spec','systemDisk','image']}"
+                                      - type: antdFlex
+                                        data:
+                                          id: 212622
+                                          vertical: true
+                                          gap: 4
+                                        children:
+                                          - type: antdText
+                                            data:
+                                              id: 2126221
+                                              strong: true
+                                              text: "Storage"
+                                          - type: parsedText
+                                            data:
+                                              id: 2126222
+                                              text: "{reqs[0]['spec','systemDisk','storage']}"
+                                      - type: antdFlex
+                                        data:
+                                          id: 212623
+                                          vertical: true
+                                          gap: 4
+                                        children:
+                                          - type: antdText
+                                            data:
+                                              id: 2126231
+                                              strong: true
+                                              text: "StorageClass"
+                                          - type: parsedText
+                                            data:
+                                              id: 2126232
+                                              text: "{reqs[0]['spec','systemDisk','storageClass']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2127
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21271
+                                      strong: true
+                                      text: "Created"
+                                  - type: antdFlex
+                                    data:
+                                      id: 21272
+                                      gap: [6]
+                                      align: center
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: 212721
+                                          text: "🌐"
+                                      - type: parsedText
+                                        data:
+                                          id: 212722
+                                          text: "{reqs[0]['metadata','creationTimestamp']}"
+                              - type: antdFlex
+                                data:
+                                  id: 2128
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: 21281
+                                      strong: true
+                                      text: "Version"
+                                  - type: parsedText
+                                    data:
+                                      id: 21282
+                                      text: "{reqs[0]['status','version']}"
+                  - type: antdCol
+                    data:
+                      id: 2130
+                      style:
+                        marginTop: 32px
+                        padding: 16px
+                    children:
+                      - type: antdText
+                        data:
+                          id: 2131
+                          text: "Conditions"
+                          strong: true
+                          style:
+                            fontSize: 22
+                      - type: EnrichedTable
+                        data:
+                          id: 2132
+                          fetchUrl: "/api/clusters/{2}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{3}/virtualmachines/{6}"
+                          clusterNamePartOfUrl: "{2}"
+                          customizationId: "factory-virtualmachine-detail-status-conditions"
+                          baseprefix: "/openapi-ui"
+                          withoutControls: true
+                          pathToItems:
+                            - status
+                            - conditions
+          - key: "yaml"
+            label: "Yaml"
+            children: "Content of Tab Pane 2"
