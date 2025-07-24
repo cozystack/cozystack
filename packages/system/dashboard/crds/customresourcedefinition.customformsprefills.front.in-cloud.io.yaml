@@ -1,0 +1,35 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: customformsprefills.front.in-cloud.io
+spec:
+  group: front.in-cloud.io
+  names:
+    kind: CustomFormsPrefill
+    plural: customformsprefills
+    singular: customformsprefill
+    shortNames:
+      - cfp
+    listKind: CustomFormsPrefillList
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          required:
+          - spec
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

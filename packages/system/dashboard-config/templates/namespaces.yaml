@@ -1,0 +1,11 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: TableUriMapping
+metadata:
+  name: namespaces
+spec:
+  id: "default-/apps.cozystack.io/v1alpha1/tenantnamespaces"
+  pathToNavigate: "/openapi-ui/{clusterName}/~recordValue~/api-table/apps.cozystack.io/v1alpha1/virtualmachines"
+  keysToParse:
+    - metadata
+    - name
