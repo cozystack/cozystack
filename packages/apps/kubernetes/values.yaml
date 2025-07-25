@@ -10,25 +10,25 @@ version: "v1.32"
 host: ""
 ## @param nodeGroups [object] Worker nodes configuration (see example)
 ##
-nodeGroups:
-  md0:
-    minReplicas: 0
-    maxReplicas: 10
-    instanceType: "u1.medium"
-    ephemeralStorage: 20Gi
-    roles:
-    - ingress-nginx
-
-    resources:
-      cpu: ""
-      memory: ""
-
-    ## List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
-    ## e.g:
-    ## instanceType: "u1.xlarge"
-    ## gpus:
-    ## - name: nvidia.com/AD102GL_L40S
-    gpus: []
+nodeGroups: {}
+#   md0:
+#     minReplicas: 0
+#     maxReplicas: 10
+#     instanceType: "u1.medium"
+#     ephemeralStorage: 20Gi
+#     roles:
+#     - ingress-nginx
+# 
+#     resources:
+#       cpu: ""
+#       memory: ""
+# 
+#     ## List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
+#     ## e.g:
+#     ## instanceType: "u1.xlarge"
+#     ## gpus:
+#     ## - name: nvidia.com/AD102GL_L40S
+#     gpus: []
 
 
 ## @section Cluster Addons
