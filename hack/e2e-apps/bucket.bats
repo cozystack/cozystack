@@ -16,7 +16,7 @@ EOF
   kubectl -n tenant-test wait hr bucket-test --timeout=100s --for=condition=ready
 
   # Get and decode credentials
-  kubectl get secret bucket-test -ojsonpath='{.data.BucketInfo}' -n tenant-test | base64 -d > bucket-test-credentials.json
+  kubectl get secret bucket-test wait -ojsonpath='{.data.BucketInfo}' --timeout=100s -n tenant-test | base64 -d > bucket-test-credentials.json
 
   # Get credentials from the secret
   ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' bucket-test-credentials.json)
