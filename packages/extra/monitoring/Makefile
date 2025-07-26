@@ -6,7 +6,7 @@ include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
 generate:
-	readme-generator-for-helm -v values.yaml -s values.schema.json.tmp -r README.md
+	cozyvalues-gen -v values.yaml -s values.schema.json.tmp -r README.md
 	cat values.schema.json.tmp | \
 		jq '.properties.metricsStorages.items.type = "object" | .properties.logsStorages.items.type = "object"' \
 		> values.schema.json
