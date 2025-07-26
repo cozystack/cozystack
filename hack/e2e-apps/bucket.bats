@@ -15,8 +15,14 @@ EOF
   # Wait for the bucket to be ready
   kubectl -n tenant-test wait hr bucket-test --timeout=100s --for=condition=ready
 
+  # Wait for credentials to be ready
+  timeout 60 bash -c "
+      until kubectl get secret bucket-test -ojsonpath='{.data.BucketInfo}' -n tenant-test >/dev/null 2>&1; do
+        sleep 2
+      done
+  "
   # Get and decode credentials
-  kubectl get secret bucket-test wait -ojsonpath='{.data.BucketInfo}' --timeout=100s -n tenant-test | base64 -d > bucket-test-credentials.json
+  kubectl get secret bucket-test -ojsonpath='{.data.BucketInfo}' -n tenant-test | base64 -d > bucket-test-credentials.json
 
   # Get credentials from the secret
   ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' bucket-test-credentials.json)
@@ -33,13 +39,13 @@ EOF
   mc alias set local https://localhost:8333 $ACCESS_KEY $SECRET_KEY --insecure
 
   # Upload file to bucket
-  mc cp bucket-test-credentials.json local/$BUCKET_NAME/bucket-test-credentials.json
+  mc cp bucket-test-credentials.json $BUCKET_NAME/bucket-test-credentials.json
 
   # Verify file was uploaded
-  mc ls local/$BUCKET_NAME | grep bucket-test-credentials.json
+  mc ls $BUCKET_NAME/bucket-test-credentials.json
 
   # Clean up uploaded file
-  mc rm local/$BUCKET_NAME/bucket-test-credentials.json
+  mc rm $BUCKET_NAME/bucket-test-credentials.json
 
   kubectl -n tenant-test delete bucket.apps.cozystack.io test
 }
