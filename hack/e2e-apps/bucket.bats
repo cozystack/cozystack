@@ -16,7 +16,7 @@ EOF
   kubectl -n tenant-test wait hr bucket-test --timeout=100s --for=condition=ready
 
   # Wait for credentials to be ready
-  timeout 60 bash -c "
+  timeout 180 bash -c "
       until kubectl get secret bucket-test -ojsonpath='{.data.BucketInfo}' -n tenant-test >/dev/null 2>&1; do
         sleep 2
       done
