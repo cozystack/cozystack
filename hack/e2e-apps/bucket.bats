@@ -16,6 +16,13 @@ EOF
   kubectl -n tenant-test wait hr bucket-${name} --timeout=100s --for=condition=ready
   kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=300s --for=jsonpath='{.status.bucketReady}'
 
+
+  # Wait for credentials to be ready
+  timeout 180 bash -c "
+      until kubectl get secret bucket-${name} -ojsonpath='{.data.BucketInfo}' -n tenant-test >/dev/null 2>&1; do
+        sleep 2
+      done
+  "
   # Get and decode credentials
   kubectl -n tenant-test get secret bucket-${name} -ojsonpath='{.data.BucketInfo}' | base64 -d > bucket-test-credentials.json
 
