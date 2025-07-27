@@ -12,6 +12,15 @@
   {{- $dashboardClient = randAlphaNum 32 }}
 {{- end }}
 
+{{- $existingAuthConfig := lookup "v1" "Secret" .Release.Namespace "dashboard-auth-config" }}
+{{ $cookieSecret := "" }}
+{{- if $existingAuthConfig }}
+  {{- $cookieSecret = index $existingAuthConfig.data "cookieSecret" | b64dec }}
+{{- else }}
+  {{- $cookieSecret = randAlphaNum 16 }}
+{{- end }}
+
+
 ---
 
 apiVersion: v1
@@ -22,6 +31,19 @@ metadata:
 type: Opaque
 data:
   client-secret-key: {{ $dashboardClient | b64enc }}
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-auth-config
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+data:
+  cookieSecret: {{ $cookieSecret | b64enc }}
+
+
 
 ---
 
@@ -49,6 +71,7 @@ spec:
     - kubernetes-client
   redirectUris:
     - "https://dashboard.{{ $host }}/oauth/callback/*"
+    - "https://dashboard.{{ $host }}/oauth2/callback/*"
     {{- range $i, $v := $extraRedirectUris }}
     - "{{ $v }}"
     {{- end }}

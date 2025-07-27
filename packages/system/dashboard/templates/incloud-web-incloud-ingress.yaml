@@ -5,6 +5,11 @@ metadata:
     acme.cert-manager.io/http01-ingress-class: tenant-root
     cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/rewrite-target: /
+    # TODO
+    nginx.ingress.kubernetes.io/client-max-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 100m
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
   labels:
     chart: helm-inserter-0.2.5
     heritage: Helm
