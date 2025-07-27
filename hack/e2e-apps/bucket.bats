@@ -7,22 +7,17 @@
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Bucket
 metadata:
-  name: test
+  name: ${name}
   namespace: tenant-test
 spec: {}
 EOF
 
   # Wait for the bucket to be ready
-  kubectl -n tenant-test wait hr bucket-test --timeout=100s --for=condition=ready
+  kubectl -n tenant-test wait hr bucket-${name} --timeout=100s --for=condition=ready
+  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=300s --for=jsonpath='{.status.bucketReady}'
 
-  # Wait for credentials to be ready
-  timeout 180 bash -c "
-      until kubectl get secret bucket-test -ojsonpath='{.data.BucketInfo}' -n tenant-test >/dev/null 2>&1; do
-        sleep 2
-      done
-  "
   # Get and decode credentials
-  kubectl get secret bucket-test -ojsonpath='{.data.BucketInfo}' -n tenant-test | base64 -d > bucket-test-credentials.json
+  kubectl -n tenant-test get secret bucket-${name} -ojsonpath='{.data.BucketInfo}' | base64 -d > bucket-test-credentials.json
 
   # Get credentials from the secret
   ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' bucket-test-credentials.json)
@@ -47,5 +42,5 @@ EOF
   # Clean up uploaded file
   mc rm $BUCKET_NAME/bucket-test-credentials.json
 
-  kubectl -n tenant-test delete bucket.apps.cozystack.io test
+  kubectl -n tenant-test delete bucket.apps.cozystack.io ${name}
 }
