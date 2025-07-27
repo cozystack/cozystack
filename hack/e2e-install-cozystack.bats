@@ -182,8 +182,9 @@ spec:
   isolated: true
   monitoring: false
   resourceQuotas: {}
-  seaweedfs: false
+  seaweedfs: true
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
+  kubectl wait hr/seaweedfs -n tenant-test --timeout=4m --for=condition=ready
 }
