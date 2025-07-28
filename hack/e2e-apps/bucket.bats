@@ -26,7 +26,7 @@ EOF
   BUCKET_NAME=$(jq -r '.spec.bucketName' bucket-test-credentials.json)
 
   # Start port-forwarding
-  bash -c 'timeout 100s kubectl port-forward service/seaweedfs-s3 -n tenant-test 8333:8333 > /dev/null 2>&1 &'
+  bash -c 'timeout 100s kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 > /dev/null 2>&1 &'
 
   # Wait for port-forward to be ready
   timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
