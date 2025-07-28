@@ -123,10 +123,10 @@ EOF
 
 @test "Configure Tenant and wait for applications" {
   # Patch root tenant and wait for its releases
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait hr/etcd hr/ingress hr/tenant-root hr/seaweedfs -n tenant-root --timeout=4m --for=condition=ready
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring tenant-root >/dev/null 2>&1; do sleep 1; done'
+  kubectl wait hr/etcd hr/ingress hr/tenant-root -n tenant-root --timeout=4m --for=condition=ready
 
   if ! kubectl wait hr/monitoring -n tenant-root --timeout=2m --for=condition=ready; then
     flux reconcile hr monitoring -n tenant-root --force
@@ -182,8 +182,9 @@ spec:
   isolated: true
   monitoring: false
   resourceQuotas: {}
-  seaweedfs: false
+  seaweedfs: true
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
+  kubectl wait hr/seaweedfs -n tenant-test --timeout=4m --for=condition=ready
 }
