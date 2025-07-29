@@ -15,3 +15,7 @@ https://github.com/cozystack/cozystack/releases/tag/v0..
 ## Documentation
 
 ## Development, Testing, and CI/CD
+
+---
+
+**Full Changelog**: **Full Changelog**: https://github.com/cozystack/cozystack/compare/v0.34.0...v0.35.0
