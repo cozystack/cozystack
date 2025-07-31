@@ -320,16 +320,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// Initialize empty Application list
-	appList := &appsv1alpha1.ApplicationList{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps.cozystack.io/v1alpha1",
-			Kind:       "ApplicationList",
-		},
-		ListMeta: metav1.ListMeta{
-			ResourceVersion: hrList.GetResourceVersion(),
-		},
-		Items: []appsv1alpha1.Application{},
-	}
+
+	items := make([]appsv1alpha1.Application, 0)
 
 	// Iterate over HelmReleases and convert to Applications
 	for _, hr := range hrList.Items {
@@ -377,11 +369,21 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			}
 		}
 
-		appList.Items = append(appList.Items, app)
+		items = append(items, app)
 	}
 
-	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(appList.Items), namespace)
-	return appList, nil
+	// Explicitly set apiVersion and kind in unstructured object
+	appList := map[string]interface{}{
+		"apiVersion": "apps.cozystack.io/v1alpha1",
+		"kind":       r.kindName + "List",
+		"metadata": metav1.ListMeta{
+			ResourceVersion: hrList.GetResourceVersion(),
+		},
+		"items": items,
+	}
+
+	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(items), namespace)
+	return &unstructured.Unstructured{Object: appList}, nil
 }
 
 // Update updates an existing Application by converting it to a HelmRelease
