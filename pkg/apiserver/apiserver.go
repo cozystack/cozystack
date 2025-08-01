@@ -27,6 +27,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 
 	"github.com/cozystack/cozystack/pkg/apis/apps"
@@ -124,11 +125,20 @@ func (c completedConfig) New() (*CozyServer, error) {
 		return nil, fmt.Errorf("unable to create dynamic client: %v", err)
 	}
 
+	clientset, err := kubernetes.NewForConfig(inClusterConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create kube clientset: %v", err)
+	}
+
 	v1alpha1storage := map[string]rest.Storage{}
 
 	// --- static, cluster-scoped resource ---
 	v1alpha1storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
-		tenantnamespacestorage.NewREST(dynamicClient),
+		tenantnamespacestorage.NewREST(
+			dynamicClient,
+			clientset.AuthorizationV1(),
+			20,
+		),
 	)
 
 	// --- dynamically-configured, per-tenant resources ---
@@ -145,7 +155,11 @@ func (c completedConfig) New() (*CozyServer, error) {
 	// --- static, cluster-scoped resource for core group ---
 	coreV1alpha1Storage := map[string]rest.Storage{}
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
-		tenantnamespacestorage.NewREST(dynamicClient),
+		tenantnamespacestorage.NewREST(
+			dynamicClient,
+			clientset.AuthorizationV1(),
+			20,
+		),
 	)
 
 	// --- dynamically-configured, per-tenant resources for apps group ---
