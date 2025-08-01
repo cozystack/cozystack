@@ -7,11 +7,14 @@ package tenantnamespace
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -21,8 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/client-go/dynamic"
+	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	"k8s.io/klog/v2"
 )
 
@@ -47,13 +52,20 @@ var (
 
 // REST provides read-only storage over Namespaces.
 type REST struct {
-	dynamic dynamic.Interface
-	gvr     schema.GroupVersionResource
+	dynamic    dynamic.Interface
+	authClient authorizationv1client.AuthorizationV1Interface // <-- NEW
+	maxWorkers int                                            // <-- NEW
+	gvr        schema.GroupVersionResource
 }
 
-func NewREST(dynamicClient dynamic.Interface) *REST {
+func NewREST(dynamicClient dynamic.Interface,
+	authClient authorizationv1client.AuthorizationV1Interface,
+	maxWorkers int,
+) *REST {
 	return &REST{
-		dynamic: dynamicClient,
+		dynamic:    dynamicClient,
+		authClient: authClient,
+		maxWorkers: maxWorkers,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -84,49 +96,39 @@ func (r *REST) GetSingularName() string { return singularName }
 // Lister / Getter
 // -----------------------------------------------------------------------------
 
-func (r *REST) List(ctx context.Context, _ *metainternal.ListOptions) (runtime.Object, error) {
-	klog.V(6).Info("Listing tenant namespaces")
-
-	nsList, err := r.dynamic.Resource(schema.GroupVersionResource{
+func listCoreNamespaces(ctx context.Context, cli dynamic.Interface) (*unstructured.UnstructuredList, error) {
+	return cli.Resource(schema.GroupVersionResource{
 		Group:    coreNSGroup,
 		Version:  coreNSVersion,
 		Resource: coreNSRes,
 	}).List(ctx, metav1.ListOptions{})
+}
+
+func (r *REST) List(ctx context.Context, _ *metainternal.ListOptions) (runtime.Object, error) {
+	nsList, err := listCoreNamespaces(ctx, r.dynamic)
+	if err != nil && apierrors.IsForbidden(err) {
+		nsList, err = listCoreNamespaces(ctx, r.dynamic)
+		if err != nil {
+			return nil, err
+		}
+
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	out := &corev1alpha1.TenantNamespaceList{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "core.cozystack.io/v1alpha1",
-			Kind:       "TenantNamespaceList",
-		},
-		ListMeta: metav1.ListMeta{
-			ResourceVersion: nsList.GetResourceVersion(),
-		},
-	}
-
-	for _, u := range nsList.Items {
-		if !strings.HasPrefix(u.GetName(), prefix) {
-			continue
+	var tenantObjs []unstructured.Unstructured
+	for i := range nsList.Items {
+		if strings.HasPrefix(nsList.Items[i].GetName(), prefix) {
+			tenantObjs = append(tenantObjs, nsList.Items[i])
 		}
-		out.Items = append(out.Items, corev1alpha1.TenantNamespace{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: "core.cozystack.io/v1alpha1",
-				Kind:       "TenantNamespace",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              u.GetName(),
-				UID:               u.GetUID(),
-				ResourceVersion:   u.GetResourceVersion(),
-				CreationTimestamp: u.GetCreationTimestamp(),
-				Labels:            u.GetLabels(),
-				Annotations:       u.GetAnnotations(),
-			},
-		})
 	}
 
-	return out, nil
+	allowed, err := r.filterAccessibleTenantNamespaces(ctx, tenantObjs)
+	if err != nil {
+		return nil, err
+	}
+	return r.buildTenantNamespaceList(nsList.GetResourceVersion(), allowed), nil
 }
 
 func (r *REST) Get(ctx context.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
@@ -196,7 +198,7 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 	build := func(o runtime.Object, name string, created time.Time) metav1.TableRow {
 		return metav1.TableRow{
 			Cells:  []interface{}{name, duration.HumanDuration(now.Sub(created))},
-			Object: runtime.RawExtension{Object: o}, // ← важно
+			Object: runtime.RawExtension{Object: o},
 		}
 	}
 
@@ -264,5 +266,102 @@ func (e errNotAcceptable) Status() metav1.Status {
 		Code:    http.StatusNotAcceptable,
 		Reason:  metav1.StatusReason("NotAcceptable"),
 		Message: e.Error(),
+	}
+}
+
+func (r *REST) buildTenantNamespaceList(rv string, names []string) *corev1alpha1.TenantNamespaceList {
+	out := &corev1alpha1.TenantNamespaceList{
+		TypeMeta: metav1.TypeMeta{APIVersion: "core.cozystack.io/v1alpha1", Kind: "TenantNamespaceList"},
+		ListMeta: metav1.ListMeta{ResourceVersion: rv},
+	}
+	for _, name := range names {
+		out.Items = append(out.Items, corev1alpha1.TenantNamespace{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "core.cozystack.io/v1alpha1", Kind: "TenantNamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+		})
+	}
+	return out
+}
+
+func (r *REST) filterAccessibleTenantNamespaces(
+	ctx context.Context, all []unstructured.Unstructured,
+) ([]string, error) {
+
+	var tenantNames []string
+	for i := range all {
+		name := all[i].GetName()
+		if strings.HasPrefix(name, prefix) {
+			tenantNames = append(tenantNames, name)
+		}
+	}
+
+	workers := int(math.Min(float64(r.maxWorkers), float64(len(tenantNames))))
+	jobs := make(chan nsJob, workers)
+	out := make(chan nsJobRes, workers)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() { r.sarWorker(ctx, jobs, out); wg.Done() }()
+	}
+	go func() { wg.Wait(); close(out) }()
+
+	go func() {
+		for _, n := range tenantNames {
+			jobs <- nsJob{n}
+		}
+		close(jobs)
+	}()
+
+	var allowed []string
+	for r := range out {
+		if r.err != nil {
+			klog.Errorf("SAR failed for %s: %v", r.name, r.err)
+			continue
+		}
+		if r.allowed {
+			allowed = append(allowed, r.name)
+		}
+	}
+	return allowed, nil
+}
+
+type nsJob struct {
+	name string
+}
+
+type nsJobRes struct {
+	name    string
+	allowed bool
+	err     error
+}
+
+func (r *REST) sarWorker(ctx context.Context, jobs <-chan nsJob, res chan<- nsJobRes) {
+	for j := range jobs {
+		u, ok := request.UserFrom(ctx)
+		if !ok || u == nil {
+			res <- nsJobRes{j.name, false, fmt.Errorf("no user in context")}
+			continue
+		}
+
+		sar := &authorizationv1.SubjectAccessReview{
+			Spec: authorizationv1.SubjectAccessReviewSpec{
+				User:   u.GetName(),
+				Groups: u.GetGroups(),
+				ResourceAttributes: &authorizationv1.ResourceAttributes{
+					Group:     "cozystack.io",
+					Resource:  "workloadmonitors",
+					Verb:      "get",
+					Namespace: j.name,
+				},
+			},
+		}
+
+		reply, err := r.authClient.SubjectAccessReviews().Create(ctx, sar, metav1.CreateOptions{})
+		if err != nil {
+			res <- nsJobRes{j.name, false, err}
+			continue
+		}
+		res <- nsJobRes{j.name, reply.Status.Allowed, nil}
 	}
 }
