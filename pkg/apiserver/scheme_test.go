@@ -20,9 +20,11 @@ import (
 	"testing"
 
 	appsfuzzer "github.com/cozystack/cozystack/pkg/apis/apps/fuzzer"
+	corefuzzer "github.com/cozystack/cozystack/pkg/apis/core/fuzzer"
 	"k8s.io/apimachinery/pkg/api/apitesting/roundtrip"
 )
 
 func TestRoundTripTypes(t *testing.T) {
 	roundtrip.RoundTripTestForScheme(t, Scheme, appsfuzzer.Funcs)
+	roundtrip.RoundTripTestForScheme(t, Scheme, corefuzzer.Funcs)
 }

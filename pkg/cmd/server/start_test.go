@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAppsEmulationVersionToKubeEmulationVersion(t *testing.T) {
+func TestCozyEmulationVersionToKubeEmulationVersion(t *testing.T) {
 	defaultKubeEffectiveVersion := utilversion.DefaultKubeEffectiveVersion()
 
 	testCases := []struct {
@@ -61,7 +61,7 @@ func TestAppsEmulationVersionToKubeEmulationVersion(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			mappedKubeEmulationVer := AppsVersionToKubeVersion(tc.appsEmulationVer)
+			mappedKubeEmulationVer := CozyVersionToKubeVersion(tc.appsEmulationVer)
 			assert.True(t, mappedKubeEmulationVer.EqualTo(tc.expectedKubeEmulationVer))
 		})
 	}

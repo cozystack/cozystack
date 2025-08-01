@@ -14,20 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package registry
+package install
 
 import (
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
-	"k8s.io/apiserver/pkg/registry/rest"
+	"testing"
+
+	corefuzzer "github.com/cozystack/cozystack/pkg/apis/core/fuzzer"
+	"k8s.io/apimachinery/pkg/api/apitesting/roundtrip"
 )
 
-// REST is a thin wrapper around genericregistry.Store that also satisfies
-// the GroupVersionKindProvider interface if callers need it later.
-type REST struct {
-	*genericregistry.Store
+func TestRoundTripTypes(t *testing.T) {
+	roundtrip.RoundTripTestForAPIGroup(t, Install, corefuzzer.Funcs)
+	// TODO: enable protobuf generation for the sample-apiserver
+	// roundtrip.RoundTripProtobufTestForAPIGroup(t, Install, corefuzzer.Funcs)
 }
-
-// RESTInPeace is a tiny helper so the call-site code reads nicely.  It simply
-// returns its argument, letting us defer (and centralise) any future error
-// handling here.
-func RESTInPeace(storage rest.Storage) rest.Storage { return storage }

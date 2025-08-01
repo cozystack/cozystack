@@ -25,8 +25,9 @@ import (
 	"io"
 	"net"
 
-	corev1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
-	"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
 	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
@@ -47,8 +48,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// AppsServerOptions holds the state for the Apps API server
-type AppsServerOptions struct {
+// CozyServerOptions holds the state for the Cozy API server
+type CozyServerOptions struct {
 	RecommendedOptions *genericoptions.RecommendedOptions
 
 	StdOut io.Writer
@@ -61,12 +62,15 @@ type AppsServerOptions struct {
 	ResourceConfig *config.ResourceConfig
 }
 
-// NewAppsServerOptions returns a new instance of AppsServerOptions
-func NewAppsServerOptions(out, errOut io.Writer) *AppsServerOptions {
-	o := &AppsServerOptions{
+// NewCozyServerOptions returns a new instance of CozyServerOptions
+func NewCozyServerOptions(out, errOut io.Writer) *CozyServerOptions {
+	o := &CozyServerOptions{
 		RecommendedOptions: genericoptions.NewRecommendedOptions(
 			"",
-			apiserver.Codecs.LegacyCodec(v1alpha1.SchemeGroupVersion),
+			apiserver.Codecs.LegacyCodec(
+				corev1alpha1.SchemeGroupVersion,
+				appsv1alpha1.SchemeGroupVersion,
+			),
 		),
 		StdOut: out,
 		StdErr: errOut,
@@ -75,12 +79,12 @@ func NewAppsServerOptions(out, errOut io.Writer) *AppsServerOptions {
 	return o
 }
 
-// NewCommandStartAppsServer provides a CLI handler for the 'start apps-server' command
-func NewCommandStartAppsServer(ctx context.Context, defaults *AppsServerOptions) *cobra.Command {
+// NewCommandStartCozyServer provides a CLI handler for the 'start apps-server' command
+func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions) *cobra.Command {
 	o := *defaults
 	cmd := &cobra.Command{
-		Short: "Launch an Apps API server",
-		Long:  "Launch an Apps API server",
+		Short: "Launch an Cozystack API server",
+		Long:  "Launch an Cozystack API server",
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			return utilversionpkg.DefaultComponentGlobalsRegistry.Set()
 		},
@@ -91,7 +95,7 @@ func NewCommandStartAppsServer(ctx context.Context, defaults *AppsServerOptions)
 			if err := o.Validate(args); err != nil {
 				return err
 			}
-			if err := o.RunAppsServer(c.Context()); err != nil {
+			if err := o.RunCozyServer(c.Context()); err != nil {
 				return err
 			}
 			return nil
@@ -103,18 +107,18 @@ func NewCommandStartAppsServer(ctx context.Context, defaults *AppsServerOptions)
 	o.RecommendedOptions.AddFlags(flags)
 
 	// The following lines demonstrate how to configure version compatibility and feature gates
-	// for the "Apps" component according to KEP-4330.
+	// for the "Cozy" component according to KEP-4330.
 
-	// Create a default version object for the "Apps" component.
-	defaultAppsVersion := "1.1"
-	// Register the "Apps" component in the global component registry,
+	// Create a default version object for the "Cozy" component.
+	defaultCozyVersion := "1.1"
+	// Register the "Cozy" component in the global component registry,
 	// associating it with its effective version and feature gate configuration.
 	_, appsFeatureGate := utilversionpkg.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
-		apiserver.AppsComponentName, utilversionpkg.NewEffectiveVersion(defaultAppsVersion),
-		featuregate.NewVersionedFeatureGate(version.MustParse(defaultAppsVersion)),
+		apiserver.CozyComponentName, utilversionpkg.NewEffectiveVersion(defaultCozyVersion),
+		featuregate.NewVersionedFeatureGate(version.MustParse(defaultCozyVersion)),
 	)
 
-	// Add feature gate specifications for the "Apps" component.
+	// Add feature gate specifications for the "Cozy" component.
 	utilruntime.Must(appsFeatureGate.AddVersioned(map[featuregate.Feature]featuregate.VersionedSpecs{
 		// Example of adding feature gates:
 		// "FeatureName": {{"v1", true}, {"v2", false}},
@@ -127,9 +131,9 @@ func NewCommandStartAppsServer(ctx context.Context, defaults *AppsServerOptions)
 		utilfeature.DefaultMutableFeatureGate,
 	)
 
-	// Set the version emulation mapping from the "Apps" component to the kube component.
+	// Set the version emulation mapping from the "Cozy" component to the kube component.
 	utilruntime.Must(utilversionpkg.DefaultComponentGlobalsRegistry.SetEmulationVersionMapping(
-		apiserver.AppsComponentName, utilversionpkg.DefaultKubeComponent, AppsVersionToKubeVersion,
+		apiserver.CozyComponentName, utilversionpkg.DefaultKubeComponent, CozyVersionToKubeVersion,
 	))
 
 	// Add flags from the global component registry.
@@ -139,9 +143,9 @@ func NewCommandStartAppsServer(ctx context.Context, defaults *AppsServerOptions)
 }
 
 // Complete fills in the fields that are not set
-func (o *AppsServerOptions) Complete() error {
+func (o *CozyServerOptions) Complete() error {
 	scheme := runtime.NewScheme()
-	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("failed to register types: %w", err)
 	}
 
@@ -155,7 +159,7 @@ func (o *AppsServerOptions) Complete() error {
 		return fmt.Errorf("client initialization failed: %w", err)
 	}
 
-	crdList := &corev1alpha1.CozystackResourceDefinitionList{}
+	crdList := &v1alpha1.CozystackResourceDefinitionList{}
 
 	if err := o.Client.List(context.Background(), crdList); err != nil {
 		return fmt.Errorf("failed to list CozystackResourceDefinitions: %w", err)
@@ -192,15 +196,15 @@ func (o *AppsServerOptions) Complete() error {
 }
 
 // Validate checks the correctness of the options
-func (o AppsServerOptions) Validate(args []string) error {
+func (o CozyServerOptions) Validate(args []string) error {
 	var allErrors []error
 	allErrors = append(allErrors, o.RecommendedOptions.Validate()...)
 	allErrors = append(allErrors, utilversionpkg.DefaultComponentGlobalsRegistry.Validate()...)
 	return utilerrors.NewAggregate(allErrors)
 }
 
-// Config returns the configuration for the API server based on AppsServerOptions
-func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
+// Config returns the configuration for the API server based on CozyServerOptions
+func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 	// TODO: set the "real" external address
 	if err := o.RecommendedOptions.SecureServing.MaybeDefaultWithSelfSignedCerts(
 		"localhost", o.AlternateDNS, []net.IP{netutils.ParseIPSloppy("127.0.0.1")},
@@ -208,8 +212,11 @@ func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 		return nil, fmt.Errorf("error creating self-signed certificates: %v", err)
 	}
 
-	// First, register the dynamic types
-	err := v1alpha1.RegisterDynamicTypes(apiserver.Scheme, o.ResourceConfig)
+	// Register *compile-time* resources first.
+	corev1alpha1.RegisterStaticTypes(apiserver.Scheme)
+
+	// Register *run-time* resources (from the user’s config file).
+	err := appsv1alpha1.RegisterDynamicTypes(apiserver.Scheme, o.ResourceConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to register dynamic types: %v", err)
 	}
@@ -236,14 +243,14 @@ func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 		kindSchemas[r.Application.Kind] = r.Application.OpenAPISchema
 	}
 
-	serverConfig.OpenAPIConfig.Info.Title = "Apps"
+	serverConfig.OpenAPIConfig.Info.Title = "Cozy"
 	serverConfig.OpenAPIConfig.Info.Version = version
 	serverConfig.OpenAPIConfig.PostProcessSpec = buildPostProcessV2(kindSchemas)
 
 	serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
 		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
 	)
-	serverConfig.OpenAPIV3Config.Info.Title = "Apps"
+	serverConfig.OpenAPIV3Config.Info.Title = "Cozy"
 	serverConfig.OpenAPIV3Config.Info.Version = version
 
 	serverConfig.OpenAPIV3Config.PostProcessSpec = buildPostProcessV3(kindSchemas)
@@ -252,7 +259,7 @@ func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 		utilversionpkg.DefaultKubeComponent,
 	)
 	serverConfig.EffectiveVersion = utilversionpkg.DefaultComponentGlobalsRegistry.EffectiveVersionFor(
-		apiserver.AppsComponentName,
+		apiserver.CozyComponentName,
 	)
 
 	if err := o.RecommendedOptions.ApplyTo(serverConfig); err != nil {
@@ -266,8 +273,8 @@ func (o *AppsServerOptions) Config() (*apiserver.Config, error) {
 	return config, nil
 }
 
-// RunAppsServer launches a new AppsServer based on AppsServerOptions
-func (o AppsServerOptions) RunAppsServer(ctx context.Context) error {
+// RunCozyServer launches a new CozyServer based on CozyServerOptions
+func (o CozyServerOptions) RunCozyServer(ctx context.Context) error {
 	config, err := o.Config()
 	if err != nil {
 		return err
@@ -286,8 +293,8 @@ func (o AppsServerOptions) RunAppsServer(ctx context.Context) error {
 	return server.GenericAPIServer.PrepareRun().RunWithContext(ctx)
 }
 
-// AppsVersionToKubeVersion defines the version mapping between the Apps component and kube
-func AppsVersionToKubeVersion(ver *version.Version) *version.Version {
+// CozyVersionToKubeVersion defines the version mapping between the Cozy component and kube
+func CozyVersionToKubeVersion(ver *version.Version) *version.Version {
 	if ver.Major() != 1 {
 		return nil
 	}

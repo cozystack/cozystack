@@ -30,10 +30,13 @@ import (
 	restclient "k8s.io/client-go/rest"
 
 	"github.com/cozystack/cozystack/pkg/apis/apps"
-	"github.com/cozystack/cozystack/pkg/apis/apps/install"
+	appsinstall "github.com/cozystack/cozystack/pkg/apis/apps/install"
+	coreinstall "github.com/cozystack/cozystack/pkg/apis/apps/install"
+	"github.com/cozystack/cozystack/pkg/apis/core"
 	"github.com/cozystack/cozystack/pkg/config"
-	appsregistry "github.com/cozystack/cozystack/pkg/registry"
+	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
+	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 )
 
 var (
@@ -42,11 +45,12 @@ var (
 	// Codecs provides methods for retrieving codecs and serializers for specific
 	// versions and content types.
 	Codecs            = serializer.NewCodecFactory(Scheme)
-	AppsComponentName = "apps"
+	CozyComponentName = "cozy"
 )
 
 func init() {
-	install.Install(Scheme)
+	appsinstall.Install(Scheme)
+	coreinstall.Install(Scheme)
 
 	// Register HelmRelease types.
 	if err := helmv2.AddToScheme(Scheme); err != nil {
@@ -73,8 +77,8 @@ type Config struct {
 	ResourceConfig *config.ResourceConfig
 }
 
-// AppsServer holds the state for the Kubernetes master/api server.
-type AppsServer struct {
+// CozyServer holds the state for the Kubernetes master/api server.
+type CozyServer struct {
 	GenericAPIServer *genericapiserver.GenericAPIServer
 }
 
@@ -98,18 +102,16 @@ func (cfg *Config) Complete() CompletedConfig {
 	return CompletedConfig{&c}
 }
 
-// New returns a new instance of AppsServer from the given configuration.
-func (c completedConfig) New() (*AppsServer, error) {
-	genericServer, err := c.GenericConfig.New("apps-apiserver", genericapiserver.NewEmptyDelegate())
+// New returns a new instance of CozyServer from the given configuration.
+func (c completedConfig) New() (*CozyServer, error) {
+	genericServer, err := c.GenericConfig.New("cozy-apiserver", genericapiserver.NewEmptyDelegate())
 	if err != nil {
 		return nil, err
 	}
 
-	s := &AppsServer{
+	s := &CozyServer{
 		GenericAPIServer: genericServer,
 	}
-
-	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 
 	// Create a dynamic client for HelmRelease using InClusterConfig.
 	inClusterConfig, err := restclient.InClusterConfig()
@@ -124,14 +126,45 @@ func (c completedConfig) New() (*AppsServer, error) {
 
 	v1alpha1storage := map[string]rest.Storage{}
 
+	// --- static, cluster-scoped resource ---
+	v1alpha1storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
+		tenantnamespacestorage.NewREST(dynamicClient),
+	)
+
+	// --- dynamically-configured, per-tenant resources ---
 	for _, resConfig := range c.ResourceConfig.Resources {
 		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
-		v1alpha1storage[resConfig.Application.Plural] = appsregistry.RESTInPeace(storage)
+		v1alpha1storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
 	}
 
-	apiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = v1alpha1storage
+	for _, resConfig := range c.ResourceConfig.Resources {
+		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
+		v1alpha1storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
+	}
 
-	if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
+	// --- static, cluster-scoped resource for core group ---
+	coreV1alpha1Storage := map[string]rest.Storage{}
+	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
+		tenantnamespacestorage.NewREST(dynamicClient),
+	)
+
+	// --- dynamically-configured, per-tenant resources for apps group ---
+	appsV1alpha1Storage := map[string]rest.Storage{}
+	for _, resConfig := range c.ResourceConfig.Resources {
+		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
+		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
+	}
+
+	// Register groups with separate storage maps
+	appsApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	appsApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = appsV1alpha1Storage
+	if err := s.GenericAPIServer.InstallAPIGroup(&appsApiGroupInfo); err != nil {
+		return nil, err
+	}
+
+	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	coreApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = coreV1alpha1Storage
+	if err := s.GenericAPIServer.InstallAPIGroup(&coreApiGroupInfo); err != nil {
 		return nil, err
 	}
 
