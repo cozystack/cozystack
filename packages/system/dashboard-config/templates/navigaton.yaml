@@ -1,0 +1,8 @@
+apiVersion: front.in-cloud.io/v1alpha1
+kind: Navigation
+metadata:
+  name: navigation
+spec:
+  namespaces:
+    change: /openapi-ui/{selectedCluster}/{value}/factory/marketplace
+    clear: /openapi-ui/{selectedCluster}/api-table/apps.cozystack.io/v1alpha1/tenantnamespaces
