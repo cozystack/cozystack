@@ -1,0 +1,29 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: Factory
+metadata:
+  name: marketplace
+spec:
+  key: marketplace
+  sidebarTags:
+    - marketplace-sidebar
+  withScrollableMainContentCard: true
+  urlsToFetch: []
+  data:
+    - type: ContentCard
+      data:
+        id: 31
+        title: "Marketplace"
+        style:
+          flexGrow: 1
+      children:
+        - type: MarketplaceCard
+          data:
+            id: 311
+            clusterNamePartOfUrl: "{2}"
+            namespacePartOfUrl: "{3}"
+            baseApiGroup: front.in-cloud.io
+            baseApiVersion: v1alpha1
+            mpResourceName: marketplacepanels
+            mpResourceKind: MarketplacePanel
+            baseprefix: openapi-ui

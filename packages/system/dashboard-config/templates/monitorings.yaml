@@ -276,12 +276,12 @@ spec:
             children:
             - type: YamlEditorSingleton
               data:
-                id: 999999999
-                cluster: "{2}"
-                isNameSpaced: true
-                type: "apis"
-                typeName: monitorings
                 apiGroup: apps.cozystack.io
                 apiVersion: v1alpha1
+                cluster: '{2}'
+                id: 999999999
+                isNameSpaced: true
                 prefillValuesRequestIndex: 0
                 substractHeight: 400
+                type: apis
+                typeName: monitorings
