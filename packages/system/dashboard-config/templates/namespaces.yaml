@@ -5,7 +5,7 @@ metadata:
   name: namespaces
 spec:
   id: "default-/apps.cozystack.io/v1alpha1/tenantnamespaces"
-  pathToNavigate: "/openapi-ui/{clusterName}/~recordValue~/api-table/apps.cozystack.io/v1alpha1/virtualmachines"
+  pathToNavigate: "/openapi-ui/{clusterName}/~recordValue~/factory/marketplace"
   keysToParse:
     - metadata
     - name
