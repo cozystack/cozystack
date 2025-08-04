@@ -174,7 +174,8 @@ virtual-machine 0.10.2 632224a3
 virtual-machine 0.11.0 4369b031
 virtual-machine 0.12.0 acd4663a
 virtual-machine 0.12.1 909208ba
-virtual-machine 0.12.2 HEAD
+virtual-machine 0.12.2 8ddbe32e
+virtual-machine 0.12.3 HEAD
 vm-disk 0.1.0 d971f2ff
 vm-disk 0.1.1 6130f43d
 vm-disk 0.1.2 632224a3
@@ -193,7 +194,8 @@ vm-instance 0.7.2 632224a3
 vm-instance 0.8.0 4369b031
 vm-instance 0.9.0 acd4663a
 vm-instance 0.10.0 909208ba
-vm-instance 0.10.1 HEAD
+vm-instance 0.10.1 8ddbe32e
+vm-instance 0.10.2 HEAD
 vpn 0.1.0 263e47be
 vpn 0.2.0 53f2365e
 vpn 0.3.0 6c5cf5bf
