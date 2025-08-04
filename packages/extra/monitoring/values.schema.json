@@ -26,11 +26,6 @@
         "storage": "10Gi",
         "storageClassName": ""
       },
-      "required": [
-        "alerts",
-        "storage",
-        "storageClassName"
-      ],
       "properties": {
         "alerts": {
           "description": "Configuration for alerts",
@@ -42,9 +37,6 @@
               "token": ""
             }
           },
-          "required": [
-            "telegram"
-          ],
           "properties": {
             "telegram": {
               "description": "Configuration for Telegram alerts",
@@ -167,9 +159,6 @@
           }
         }
       },
-      "required": [
-        "db"
-      ],
       "properties": {
         "db": {
           "description": "Database configuration",
@@ -177,9 +166,6 @@
           "default": {
             "size": "10Gi"
           },
-          "required": [
-            "size"
-          ],
           "properties": {
             "size": {
               "description": "Persistent Volume size for the database",

@@ -58,8 +58,8 @@
 | Name                                      | Description                                                                         | Type      | Value   |
 | ----------------------------------------- | ----------------------------------------------------------------------------------- | --------- | ------- |
 | `alerta`                                  | Configuration for Alerta service                                                    | `object`  | `{}`    |
-| `alerta.storage`                          | Persistent Volume size for the database                                             | `string`  | `10Gi`  |
-| `alerta.storageClassName`                 | StorageClass used to store the data                                                 | `string`  | `""`    |
+| `alerta.storage`                          | Persistent Volume size for the database                                             | `*string` | `10Gi`  |
+| `alerta.storageClassName`                 | StorageClass used to store the data                                                 | `*string` | `""`    |
 | `alerta.resources`                        | Resources configuration                                                             | `*object` | `null`  |
 | `alerta.resources.requests`               |                                                                                     | `*object` | `null`  |
 | `alerta.resources.requests.cpu`           | CPU request (minimum available CPU)                                                 | `*string` | `100m`  |
@@ -67,8 +67,8 @@
 | `alerta.resources.limits`                 |                                                                                     | `*object` | `null`  |
 | `alerta.resources.limits.cpu`             | CPU limit (maximum available CPU)                                                   | `*string` | `1`     |
 | `alerta.resources.limits.memory`          | Memory limit (maximum available memory)                                             | `*string` | `1Gi`   |
-| `alerta.alerts`                           | Configuration for alerts                                                            | `object`  | `{}`    |
-| `alerta.alerts.telegram`                  | Configuration for Telegram alerts                                                   | `object`  | `{}`    |
+| `alerta.alerts`                           | Configuration for alerts                                                            | `*object` | `null`  |
+| `alerta.alerts.telegram`                  | Configuration for Telegram alerts                                                   | `*object` | `null`  |
 | `alerta.alerts.telegram.token`            | Telegram token for your bot                                                         | `string`  | `""`    |
 | `alerta.alerts.telegram.chatID`           | Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot | `string`  | `""`    |
 | `alerta.alerts.telegram.disabledSeverity` | List of severity without alerts, separated by comma like: "informational,warning"   | `string`  | `""`    |
@@ -79,8 +79,8 @@
 | Name                                | Description                               | Type      | Value   |
 | ----------------------------------- | ----------------------------------------- | --------- | ------- |
 | `grafana`                           | Configuration for Grafana                 | `object`  | `{}`    |
-| `grafana.db`                        | Database configuration                    | `object`  | `{}`    |
-| `grafana.db.size`                   | Persistent Volume size for the database   | `string`  | `10Gi`  |
+| `grafana.db`                        | Database configuration                    | `*object` | `null`  |
+| `grafana.db.size`                   | Persistent Volume size for the database   | `*string` | `10Gi`  |
 | `grafana.resources`                 | Resources configuration                   | `*object` | `null`  |
 | `grafana.resources.requests`        |                                           | `*object` | `null`  |
 | `grafana.resources.requests.cpu`    | CPU request (minimum available CPU)       | `*string` | `100m`  |

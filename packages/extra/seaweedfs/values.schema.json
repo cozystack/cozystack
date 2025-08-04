@@ -1,55 +1,64 @@
 {
+  "title": "Chart Values",
+  "type": "object",
   "properties": {
     "filer": {
+      "description": "Filer service configuration",
+      "type": "object",
+      "default": {
+        "grpcHost": "",
+        "grpcPort": 443,
+        "whitelist": {}
+      },
       "properties": {
         "grpcHost": {
-          "default": "",
           "description": "The hostname used to expose or access the filer service externally.",
           "type": "string"
         },
         "grpcPort": {
-          "default": 443,
           "description": "The port used to access the filer service externally.",
-          "type": "number"
+          "type": "integer",
+          "default": 443
         },
         "whitelist": {
-          "default": [],
           "description": "A list of IP addresses or CIDR ranges that are allowed to access the filer service.",
-          "items": {},
-          "type": "array"
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
         }
-      },
-      "type": "object"
+      }
     },
     "host": {
-      "default": "",
       "description": "The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).",
       "type": "string"
     },
     "replicas": {
-      "default": 2,
-      "description": "Persistent Volume size for SeaweedFS",
-      "type": "number"
+      "description": "Number of replicas",
+      "type": "integer",
+      "default": 2
     },
     "replicationFactor": {
-      "default": 2,
-      "description": "The number of replicas for each volume in the SeaweedFS cluster.",
-      "type": "number"
+      "description": "Replication factor: number of replicas for each volume in the SeaweedFS cluster.",
+      "type": "integer",
+      "default": 2
     },
     "size": {
-      "default": "10Gi",
       "description": "Persistent Volume size",
-      "type": "string"
+      "type": "string",
+      "default": "10Gi",
+      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "x-kubernetes-int-or-string": true
     },
     "storageClass": {
-      "default": "",
       "description": "StorageClass used to store the data",
       "type": "string"
     },
     "topology": {
-      "default": "Simple",
       "description": "The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone, Client)",
       "type": "string",
+      "default": "Simple",
       "enum": [
         "Simple",
         "MultiZone",
@@ -57,11 +66,28 @@
       ]
     },
     "zones": {
-      "default": {},
       "description": "A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.",
-      "type": "object"
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "replicas",
+          "size"
+        ],
+        "properties": {
+          "replicas": {
+            "description": "Number of replicas in the zone",
+            "type": "integer"
+          },
+          "size": {
+            "description": "Zone storage size",
+            "type": "string",
+            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "x-kubernetes-int-or-string": true
+          }
+        }
+      }
     }
-  },
-  "title": "Chart Values",
-  "type": "object"
+  }
 }

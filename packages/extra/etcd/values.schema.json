@@ -1,36 +1,46 @@
 {
-    "properties": {
-        "replicas": {
-            "default": 3,
-            "description": "Number of etcd replicas",
-            "type": "number"
-        },
-        "resources": {
-            "properties": {
-                "cpu": {
-                    "default": 4,
-                    "description": "The number of CPU cores allocated",
-                    "type": "number"
-                },
-                "memory": {
-                    "default": "1Gi",
-                    "description": "The amount of memory allocated",
-                    "type": "string"
-                }
-            },
-            "type": "object"
-        },
-        "size": {
-            "default": "4Gi",
-            "description": "Persistent Volume size",
-            "type": "string"
-        },
-        "storageClass": {
-            "default": "",
-            "description": "StorageClass used to store the data",
-            "type": "string"
-        }
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "replicas": {
+      "description": "Number of etcd replicas",
+      "type": "integer",
+      "default": 3
     },
-    "title": "Chart Values",
-    "type": "object"
+    "resources": {
+      "description": "Resource configuration for etcd",
+      "type": "object",
+      "default": {
+        "cpu": 4,
+        "memory": "1Gi"
+      },
+      "properties": {
+        "cpu": {
+          "description": "The number of CPU cores allocated",
+          "type": "string",
+          "default": "4",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "The amount of memory allocated",
+          "type": "string",
+          "default": "1Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "size": {
+      "description": "Persistent Volume size",
+      "type": "string",
+      "default": "4Gi",
+      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "x-kubernetes-int-or-string": true
+    },
+    "storageClass": {
+      "description": "StorageClass used to store the data",
+      "type": "string"
+    }
+  }
 }

@@ -1,15 +1,15 @@
 ## @section Common parameters
 
-## @param replicas Number of ingress-nginx replicas
+## @param replicas {int} Number of ingress-nginx replicas
 ##
 replicas: 2
 
-## @param whitelist List of client networks
+## @param whitelist {[]*string} List of client networks
 ## Example:
 ## whitelist:
 ## - "1.2.3.4"
 ## - "10.100.0.0/16"
 whitelist: []
 
-## @param clouflareProxy Restoring original visitor IPs when Cloudflare proxied is enabled
+## @param clouflareProxy {bool} Restoring original visitor IPs when Cloudflare proxied is enabled
 clouflareProxy: false

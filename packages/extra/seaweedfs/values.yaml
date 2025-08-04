@@ -1,24 +1,26 @@
 ## @section Common parameters
 
-## @param host The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).
+## @param host {*string} The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).
 host: ""
 
-## @param topology The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone, Client)
+## @param topology {string enum:"Simple,MultiZone,Client"} The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone, Client)
 ##
 topology: Simple
 
-## @param replicationFactor The number of replicas for each volume in the SeaweedFS cluster.
+## @param replicationFactor {int} Replication factor: number of replicas for each volume in the SeaweedFS cluster.
 replicationFactor: 2
 
-## @param replicas Persistent Volume size for SeaweedFS
-## @param size Persistent Volume size
-## @param storageClass StorageClass used to store the data
+## @param replicas {int} Number of replicas
 ##
 replicas: 2
+## @param size {quantity} Persistent Volume size
 size: 10Gi
+## @param storageClass {*string} StorageClass used to store the data
 storageClass: ""
 
-## @param zones A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
+## @param zones {map[string]zone} A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
+## @field zone.replicas {int} Number of replicas in the zone
+## @field zone.size {quantity} Zone storage size
 ## Example:
 ## zones:
 ##   dc1:
@@ -32,9 +34,11 @@ storageClass: ""
 ##     size: 10Gi
 zones: {}
 
-## @param filer.grpcHost The hostname used to expose or access the filer service externally.
-## @param filer.grpcPort The port used to access the filer service externally.
-## @param filer.whitelist A list of IP addresses or CIDR ranges that are allowed to access the filer service.
+## @param filer {*filer} Filer service configuration
+## @field filer.grpcHost {*string} The hostname used to expose or access the filer service externally.
+## @field filer.grpcPort {*int} The port used to access the filer service externally.
+## TODO: select a more appropriate type after resolving https://github.com/cozystack/cozyvalues-gen/issues/4
+## @field filer.whitelist {[]*string} A list of IP addresses or CIDR ranges that are allowed to access the filer service.
 filer:
   grpcHost: ""
   grpcPort: 443

@@ -82,11 +82,11 @@ logsStorages:
 ## @section Alerta configuration
 
 ## @param alerta {alerta} Configuration for Alerta service
-## @field alerta.storage {string} Persistent Volume size for the database
-## @field alerta.storageClassName {string} StorageClass used to store the data
+## @field alerta.storage {*string} Persistent Volume size for the database
+## @field alerta.storageClassName {*string} StorageClass used to store the data
 ## @field alerta.resources {*resources} Resources configuration
-## @field alerta.alerts {alerts} Configuration for alerts
-## @field alerts.telegram {telegramAlerts} Configuration for Telegram alerts
+## @field alerta.alerts {*alerts} Configuration for alerts
+## @field alerts.telegram {*telegramAlerts} Configuration for Telegram alerts
 ## @field telegramAlerts.token {string} Telegram token for your bot
 ## @field telegramAlerts.chatID {string} Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
 ## @field telegramAlerts.disabledSeverity {string} List of severity without alerts, separated by comma like: "informational,warning"
@@ -115,8 +115,8 @@ alerta:
 ## @section Grafana configuration
 
 ## @param grafana {grafana} Configuration for Grafana
-## @field grafana.db {grafanaDB} Database configuration
-## @field grafanaDB.size {string} Persistent Volume size for the database
+## @field grafana.db {*grafanaDB} Database configuration
+## @field grafanaDB.size {*string} Persistent Volume size for the database
 ## @field grafana.resources {*resources} Resources configuration
 
 
