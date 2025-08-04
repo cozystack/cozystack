@@ -69,12 +69,13 @@ tenant-u1
 
 ### Common parameters
 
-| Name             | Description                                                                                                                 | Value   |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `host`           | The hostname used to access tenant services (defaults to using the tenant name as a subdomain for it's parent tenant host). | `""`    |
-| `etcd`           | Deploy own Etcd cluster                                                                                                     | `false` |
-| `monitoring`     | Deploy own Monitoring Stack                                                                                                 | `false` |
-| `ingress`        | Deploy own Ingress Controller                                                                                               | `false` |
-| `seaweedfs`      | Deploy own SeaweedFS                                                                                                        | `false` |
-| `isolated`       | Enforce tenant namespace with network policies                                                                              | `true`  |
-| `resourceQuotas` | Define resource quotas for the tenant                                                                                       | `{}`    |
+| Name             | Description                                                                                                                 | Type      | Value   |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------- | --------- | ------- |
+| `host`           | The hostname used to access tenant services (defaults to using the tenant name as a subdomain for it's parent tenant host). | `*string` | `""`    |
+| `etcd`           | Deploy own Etcd cluster                                                                                                     | `bool`    | `false` |
+| `monitoring`     | Deploy own Monitoring Stack                                                                                                 | `bool`    | `false` |
+| `ingress`        | Deploy own Ingress Controller                                                                                               | `bool`    | `false` |
+| `seaweedfs`      | Deploy own SeaweedFS                                                                                                        | `bool`    | `false` |
+| `isolated`       | Enforce tenant namespace with network policies, `true` by default                                                           | `bool`    | `true`  |
+| `resourceQuotas` | Define resource quotas for the tenant                                                                                       | `string`  | `{}`    |
+
