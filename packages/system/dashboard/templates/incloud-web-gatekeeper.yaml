@@ -60,7 +60,7 @@ spec:
             - --email-domain=*
             - --pass-access-token=true
             - --pass-authorization-header=true
-            - --cookie-refresh=1h
+            - --cookie-refresh=3m
             - --cookie-name=kc-access
             - --cookie-secure=true
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
