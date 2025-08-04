@@ -4,6 +4,7 @@
 {{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
 vertical-pod-autoscaler:
+  vpaForVPA: false
   recommender:
     extraArgs:
       container-name-label: container
