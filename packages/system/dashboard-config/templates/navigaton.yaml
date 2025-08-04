@@ -5,4 +5,4 @@ metadata:
 spec:
   namespaces:
     change: /openapi-ui/{selectedCluster}/{value}/factory/marketplace
-    clear: /openapi-ui/{selectedCluster}/api-table/apps.cozystack.io/v1alpha1/tenantnamespaces
+    clear: /openapi-ui/{selectedCluster}/api-table/core.cozystack.io/v1alpha1/tenantnamespaces
