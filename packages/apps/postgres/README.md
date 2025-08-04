@@ -100,16 +100,16 @@ See:
 
 ### Backup parameters
 
-| Name                     | Description                                                | Type     | Value                               |
-| ------------------------ | ---------------------------------------------------------- | -------- | ----------------------------------- |
-| `backup`                 | Backup configuration                                       | `object` | `{}`                                |
-| `backup.enabled`         | Enable regular backups                                     | `bool`   | `false`                             |
-| `backup.schedule`        | Cron schedule for automated backups                        | `string` | `0 2 * * * *`                       |
-| `backup.retentionPolicy` | Retention policy                                           | `string` | `30d`                               |
-| `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `string` | `s3://bucket/path/to/folder/`       |
-| `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `string` | `http://minio-gateway-service:9000` |
-| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `string` | `<access key>`                      |
-| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `string` | `<secret key>`                      |
+| Name                     | Description                                                | Type      | Value                               |
+| ------------------------ | ---------------------------------------------------------- | --------- | ----------------------------------- |
+| `backup`                 | Backup configuration                                       | `object`  | `{}`                                |
+| `backup.enabled`         | Enable regular backups                                     | `*bool`   | `false`                             |
+| `backup.schedule`        | Cron schedule for automated backups                        | `*string` | `0 2 * * * *`                       |
+| `backup.retentionPolicy` | Retention policy                                           | `*string` | `30d`                               |
+| `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `*string` | `s3://bucket/path/to/folder/`       |
+| `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `*string` | `http://minio-gateway-service:9000` |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `*string` | `<access key>`                      |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `*string` | `<secret key>`                      |
 
 
 ### Bootstrap (recovery) parameters

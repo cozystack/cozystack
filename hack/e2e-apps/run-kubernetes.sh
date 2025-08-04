@@ -57,9 +57,6 @@ spec:
       instanceType: u1.medium
       maxReplicas: 10
       minReplicas: 0
-      resources:
-        cpu: ""
-        memory: ""
       roles:
       - ingress-nginx
   storageClass: replicated

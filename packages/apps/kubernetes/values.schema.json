@@ -1,182 +1,365 @@
 {
+  "title": "Chart Values",
+  "type": "object",
   "properties": {
     "addons": {
-      "properties": {
+      "description": "Cluster addons configuration",
+      "type": "object",
+      "default": {
         "certManager": {
-          "properties": {
-            "enabled": {
-              "default": false,
-              "description": "Enable cert-manager, which automatically creates and manages SSL/TLS certificates.",
-              "type": "boolean"
-            },
-            "valuesOverride": {
-              "default": {},
-              "description": "Custom values to override",
-              "type": "object"
-            }
-          },
-          "type": "object"
+          "enabled": false,
+          "valuesOverride": {}
         },
         "cilium": {
-          "properties": {
-            "valuesOverride": {
-              "default": {},
-              "description": "Custom values to override",
-              "type": "object"
-            }
-          },
-          "type": "object"
+          "valuesOverride": {}
         },
         "fluxcd": {
-          "properties": {
-            "enabled": {
-              "default": false,
-              "description": "Enable FluxCD",
-              "type": "boolean"
-            },
-            "valuesOverride": {
-              "default": {},
-              "description": "Custom values to override",
-              "type": "object"
-            }
-          },
-          "type": "object"
+          "enabled": false,
+          "valuesOverride": {}
         },
         "gatewayAPI": {
-          "properties": {
-            "enabled": {
-              "default": false,
-              "description": "Enable the Gateway API",
-              "type": "boolean"
-            }
-          },
-          "type": "object"
+          "enabled": false
         },
         "gpuOperator": {
-          "properties": {
-            "enabled": {
-              "default": false,
-              "description": "Enable the GPU-operator",
-              "type": "boolean"
-            },
-            "valuesOverride": {
-              "default": {},
-              "description": "Custom values to override",
-              "type": "object"
-            }
-          },
-          "type": "object"
+          "enabled": false,
+          "valuesOverride": {}
         },
         "ingressNginx": {
+          "enabled": false,
+          "exposeMethod": "Proxied",
+          "hosts": {},
+          "valuesOverride": {}
+        },
+        "monitoringAgents": {
+          "enabled": false,
+          "valuesOverride": {}
+        },
+        "velero": {
+          "enabled": false,
+          "valuesOverride": {}
+        },
+        "verticalPodAutoscaler": {
+          "valuesOverride": {}
+        }
+      },
+      "required": [
+        "certManager",
+        "cilium",
+        "fluxcd",
+        "gatewayAPI",
+        "gpuOperator",
+        "ingressNginx",
+        "monitoringAgents",
+        "velero",
+        "verticalPodAutoscaler"
+      ],
+      "properties": {
+        "certManager": {
+          "description": "Cert-manager: automatically creates and manages SSL/TLS certificate",
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "valuesOverride": {}
+          },
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
           "properties": {
             "enabled": {
-              "default": false,
+              "description": "Enable cert-manager, which automatically creates and manages SSL/TLS certificates.",
+              "type": "boolean",
+              "default": false
+            },
+            "valuesOverride": {
+              "description": "Custom values to override",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "cilium": {
+          "description": "Cilium CNI plugin",
+          "type": "object",
+          "default": {
+            "valuesOverride": {}
+          },
+          "required": [
+            "valuesOverride"
+          ],
+          "properties": {
+            "valuesOverride": {
+              "description": "Custom values to override",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "fluxcd": {
+          "description": "Flux CD",
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "valuesOverride": {}
+          },
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Enable FluxCD",
+              "type": "boolean",
+              "default": false
+            },
+            "valuesOverride": {
+              "description": "Custom values to override",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "gatewayAPI": {
+          "description": "Gateway API",
+          "type": "object",
+          "default": {
+            "enabled": false
+          },
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Enable the Gateway API",
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "gpuOperator": {
+          "description": "GPU-operator: NVIDIA GPU Operator",
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "valuesOverride": {}
+          },
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Enable the GPU-operator",
+              "type": "boolean",
+              "default": false
+            },
+            "valuesOverride": {
+              "description": "Custom values to override",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "ingressNginx": {
+          "description": "Ingress-NGINX Controller",
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "exposeMethod": "Proxied",
+            "hosts": {},
+            "valuesOverride": {}
+          },
+          "required": [
+            "enabled",
+            "exposeMethod",
+            "valuesOverride"
+          ],
+          "properties": {
+            "enabled": {
               "description": "Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).",
-              "type": "boolean"
+              "type": "boolean",
+              "default": false
             },
             "exposeMethod": {
-              "default": "Proxied",
-              "description": "Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)",
+              "description": "Method to expose the Ingress-NGINX controller. Allowed values: `Proxied`, `LoadBalancer`.",
               "type": "string",
+              "default": "Proxied",
               "enum": [
                 "Proxied",
                 "LoadBalancer"
               ]
             },
             "hosts": {
-              "default": [],
               "description": "List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.",
-              "items": {},
-              "type": "array"
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
             },
             "valuesOverride": {
-              "default": {},
               "description": "Custom values to override",
-              "type": "object"
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
             }
-          },
-          "type": "object"
+          }
         },
         "monitoringAgents": {
+          "description": "MonitoringAgents",
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "valuesOverride": {}
+          },
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
           "properties": {
             "enabled": {
-              "default": false,
               "description": "Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage.",
-              "type": "boolean"
+              "type": "boolean",
+              "default": false
             },
             "valuesOverride": {
-              "default": {},
               "description": "Custom values to override",
-              "type": "object"
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
             }
-          },
-          "type": "object"
+          }
         },
         "velero": {
+          "description": "Velero",
+          "type": "object",
+          "default": {
+            "enabled": false,
+            "valuesOverride": {}
+          },
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
           "properties": {
             "enabled": {
-              "default": false,
-              "description": "Enable velero for backup and restore k8s cluster.",
-              "type": "boolean"
+              "description": "Enable Velero for backup and recovery of a tenant Kubernetes cluster.",
+              "type": "boolean",
+              "default": false
             },
             "valuesOverride": {
-              "default": {},
               "description": "Custom values to override",
-              "type": "object"
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
             }
-          },
-          "type": "object"
+          }
         },
         "verticalPodAutoscaler": {
+          "description": "VerticalPodAutoscaler",
+          "type": "object",
+          "default": {
+            "valuesOverride": {}
+          },
+          "required": [
+            "valuesOverride"
+          ],
           "properties": {
             "valuesOverride": {
-              "default": {},
               "description": "Custom values to override",
-              "type": "object"
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
             }
-          },
-          "type": "object"
+          }
         }
-      },
-      "type": "object"
+      }
     },
     "controlPlane": {
-      "properties": {
+      "description": "Control Plane Configuration",
+      "type": "object",
+      "default": {
         "apiServer": {
-          "properties": {
-            "resources": {
-              "default": {},
-              "description": "Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.",
-              "type": "object"
-            },
-            "resourcesPreset": {
-              "default": "medium",
-              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
-              "type": "string",
-              "enum": [
-                "nano",
-                "micro",
-                "small",
-                "medium",
-                "large",
-                "xlarge",
-                "2xlarge"
-              ]
-            }
-          },
-          "type": "object"
+          "resources": {},
+          "resourcesPreset": "medium"
         },
         "controllerManager": {
+          "resources": {},
+          "resourcesPreset": "micro"
+        },
+        "konnectivity": {
+          "server": {
+            "resources": {},
+            "resourcesPreset": "micro"
+          }
+        },
+        "replicas": 2,
+        "scheduler": {
+          "resources": {},
+          "resourcesPreset": "micro"
+        }
+      },
+      "required": [
+        "apiServer",
+        "controllerManager",
+        "konnectivity",
+        "replicas",
+        "scheduler"
+      ],
+      "properties": {
+        "apiServer": {
+          "description": "Control plane API server configuration.",
+          "type": "object",
+          "default": {
+            "resources": {},
+            "resourcesPreset": "medium"
+          },
+          "required": [
+            "resources",
+            "resourcesPreset"
+          ],
           "properties": {
             "resources": {
+              "description": "Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.",
+              "type": "object",
               "default": {},
-              "description": "Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.",
-              "type": "object"
+              "properties": {
+                "cpu": {
+                  "description": "Available CPU",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Available memory (RAM)",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
             },
             "resourcesPreset": {
-              "default": "micro",
               "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
               "type": "string",
+              "default": "medium",
               "enum": [
                 "nano",
                 "micro",
@@ -187,22 +370,131 @@
                 "2xlarge"
               ]
             }
+          }
+        },
+        "controllerManager": {
+          "description": "Controller Manager configuration.",
+          "type": "object",
+          "default": {
+            "resources": {},
+            "resourcesPreset": "micro"
           },
-          "type": "object"
+          "required": [
+            "resources",
+            "resourcesPreset"
+          ],
+          "properties": {
+            "resources": {
+              "description": "Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Available CPU",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Available memory (RAM)",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "resourcesPreset": {
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+              "type": "string",
+              "default": "micro",
+              "enum": [
+                "nano",
+                "micro",
+                "small",
+                "medium",
+                "large",
+                "xlarge",
+                "2xlarge"
+              ]
+            }
+          }
         },
         "konnectivity": {
+          "description": "Konnectivity configuration.",
+          "type": "object",
+          "default": {
+            "server": {
+              "resources": {},
+              "resourcesPreset": "micro"
+            }
+          },
+          "required": [
+            "server"
+          ],
           "properties": {
             "server": {
+              "description": "Konnectivity server configuration.",
+              "type": "object",
+              "default": {
+                "resources": {},
+                "resourcesPreset": "micro"
+              },
+              "required": [
+                "resources",
+                "resourcesPreset"
+              ],
               "properties": {
                 "resources": {
-                  "default": {},
                   "description": "Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.",
-                  "type": "object"
+                  "type": "object",
+                  "default": {},
+                  "properties": {
+                    "cpu": {
+                      "description": "Available CPU",
+                      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ],
+                      "x-kubernetes-int-or-string": true
+                    },
+                    "memory": {
+                      "description": "Available memory (RAM)",
+                      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ],
+                      "x-kubernetes-int-or-string": true
+                    }
+                  }
                 },
                 "resourcesPreset": {
-                  "default": "micro",
                   "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
                   "type": "string",
+                  "default": "micro",
                   "enum": [
                     "nano",
                     "micro",
@@ -213,28 +505,64 @@
                     "2xlarge"
                   ]
                 }
-              },
-              "type": "object"
+              }
             }
-          },
-          "type": "object"
+          }
         },
         "replicas": {
-          "default": 2,
-          "description": "Number of replicas for Kubernetes control-plane components.",
-          "type": "number"
+          "description": "Number of replicas for Kubernetes control plane components.",
+          "type": "integer",
+          "default": 2
         },
         "scheduler": {
+          "description": "Scheduler configuration.",
+          "type": "object",
+          "default": {
+            "resources": {},
+            "resourcesPreset": "micro"
+          },
+          "required": [
+            "resources",
+            "resourcesPreset"
+          ],
           "properties": {
             "resources": {
-              "default": {},
               "description": "Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.",
-              "type": "object"
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Available CPU",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Available memory (RAM)",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
             },
             "resourcesPreset": {
-              "default": "micro",
               "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
               "type": "string",
+              "default": "micro",
               "enum": [
                 "nano",
                 "micro",
@@ -245,26 +573,132 @@
                 "2xlarge"
               ]
             }
-          },
-          "type": "object"
+          }
         }
-      },
-      "type": "object"
+      }
     },
     "host": {
-      "default": "",
       "description": "Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.",
       "type": "string"
     },
+    "nodeGroups": {
+      "description": "Worker nodes configuration",
+      "type": "object",
+      "default": {
+        "md0": {
+          "ephemeralStorage": "20Gi",
+          "gpus": {},
+          "instanceType": "u1.medium",
+          "maxReplicas": 10,
+          "minReplicas": 0,
+          "resources": {},
+          "roles": [
+            "ingress-nginx"
+          ]
+        }
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "ephemeralStorage",
+          "instanceType",
+          "maxReplicas",
+          "minReplicas",
+          "resources"
+        ],
+        "properties": {
+          "ephemeralStorage": {
+            "description": "Ephemeral storage size",
+            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "x-kubernetes-int-or-string": true
+          },
+          "gpus": {
+            "description": "List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\"",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "instanceType": {
+            "description": "Virtual machine instance type",
+            "type": "string"
+          },
+          "maxReplicas": {
+            "description": "Maximum amount of replicas",
+            "type": "integer"
+          },
+          "minReplicas": {
+            "description": "Minimum amount of replicas",
+            "type": "integer"
+          },
+          "resources": {
+            "description": "Available resources for each worker node",
+            "type": "object",
+            "properties": {
+              "cpu": {
+                "description": "Available CPU",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              },
+              "memory": {
+                "description": "Available memory (RAM)",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              }
+            }
+          },
+          "roles": {
+            "description": "List of node's roles",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
     "storageClass": {
-      "default": "replicated",
-      "description": "StorageClass used to store user data.",
-      "type": "string"
+      "description": "StorageClass used to store the data",
+      "type": "string",
+      "default": "replicated"
     },
     "version": {
-      "default": "v1.32",
       "description": "Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.",
       "type": "string",
+      "default": "v1.32",
       "enum": [
         "v1.28",
         "v1.29",
@@ -274,7 +708,5 @@
         "v1.33"
       ]
     }
-  },
-  "title": "Chart Values",
-  "type": "object"
+  }
 }

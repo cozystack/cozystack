@@ -1,15 +1,20 @@
 ## @section Common parameters
 
-## @param source The source image location used to create a disk
+## @param source {source} The source image location used to create a disk
+## @field source.image {*uploadImage} Use image by name: uploaded as "golden image" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, and `talos`.
+## @field uploadImage.name {string} Name of the image to use
 ## Example using golden image:
 ## source:
 ##   image:
 ##     name: ubuntu
 ##
+## @field source.upload {*emptyobject} Upload local image
 ## Example upload local image:
 ## source:
 ##   upload: {}
 ##
+## @field source.http {*uploadHTTP} Download image from an HTTP source
+## @field uploadHTTP.url {string} URL to download the image
 ## Example download image from http source:
 ## source:
 ##   http:
@@ -24,10 +29,10 @@
 
 source: {}
 
-## @param optical Defines is disk should be considered as optical
+## @param optical {bool} Defines if disk should be considered optical
 optical: false
 
-## @param storage The size of the disk allocated for the virtual machine
-## @param storageClass StorageClass used to store the data
+## @param storage {quantity} The size of the disk allocated for the virtual machine
+## @param storageClass {string} StorageClass used to store the data
 storage: 5Gi
 storageClass: replicated

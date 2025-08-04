@@ -1,14 +1,26 @@
 ## @section Common Parameters
 
-## @param storageClass StorageClass used to store user data.
+## @param storageClass {string} StorageClass used to store the data
 storageClass: replicated
 
 ## @section Application-specific parameters
-## @param version Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.
+## @param version {string} Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.
 version: "v1.32"
-## @param host Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.
+## @param host {string} Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.
 host: ""
-## @param nodeGroups [object] Worker nodes configuration (see example)
+
+## @param nodeGroups {map[string]node} Worker nodes configuration
+## @field node {node} Node configuration
+## @field node.minReplicas {int} Minimum amount of replicas
+## @field node.maxReplicas {int} Maximum amount of replicas
+## @field node.instanceType {string} Virtual machine instance type
+## @field node.ephemeralStorage {quantity} Ephemeral storage size
+## @field node.roles {[]string} List of node's roles
+## @field node.resources {resources} Available resources for each worker node
+## @field resources.cpu {*quantity} Available CPU
+## @field resources.memory {*quantity} Available memory (RAM)
+## @field node.gpus {[]gpu} List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
+## @field gpu.name {string} Name of GPU, such as "nvidia.com/AD102GL_L40S"
 ##
 nodeGroups:
   md0:
@@ -18,11 +30,7 @@ nodeGroups:
     ephemeralStorage: 20Gi
     roles:
     - ingress-nginx
-
-    resources:
-      cpu: ""
-      memory: ""
-
+    resources: {}
     ## List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
     ## e.g:
     ## instanceType: "u1.xlarge"
@@ -33,117 +41,124 @@ nodeGroups:
 
 ## @section Cluster Addons
 ##
+## @param addons {addons} Cluster addons configuration
 addons:
-  ## Cert-manager: automatically creates and manages SSL/TLS certificate
+  ## @field addons.certManager {certManager} Cert-manager: automatically creates and manages SSL/TLS certificate
   ##
   certManager:
-    ## @param addons.certManager.enabled Enable cert-manager, which automatically creates and manages SSL/TLS certificates.
+    ## @field certManager.enabled {bool} Enable cert-manager, which automatically creates and manages SSL/TLS certificates.
     enabled: false
-    ## @param addons.certManager.valuesOverride Custom values to override
+    ## @field certManager.valuesOverride {object} Custom values to override
     valuesOverride: {}
 
-  ## Cilium CNI plugin
+  ## @field addons.cilium {cilium} Cilium CNI plugin
   ##
   cilium:
-    ## @param addons.cilium.valuesOverride Custom values to override
+    ## @field cilium.valuesOverride {object} Custom values to override
     valuesOverride: {}
 
-  ## Gateway API
+  ## @field addons.gatewayAPI {gatewayAPI} Gateway API
   ##
   gatewayAPI:
-    ## @param addons.gatewayAPI.enabled Enable the Gateway API
+    ## @field gatewayAPI.enabled {bool} Enable the Gateway API
     enabled: false
 
-  ## Ingress-NGINX Controller
+  ## @field addons.ingressNginx {ingressNginx} Ingress-NGINX Controller
   ##
   ingressNginx:
-    ## @param addons.ingressNginx.enabled Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).
+    ## @field ingressNginx.enabled {bool} Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).
     enabled: false
-    ## @param addons.ingressNginx.exposeMethod Method to expose the Ingress-NGINX controller. (allowed values: Proxied, LoadBalancer)
+    ## @field ingressNginx.exposeMethod {string enum:"Proxied,LoadBalancer"} Method to expose the Ingress-NGINX controller. Allowed values: `Proxied`, `LoadBalancer`.
     exposeMethod: Proxied
-    ## @param addons.ingressNginx.hosts List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.
+    ## @field ingressNginx.hosts {[]string} List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.
     ## e.g:
     ## hosts:
     ## - example.org
     ## - foo.example.net
     ##
     hosts: []
-    ## @param addons.ingressNginx.valuesOverride Custom values to override
+    ## @field ingressNginx.valuesOverride {object} Custom values to override
     valuesOverride: {}
 
-  ## GPU-operator: NVIDIA GPU Operator
+  ## @field addons.gpuOperator {gpuOperator} GPU-operator: NVIDIA GPU Operator
   ##
   gpuOperator:
-    ## @param addons.gpuOperator.enabled Enable the GPU-operator
-    ## @param addons.gpuOperator.valuesOverride Custom values to override
+    ## @field gpuOperator.enabled {bool} Enable the GPU-operator
+    ## @field gpuOperator.valuesOverride {object} Custom values to override
     enabled: false
     valuesOverride: {}
 
-  ## Flux CD
+  ## @field addons.fluxcd {fluxcd} Flux CD
   ##
   fluxcd:
-    ## @param addons.fluxcd.enabled Enable FluxCD
-    ## @param addons.fluxcd.valuesOverride Custom values to override
+    ## @field fluxcd.enabled {bool} Enable FluxCD
+    ## @field fluxcd.valuesOverride {object} Custom values to override
     ##
     enabled: false
     valuesOverride: {}
 
-  ## MonitoringAgents
+  ## @field addons.monitoringAgents {monitoringAgents} MonitoringAgents
   ##
   monitoringAgents:
-    ## @param addons.monitoringAgents.enabled Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage.
-    ## @param addons.monitoringAgents.valuesOverride Custom values to override
+    ## @field monitoringAgents.enabled {bool} Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage.
+    ## @field monitoringAgents.valuesOverride {object} Custom values to override
     ##
     enabled: false
     valuesOverride: {}
 
-  ## VerticalPodAutoscaler
+  ## @field addons.verticalPodAutoscaler {verticalPodAutoscaler} VerticalPodAutoscaler
   ##
   verticalPodAutoscaler:
-    ## @param addons.verticalPodAutoscaler.valuesOverride Custom values to override
+    ## @field verticalPodAutoscaler.valuesOverride {object} Custom values to override
     ##
     valuesOverride: {}
 
-  ## Velero
+  ## @field addons.velero {velero} Velero
   ##
   velero:
-    ## @param addons.velero.enabled Enable velero for backup and restore k8s cluster.
-    ## @param addons.velero.valuesOverride Custom values to override
+    ## @field velero.enabled {bool} Enable Velero for backup and recovery of a tenant Kubernetes cluster.
+    ## @field velero.valuesOverride {object} Custom values to override
     ##
     enabled: false
     valuesOverride: {}
 
 ## @section Kubernetes Control Plane Configuration
 ##
+## @param controlPlane {controlPlane} Control Plane Configuration
 controlPlane:
-  ## @param controlPlane.replicas Number of replicas for Kubernetes control-plane components.
+  ## @field controlPlane.replicas {int} Number of replicas for Kubernetes control plane components.
   replicas: 2
+  ## @field controlPlane.apiServer {apiServer} Control plane API server configuration.
   apiServer:
-    ## @param controlPlane.apiServer.resources Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.
-    resources: {}
-    ## @param controlPlane.apiServer.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+    ## @field apiServer.resources {resources} Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.
     ## e.g:
     ## resources:
     ##   cpu: 4000m
     ##   memory: 4Gi
     ##
+    resources: {}
+    ## @field apiServer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
     resourcesPreset: "medium"
 
+  ## @field controlPlane.controllerManager {controllerManager} Controller Manager configuration.
   controllerManager:
-    ## @param controlPlane.controllerManager.resources Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.
-    ## @param controlPlane.controllerManager.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+    ## @field controllerManager.resources {resources} Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.
+    ## @field controllerManager.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
     resourcesPreset: "micro"
     resources: {}
 
+  ## @field controlPlane.scheduler {scheduler} Scheduler configuration.
   scheduler:
-    ## @param controlPlane.scheduler.resources Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.
-    ## @param controlPlane.scheduler.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+    ## @field scheduler.resources {resources} Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.
+    ## @field scheduler.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
     resourcesPreset: "micro"
     resources: {}
 
+  ## @field controlPlane.konnectivity {konnectivity} Konnectivity configuration.
   konnectivity:
+    ## @field konnectivity.server {konnectivityServer} Konnectivity server configuration.
     server:
-      ## @param controlPlane.konnectivity.server.resources Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.
-      ## @param controlPlane.konnectivity.server.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+      ## @field konnectivityServer.resources {resources} Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.
+      ## @field konnectivityServer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
       resourcesPreset: "micro"
       resources: {}

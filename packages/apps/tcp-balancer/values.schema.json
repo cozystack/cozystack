@@ -1,59 +1,112 @@
 {
+  "title": "Chart Values",
+  "type": "object",
   "properties": {
     "external": {
-      "default": false,
       "description": "Enable external access from outside the cluster",
-      "type": "boolean"
+      "type": "boolean",
+      "default": false
     },
     "httpAndHttps": {
+      "description": "HTTP and HTTPS configuration",
+      "type": "object",
+      "default": {
+        "endpoints": {},
+        "mode": "tcp",
+        "targetPorts": {
+          "http": 80,
+          "https": 443
+        }
+      },
+      "required": [
+        "mode",
+        "targetPorts"
+      ],
       "properties": {
         "endpoints": {
-          "default": [],
           "description": "Endpoint addresses list",
-          "items": {},
-          "type": "array"
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
         },
         "mode": {
-          "default": "tcp",
           "description": "Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`",
           "type": "string",
+          "default": "tcp",
           "enum": [
             "tcp",
             "tcp-with-proxy"
           ]
         },
         "targetPorts": {
+          "description": "Target ports configuration",
+          "type": "object",
+          "default": {
+            "http": 80,
+            "https": 443
+          },
+          "required": [
+            "http",
+            "https"
+          ],
           "properties": {
             "http": {
-              "default": 80,
               "description": "HTTP port number.",
-              "type": "number"
+              "type": "integer",
+              "default": 80
             },
             "https": {
-              "default": 443,
               "description": "HTTPS port number.",
-              "type": "number"
+              "type": "integer",
+              "default": 443
             }
-          },
-          "type": "object"
+          }
         }
-      },
-      "type": "object"
+      }
     },
     "replicas": {
-      "default": 2,
       "description": "Number of HAProxy replicas",
-      "type": "number"
+      "type": "integer",
+      "default": 2
     },
     "resources": {
-      "default": {},
-      "description": "Explicit CPU and memory configuration for each TCP Balancer replica. When left empty, the preset defined in `resourcesPreset` is applied.",
-      "type": "object"
+      "description": "Explicit CPU and memory configuration for each TCP Balancer replica.  When left empty, the preset defined in `resourcesPreset` is applied.",
+      "type": "object",
+      "properties": {
+        "cpu": {
+          "description": "CPU",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
     },
     "resourcesPreset": {
-      "default": "nano",
-      "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+      "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
       "type": "string",
+      "default": "nano",
       "enum": [
         "nano",
         "micro",
@@ -65,17 +118,17 @@
       ]
     },
     "whitelist": {
+      "description": "List of allowed client networks",
+      "type": "array",
       "default": [],
-      "description": "List of client networks",
-      "items": {},
-      "type": "array"
+      "items": {
+        "type": "string"
+      }
     },
     "whitelistHTTP": {
-      "default": false,
-      "description": "Secure HTTP by whitelisting client networks",
-      "type": "boolean"
+      "description": "Secure HTTP by whitelisting client networks, `false` by default.",
+      "type": "boolean",
+      "default": false
     }
-  },
-  "title": "Chart Values",
-  "type": "object"
+  }
 }

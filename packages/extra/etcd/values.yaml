@@ -9,8 +9,8 @@ storageClass: ""
 replicas: 3
 
 ## @param resources {*resources} Resource configuration for etcd
-## @param resources.cpu {*quantity} The number of CPU cores allocated
-## @param resources.memory {*quantity} The amount of memory allocated
+## @field resources.cpu {*quantity} The number of CPU cores allocated
+## @field resources.memory {*quantity} The amount of memory allocated
 resources:
   cpu: 4
   memory: 1Gi

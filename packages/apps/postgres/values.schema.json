@@ -14,15 +14,6 @@
         "s3SecretKey": "\u003csecret key\u003e",
         "schedule": "0 2 * * * *"
       },
-      "required": [
-        "destinationPath",
-        "enabled",
-        "endpointURL",
-        "retentionPolicy",
-        "s3AccessKey",
-        "s3SecretKey",
-        "schedule"
-      ],
       "properties": {
         "destinationPath": {
           "description": "Path to store the backup (i.e. s3://bucket/path/to/folder)",

@@ -50,7 +50,7 @@ virtctl ssh <user>@<vm>
 | `systemDisk.storageClass` | StorageClass used to store the data                                                                         | `*string`   | `replicated` |
 | `gpus`                    | List of GPUs to attach                                                                                      | `[]object`  | `[]`         |
 | `gpus[i].name`            | The name of the GPU to attach. This should match the GPU resource name in the cluster.                      | `string`    | `""`         |
-| `resources`               | Resources                                                                                                   | `object`    | `{}`         |
+| `resources`               | Resources                                                                                                   | `*object`   | `{}`         |
 | `resources.cpu`           | The number of CPU cores allocated to the virtual machine                                                    | `*quantity` | `null`       |
 | `resources.sockets`       | The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)                   | `*quantity` | `null`       |
 | `resources.memory`        | The amount of memory allocated to the virtual machine                                                       | `*quantity` | `null`       |
