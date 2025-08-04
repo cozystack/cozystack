@@ -20,9 +20,7 @@ spec:
     storage: 5Gi
     storageClass: replicated
   gpus: []
-  resources:
-    cpu: ""
-    memory: ""
+  resources: {}
   sshKeys:
   - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPht0dPk5qQ+54g1hSX7A6AUxXJW5T6n/3d7Ga2F8gTF
     test@test
