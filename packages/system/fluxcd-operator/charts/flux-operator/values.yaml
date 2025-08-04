@@ -46,7 +46,7 @@ apiPriority: # @schema default: {"enabled":false,"level":"workload-high","extraS
 # -- Container resources requests and limits settings.
 resources: # @schema required: true
   limits:
-    cpu: 1000m
+    cpu: 2000m
     memory: 1Gi
   requests: # @schema default: {"cpu":"100m","memory":"64Mi"}
     cpu: 100m
