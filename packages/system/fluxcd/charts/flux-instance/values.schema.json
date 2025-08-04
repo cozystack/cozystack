@@ -1,20 +1,275 @@
 {
     "$schema": "https://json-schema.org/draft/2019-09/schema",
+    "type": "object",
     "properties": {
         "commonAnnotations": {
-            "properties": {},
             "type": "object"
         },
         "commonLabels": {
-            "properties": {},
             "type": "object"
         },
         "fullnameOverride": {
             "type": "string"
         },
+        "healthcheck": {
+            "type": "object",
+            "required": [
+                "resources",
+                "securityContext"
+            ],
+            "properties": {
+                "affinity": {
+                    "default": {
+                        "nodeAffinity": {
+                            "requiredDuringSchedulingIgnoredDuringExecution": {
+                                "nodeSelectorTerms": [
+                                    {
+                                        "matchExpressions": [
+                                            {
+                                                "key": "kubernetes.io/os",
+                                                "operator": "In",
+                                                "values": [
+                                                    "linux"
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "type": "object",
+                    "properties": {
+                        "nodeAffinity": {
+                            "type": "object",
+                            "properties": {
+                                "requiredDuringSchedulingIgnoredDuringExecution": {
+                                    "type": "object",
+                                    "properties": {
+                                        "nodeSelectorTerms": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "matchExpressions": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                                "key": {
+                                                                    "type": "string"
+                                                                },
+                                                                "operator": {
+                                                                    "type": "string"
+                                                                },
+                                                                "values": {
+                                                                    "type": "array",
+                                                                    "items": {
+                                                                        "type": "string"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "envs": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "extraArgs": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "hostNetwork": {
+                    "default": false,
+                    "type": "boolean"
+                },
+                "image": {
+                    "type": "object",
+                    "required": [
+                        "repository"
+                    ],
+                    "properties": {
+                        "imagePullPolicy": {
+                            "type": "string",
+                            "enum": [
+                                "IfNotPresent",
+                                "Always",
+                                "Never"
+                            ]
+                        },
+                        "pullSecrets": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "object"
+                            }
+                        },
+                        "repository": {
+                            "type": "string"
+                        },
+                        "tag": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "nodeSelector": {
+                    "type": "object"
+                },
+                "podSecurityContext": {
+                    "default": {
+                        "fsGroup": 1337
+                    },
+                    "type": "object"
+                },
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "default": {
+                                "cpu": "100m",
+                                "memory": "64Mi"
+                            },
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "securityContext": {
+                    "type": "object",
+                    "properties": {
+                        "allowPrivilegeEscalation": {
+                            "default": false,
+                            "type": "boolean"
+                        },
+                        "capabilities": {
+                            "default": {
+                                "drop": [
+                                    "ALL"
+                                ]
+                            },
+                            "type": "object",
+                            "properties": {
+                                "drop": {
+                                    "type": "array",
+                                    "uniqueItems": true,
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        },
+                        "readOnlyRootFilesystem": {
+                            "default": true,
+                            "type": "boolean"
+                        },
+                        "runAsNonRoot": {
+                            "default": true,
+                            "type": "boolean"
+                        },
+                        "seccompProfile": {
+                            "default": {
+                                "type": "RuntimeDefault"
+                            },
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "serviceAccount": {
+                    "default": {
+                        "automount": true,
+                        "create": false,
+                        "name": "flux-operator"
+                    },
+                    "type": "object",
+                    "properties": {
+                        "automount": {
+                            "type": "boolean"
+                        },
+                        "create": {
+                            "type": "boolean"
+                        },
+                        "name": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "timeout": {
+                    "default": "5m",
+                    "type": "string"
+                },
+                "tolerations": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "volumeMounts": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "volumes": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                        "type": "object"
+                    }
+                }
+            }
+        },
         "instance": {
+            "type": "object",
+            "required": [
+                "distribution",
+                "cluster"
+            ],
             "properties": {
                 "cluster": {
+                    "type": "object",
                     "properties": {
                         "domain": {
                             "type": "string"
@@ -29,33 +284,33 @@
                             "type": "string"
                         },
                         "type": {
+                            "type": "string",
                             "enum": [
                                 "kubernetes",
                                 "openshift",
                                 "aws",
                                 "azure",
                                 "gcp"
-                            ],
-                            "type": "string"
+                            ]
                         }
-                    },
-                    "type": "object"
+                    }
                 },
                 "commonMetadata": {
+                    "type": "object",
                     "properties": {
                         "annotations": {
-                            "properties": {},
                             "type": "object"
                         },
                         "labels": {
-                            "properties": {},
                             "type": "object"
                         }
-                    },
-                    "type": "object"
+                    }
                 },
                 "components": {
+                    "type": "array",
+                    "uniqueItems": true,
                     "items": {
+                        "type": "string",
                         "enum": [
                             "source-controller",
                             "kustomize-controller",
@@ -63,13 +318,15 @@
                             "notification-controller",
                             "image-reflector-controller",
                             "image-automation-controller"
-                        ],
-                        "type": "string"
-                    },
-                    "type": "array",
-                    "uniqueItems": true
+                        ]
+                    }
                 },
                 "distribution": {
+                    "type": "object",
+                    "required": [
+                        "version",
+                        "registry"
+                    ],
                     "properties": {
                         "artifact": {
                             "type": "string"
@@ -86,39 +343,35 @@
                         "version": {
                             "type": "string"
                         }
-                    },
-                    "required": [
-                        "version",
-                        "registry"
-                    ],
-                    "type": "object"
+                    }
                 },
                 "kustomize": {
+                    "type": "object",
                     "properties": {
                         "patches": {
+                            "type": "array",
                             "items": {
                                 "type": "object"
-                            },
-                            "type": "array"
+                            }
                         }
-                    },
-                    "type": "object"
+                    }
                 },
                 "sharding": {
+                    "type": "object",
                     "properties": {
                         "key": {
                             "type": "string"
                         },
                         "shards": {
+                            "type": "array",
                             "items": {
                                 "type": "string"
-                            },
-                            "type": "array"
+                            }
                         }
-                    },
-                    "type": "object"
+                    }
                 },
                 "storage": {
+                    "type": "object",
                     "properties": {
                         "class": {
                             "type": "string"
@@ -126,21 +379,21 @@
                         "size": {
                             "type": "string"
                         }
-                    },
-                    "type": "object"
+                    }
                 },
                 "sync": {
+                    "type": "object",
                     "properties": {
                         "interval": {
                             "type": "string"
                         },
                         "kind": {
+                            "type": "string",
                             "enum": [
                                 "GitRepository",
                                 "OCIRepository",
                                 "Bucket"
-                            ],
-                            "type": "string"
+                            ]
                         },
                         "name": {
                             "type": "string"
@@ -160,19 +413,12 @@
                         "url": {
                             "type": "string"
                         }
-                    },
-                    "type": "object"
+                    }
                 }
-            },
-            "required": [
-                "distribution",
-                "cluster"
-            ],
-            "type": "object"
+            }
         },
         "nameOverride": {
             "type": "string"
         }
-    },
-    "type": "object"
+    }
 }

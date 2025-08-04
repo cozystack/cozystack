@@ -1,6 +1,6 @@
 # flux-instance
 
-![Version: 0.24.1](https://img.shields.io/badge/Version-0.24.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.24.1](https://img.shields.io/badge/AppVersion-v0.24.1-informational?style=flat-square)
+![Version: 0.26.0](https://img.shields.io/badge/Version-0.26.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.26.0](https://img.shields.io/badge/AppVersion-v0.26.0-informational?style=flat-square)
 
 This chart is a thin wrapper around the `FluxInstance` custom resource, which is
 used by the [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator)
@@ -37,6 +37,8 @@ helm -n flux-system uninstall flux
 | commonAnnotations | object | `{}` | Common annotations to add to all deployed objects including pods. |
 | commonLabels | object | `{}` | Common labels to add to all deployed objects including pods. |
 | fullnameOverride | string | `"flux"` |  |
+| healthcheck.enabled | bool | `false` | Enable post-install and post-upgrade health checks. |
+| healthcheck.timeout | string | `"5m"` | Health check timeout in Go duration format. |
 | instance.cluster | object | `{"domain":"cluster.local","multitenant":false,"networkPolicy":true,"tenantDefaultServiceAccount":"default","type":"kubernetes"}` | Cluster https://fluxcd.control-plane.io/operator/fluxinstance/#cluster-configuration |
 | instance.commonMetadata | object | `{"annotations":{},"labels":{}}` | Common metadata https://fluxcd.control-plane.io/operator/fluxinstance/#common-metadata |
 | instance.components | list | `["source-controller","kustomize-controller","helm-controller","notification-controller"]` | Components https://fluxcd.control-plane.io/operator/fluxinstance/#components-configuration |

@@ -55,3 +55,94 @@ commonAnnotations: { }
 
 # -- Common labels to add to all deployed objects including pods.
 commonLabels: { }
+
+# Healthcheck job settings.
+healthcheck:
+  # -- Enable post-install and post-upgrade health checks.
+  enabled: false
+  # -- Health check timeout in Go duration format.
+  timeout: 5m # @schema default: "5m"
+
+  # Container image settings.
+  # The image tag defaults to the chart appVersion.
+  # @ignore
+  image:
+    repository: ghcr.io/controlplaneio-fluxcd/flux-operator-cli # @schema required: true
+    tag: ""
+    pullSecrets: [ ] # @schema item: object ; uniqueItems: true
+    imagePullPolicy: IfNotPresent # @schema enum:[IfNotPresent, Always, Never]
+
+  # Container resources requests and limits settings.
+  # @ignore
+  resources: # @schema required: true
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests: # @schema default: {"cpu":"100m","memory":"64Mi"}
+      cpu: 100m
+      memory: 64Mi
+
+  # Pod service account settings.
+  # The name of the service account defaults to the release name.
+  # @ignore
+  serviceAccount: # @schema default: {"create":false,"automount":true,"name":"flux-operator"}
+    create: false
+    automount: true
+    name: "flux-operator"
+
+  # Pod security context settings.
+  # @ignore
+  podSecurityContext: { } # @schema default: {"fsGroup":1337}
+
+  # Container security context settings.
+  # The default is compliant with the pod security restricted profile.
+  # @ignore
+  securityContext: # @schema required: true
+    runAsNonRoot: true # @schema default: true
+    readOnlyRootFilesystem: true # @schema default: true
+    allowPrivilegeEscalation: false # @schema default: false
+    capabilities: # @schema default: {"drop":["ALL"]}
+      drop: # @schema item: string ; uniqueItems: true
+        - "ALL"
+    seccompProfile: # @schema default: {"type":"RuntimeDefault"}
+      type: "RuntimeDefault"
+
+  # Pod affinity and anti-affinity settings.
+  # @ignore
+  affinity: # @schema default: {"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/os","operator":"In","values":["linux"]}]}]}}}
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/os
+                operator: In
+                values:
+                  - linux
+
+  # Pod tolerations settings.
+  # @ignore
+  tolerations: [ ] # @schema item: object ; uniqueItems: true
+
+  # Pod Node Selector settings.
+  # @ignore
+  nodeSelector: { } # @schema type: object
+
+  # If `true`, the container ports (`8080` and `8081`) are exposed on the host network.
+  # @ignore
+  hostNetwork: false # @schema default: false
+
+  # Pod extra volumes.
+  # @ignore
+  volumes: [ ] # @schema item: object ; uniqueItems: true
+
+  # Container extra volume mounts.
+  # @ignore
+  volumeMounts: [ ] # @schema item: object ; uniqueItems: true
+
+  # Container extra environment variables.
+  # @ignore
+  envs: [ ] # @schema item: object ; uniqueItems: true
+
+  # Container extra arguments.
+  # @ignore
+  extraArgs: [ ] # @schema item: string ; uniqueItems: true
