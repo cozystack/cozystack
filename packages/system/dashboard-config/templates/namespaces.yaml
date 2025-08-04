@@ -4,7 +4,7 @@ kind: TableUriMapping
 metadata:
   name: namespaces
 spec:
-  id: "default-/apps.cozystack.io/v1alpha1/tenantnamespaces"
+  id: "default-/core.cozystack.io/v1alpha1/tenantnamespaces"
   pathToNavigate: "/openapi-ui/{clusterName}/~recordValue~/factory/marketplace"
   keysToParse:
     - metadata
