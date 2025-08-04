@@ -1,0 +1,35 @@
+diff --git a/src/api/auth.ts b/src/api/auth.ts
+index 6ee752d..14f07cf 100644
+--- a/src/api/auth.ts
++++ b/src/api/auth.ts
+@@ -6,7 +6,7 @@ export const login = async (): Promise<TAuthResponse | undefined> => {
+   let response: AxiosResponse<TAuthResponse> | undefined
+ 
+   try {
+-    response = await axios.get<TAuthResponse>('/oauth/token', { withCredentials: true })
++    response = await axios.get<TAuthResponse>('/oauth2/userinfo', { withCredentials: true })
+   } catch (error) {
+     handleError(error)
+   }
+@@ -18,7 +18,7 @@ export const logout = async (): Promise<TAuthResponse | undefined> => {
+   let response: AxiosResponse<TAuthResponse> | undefined
+ 
+   try {
+-    response = await axios.get<TAuthResponse>('/oauth/logout', { withCredentials: true })
++    response = await axios.get<TAuthResponse>('/oauth2/sign_out', { withCredentials: true })
+   } catch (error) {
+     handleError(error)
+   } finally {
+diff --git a/src/api/handleResponse.ts b/src/api/handleResponse.ts
+index e538965..c420908 100644
+--- a/src/api/handleResponse.ts
++++ b/src/api/handleResponse.ts
+@@ -5,7 +5,7 @@ export const handleError = (error: any) => {
+   if (isAxiosError(error)) {
+     if (error.status === 401) {
+       try {
+-        axios.get('/oauth/logout', {
++        axios.get('/oauth2/sign_out', {
+           method: 'GET',
+           withCredentials: true,
+         })

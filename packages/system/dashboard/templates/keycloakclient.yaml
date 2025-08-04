@@ -70,7 +70,6 @@ spec:
     - groups
     - kubernetes-client
   redirectUris:
-    - "https://dashboard.{{ $host }}/oauth/callback/*"
     - "https://dashboard.{{ $host }}/oauth2/callback/*"
     {{- range $i, $v := $extraRedirectUris }}
     - "{{ $v }}"
