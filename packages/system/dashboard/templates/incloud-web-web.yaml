@@ -125,9 +125,9 @@ spec:
             - name: NAVIGATE_FROM_CLUSTERLIST
               value: /openapi-ui/~recordValue~/api-table/core.cozystack.io/v1alpha1/tenantnamespaces
             - name: PROJECTS_API_GROUP
-              value: in-cloud.io
+              value: core.cozystack.io
             - name: PROJECTS_RESOURCE_NAME
-              value: projects
+              value: tenantnamespaces
             - name: PROJECTS_VERSION
               value: v1alpha1
             - name: USE_NAMESPACE_NAV
