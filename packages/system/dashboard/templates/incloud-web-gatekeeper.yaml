@@ -64,6 +64,14 @@ spec:
             - --cookie-name=kc-access
             - --cookie-secure=true
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+          #args: #for-token-proxy
+          #  - --upstream=http://incloud-web-nginx.incloud-web.svc:8080
+          #  - --http-address=0.0.0.0:8000
+          #  - --cookie-refresh=1h
+          #  - --cookie-name=kc-access
+          #  - --cookie-secure=true
+          #  - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+          #  - --token-check-url=http://incloud-web-nginx.incloud-web.svc:8080/api/clusters/cozydev4/k8s/apis/core.cozystack.io/v1alpha1/tenantnamespaces
           env:
             - name: OAUTH2_PROXY_CLIENT_ID
               value: dashboard
