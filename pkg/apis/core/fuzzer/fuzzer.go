@@ -14,20 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package registry
+package fuzzer
 
 import (
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
-	"k8s.io/apiserver/pkg/registry/rest"
+	"github.com/cozystack/cozystack/pkg/apis/core"
+	fuzz "github.com/google/gofuzz"
+
+	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
 )
 
-// REST is a thin wrapper around genericregistry.Store that also satisfies
-// the GroupVersionKindProvider interface if callers need it later.
-type REST struct {
-	*genericregistry.Store
+// Funcs returns the fuzzer functions for the core api group.
+var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
+	return []interface{}{
+		func(s *core.TenantNamespaceSpec, c fuzz.Continue) {
+			c.FuzzNoCustom(s) // fuzz self without calling this function again
+		},
+	}
 }
-
-// RESTInPeace is a tiny helper so the call-site code reads nicely.  It simply
-// returns its argument, letting us defer (and centralise) any future error
-// handling here.
-func RESTInPeace(storage rest.Storage) rest.Storage { return storage }
