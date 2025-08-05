@@ -17,24 +17,17 @@ limitations under the License.
 package registry
 
 import (
-	"github.com/cozystack/cozystack/pkg/registry/apps/application"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 )
 
-// REST implements a RESTStorage for API services against etcd
+// REST is a thin wrapper around genericregistry.Store that also satisfies
+// the GroupVersionKindProvider interface if callers need it later.
 type REST struct {
 	*genericregistry.Store
-	GVK schema.GroupVersionKind
 }
 
-// Implement the GroupVersionKindProvider interface
-func (r *REST) GroupVersionKind(containingGV schema.GroupVersion) schema.GroupVersionKind {
-	return r.GVK
-}
-
-// RESTInPeace creates REST for Application
-func RESTInPeace(r *application.REST) rest.Storage {
-	return r
-}
+// RESTInPeace is a tiny helper so the call-site code reads nicely.  It simply
+// returns its argument, letting us defer (and centralise) any future error
+// handling here.
+func RESTInPeace(storage rest.Storage) rest.Storage { return storage }
