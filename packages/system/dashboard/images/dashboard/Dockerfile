@@ -1,7 +1,7 @@
 FROM bitnami/node:20.15.1 AS build
 WORKDIR /app
 
-ARG COMMIT_REF=cdf9095f50c74505870de337725d2a9d0bd20947
+ARG COMMIT_REF=4926bc68fabb0914afab574006643c85a597b371
 RUN wget -O- https://github.com/cozystack/kubeapps/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=2 kubeapps-${COMMIT_REF}/dashboard
 
 RUN yarn install --frozen-lockfile

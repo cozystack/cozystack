@@ -4,7 +4,7 @@
 # syntax = docker/dockerfile:1
 
 FROM alpine AS source
-ARG COMMIT_REF=cdf9095f50c74505870de337725d2a9d0bd20947
+ARG COMMIT_REF=4926bc68fabb0914afab574006643c85a597b371
 RUN apk add --no-cache patch
 WORKDIR /source
 RUN wget -O- https://github.com/cozystack/kubeapps/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=1
