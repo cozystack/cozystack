@@ -14,20 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package registry
+package install
 
 import (
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
-	"k8s.io/apiserver/pkg/registry/rest"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 )
 
-// REST is a thin wrapper around genericregistry.Store that also satisfies
-// the GroupVersionKindProvider interface if callers need it later.
-type REST struct {
-	*genericregistry.Store
+// Install registers the API group and adds types to a scheme
+func Install(scheme *runtime.Scheme) {
+	utilruntime.Must(corev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(scheme.SetVersionPriority(corev1alpha1.SchemeGroupVersion))
 }
-
-// RESTInPeace is a tiny helper so the call-site code reads nicely.  It simply
-// returns its argument, letting us defer (and centralise) any future error
-// handling here.
-func RESTInPeace(storage rest.Storage) rest.Storage { return storage }
