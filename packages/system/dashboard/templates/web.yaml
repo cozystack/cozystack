@@ -1,15 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  annotations: {}
-  labels:
-    app.kubernetes.io/instance: incloud-web
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: web
-    app.kubernetes.io/version: 1.16.0
-    helm.sh/chart: appSpec-0.1.0
   name: incloud-web-web
-  namespace: incloud-web
 spec:
   replicas: 1
   selector:
