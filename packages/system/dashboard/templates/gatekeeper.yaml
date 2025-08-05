@@ -1,8 +1,10 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: incloud-web-gatekeeper
-  namespace: incloud-web
 spec:
   replicas: 1
   selector:
@@ -47,10 +49,10 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - --provider=oidc
-            - --upstream=http://incloud-web-nginx.incloud-web.svc:8080
+            - --upstream=http://incloud-web-nginx.{{ .Release.Namespace }}.svc:8080
             - --http-address=0.0.0.0:8000
-            - --redirect-url=https://dashboard.dev5.infra.aenix.org/oauth2/callback
-            - --oidc-issuer-url=https://keycloak.dev5.infra.aenix.org/realms/cozy
+            - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
+            - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
             - --email-domain=*
             - --pass-access-token=true
             - --pass-authorization-header=true
@@ -70,9 +72,15 @@ spec:
             - name: OAUTH2_PROXY_CLIENT_ID
               value: dashboard
             - name: OAUTH2_PROXY_CLIENT_SECRET
-              value: 5XaRqvm8k5QHHhgNWJ8odFACquowgZ8e
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-client
+                  key: client-secret-key
             - name: OAUTH2_PROXY_COOKIE_SECRET
-              value: 82Cm0C3vMWtdqs9T
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth-config
+                  key: cookieSecret
           ports:
             - name: proxy
               containerPort: 8000
