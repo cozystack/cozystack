@@ -1,3 +1,6 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+
 apiVersion: v1
 data:
   nginx-config: |-
@@ -13,7 +16,7 @@ data:
 
       location ~ ^(/clusterlist|/api/clusters)$ {
         add_header Content-Type application/json;
-        set $cluster_list '[{"api":"incloud-api.dev5.infra.aenix.org","baseDomain":"dev5.infra.aenix.org","description":"dashboard.dev5.infra.aenix.org","externalDomain":"dashboard.dev5.infra.aenix.org","name":"cozydev4","tenant":"dev"}]';
+        set $cluster_list '[{"api":"{{ $host }}","baseDomain":"{{ $host }}","description":"dashboard.{{ $host }}","externalDomain":"dashboard.{{ $host }}","name":"cozydev4","tenant":"dev"}]';
         return 200 $cluster_list;
       }
 
@@ -27,7 +30,7 @@ data:
           proxy_send_timeout 86400s;
 
           rewrite /api/clusters/cozydev4/(.*) /$1  break;
-          proxy_pass http://incloud-web-nginx.incloud-web.svc:8080;
+          proxy_pass http://incloud-web-nginx.{{ .Release.Namespace }}.svc:8080;
       }
 
       location /k8s {
@@ -36,7 +39,7 @@ data:
       }
 
       location /openapi-bff {
-          proxy_pass http://incloud-web-web.incloud-web.svc:64231;
+          proxy_pass http://incloud-web-web.{{ .Release.Namespace }}.svc:64231;
       }
 
 
@@ -49,15 +52,15 @@ data:
           proxy_read_timeout 86400s;
           proxy_send_timeout 86400s;
 
-          proxy_pass http://incloud-web-web.incloud-web.svc:64231;
+          proxy_pass http://incloud-web-web.{{ .Release.Namespace }}.svc:64231;
       }
 
       location = / {
-          return 301 https://dashboard.dev5.infra.aenix.org/openapi-ui;
+          return 301 https://dashboard.{{ $host }}/openapi-ui;
       }
 
       location / {
-          proxy_pass http://incloud-web-web.incloud-web.svc:8080;
+          proxy_pass http://incloud-web-web.{{ .Release.Namespace }}.svc:8080;
       }
 
       location /healthcheck {
@@ -67,12 +70,4 @@ data:
     }
 kind: ConfigMap
 metadata:
-  annotations: {}
-  labels:
-    app.kubernetes.io/instance: incloud-web
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: nginx
-    app.kubernetes.io/version: 1.16.0
-    helm.sh/chart: appSpec-0.1.0
   name: incloud-web-nginx-config
-  namespace: incloud-web

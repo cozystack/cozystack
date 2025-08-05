@@ -1,25 +1,29 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $issuerType := (index $cozyConfig.data "clusterissuer") | default "http01" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- $exposeServices := splitList "," ((index $cozyConfig.data "expose-services") | default "") }}
+{{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
+
+{{- if and (has "dashboard" $exposeServices) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-    acme.cert-manager.io/http01-ingress-class: tenant-root
     cert-manager.io/cluster-issuer: letsencrypt-prod
+    {{- if eq $issuerType "cloudflare" }}
+    {{- else }}
+    acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
+    {{- end }}
     nginx.ingress.kubernetes.io/rewrite-target: /
-    # TODO
     nginx.ingress.kubernetes.io/client-max-body-size: 100m
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
     nginx.ingress.kubernetes.io/proxy-buffer-size: 100m
     nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
-  labels:
-    chart: helm-inserter-0.2.5
-    heritage: Helm
-    release: incloud-web
-  name: incloud-web-incloud-ingress
-  namespace: incloud-web
+  name: dashboard-web-ingress
 spec:
-  ingressClassName: tenant-root
+  ingressClassName: {{ $exposeIngress }}
   rules:
-    - host: dashboard.dev5.infra.aenix.org
+    - host: dashboard.{{ $host }}
       http:
         paths:
           - backend:
@@ -31,5 +35,6 @@ spec:
             pathType: Prefix
   tls:
     - hosts:
-        - dashboard.dev5.infra.aenix.org
-      secretName: incloud-web-tls
+        - dashboard.{{ $host }}
+      secretName: dashboard-web-tls
+{{- end }}
