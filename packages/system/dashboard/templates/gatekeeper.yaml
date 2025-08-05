@@ -3,12 +3,6 @@ kind: Deployment
 metadata:
   name: incloud-web-gatekeeper
   namespace: incloud-web
-  labels:
-    app.kubernetes.io/instance: incloud-web
-    app.kubernetes.io/name: gatekeeper
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/version: 7.7.1
-    helm.sh/chart: appSpec-0.1.0
 spec:
   replicas: 1
   selector:
