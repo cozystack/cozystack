@@ -44,20 +44,89 @@ func init() {
 /* ----------------------------- templates -------------------------------- */
 
 var loginTmpl = template.Must(template.New("login").Parse(`
-<!doctype html><html><head><title>Login</title></head>
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Login</title>
+	<style>
+		body {
+			margin: 0;
+			height: 100vh;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background: #f4f6f8;
+			font-family: Arial, sans-serif;
+		}
+		.card {
+			background: #fff;
+			padding: 2rem;
+			border-radius: 12px;
+			box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+			width: 400px;
+			text-align: center;
+		}
+		h2 {
+			margin-bottom: 1rem;
+			color: #333;
+		}
+		input {
+			width: 100%;
+			padding: 0.8rem;
+			margin-bottom: 1rem;
+			border: 1px solid #ccc;
+			border-radius: 8px;
+			font-size: 1rem;
+			transition: border 0.3s;
+		}
+		input:focus {
+			outline: none;
+			border-color: #4a90e2;
+		}
+		button {
+			width: 100%;
+			padding: 0.8rem;
+			background: #4a90e2;
+			color: white;
+			font-size: 1rem;
+			font-weight: bold;
+			border: none;
+			border-radius: 8px;
+			cursor: pointer;
+			transition: background 0.3s;
+		}
+		button:hover {
+			background: #357ABD;
+		}
+		.error {
+			color: #e74c3c;
+			margin-bottom: 1rem;
+		}
+	</style>
+</head>
 <body>
-	<h2>Enter ServiceAccount / OIDC token</h2>
-	{{if .Err}}<p style="color:red">{{.Err}}</p>{{end}}
-	<form method="POST" action="{{.Action}}">
-		<input style="width:420px" name="token" placeholder="Paste token" autofocus/>
-		<button type="submit">Login</button>
-	</form>
-</body></html>`))
+	<div class="card">
+		<h2>Kubernetes API Token</h2>
+		{{if .Err}}<p class="error">{{.Err}}</p>{{end}}
+		<form method="POST" action="{{.Action}}">
+			<input type="text" name="token" placeholder="Paste token here" autofocus />
+			<button type="submit">Login</button>
+		</form>
+	</div>
+</body>
+</html>`))
 
 /* ----------------------------- helpers ---------------------------------- */
 
 func decodeJWT(raw string) jwt.MapClaims {
-	tkn, _ := jwt.Parse(raw, nil)
+	if raw == "" {
+		return jwt.MapClaims{}
+	}
+	tkn, _, err := new(jwt.Parser).ParseUnverified(raw, jwt.MapClaims{})
+	if err != nil || tkn == nil {
+		return jwt.MapClaims{}
+	}
 	if c, ok := tkn.Claims.(jwt.MapClaims); ok {
 		return c
 	}
@@ -88,7 +157,10 @@ func encodeSession(sc *securecookie.SecureCookie, token string, exp, issued int6
 		"expires":      exp,
 		"issued":       issued,
 	}
-	return sc.Encode(cookieName, v)
+	if sc != nil {
+		return sc.Encode(cookieName, v)
+	}
+	return token, nil
 }
 
 /* ----------------------------- main ------------------------------------- */
@@ -106,14 +178,16 @@ func main() {
 	if cookieSecretB64 == "" {
 		cookieSecretB64 = os.Getenv("COOKIE_SECRET")
 	}
-	if cookieSecretB64 == "" {
-		log.Fatal("--cookie-secret or $COOKIE_SECRET is required")
+	var sc *securecookie.SecureCookie
+	if cookieSecretB64 != "" {
+		secret, err := base64.StdEncoding.DecodeString(cookieSecretB64)
+		if err != nil {
+			log.Fatalf("cookie-secret: %v", err)
+		}
+		sc = securecookie.New(secret, nil)
+	} else {
+		log.Println("warning: no cookie-secret provided, cookies will be stored unsigned")
 	}
-	secret, err := base64.StdEncoding.DecodeString(cookieSecretB64)
-	if err != nil {
-		log.Fatalf("cookie-secret: %v", err)
-	}
-	sc := securecookie.New(secret, nil)
 
 	// control paths
 	signIn := path.Join(proxyPrefix, "sign_in")
@@ -189,12 +263,21 @@ func main() {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		var token string
 		var sess map[string]interface{}
-		if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+		if sc != nil {
+			if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			token, _ = sess["access_token"].(string)
+		} else {
+			token = c.Value
+			sess = map[string]interface{}{
+				"expires": time.Now().Add(24 * time.Hour).Unix(),
+				"issued":  time.Now().Unix(),
+			}
 		}
-		token, _ := sess["access_token"].(string)
 		claims := decodeJWT(token)
 
 		out := map[string]interface{}{
@@ -219,12 +302,21 @@ func main() {
 			http.Redirect(w, r, signIn, http.StatusFound)
 			return
 		}
+		var token string
 		var sess map[string]interface{}
-		if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
-			http.Redirect(w, r, signIn, http.StatusFound)
-			return
+		if sc != nil {
+			if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
+				http.Redirect(w, r, signIn, http.StatusFound)
+				return
+			}
+			token, _ = sess["access_token"].(string)
+		} else {
+			token = c.Value
+			sess = map[string]interface{}{
+				"expires": time.Now().Add(24 * time.Hour).Unix(),
+				"issued":  time.Now().Unix(),
+			}
 		}
-		token, _ := sess["access_token"].(string)
 		if token == "" {
 			http.Redirect(w, r, signIn, http.StatusFound)
 			return
