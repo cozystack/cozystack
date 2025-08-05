@@ -2,4 +2,3 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: incloud-web-gatekeeper
-  namespace: incloud-web
