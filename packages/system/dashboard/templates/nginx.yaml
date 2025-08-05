@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: incloud-web-nginx
-  namespace: incloud-web
 spec:
   replicas: 1
   selector:
