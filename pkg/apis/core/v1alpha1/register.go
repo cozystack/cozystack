@@ -4,7 +4,6 @@
 package v1alpha1
 
 import (
-	"github.com/cozystack/cozystack/pkg/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -16,7 +15,7 @@ import (
 // -----------------------------------------------------------------------------
 
 // GroupName is the API group for every resource in this package.
-const GroupName = "apps.cozystack.io"
+const GroupName = "core.cozystack.io"
 
 // SchemeGroupVersion is the canonical {group,version} for v1alpha1.
 var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1alpha1"}
@@ -53,21 +52,14 @@ func Resource(resource string) schema.GroupResource {
 // Public helpers consumed by the apiserver wiring
 // -----------------------------------------------------------------------------
 
-// RegisterDynamicTypes adds per-tenant “Application” kinds that are only known
-// at runtime from a config file.
-func RegisterDynamicTypes(scheme *runtime.Scheme, cfg *config.ResourceConfig) error {
-	for _, res := range cfg.Resources {
-		kind := res.Application.Kind
-
-		gvk := SchemeGroupVersion.WithKind(kind)
-		scheme.AddKnownTypeWithName(gvk, &Application{})
-		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(kind+"List"), &ApplicationList{})
-
-		gvkInternal := schema.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}.WithKind(kind)
-		scheme.AddKnownTypeWithName(gvkInternal, &Application{})
-		scheme.AddKnownTypeWithName(gvkInternal.GroupVersion().WithKind(kind+"List"), &ApplicationList{})
-
-		klog.V(1).Infof("Registered dynamic kind: %s", kind)
-	}
-	return nil
+// RegisterStaticTypes adds *compile-time* resources such as TenantNamespace.
+func RegisterStaticTypes(scheme *runtime.Scheme) {
+	scheme.AddKnownTypes(SchemeGroupVersion,
+		&TenantNamespace{},
+		&TenantNamespaceList{},
+		&TenantSecret{},
+		&TenantSecretList{},
+	)
+	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
+	klog.V(1).Info("Registered static kinds: TenantNamespace, TenantSecret")
 }
