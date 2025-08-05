@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// TenantNamespace registry: read-only view over core Namespaces whose names
-// start with “tenant-”.
+// TenantNamespace registry: read-only view over Namespaces whose names start
+// with “tenant-”.
 
 package tenantnamespace
 
@@ -13,58 +13,57 @@ import (
 	"sync"
 	"time"
 
-	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	meta "k8s.io/apimachinery/pkg/api/meta"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	"k8s.io/client-go/dynamic"
 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/klog/v2"
+
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
 const (
-	coreNSGroup   = ""
-	coreNSVersion = "v1"
-	coreNSRes     = "namespaces"
-	prefix        = "tenant-"
-	singularName  = "tenantnamespace"
+	prefix       = "tenant-"
+	singularName = "tenantnamespace"
 )
 
-// Verify interface conformance.
+// -----------------------------------------------------------------------------
+// REST storage
+// -----------------------------------------------------------------------------
+
 var (
 	_ rest.Lister               = &REST{}
 	_ rest.Getter               = &REST{}
-	_ rest.Scoper               = &REST{}
 	_ rest.Watcher              = &REST{}
 	_ rest.TableConvertor       = &REST{}
-	_ rest.Storage              = &REST{}
+	_ rest.Scoper               = &REST{}
 	_ rest.SingularNameProvider = &REST{}
 )
 
-// REST provides read-only storage over Namespaces.
 type REST struct {
-	dynamic    dynamic.Interface
-	authClient authorizationv1client.AuthorizationV1Interface // <-- NEW
-	maxWorkers int                                            // <-- NEW
+	core       corev1client.CoreV1Interface
+	authClient authorizationv1client.AuthorizationV1Interface
+	maxWorkers int
 	gvr        schema.GroupVersionResource
 }
 
-func NewREST(dynamicClient dynamic.Interface,
-	authClient authorizationv1client.AuthorizationV1Interface,
+func NewREST(
+	coreCli corev1client.CoreV1Interface,
+	authCli authorizationv1client.AuthorizationV1Interface,
 	maxWorkers int,
 ) *REST {
 	return &REST{
-		dynamic:    dynamicClient,
-		authClient: authClient,
+		core:       coreCli,
+		authClient: authCli,
 		maxWorkers: maxWorkers,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
@@ -75,88 +74,74 @@ func NewREST(dynamicClient dynamic.Interface,
 }
 
 // -----------------------------------------------------------------------------
-// rest.Scoper
+// Basic meta
 // -----------------------------------------------------------------------------
 
-func (r *REST) NamespaceScoped() bool { return false }
-
-// -----------------------------------------------------------------------------
-// Object & name helpers
-// -----------------------------------------------------------------------------
-
-func (r *REST) New() runtime.Object     { return &corev1alpha1.TenantNamespace{} }
-func (r *REST) NewList() runtime.Object { return &corev1alpha1.TenantNamespaceList{} }
-func (r *REST) Kind() string            { return "TenantNamespace" }
+func (*REST) NamespaceScoped() bool { return false }
+func (*REST) New() runtime.Object   { return &corev1alpha1.TenantNamespace{} }
+func (*REST) NewList() runtime.Object {
+	return &corev1alpha1.TenantNamespaceList{}
+}
+func (*REST) Kind() string { return "TenantNamespace" }
 func (r *REST) GroupVersionKind(_ schema.GroupVersion) schema.GroupVersionKind {
 	return r.gvr.GroupVersion().WithKind("TenantNamespace")
 }
-func (r *REST) GetSingularName() string { return singularName }
+func (*REST) GetSingularName() string { return singularName }
 
 // -----------------------------------------------------------------------------
 // Lister / Getter
 // -----------------------------------------------------------------------------
 
-func listCoreNamespaces(ctx context.Context, cli dynamic.Interface) (*unstructured.UnstructuredList, error) {
-	return cli.Resource(schema.GroupVersionResource{
-		Group:    coreNSGroup,
-		Version:  coreNSVersion,
-		Resource: coreNSRes,
-	}).List(ctx, metav1.ListOptions{})
-}
-
-func (r *REST) List(ctx context.Context, _ *metainternal.ListOptions) (runtime.Object, error) {
-	nsList, err := listCoreNamespaces(ctx, r.dynamic)
-	if err != nil && apierrors.IsForbidden(err) {
-		nsList, err = listCoreNamespaces(ctx, r.dynamic)
-		if err != nil {
-			return nil, err
-		}
-
-	}
+func (r *REST) List(
+	ctx context.Context,
+	_ *metainternal.ListOptions,
+) (runtime.Object, error) {
+	nsList, err := r.core.Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	var tenantObjs []unstructured.Unstructured
+	var tenantNames []string
 	for i := range nsList.Items {
-		if strings.HasPrefix(nsList.Items[i].GetName(), prefix) {
-			tenantObjs = append(tenantObjs, nsList.Items[i])
+		if strings.HasPrefix(nsList.Items[i].Name, prefix) {
+			tenantNames = append(tenantNames, nsList.Items[i].Name)
 		}
 	}
 
-	allowed, err := r.filterAccessibleTenantNamespaces(ctx, tenantObjs)
+	allowed, err := r.filterAccessible(ctx, tenantNames)
 	if err != nil {
 		return nil, err
 	}
-	return r.buildTenantNamespaceList(nsList.GetResourceVersion(), allowed), nil
+
+	return r.makeList(nsList, allowed), nil
 }
 
-func (r *REST) Get(ctx context.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
+func (r *REST) Get(
+	ctx context.Context,
+	name string,
+	opts *metav1.GetOptions,
+) (runtime.Object, error) {
 	if !strings.HasPrefix(name, prefix) {
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
-	u, err := r.dynamic.Resource(schema.GroupVersionResource{
-		Group:    coreNSGroup,
-		Version:  coreNSVersion,
-		Resource: coreNSRes,
-	}).Get(ctx, name, *opts)
+	ns, err := r.core.Namespaces().Get(ctx, name, *opts)
 	if err != nil {
 		return nil, err
 	}
 
 	return &corev1alpha1.TenantNamespace{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "core.cozystack.io/v1alpha1",
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       "TenantNamespace",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              u.GetName(),
-			UID:               u.GetUID(),
-			ResourceVersion:   u.GetResourceVersion(),
-			CreationTimestamp: u.GetCreationTimestamp(),
-			Labels:            u.GetLabels(),
-			Annotations:       u.GetAnnotations(),
+			Name:              ns.Name,
+			UID:               ns.UID,
+			ResourceVersion:   ns.ResourceVersion,
+			CreationTimestamp: ns.CreationTimestamp,
+			Labels:            ns.Labels,
+			Annotations:       ns.Annotations,
 		},
 	}, nil
 }
@@ -166,27 +151,43 @@ func (r *REST) Get(ctx context.Context, name string, opts *metav1.GetOptions) (r
 // -----------------------------------------------------------------------------
 
 func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
-	nsWatch, err := r.dynamic.Resource(schema.GroupVersionResource{
-		Group:    coreNSGroup,
-		Version:  coreNSVersion,
-		Resource: coreNSRes,
-	}).Watch(ctx, metav1.ListOptions{
-		ResourceVersion: opts.ResourceVersion,
+	nsWatch, err := r.core.Namespaces().Watch(ctx, metav1.ListOptions{
 		Watch:           true,
+		ResourceVersion: opts.ResourceVersion,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	tenantWatch := watch.Filter(nsWatch, func(e watch.Event) (watch.Event, bool) {
-		acc, err := meta.Accessor(e.Object)
-		if err != nil {
-			return e, false
-		}
-		return e, strings.HasPrefix(acc.GetName(), prefix)
-	})
+	events := make(chan watch.Event)
+	pw := watch.NewProxyWatcher(events)
 
-	return tenantWatch, nil
+	go func() {
+		defer pw.Stop()
+		for ev := range nsWatch.ResultChan() {
+			ns, ok := ev.Object.(*corev1.Namespace)
+			if !ok || !strings.HasPrefix(ns.Name, prefix) {
+				continue
+			}
+			out := &corev1alpha1.TenantNamespace{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+					Kind:       "TenantNamespace",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              ns.Name,
+					UID:               ns.UID,
+					ResourceVersion:   ns.ResourceVersion,
+					CreationTimestamp: ns.CreationTimestamp,
+					Labels:            ns.Labels,
+					Annotations:       ns.Annotations,
+				},
+			}
+			events <- watch.Event{Type: ev.Type, Object: out}
+		}
+	}()
+
+	return pw, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -195,18 +196,15 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.Object) (*metav1.Table, error) {
 	now := time.Now()
-	build := func(o runtime.Object, name string, created time.Time) metav1.TableRow {
+	row := func(o *corev1alpha1.TenantNamespace) metav1.TableRow {
 		return metav1.TableRow{
-			Cells:  []interface{}{name, duration.HumanDuration(now.Sub(created))},
+			Cells:  []interface{}{o.Name, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
 			Object: runtime.RawExtension{Object: o},
 		}
 	}
 
-	table := &metav1.Table{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "meta.k8s.io/v1",
-			Kind:       "Table",
-		},
+	tbl := &metav1.Table{
+		TypeMeta: metav1.TypeMeta{APIVersion: "meta.k8s.io/v1", Kind: "Table"},
 		ColumnDefinitions: []metav1.TableColumnDefinition{
 			{Name: "NAME", Type: "string"},
 			{Name: "AGE", Type: "string"},
@@ -214,101 +212,91 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 	}
 
 	switch v := obj.(type) {
-
 	case *corev1alpha1.TenantNamespaceList:
 		for i := range v.Items {
-			ns := &v.Items[i]
-			table.Rows = append(table.Rows, build(ns, ns.Name, ns.CreationTimestamp.Time))
+			tbl.Rows = append(tbl.Rows, row(&v.Items[i]))
 		}
-
+		tbl.ListMeta.ResourceVersion = v.ListMeta.ResourceVersion
 	case *corev1alpha1.TenantNamespace:
-		table.Rows = append(table.Rows, build(v, v.Name, v.CreationTimestamp.Time))
-
-	case *unstructured.UnstructuredList:
-		for i := range v.Items {
-			it := &v.Items[i]
-			table.Rows = append(table.Rows, build(it, it.GetName(), it.GetCreationTimestamp().Time))
-		}
-
-	case *unstructured.Unstructured:
-		table.Rows = append(table.Rows, build(v, v.GetName(), v.GetCreationTimestamp().Time))
-
+		tbl.Rows = append(tbl.Rows, row(v))
+		tbl.ListMeta.ResourceVersion = v.ResourceVersion
 	default:
-		return nil, errNotAcceptable{
-			resource: r.gvr.GroupResource(),
-			message:  fmt.Sprintf("unexpected object type %T", obj),
-		}
+		return nil, notAcceptable{r.gvr.GroupResource(), fmt.Sprintf("unexpected %T", obj)}
+	}
+	return tbl, nil
+}
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alpha1.TenantNamespaceList {
+	set := map[string]struct{}{}
+	for _, n := range allowed {
+		set[n] = struct{}{}
 	}
 
-	return table, nil
-}
-
-// -----------------------------------------------------------------------------
-// Destroy — satisfy rest.Storage; nothing to clean up.
-// -----------------------------------------------------------------------------
-
-func (r *REST) Destroy() {}
-
-// -----------------------------------------------------------------------------
-// Local “NotAcceptable” error helper.
-// -----------------------------------------------------------------------------
-
-type errNotAcceptable struct {
-	resource schema.GroupResource
-	message  string
-}
-
-func (e errNotAcceptable) Error() string { return e.message }
-
-func (e errNotAcceptable) Status() metav1.Status {
-	return metav1.Status{
-		Status:  metav1.StatusFailure,
-		Code:    http.StatusNotAcceptable,
-		Reason:  metav1.StatusReason("NotAcceptable"),
-		Message: e.Error(),
-	}
-}
-
-func (r *REST) buildTenantNamespaceList(rv string, names []string) *corev1alpha1.TenantNamespaceList {
 	out := &corev1alpha1.TenantNamespaceList{
-		TypeMeta: metav1.TypeMeta{APIVersion: "core.cozystack.io/v1alpha1", Kind: "TenantNamespaceList"},
-		ListMeta: metav1.ListMeta{ResourceVersion: rv},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+			Kind:       "TenantNamespaceList",
+		},
+		ListMeta: metav1.ListMeta{ResourceVersion: src.ResourceVersion},
 	}
-	for _, name := range names {
+
+	for i := range src.Items {
+		ns := &src.Items[i]
+		if _, ok := set[ns.Name]; !ok {
+			continue
+		}
 		out.Items = append(out.Items, corev1alpha1.TenantNamespace{
-			TypeMeta:   metav1.TypeMeta{APIVersion: "core.cozystack.io/v1alpha1", Kind: "TenantNamespace"},
-			ObjectMeta: metav1.ObjectMeta{Name: name},
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       "TenantNamespace",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              ns.Name,
+				UID:               ns.UID,
+				ResourceVersion:   ns.ResourceVersion,
+				CreationTimestamp: ns.CreationTimestamp,
+				Labels:            ns.Labels,
+				Annotations:       ns.Annotations,
+			},
 		})
 	}
 	return out
 }
 
-func (r *REST) filterAccessibleTenantNamespaces(
-	ctx context.Context, all []unstructured.Unstructured,
+func (r *REST) filterAccessible(
+	ctx context.Context,
+	names []string,
 ) ([]string, error) {
-
-	var tenantNames []string
-	for i := range all {
-		name := all[i].GetName()
-		if strings.HasPrefix(name, prefix) {
-			tenantNames = append(tenantNames, name)
-		}
+	workers := int(math.Min(float64(r.maxWorkers), float64(len(names))))
+	type job struct{ name string }
+	type res struct {
+		name    string
+		allowed bool
+		err     error
 	}
-
-	workers := int(math.Min(float64(r.maxWorkers), float64(len(tenantNames))))
-	jobs := make(chan nsJob, workers)
-	out := make(chan nsJobRes, workers)
+	jobs := make(chan job, workers)
+	out := make(chan res, workers)
 
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func() { r.sarWorker(ctx, jobs, out); wg.Done() }()
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				ok, err := r.sar(ctx, j.name)
+				out <- res{j.name, ok, err}
+			}
+		}()
 	}
 	go func() { wg.Wait(); close(out) }()
 
 	go func() {
-		for _, n := range tenantNames {
-			jobs <- nsJob{n}
+		for _, n := range names {
+			jobs <- job{n}
 		}
 		close(jobs)
 	}()
@@ -326,42 +314,50 @@ func (r *REST) filterAccessibleTenantNamespaces(
 	return allowed, nil
 }
 
-type nsJob struct {
-	name string
-}
+func (r *REST) sar(ctx context.Context, ns string) (bool, error) {
+	u, ok := request.UserFrom(ctx)
+	if !ok || u == nil {
+		return false, fmt.Errorf("user missing in context")
+	}
 
-type nsJobRes struct {
-	name    string
-	allowed bool
-	err     error
-}
-
-func (r *REST) sarWorker(ctx context.Context, jobs <-chan nsJob, res chan<- nsJobRes) {
-	for j := range jobs {
-		u, ok := request.UserFrom(ctx)
-		if !ok || u == nil {
-			res <- nsJobRes{j.name, false, fmt.Errorf("no user in context")}
-			continue
-		}
-
-		sar := &authorizationv1.SubjectAccessReview{
-			Spec: authorizationv1.SubjectAccessReviewSpec{
-				User:   u.GetName(),
-				Groups: u.GetGroups(),
-				ResourceAttributes: &authorizationv1.ResourceAttributes{
-					Group:     "cozystack.io",
-					Resource:  "workloadmonitors",
-					Verb:      "get",
-					Namespace: j.name,
-				},
+	sar := &authorizationv1.SubjectAccessReview{
+		Spec: authorizationv1.SubjectAccessReviewSpec{
+			User:   u.GetName(),
+			Groups: u.GetGroups(),
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Group:     "cozystack.io",
+				Resource:  "workloadmonitors",
+				Verb:      "get",
+				Namespace: ns,
 			},
-		}
+		},
+	}
 
-		reply, err := r.authClient.SubjectAccessReviews().Create(ctx, sar, metav1.CreateOptions{})
-		if err != nil {
-			res <- nsJobRes{j.name, false, err}
-			continue
-		}
-		res <- nsJobRes{j.name, reply.Status.Allowed, nil}
+	rsp, err := r.authClient.SubjectAccessReviews().
+		Create(ctx, sar, metav1.CreateOptions{})
+	if err != nil {
+		return false, err
+	}
+	return rsp.Status.Allowed, nil
+}
+
+// -----------------------------------------------------------------------------
+// Boiler-plate
+// -----------------------------------------------------------------------------
+
+func (*REST) Destroy() {}
+
+type notAcceptable struct {
+	resource schema.GroupResource
+	message  string
+}
+
+func (e notAcceptable) Error() string { return e.message }
+func (e notAcceptable) Status() metav1.Status {
+	return metav1.Status{
+		Status:  metav1.StatusFailure,
+		Code:    http.StatusNotAcceptable,
+		Reason:  metav1.StatusReason("NotAcceptable"),
+		Message: e.message,
 	}
 }

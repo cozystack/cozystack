@@ -38,6 +38,7 @@ import (
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
+	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
 )
 
 var (
@@ -130,55 +131,36 @@ func (c completedConfig) New() (*CozyServer, error) {
 		return nil, fmt.Errorf("create kube clientset: %v", err)
 	}
 
-	v1alpha1storage := map[string]rest.Storage{}
-
-	// --- static, cluster-scoped resource ---
-	v1alpha1storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
-		tenantnamespacestorage.NewREST(
-			dynamicClient,
-			clientset.AuthorizationV1(),
-			20,
-		),
-	)
-
-	// --- dynamically-configured, per-tenant resources ---
-	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
-		v1alpha1storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
-	}
-
-	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
-		v1alpha1storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
-	}
-
 	// --- static, cluster-scoped resource for core group ---
 	coreV1alpha1Storage := map[string]rest.Storage{}
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
 		tenantnamespacestorage.NewREST(
-			dynamicClient,
+			clientset.CoreV1(),
 			clientset.AuthorizationV1(),
 			20,
 		),
 	)
+	coreV1alpha1Storage["tenantsecrets"] = cozyregistry.RESTInPeace(
+		tenantsecretstorage.NewREST(
+			clientset.CoreV1(),
+		),
+	)
 
-	// --- dynamically-configured, per-tenant resources for apps group ---
+	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	coreApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = coreV1alpha1Storage
+	if err := s.GenericAPIServer.InstallAPIGroup(&coreApiGroupInfo); err != nil {
+		return nil, err
+	}
+
+	// --- dynamically-configured, per-tenant resources ---
 	appsV1alpha1Storage := map[string]rest.Storage{}
 	for _, resConfig := range c.ResourceConfig.Resources {
 		storage := applicationstorage.NewREST(dynamicClient, &resConfig)
 		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
 	}
-
-	// Register groups with separate storage maps
 	appsApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	appsApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = appsV1alpha1Storage
 	if err := s.GenericAPIServer.InstallAPIGroup(&appsApiGroupInfo); err != nil {
-		return nil, err
-	}
-
-	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
-	coreApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = coreV1alpha1Storage
-	if err := s.GenericAPIServer.InstallAPIGroup(&coreApiGroupInfo); err != nil {
 		return nil, err
 	}
 
