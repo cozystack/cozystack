@@ -291,6 +291,23 @@ releases:
   - keycloak-configure
   {{- end }}
 
+- name: dashboard-config
+  releaseName: dashboard-config
+  chart: cozy-dashboard-config
+  namespace: cozy-dashboard
+  values:
+    {{- $dashboardKCconfig := lookup "v1" "ConfigMap" "cozy-dashboard" "kubeapps-auth-config" }}
+    {{- $dashboardKCValues := dig "data" "values.yaml" "" $dashboardKCconfig | fromYaml }}
+    {{- toYaml (deepCopy $dashboardKCValues | mergeOverwrite (fromYaml (include "cozystack.defaultDashboardValues" .))) | nindent 4 }}
+  dependsOn:
+  - cilium
+  - kubeovn
+  - dashboard
+  {{- if eq $oidcEnabled "true" }}
+  - keycloak-configure
+  {{- end }}
+
+
 - name: kamaji
   releaseName: kamaji
   chart: cozy-kamaji
