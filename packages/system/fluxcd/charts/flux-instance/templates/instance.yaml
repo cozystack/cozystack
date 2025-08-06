@@ -24,7 +24,12 @@ spec:
     imagePullSecret: {{ .Values.instance.distribution.imagePullSecret }}
     {{- end }}
   components: {{ .Values.instance.components | toYaml | nindent 4 }}
-  cluster: {{ .Values.instance.cluster | toYaml | nindent 4 }}
+  cluster:
+    {{- range $key, $value := .Values.instance.cluster }}
+    {{- if not (and (kindIs "string" $value) (eq $value "")) }}
+    {{ $key }}: {{ $value }}
+    {{- end }}
+    {{- end }}
   {{- if or .Values.instance.commonMetadata.annotations  .Values.instance.commonMetadata.labels }}
   commonMetadata:
     {{- with .Values.instance.commonMetadata.annotations }}

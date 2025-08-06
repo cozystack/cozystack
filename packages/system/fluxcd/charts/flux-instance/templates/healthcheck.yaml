@@ -1,0 +1,78 @@
+{{- if .Values.healthcheck.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ .Release.Name }}-healthcheck"
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: "{{ .Release.Name }}"
+      labels:
+        app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    spec:
+      restartPolicy: Never
+      {{- with .Values.healthcheck.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ .Values.healthcheck.serviceAccount.name }}
+      {{- with .Values.healthcheck.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.healthcheck.hostNetwork }}
+      hostNetwork: true
+      {{- end }}
+      containers:
+        - name: healthcheck
+          image: "{{ .Values.healthcheck.image.repository }}:{{ .Values.healthcheck.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: "{{ .Values.healthcheck.image.imagePullPolicy }}"
+          args:
+            - wait
+            - instance
+            - {{ include "flux-instance.fullname" . }}
+            - --namespace={{ .Release.Namespace }}
+            - --timeout={{ .Values.healthcheck.timeout }}
+            {{- range .Values.healthcheck.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          {{- with .Values.healthcheck.envs }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.healthcheck.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.healthcheck.resources | nindent 12 }}
+          {{- with .Values.healthcheck.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.healthcheck.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.healthcheck.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.healthcheck.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.healthcheck.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

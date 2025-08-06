@@ -85,6 +85,16 @@ spec:
                       required for object-level workload identity.
                       This feature is only available in Flux v2.6.0 and later.
                     type: boolean
+                  size:
+                    description: |-
+                      Size defines the vertical scaling profile of the Flux controllers.
+                      The size is used to determine the concurrency and CPU/Memory limits for the Flux controllers.
+                      Accepted values are: 'small', 'medium' and 'large'.
+                    enum:
+                    - small
+                    - medium
+                    - large
+                    type: string
                   tenantDefaultServiceAccount:
                     description: |-
                       TenantDefaultServiceAccount is the name of the service account
