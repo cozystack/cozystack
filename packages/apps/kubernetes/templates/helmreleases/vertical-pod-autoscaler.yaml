@@ -3,8 +3,8 @@
 {{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 {{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
+vpaForVPA: false
 vertical-pod-autoscaler:
-  vpaForVPA: false
   recommender:
     extraArgs:
       container-name-label: container
