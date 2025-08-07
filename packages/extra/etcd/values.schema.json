@@ -17,25 +17,46 @@
       "properties": {
         "cpu": {
           "description": "The number of CPU cores allocated",
-          "type": "string",
-          "default": "4",
+          "default": 4,
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
           "x-kubernetes-int-or-string": true
         },
         "memory": {
           "description": "The amount of memory allocated",
-          "type": "string",
           "default": "1Gi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
           "x-kubernetes-int-or-string": true
         }
       }
     },
     "size": {
       "description": "Persistent Volume size",
-      "type": "string",
       "default": "4Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
       "x-kubernetes-int-or-string": true
     },
     "storageClass": {

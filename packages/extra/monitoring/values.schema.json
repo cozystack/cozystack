@@ -91,16 +91,30 @@
               "properties": {
                 "cpu": {
                   "description": "CPU limit (maximum available CPU)",
-                  "type": "string",
-                  "default": "1",
+                  "default": 1,
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 },
                 "memory": {
                   "description": "Memory limit (maximum available memory)",
-                  "type": "string",
                   "default": "1Gi",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 }
               }
@@ -114,16 +128,30 @@
               "properties": {
                 "cpu": {
                   "description": "CPU request (minimum available CPU)",
-                  "type": "string",
                   "default": "100m",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 },
                 "memory": {
                   "description": "Memory request (minimum available memory)",
-                  "type": "string",
                   "default": "256Mi",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 }
               }
@@ -197,16 +225,30 @@
               "properties": {
                 "cpu": {
                   "description": "CPU limit (maximum available CPU)",
-                  "type": "string",
-                  "default": "1",
+                  "default": 1,
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 },
                 "memory": {
                   "description": "Memory limit (maximum available memory)",
-                  "type": "string",
                   "default": "1Gi",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 }
               }
@@ -220,16 +262,30 @@
               "properties": {
                 "cpu": {
                   "description": "CPU request (minimum available CPU)",
-                  "type": "string",
                   "default": "100m",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 },
                 "memory": {
                   "description": "Memory request (minimum available memory)",
-                  "type": "string",
                   "default": "256Mi",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
                   "x-kubernetes-int-or-string": true
                 }
               }
@@ -338,16 +394,30 @@
                 "properties": {
                   "cpu": {
                     "description": "CPU limit (maximum available CPU)",
-                    "type": "string",
-                    "default": "1",
+                    "default": 1,
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   },
                   "memory": {
                     "description": "Memory limit (maximum available memory)",
-                    "type": "string",
                     "default": "1Gi",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   }
                 }
@@ -358,16 +428,30 @@
                 "properties": {
                   "cpu": {
                     "description": "CPU request (minimum available CPU)",
-                    "type": "string",
                     "default": "100m",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   },
                   "memory": {
                     "description": "Memory request (minimum available memory)",
-                    "type": "string",
                     "default": "256Mi",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   }
                 }
@@ -384,16 +468,30 @@
                 "properties": {
                   "cpu": {
                     "description": "CPU limit (maximum available CPU)",
-                    "type": "string",
-                    "default": "1",
+                    "default": 1,
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   },
                   "memory": {
                     "description": "Memory limit (maximum available memory)",
-                    "type": "string",
                     "default": "1Gi",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   }
                 }
@@ -404,16 +502,30 @@
                 "properties": {
                   "cpu": {
                     "description": "CPU request (minimum available CPU)",
-                    "type": "string",
                     "default": "100m",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   },
                   "memory": {
                     "description": "Memory request (minimum available memory)",
-                    "type": "string",
                     "default": "256Mi",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   }
                 }
@@ -430,16 +542,30 @@
                 "properties": {
                   "cpu": {
                     "description": "CPU limit (maximum available CPU)",
-                    "type": "string",
-                    "default": "1",
+                    "default": 1,
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   },
                   "memory": {
                     "description": "Memory limit (maximum available memory)",
-                    "type": "string",
                     "default": "1Gi",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   }
                 }
@@ -450,16 +576,30 @@
                 "properties": {
                   "cpu": {
                     "description": "CPU request (minimum available CPU)",
-                    "type": "string",
                     "default": "100m",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   },
                   "memory": {
                     "description": "Memory request (minimum available memory)",
-                    "type": "string",
                     "default": "256Mi",
                     "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
                     "x-kubernetes-int-or-string": true
                   }
                 }

@@ -27,22 +27,31 @@
           "ip": {
             "type": "object",
             "required": [
-              "address",
-              "gateway",
-              "netmask"
+              "address"
             ],
             "properties": {
               "address": {
                 "description": "IP address",
-                "type": "string"
-              },
-              "gateway": {
-                "description": "IP gateway",
-                "type": "string"
-              },
-              "netmask": {
-                "description": "Netmask",
-                "type": "string"
+                "type": "object",
+                "required": [
+                  "address",
+                  "gateway",
+                  "netmask"
+                ],
+                "properties": {
+                  "address": {
+                    "description": "IP address",
+                    "type": "string"
+                  },
+                  "gateway": {
+                    "description": "IP gateway",
+                    "type": "string"
+                  },
+                  "netmask": {
+                    "description": "Netmask",
+                    "type": "string"
+                  }
+                }
               }
             }
           },

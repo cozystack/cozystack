@@ -46,9 +46,16 @@
     },
     "size": {
       "description": "Persistent Volume size",
-      "type": "string",
       "default": "10Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
       "x-kubernetes-int-or-string": true
     },
     "storageClass": {
@@ -82,8 +89,15 @@
           },
           "size": {
             "description": "Zone storage size",
-            "type": "string",
             "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "x-kubernetes-int-or-string": true
           }
         }

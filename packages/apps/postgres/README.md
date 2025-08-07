@@ -66,16 +66,16 @@ See:
 
 ### Common parameters
 
-| Name               | Description                                                                                                                               | Type      | Value   |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------- |
-| `replicas`         | Number of Postgres replicas                                                                                                               | `int`     | `2`     |
-| `resources`        | Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.   | `*object` | `{}`    |
-| `resources.cpu`    | CPU                                                                                                                                       | `*string` | `null`  |
-| `resources.memory` | Memory                                                                                                                                    | `*string` | `null`  |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`  | `{}`    |
-| `size`             | Persistent Volume Claim size, available for application data                                                                              | `string`  | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data                                                                                                       | `string`  | `""`    |
-| `external`         | Enable external access from outside the cluster                                                                                           | `bool`    | `false` |
+| Name               | Description                                                                                                                               | Type        | Value   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `replicas`         | Number of Postgres replicas                                                                                                               | `int`       | `2`     |
+| `resources`        | Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.   | `*object`   | `{}`    |
+| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
+| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro` |
+| `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
+| `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
+| `external`         | Enable external access from outside the cluster                                                                                           | `bool`      | `false` |
 
 
 ### Application-specific parameters

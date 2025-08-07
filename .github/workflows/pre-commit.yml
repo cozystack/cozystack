@@ -29,7 +29,7 @@ jobs:
       - name: Install generate
         run: |
           curl -sSL https://github.com/cozystack/readme-generator-for-helm/releases/download/v1.0.0/readme-generator-for-helm-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ readme-generator-for-helm
-          curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v0.7.0/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
+          curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v0.8.1/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
 
       - name: Run pre-commit hooks
         run: |

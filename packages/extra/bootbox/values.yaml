@@ -1,7 +1,7 @@
 ## @section Common parameters
 
 ## @param whitelistHTTP {bool} Secure HTTP by enabling client networks whitelisting
-## @param whitelist {[]*string} List of client networks
+## @param whitelist {[]string} List of client networks
 ## Example:
 ## whitelistHTTP: true
 ## whitelist:
@@ -15,9 +15,10 @@ whitelist: []
 ## @field machine {machine} Machine configuration
 ## @field machine.hostname {string} Hostname
 ## @field machine.arch {string} Architecture
-## @field machine.ip.address {string} IP address
-## @field machine.ip.gateway {string} IP gateway
-## @field machine.ip.netmask {string} Netmask
+## @field machine.ip.address {machineConfig} IP address
+## @field machineConfig.address {string} IP address
+## @field machineConfig.gateway {string} IP gateway
+## @field machineConfig.netmask {string} Netmask
 ## @field machine.leaseTime {int} Lease time
 ## @field machine.mac {[]string} MAC addresses
 ## @field machine.nameServers {[]string} Name servers
