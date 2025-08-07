@@ -53,6 +53,15 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 | `backup.s3SecretKey`     | Secret key for S3, used for authentication     | `ju3eum4dekeich9ahM1te8waeGai0oog`                     |
 | `backup.resticPassword`  | Password for Restic backup encryption          | `ChaXoveekoh6eigh4siesheeda2quai0`                     |
 
+### clickhouseKeeper parameters
+
+| Name                               | Description                                                                                                                 | Value   |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination                                                                           | `true`  |
+| `clickhouseKeeper.size`            | Persistent Volume Claim size, available for application data                                                                | `1Gi`   |
+| `clickhouseKeeper.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge. | `micro` |
+| `clickhouseKeeper.replicas`        | Number of keeper replicas                                                                                                   | `3`     |
+
 ## Parameter examples and reference
 
 ### resources and resourcesPreset

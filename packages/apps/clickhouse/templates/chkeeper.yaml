@@ -1,0 +1,96 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+
+{{- if .Values.clickhouseKeeper.enabled }}
+apiVersion: "clickhouse-keeper.altinity.com/v1"
+kind: "ClickHouseKeeperInstallation"
+metadata:
+  name: "{{ .Release.Name }}-keeper"
+  annotations:
+    prometheus.io/port: "7000"
+    prometheus.io/scrape: "true"
+spec:
+  namespaceDomainPattern: "%s.svc.{{ $clusterDomain }}"
+  configuration:
+    clusters:
+      - name: "cluster1"
+        layout:
+          replicasCount: {{ .Values.clickhouseKeeper.replicas }}
+    settings:
+      logger/level: "trace"
+      logger/console: "true"
+      listen_host: "0.0.0.0"
+      keeper_server/four_letter_word_white_list: "*"
+      keeper_server/coordination_settings/raft_logs_level: "information"
+      prometheus/endpoint: "/metrics"
+      prometheus/port: "7000"
+      prometheus/metrics: "true"
+      prometheus/events: "true"
+      prometheus/asynchronous_metrics: "true"
+      prometheus/status_info: "false"
+
+  defaults:
+    templates:
+      # Templates are specified as default for all clusters
+      podTemplate: default
+      dataVolumeClaimTemplate: default
+
+  templates:
+    podTemplates:
+      - name: default
+        metadata:
+          labels:
+            app: "{{ .Release.Name }}-keeper"
+          annotations:
+            prometheus.io/port: "7000"
+            prometheus.io/scrape: "true"
+        spec:
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: "app"
+                        operator: In
+                        values:
+                          - "{{ .Release.Name }}-keeper"
+                  topologyKey: "kubernetes.io/hostname"
+          containers:
+            - name: clickhouse-keeper
+              imagePullPolicy: IfNotPresent
+              image: clickhouse/clickhouse-keeper:24.9.2.42
+              resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.clickhouseKeeper.resourcesPreset .Values.resources $) | nindent 20 }}  
+          securityContext:
+            fsGroup: 101
+
+    volumeClaimTemplates:
+      - name: default
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: "{{ .Values.clickhouseKeeper.size }}"
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: {{ .Release.Name }}-keeper
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-keeper
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scheme: http
+      relabelConfigs:
+        - action: replace
+          sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: instance
+{{- end }}

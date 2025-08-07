@@ -1,3 +1,8 @@
+namespaceOverride: ""
+# commonLabels -- set of labels that will be applied to all the resources for the operator
+commonLabels: {}
+# commonAnnotations -- set of annotations that will be applied to all the resources for the operator
+commonAnnotations: {}
 operator:
   image:
     # operator.image.repository -- image repository
@@ -7,7 +12,7 @@ operator:
     # operator.image.pullPolicy -- image pull policy
     pullPolicy: IfNotPresent
   containerSecurityContext: {}
-  # operator.resources -- custom resource configuration, look `kubectl explain pod.spec.containers.resources` for details
+  # operator.resources -- custom resource configuration, check `kubectl explain pod.spec.containers.resources` for details
   resources: {}
   #  limits:
   #    cpu: 100m
@@ -17,7 +22,7 @@ operator:
   #    memory: 128Mi
 
   # operator.env -- additional environment variables for the clickhouse-operator container in deployment
-  # possible format value [{"name": "SAMPLE", "value": "text"}]
+  # possible format value `[{"name": "SAMPLE", "value": "text"}]`
   env: []
 metrics:
   enabled: true
@@ -39,15 +44,16 @@ metrics:
   #    memory: 128Mi
 
   # metrics.env -- additional environment variables for the deployment of metrics-exporter containers
-  # possible format value [{"name": "SAMPLE", "value": "text"}]
+  # possible format value `[{"name": "SAMPLE", "value": "text"}]`
   env: []
 # imagePullSecrets -- image pull secret for private images in clickhouse-operator pod
-#  possible value format [{"name":"your-secret-name"}]
-#  look `kubectl explain pod.spec.imagePullSecrets` for details
+# possible value format `[{"name":"your-secret-name"}]`,
+# check `kubectl explain pod.spec.imagePullSecrets` for details
 imagePullSecrets: []
 # podLabels -- labels to add to the clickhouse-operator pod
 podLabels: {}
-# podAnnotations -- annotations to add to the clickhouse-operator pod, look `kubectl explain pod.spec.annotations` for details
+# podAnnotations -- annotations to add to the clickhouse-operator pod, check `kubectl explain pod.spec.annotations` for details
+# @default -- check the `values.yaml` file
 podAnnotations:
   prometheus.io/port: '8888'
   prometheus.io/scrape: 'true'
@@ -65,8 +71,10 @@ serviceAccount:
   # serviceAccount.name -- the name of the service account to use; if not set and create is true, a name is generated using the fullname template
   name:
 rbac:
-  # rbac.create -- specifies whether cluster roles and cluster role bindings should be created
+  # rbac.create -- specifies whether rbac resources should be created
   create: true
+  # rbac.namespaceScoped -- specifies whether to create roles and rolebindings at the cluster level or namespace level
+  namespaceScoped: false
 secret:
   # secret.create -- create a secret with operator credentials
   create: true
@@ -74,21 +82,42 @@ secret:
   username: clickhouse_operator
   # secret.password -- operator credentials password
   password: clickhouse_operator_password
-# nodeSelector -- node for scheduler pod assignment, look `kubectl explain pod.spec.nodeSelector` for details
+# nodeSelector -- node for scheduler pod assignment, check `kubectl explain pod.spec.nodeSelector` for details
 nodeSelector: {}
-# tolerations -- tolerations for scheduler pod assignment, look `kubectl explain pod.spec.tolerations` for details
+# tolerations -- tolerations for scheduler pod assignment, check `kubectl explain pod.spec.tolerations` for details
 tolerations: []
-# affinity -- affinity for scheduler pod assignment, look `kubectl explain pod.spec.affinity` for details
+# affinity -- affinity for scheduler pod assignment, check `kubectl explain pod.spec.affinity` for details
 affinity: {}
-# podSecurityContext - operator deployment SecurityContext, look `kubectl explain pod.spec.securityContext` for details
+# podSecurityContext - operator deployment SecurityContext, check `kubectl explain pod.spec.securityContext` for details
 podSecurityContext: {}
+# topologySpreadConstraints - topologySpreadConstraints affinity for scheduler pod assignment, check `kubectl explain pod.spec.topologySpreadConstraints` for details
+topologySpreadConstraints: []
 serviceMonitor:
-  # serviceMonitor.enabled -- ServiceMonitor Custom resource is created for a (prometheus-operator)[https://github.com/prometheus-operator/prometheus-operator]
+  # serviceMonitor.enabled -- ServiceMonitor Custom resource is created for a [prometheus-operator](https://github.com/prometheus-operator/prometheus-operator)
+  # In serviceMonitor will be created two endpoints clickhouse-metrics on port 8888 and operator-metrics # 9999. Ypu can specify interval, scrapeTimeout, relabelings, metricRelabelings for each endpoint below
   enabled: false
   # serviceMonitor.additionalLabels -- additional labels for service monitor
   additionalLabels: {}
-# configs -- clickhouse-operator configs
-# @default -- check the values.yaml file for the config content, auto-generated from latest operator release
+  clickhouseMetrics:
+    # serviceMonitor.interval for clickhouse-metrics endpoint --
+    interval: 30s
+    # serviceMonitor.scrapeTimeout for clickhouse-metrics endpoint -- Prometheus ServiceMonitor scrapeTimeout. If empty, Prometheus uses the global scrape timeout unless it is less than the target's scrape interval value in which the latter is used.
+    scrapeTimeout: ""
+    # serviceMonitor.relabelings for clickhouse-metrics endpoint -- Prometheus [RelabelConfigs] to apply to samples before scraping
+    relabelings: []
+    # serviceMonitor.metricRelabelings for clickhouse-metrics endpoint -- Prometheus [MetricRelabelConfigs] to apply to samples before ingestio
+    metricRelabelings: []
+  operatorMetrics:
+    # serviceMonitor.interval for operator-metrics endpoint --
+    interval: 30s
+    # serviceMonitor.scrapeTimeout for operator-metrics endpoint -- Prometheus ServiceMonitor scrapeTimeout. If empty, Prometheus uses the global scrape timeout unless it is less than the target's scrape interval value in which the latter is used.
+    scrapeTimeout: ""
+    # serviceMonitor.relabelings for operator-metrics endpoint -- Prometheus [RelabelConfigs] to apply to samples before scraping
+    relabelings: []
+    # serviceMonitor.metricRelabelings  for operator-metrics endpoint-- Prometheus [MetricRelabelConfigs] to apply to samples before ingestio
+    metricRelabelings: []
+# configs -- clickhouse operator configs
+# @default -- check the `values.yaml` file for the config content (auto-generated from latest operator release)
 configs:
   confdFiles: null
   configdFiles:
@@ -212,12 +241,12 @@ configs:
             # In case path is relative - it is relative to the folder where configuration file you are reading right now is located.
             path:
               # Path to the folder where ClickHouse configuration files common for all instances within a CHI are located.
-              common: config.d
+              common: chi/config.d
               # Path to the folder where ClickHouse configuration files unique for each instance (host) within a CHI are located.
-              host: conf.d
+              host: chi/conf.d
               # Path to the folder where ClickHouse configuration files with users' settings are located.
               # Files are common for all instances within a CHI.
-              user: users.d
+              user: chi/users.d
           ################################################
           ##
           ## Configuration users section
@@ -287,10 +316,13 @@ configs:
                 - settings/macros/*: "no"
                 - settings/remote_servers/*: "no"
                 - settings/user_directories/*: "no"
+                # these settings should not lead to pod restarts
+                - settings/display_secrets_in_show_and_select: "no"
                 - zookeeper/*: "yes"
                 - files/*.xml: "yes"
                 - files/config.d/*.xml: "yes"
                 - files/config.d/*dict*.xml: "no"
+                - files/config.d/*no_restart*: "no"
                 # exceptions in default profile
                 - profiles/default/background_*_pool_size: "yes"
                 - profiles/default/max_*_for_server: "yes"
@@ -312,7 +344,6 @@ configs:
           # These credentials are used for:
           #   1. Metrics requests
           #   2. Schema maintenance
-          #   3. DROP DNS CACHE
           # User with these credentials can be specified in additional ClickHouse .xml config files,
           # located in 'clickhouse.configuration.file.path.user' folder
           username: ""
@@ -339,6 +370,56 @@ configs:
             connect: 1
             # Timout to perform SQL query from the operator to ClickHouse instances. In seconds.
             query: 4
+        ################################################
+        ##
+        ## Addons specifies additional configuration sections
+        ## Should it be called something like "templates"?
+        ##
+        ################################################
+        addons:
+          rules:
+            - version: "*"
+              spec:
+                configuration:
+                  users:
+                  profiles:
+                  quotas:
+                  settings:
+                  files:
+            - version: ">= 23.3"
+              spec:
+                configuration:
+                  ###
+                  ### users.d is global while description depends on CH version which may vary on per-host basis
+                  ### In case of global-ness this may be better to implement via auto-templates
+                  ###
+                  ### As a solution, this may be applied on the whole cluster based on any of its hosts
+                  ###
+                  ### What to do when host is just created? CH version is not known prior to CH started and user config is required before CH started.
+                  ### We do not have any info about the cluster on initial creation
+                  ###
+                  users:
+                    "{clickhouseOperatorUser}/access_management": 1
+                    "{clickhouseOperatorUser}/named_collection_control": 1
+                    "{clickhouseOperatorUser}/show_named_collections": 1
+                    "{clickhouseOperatorUser}/show_named_collections_secrets": 1
+                  profiles:
+                  quotas:
+                  settings:
+                  files:
+            - version: ">= 23.5"
+              spec:
+                configuration:
+                  users:
+                  profiles:
+                    clickhouse_operator/format_display_secrets_in_show_and_select: 1
+                  quotas:
+                  settings:
+                    ##
+                    ## this may be added on per-host basis into host's conf.d folder
+                    ##
+                    display_secrets_in_show_and_select: 1
+                  files:
         #################################################
         ##
         ## Metrics collection
@@ -352,6 +433,25 @@ configs:
             # Upon reaching this timeout metrics collection is aborted and no more metrics are collected in this cycle.
             # All collected metrics are returned.
             collect: 9
+      keeper:
+        configuration:
+          ################################################
+          ##
+          ## Configuration files section
+          ##
+          ################################################
+          file:
+            # Each 'path' can be either absolute or relative.
+            # In case path is absolute - it is used as is
+            # In case path is relative - it is relative to the folder where configuration file you are reading right now is located.
+            path:
+              # Path to the folder where Keeper configuration files common for all instances within a CHK are located.
+              common: chk/keeper_config.d
+              # Path to the folder where Keeper configuration files unique for each instance (host) within a CHK are located.
+              host: chk/conf.d
+              # Path to the folder where Keeper configuration files with users' settings are located.
+              # Files are common for all instances within a CHI.
+              user: chk/users.d
       ################################################
       ##
       ## Template(s) management section
@@ -367,7 +467,17 @@ configs:
           # Path to the folder where ClickHouseInstallation templates .yaml manifests are located.
           # Templates are added to the list of all templates and used when CHI is reconciled.
           # Templates are applied in sorted alpha-numeric order.
-          path: templates.d
+          path: chi/templates.d
+        chk:
+          # CHK template updates handling policy
+          # Possible policy values:
+          #   - ReadOnStart. Accept CHIT updates on the operators start only.
+          #   - ApplyOnNextReconcile. Accept CHIT updates at all time. Apply news CHITs on next regular reconcile of the CHI
+          policy: ApplyOnNextReconcile
+          # Path to the folder where ClickHouseInstallation templates .yaml manifests are located.
+          # Templates are added to the list of all templates and used when CHI is reconciled.
+          # Templates are applied in sorted alpha-numeric order.
+          path: chk/templates.d
       ################################################
       ##
       ## Reconcile section
@@ -386,9 +496,9 @@ configs:
           #   3. The first shard is always reconciled alone. Concurrency starts from the second shard and onward.
           # Thus limiting number of shards being reconciled (and thus having hosts down) in each CHI by both number and percentage
 
-          # Max number of concurrent shard reconciles within one CHI in progress
+          # Max number of concurrent shard reconciles within one cluster in progress
           reconcileShardsThreadsNumber: 5
-          # Max percentage of concurrent shard reconciles within one CHI in progress
+          # Max percentage of concurrent shard reconciles within one cluster in progress
           reconcileShardsMaxConcurrencyPercent: 50
         # Reconcile StatefulSet scenario
         statefulSet:
@@ -429,6 +539,10 @@ configs:
             exclude: true
             queries: true
             include: false
+            replicas:
+              all: no
+              new: yes
+              delay: 10
       ################################################
       ##
       ## Annotations management section
@@ -471,6 +585,25 @@ configs:
         #  LabelClusterScopeCycleIndex
         #  LabelClusterScopeCycleOffset
         appendScope: "no"
+      ################################################
+      ##
+      ## Metrics management section
+      ##
+      ################################################
+      metrics:
+        labels:
+          exclude: []
+      ################################################
+      ##
+      ## Status management section
+      ##
+      ################################################
+      status:
+        fields:
+          action: false
+          actions: false
+          error: false
+          errors: false
       ################################################
       ##
       ## StatefulSet management section
@@ -631,20 +764,87 @@ configs:
           </default>
         </profiles>
       </yandex>
-# additionalResources -- list of additional resources to create (are processed via `tpl` function), useful for create ClickHouse clusters together with clickhouse-operator, look `kubectl explain chi` for details
+  keeperConfdFiles: null
+  keeperConfigdFiles:
+    01-keeper-01-default-config.xml: |
+      <!-- IMPORTANT -->
+      <!-- This file is auto-generated -->
+      <!-- Do not edit this file - all changes would be lost -->
+      <!-- Edit appropriate template in the following folder: -->
+      <!-- deploy/builder/templates-config -->
+      <!-- IMPORTANT -->
+      <clickhouse>
+          <keeper_server>
+              <coordination_settings>
+                  <min_session_timeout_ms>10000</min_session_timeout_ms>
+                  <operation_timeout_ms>10000</operation_timeout_ms>
+                  <raft_logs_level>information</raft_logs_level>
+                  <session_timeout_ms>100000</session_timeout_ms>
+              </coordination_settings>
+              <hostname_checks_enabled>true</hostname_checks_enabled>
+              <log_storage_path>/var/lib/clickhouse-keeper/coordination/logs</log_storage_path>
+              <snapshot_storage_path>/var/lib/clickhouse-keeper/coordination/snapshots</snapshot_storage_path>
+              <storage_path>/var/lib/clickhouse-keeper</storage_path>
+              <tcp_port>2181</tcp_port>
+          </keeper_server>
+          <listen_host>::</listen_host>
+          <listen_host>0.0.0.0</listen_host>
+          <listen_try>1</listen_try>
+          <logger>
+              <console>1</console>
+              <level>information</level>
+          </logger>
+          <max_connections>4096</max_connections>
+      </clickhouse>
+    01-keeper-02-readiness.xml: |
+      <!-- IMPORTANT -->
+      <!-- This file is auto-generated -->
+      <!-- Do not edit this file - all changes would be lost -->
+      <!-- Edit appropriate template in the following folder: -->
+      <!-- deploy/builder/templates-config -->
+      <!-- IMPORTANT -->
+      <clickhouse>
+          <keeper_server>
+              <http_control>
+                  <port>9182</port>
+                  <readiness>
+                      <endpoint>/ready</endpoint>
+                  </readiness>
+              </http_control>
+          </keeper_server>
+      </clickhouse>
+    01-keeper-03-enable-reconfig.xml: |-
+      <!-- IMPORTANT -->
+      <!-- This file is auto-generated -->
+      <!-- Do not edit this file - all changes would be lost -->
+      <!-- Edit appropriate template in the following folder: -->
+      <!-- deploy/builder/templates-config -->
+      <!-- IMPORTANT -->
+      <clickhouse>
+          <keeper_server>
+              <enable_reconfiguration>false</enable_reconfiguration>
+          </keeper_server>
+      </clickhouse>
+  keeperTemplatesdFiles:
+    readme: |-
+      Templates in this folder are packaged with an operator and available via 'useTemplate'
+  keeperUsersdFiles: null
+# additionalResources -- list of additional resources to create (processed via `tpl` function),
+# useful for create ClickHouse clusters together with clickhouse-operator.
+# check `kubectl explain chi` for details
 additionalResources: []
 #  - |
 #    apiVersion: v1
 #    kind: ConfigMap
 #    metadata:
 #      name: {{ include "altinity-clickhouse-operator.fullname" . }}-cm
-#      namespace: {{ .Release.Namespace }}
+#      namespace: {{ include "altinity-clickhouse-operator.namespace" . }}
 #  - |
 #     apiVersion: v1
 #     kind: Secret
 #     metadata:
 #       name: {{ include "altinity-clickhouse-operator.fullname" . }}-s
-#       namespace: {{ .Release.Namespace }}
+#       namespace: {{ include "altinity-clickhouse-operator.namespace" . }}
 #     stringData:
 #       mykey: my-value
 #  - |
@@ -652,15 +852,16 @@ additionalResources: []
 #     kind: ClickHouseInstallation
 #     metadata:
 #       name: {{ include "altinity-clickhouse-operator.fullname" . }}-chi
-#       namespace: {{ .Release.Namespace }}
+#       namespace: {{ include "altinity-clickhouse-operator.namespace" . }}
 #     spec:
 #       configuration:
 #         clusters:
 #         - name: default
 #           layout:
 #             shardsCount: 1
+
 dashboards:
-  # dashboards.enabled -- provision grafana dashboards as secrets (can be synced by grafana dashboards sidecar https://github.com/grafana/helm-charts/blob/grafana-6.33.1/charts/grafana/values.yaml#L679 )
+  # dashboards.enabled -- provision grafana dashboards as configMaps (can be synced by grafana dashboards sidecar https://github.com/grafana/helm-charts/blob/grafana-8.3.4/charts/grafana/values.yaml#L778 )
   enabled: false
   # dashboards.additionalLabels -- labels to add to a secret with dashboards
   additionalLabels:

@@ -45,6 +45,42 @@
             },
             "type": "object"
         },
+        "clickhouseKeeper": {
+            "properties": {
+                "enabled": {
+                    "default": true,
+                    "description": "Deploy ClickHouse Keeper for cluster coordination  ",
+                    "type": "boolean"
+                },
+                "replicas": {
+                    "default": 3,
+                    "description": "Number of keeper replicas",
+                    "type": "number"
+                },
+                "resourcesPreset": {
+                    "default": "micro",
+                    "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+                    "type": "string"
+                },
+                "size": {
+                    "default": "1Gi",
+                    "description": "Persistent Volume Claim size, available for application data",
+                    "type": "string"
+                }
+            },
+            "type": "object",
+            "resourcesPreset": {
+                "enum": [
+                    "nano",
+                    "micro",
+                    "small",
+                    "medium",
+                    "large",
+                    "xlarge",
+                    "2xlarge"
+                ]
+            }
+        },
         "logStorageSize": {
             "default": "2Gi",
             "description": "Size of Persistent Volume for logs",

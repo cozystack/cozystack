@@ -56,3 +56,13 @@ backup:
   s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
   resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
 
+## @section clickhouseKeeper parameters
+## @param clickhouseKeeper.enabled Deploy ClickHouse Keeper for cluster coordination  
+## @param clickhouseKeeper.size Persistent Volume Claim size, available for application data
+## @param clickhouseKeeper.resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+## @param clickhouseKeeper.replicas Number of keeper replicas
+clickhouseKeeper:
+  enabled: true
+  size: 1Gi
+  resourcesPreset: micro
+  replicas: 3

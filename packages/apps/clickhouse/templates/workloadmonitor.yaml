@@ -11,3 +11,18 @@ spec:
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
   version: {{ $.Chart.Version }}
+{{- if .Values.clickhouseKeeper.enabled }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-keeper
+spec:
+  replicas: {{ .Values.clickhouseKeeper.replicas }}
+  minReplicas: 1
+  kind: clickhouse
+  type: clickhouse
+  selector:
+    app: {{ $.Release.Name }}-keeper
+  version: {{ $.Chart.Version }}
+{{- end }}

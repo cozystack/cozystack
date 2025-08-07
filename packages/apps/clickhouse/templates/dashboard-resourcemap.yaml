@@ -23,6 +23,9 @@ rules:
   - workloadmonitors
   resourceNames:
   - {{ .Release.Name }}
+  {{- if .Values.clickhouseKeeper.enabled }}
+  - {{ .Release.Name }}-keeper
+  {{- end }}
   verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding

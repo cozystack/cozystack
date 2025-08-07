@@ -27,6 +27,10 @@ spec:
     s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
     s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
     resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
+  clickhouseKeeper:
+    enabled: true
+    resourcesPreset: "micro"
+    size: "1Gi"
   resources: {}
   resourcesPreset: "nano"
 EOF
