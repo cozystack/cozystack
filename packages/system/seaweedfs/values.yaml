@@ -8,8 +8,8 @@ global:
     enabled: true
 seaweedfs:
   master:
+    volumeSizeLimitMB: 30000
     replicas: 3
-    volumeSizeLimitMB: 100
     #  replication type is XYZ:
     # X number of replica in other data centers
     # Y number of replica in other racks in the same data center

@@ -110,6 +110,7 @@ spec:
             {{- else if $.Values.storageClass }}
             storageClass: {{ $.Values.storageClass }}
             {{- end }}
+            maxVolumes: 0
           nodeSelector: |
             topology.kubernetes.io/zone: {{ $zoneName }}
           dataCenter: {{ $zone.dataCenter | default $zoneName }}
