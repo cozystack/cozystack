@@ -92,6 +92,8 @@ seaweedfs:
       host: "seaweedfs2.demo.cozystack.io"
       annotations:
         nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        nginx.ingress.kubernetes.io/proxy-buffering: "off"
+        nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
         nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
         acme.cert-manager.io/http01-ingress-class: tenant-root
         cert-manager.io/cluster-issuer: letsencrypt-prod
