@@ -14,7 +14,7 @@ spec:
     - replacement: linstor-controller
       targetLabel: job
     - sourceLabels: [__meta_kubernetes_pod_node_name]
-      targetLabel: node
+      targetLabel: controller_node
     - targetLabel: tier
       replacement: cluster
   selector:
