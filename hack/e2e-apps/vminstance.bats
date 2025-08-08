@@ -1,5 +1,12 @@
 #!/usr/bin/env bats
 
+@test "Cleanup" {
+  name='test'
+  diskName='test'
+  kubectl -n tenant-test delete vmdisks.apps.cozystack.io $diskName --ignore-not-found
+  kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --ignore-not-found
+}
+
 @test "Create a VM Disk" {
   name='test'
   kubectl apply -f - <<EOF

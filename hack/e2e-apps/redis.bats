@@ -2,6 +2,7 @@
 
 @test "Create Redis" {
   name='test'
+  kubectl -n tenant-test delete redises.apps.cozystack.io $name --ignore-not-found
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Redis

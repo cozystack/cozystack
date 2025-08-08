@@ -3,6 +3,7 @@
 @test "Create and Verify Seeweedfs Bucket" {
   # Create the bucket resource
   name='test'
+  kubectl -n tenant-test delete buckets.apps.cozystack.io "$name" --ignore-not-found
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Bucket

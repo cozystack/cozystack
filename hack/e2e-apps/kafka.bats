@@ -2,6 +2,7 @@
 
 @test "Create Kafka" {
   name='test'
+  kubectl -n tenant-test delete kafkas.apps.cozystack.io "$name" --ignore-not-found
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kafka

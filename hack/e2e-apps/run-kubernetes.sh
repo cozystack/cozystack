@@ -4,6 +4,7 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name --ignore-not-found
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
