@@ -1,22 +1,25 @@
 ## @section Common parameters
 ##
-## @param replicas Number of replicas
+## @param replicas {int} Number of replicas
 replicas: 2
-## @param resources Explicit CPU and memory configuration for each NATS replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @param resources {*resources} Explicit CPU and memory configuration for each NATS replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU
+## @field resources.memory {*quantity} Memory
 resources: {}
   # resources:
   #   cpu: 4000m
   #   memory: 4Gi
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
 resourcesPreset: "nano"
-## @param storageClass StorageClass used to store the data
+## @param storageClass {string} StorageClass used to store the data
 storageClass: ""
-## @param external Enable external access from outside the cluster
+## @param external {bool} Enable external access from outside the cluster
 external: false
 
 ## @section Application-specific parameters
 ##
-## @param users [object] Users configuration (see example)
+## @param users {map[string]user} Users configuration
+## @field user.password {*string} Password for the user
 ## Example:
 ## users:
 ##   user1:
@@ -24,18 +27,19 @@ external: false
 ##   user2: {}
 users: {}
 
+## @param jetstream {jetstream} Jetstream configuration
 jetstream:
-  ## @param jetstream.enabled Enable or disable Jetstream
-  ## Set to true to enable Jetstream for persistent messaging in NATS.
+  ## @field jetstream.enabled {bool} Enable or disable Jetstream. Set to `true` (default) to enable Jetstream for persistent messaging in NATS.
+  ##
   ## Default: true
   enabled: true
-  ## @param jetstream.size Jetstream persistent storage size
-  ## Specifies the size of the persistent storage for Jetstream (message store).
-  ## Default: 10Gi
+  ## @field jetstream.size {quantity} Jetstream persistent storage size. Specifies the size of the persistent storage for Jetstream (message store).
+  ##
   size: 10Gi
 
+## @param config {config} NATS configuration
 config:
-  ## @param config.merge Additional configuration to merge into NATS config (see example)
+  ## @field config.merge {*merge} Additional configuration to merge into NATS config (see example)
   ## Allows you to customize NATS server settings by merging additional configurations.
   ## For example, you can add extra parameters, configure authentication, or set custom settings.
   ## Default: {}
@@ -63,7 +67,7 @@ config:
   ##   include ./my-config-last.conf;
   ## }
   merge: {}
-  ## @param config.resolver Additional resolver configuration to merge into NATS config (see example)
+  ## @field config.resolver {resolver} Additional resolver configuration to merge into NATS config (see example)
   ## Allows you to customize NATS server settings by merging resolver configurations.
   ## Default: {}
   ## Example: https://github.com/nats-io/k8s/blob/94414664c254b0bbac3a07fc9693f6c4f8f88709/helm/charts/nats/values.yaml#L248-L270

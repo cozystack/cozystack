@@ -13,21 +13,33 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 
 ### Common parameters
 
-| Name              | Description                                                                                                                           | Value   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `replicas`        | Number of RabbitMQ replicas                                                                                                           | `3`     |
-| `resources`       | Explicit CPU and memory configuration for each RabbitMQ replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
-| `resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.           | `nano`  |
-| `size`            | Persistent Volume size                                                                                                                | `10Gi`  |
-| `storageClass`    | StorageClass used to store the data                                                                                                   | `""`    |
-| `external`        | Enable external access from outside the cluster                                                                                       | `false` |
+| Name               | Description                                                                                                                               | Type        | Value   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `replicas`         | Number of RabbitMQ replicas                                                                                                               | `int`       | `3`     |
+| `resources`        | Explicit CPU and memory configuration for each RabbitMQ replica.  When left empty, the preset defined in `resourcesPreset` is applied.    | `*object`   | `{}`    |
+| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
+| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano`  |
+| `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
+| `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
+| `external`         | Enable external access from outside the cluster                                                                                           | `bool`      | `false` |
+
 
 ### Application-specific parameters
 
-| Name     | Description                 | Value |
-| -------- | --------------------------- | ----- |
-| `users`  | Users configuration         | `{}`  |
-| `vhosts` | Virtual Hosts configuration | `{}`  |
+| Name                          | Description                 | Type                | Value   |
+| ----------------------------- | --------------------------- | ------------------- | ------- |
+| `users`                       | Users configuration         | `map[string]object` | `{...}` |
+| `users[name].password`        | Password for the user       | `*string`           | `null`  |
+| `vhosts`                      | Virtual Hosts configuration | `map[string]object` | `{...}` |
+| `vhosts[name].roles`          | Virtual host roles list     | `object`            | `{}`    |
+| `vhosts[name].roles.admin`    | List of admin users         | `[]*string`         | `[]`    |
+| `vhosts[name].roles.readonly` | List of readonly users      | `[]*string`         | `[]`    |
+| `vhost`                       | Virtual Host                | `object`            | `{}`    |
+| `vhost.roles`                 | Virtual host roles list     | `object`            | `{}`    |
+| `vhost.roles.admin`           | List of admin users         | `[]*string`         | `[]`    |
+| `vhost.roles.readonly`        | List of readonly users      | `[]*string`         | `[]`    |
+
 
 ## Parameter examples and reference
 

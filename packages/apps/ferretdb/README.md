@@ -8,42 +8,52 @@ Internally, FerretDB service is backed by Postgres.
 
 ### Common parameters
 
-| Name              | Description                                                                                                                           | Value   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `replicas`        | Number of replicas                                                                                                                    | `2`     |
-| `resources`       | Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
-| `resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.     | `micro` |
-| `size`            | Persistent Volume size                                                                                                                | `10Gi`  |
-| `storageClass`    | StorageClass used to store the data                                                                                                   | `""`    |
-| `external`        | Enable external access from outside the cluster                                                                                       | `false` |
+| Name               | Description                                                                                                                               | Type        | Value   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `replicas`         | Number of replicas                                                                                                                        | `int`       | `2`     |
+| `resources`        | Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.     | `*object`   | `{}`    |
+| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
+| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro` |
+| `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
+| `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
+| `external`         | Enable external access from outside the cluster                                                                                           | `bool`      | `false` |
+
 
 ### Application-specific parameters
 
-| Name                     | Description                                                                                                                 | Value |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `quorum.minSyncReplicas` | Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed                | `0`   |
-| `quorum.maxSyncReplicas` | Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas) | `0`   |
-| `users`                  | Users configuration                                                                                                         | `{}`  |
+| Name                     | Description                                                                                                                 | Type                | Value   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------- |
+| `quorum`                 | Configuration for the quorum-based synchronous replication                                                                  | `object`            | `{}`    |
+| `quorum.minSyncReplicas` | Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed                | `int`               | `0`     |
+| `quorum.maxSyncReplicas` | Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas) | `int`               | `0`     |
+| `users`                  | Users configuration                                                                                                         | `map[string]object` | `{...}` |
+| `users[name].password`   | Password for the user                                                                                                       | `*string`           | `null`  |
+
 
 ### Backup parameters
 
-| Name                     | Description                                                | Value                               |
-| ------------------------ | ---------------------------------------------------------- | ----------------------------------- |
-| `backup.enabled`         | Enable regular backups                                     | `false`                             |
-| `backup.schedule`        | Cron schedule for automated backups                        | `0 2 * * * *`                       |
-| `backup.retentionPolicy` | Retention policy                                           | `30d`                               |
-| `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `s3://bucket/path/to/folder/`       |
-| `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `http://minio-gateway-service:9000` |
-| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`  |
-| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `ju3eum4dekeich9ahM1te8waeGai0oog`  |
+| Name                     | Description                                                | Type      | Value                               |
+| ------------------------ | ---------------------------------------------------------- | --------- | ----------------------------------- |
+| `backup`                 | Backup configuration                                       | `object`  | `{}`                                |
+| `backup.enabled`         | Enable regular backups, default is `false`.                | `*bool`   | `false`                             |
+| `backup.schedule`        | Cron schedule for automated backups                        | `*string` | `0 2 * * * *`                       |
+| `backup.retentionPolicy` | Retention policy                                           | `*string` | `30d`                               |
+| `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `*string` | `http://minio-gateway-service:9000` |
+| `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `*string` | `s3://bucket/path/to/folder/`       |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `*string` | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`  |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `*string` | `ju3eum4dekeich9ahM1te8waeGai0oog`  |
+
 
 ### Bootstrap (recovery) parameters
 
-| Name                     | Description                                                                                                          | Value   |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------- |
-| `bootstrap.enabled`      | Restore database cluster from a backup                                                                               | `false` |
-| `bootstrap.recoveryTime` | Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest | `""`    |
-| `bootstrap.oldName`      | Name of database cluster before deleting                                                                             | `""`    |
+| Name                     | Description                                                                                                           | Type      | Value   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------- | --------- | ------- |
+| `bootstrap`              | Bootstrap (recovery) configuration                                                                                    | `object`  | `{}`    |
+| `bootstrap.enabled`      | Restore database cluster from a backup                                                                                | `*bool`   | `false` |
+| `bootstrap.recoveryTime` | Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest. | `*string` | `""`    |
+| `bootstrap.oldName`      | Name of database cluster before deleting                                                                              | `*string` | `""`    |
+
 
 ## Parameter examples and reference
 

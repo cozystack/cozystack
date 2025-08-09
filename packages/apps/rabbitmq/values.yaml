@@ -1,25 +1,29 @@
 ## @section Common parameters
 ##
-## @param replicas Number of RabbitMQ replicas
+## @param replicas {int} Number of RabbitMQ replicas
 replicas: 3
-## @param resources Explicit CPU and memory configuration for each RabbitMQ replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @param resources {*resources} Explicit CPU and memory configuration for each RabbitMQ replica.  When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU
+## @field resources.memory {*quantity} Memory
+# resources:
+#   cpu: 4000m
+#   memory: 4Gi
 resources: {}
-  # resources:
-  #   cpu: 4000m
-  #   memory: 4Gi
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
 resourcesPreset: "nano"
-## @param size Persistent Volume size
+## @param size {quantity} Persistent Volume Claim size, available for application data
 size: 10Gi
-## @param storageClass StorageClass used to store the data
+## @param storageClass {string} StorageClass used to store the data
 storageClass: ""
-## @param external Enable external access from outside the cluster
+## @param external {bool} Enable external access from outside the cluster
 external: false
 
 
 ## @section Application-specific parameters
 ##
-## @param users [object] Users configuration
+## @param users {map[string]user} Users configuration
+## @field user.password {*string} Password for the user
 ## Example:
 ## users:
 ##   user1:
@@ -31,7 +35,12 @@ external: false
 ##
 users: {}
 
-## @param vhosts Virtual Hosts configuration
+## @param vhosts {map[string]vhost} Virtual Hosts configuration
+## @param vhost {vhost} Virtual Host
+## @field vhost.roles {roles} Virtual host roles list
+## @field roles.admin {[]*string} List of admin users
+## @field roles.readonly {[]*string} List of readonly users
+##
 ## Example:
 ## vhosts:
 ##   myapp:

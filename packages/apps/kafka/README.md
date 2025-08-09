@@ -4,35 +4,49 @@
 
 ### Common parameters
 
-| Name       | Description                                     | Value   |
-| ---------- | ----------------------------------------------- | ------- |
-| `external` | Enable external access from outside the cluster | `false` |
+| Name       | Description                                     | Type   | Value   |
+| ---------- | ----------------------------------------------- | ------ | ------- |
+| `external` | Enable external access from outside the cluster | `bool` | `false` |
+
 
 ### Application-specific parameters
 
-| Name     | Description                        | Value |
-| -------- | ---------------------------------- | ----- |
-| `topics` | Topics configuration (see example) | `[]`  |
+| Name                   | Description          | Type                | Value |
+| ---------------------- | -------------------- | ------------------- | ----- |
+| `topics`               | Topics configuration | `[]object`          | `[]`  |
+| `topics[i].name`       | Topic name           | `string`            | `""`  |
+| `topics[i].partitions` | Number of partitions | `int`               | `0`   |
+| `topics[i].replicas`   | Number of replicas   | `int`               | `0`   |
+| `topics[i].config`     | Topic configuration  | `map[string]object` | `{}`  |
+
 
 ### Kafka configuration
 
-| Name                    | Description                                                                                                                        | Value   |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `kafka.replicas`        | Number of Kafka replicas                                                                                                           | `3`     |
-| `kafka.resources`       | Explicit CPU and memory configuration for each Kafka replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
-| `kafka.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.        | `small` |
-| `kafka.size`            | Persistent Volume size for Kafka                                                                                                   | `10Gi`  |
-| `kafka.storageClass`    | StorageClass used to store the Kafka data                                                                                          | `""`    |
+| Name                     | Description                                                                                                                               | Type        | Value   |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `kafka`                  | Kafka configuration                                                                                                                       | `object`    | `{}`    |
+| `kafka.replicas`         | Number of Kafka replicas                                                                                                                  | `int`       | `3`     |
+| `kafka.resources`        | Explicit CPU and memory configuration for each replica. When left empty, the preset defined in `resourcesPreset` is applied.              | `*object`   | `null`  |
+| `kafka.resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
+| `kafka.resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `kafka.resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `small` |
+| `kafka.size`             | Persistent Volume size for Kafka                                                                                                          | `quantity`  | `10Gi`  |
+| `kafka.storageClass`     | StorageClass used to store the Kafka data                                                                                                 | `string`    | `""`    |
+
 
 ### Zookeeper configuration
 
-| Name                        | Description                                                                                                                            | Value   |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `zookeeper.replicas`        | Number of ZooKeeper replicas                                                                                                           | `3`     |
-| `zookeeper.resources`       | Explicit CPU and memory configuration for each Zookeeper replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
-| `zookeeper.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.            | `small` |
-| `zookeeper.size`            | Persistent Volume size for ZooKeeper                                                                                                   | `5Gi`   |
-| `zookeeper.storageClass`    | StorageClass used to store the ZooKeeper data                                                                                          | `""`    |
+| Name                         | Description                                                                                                                               | Type        | Value   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `zookeeper`                  | Zookeeper configuration                                                                                                                   | `object`    | `{}`    |
+| `zookeeper.replicas`         | Number of ZooKeeper replicas                                                                                                              | `int`       | `3`     |
+| `zookeeper.resources`        | Explicit CPU and memory configuration for each replica. When left empty, the preset defined in `resourcesPreset` is applied.              | `*object`   | `null`  |
+| `zookeeper.resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
+| `zookeeper.resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `zookeeper.resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `small` |
+| `zookeeper.size`             | Persistent Volume size for ZooKeeper                                                                                                      | `quantity`  | `5Gi`   |
+| `zookeeper.storageClass`     | StorageClass used to store the ZooKeeper data                                                                                             | `string`    | `""`    |
+
 
 ## Parameter examples and reference
 

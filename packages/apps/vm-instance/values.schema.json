@@ -1,57 +1,81 @@
 {
+  "title": "Chart Values",
+  "type": "object",
   "properties": {
     "cloudInit": {
-      "default": "",
-      "description": "cloud-init user data config. See cloud-init documentation for more details.",
-      "type": "string"
+      "description": "cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/explanation/format.html)."
     },
     "cloudInitSeed": {
-      "default": "",
       "description": "A seed string to generate an SMBIOS UUID for the VM.",
       "type": "string"
     },
     "disks": {
-      "default": [],
       "description": "List of disks to attach",
+      "type": "array",
+      "default": [],
       "items": {
-        "type": "object"
-      },
-      "type": "array"
+        "type": "object",
+        "required": [
+          "bus",
+          "name"
+        ],
+        "properties": {
+          "bus": {
+            "description": "Disk bus type, such as \"sata\"",
+            "type": "string"
+          },
+          "name": {
+            "description": "Disk name",
+            "type": "string"
+          }
+        }
+      }
     },
     "external": {
-      "default": false,
       "description": "Enable external access from outside the cluster",
-      "type": "boolean"
+      "type": "boolean",
+      "default": false
     },
     "externalMethod": {
-      "default": "PortList",
-      "description": "specify method to passthrough the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`",
+      "description": "Specify method to pass through the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`",
       "type": "string",
+      "default": "PortList",
       "enum": [
         "PortList",
         "WholeIP"
       ]
     },
     "externalPorts": {
-      "default": [],
-      "description": "Specify ports to forward from outside the cluster",
+      "description": "Ports to forward from outside the cluster",
+      "type": "array",
+      "default": [
+        22
+      ],
       "items": {
         "type": "integer"
-      },
-      "type": "array"
+      }
     },
     "gpus": {
+      "description": "List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)",
+      "type": "array",
       "default": [],
-      "description": "List of GPUs to attach",
       "items": {
-        "type": "object"
-      },
-      "type": "array"
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\"",
+            "type": "string"
+          }
+        }
+      }
     },
     "instanceProfile": {
-      "default": "ubuntu",
       "description": "Virtual Machine preferences profile",
       "type": "string",
+      "default": "ubuntu",
       "enum": [
         "alpine",
         "centos.7",
@@ -99,42 +123,68 @@
       ]
     },
     "instanceType": {
-      "default": "u1.medium",
       "description": "Virtual Machine instance type",
-      "type": "string"
+      "type": "string",
+      "default": "u1.medium"
     },
     "resources": {
+      "description": "Resources",
+      "type": "object",
+      "default": {},
       "properties": {
         "cpu": {
-          "default": "",
           "description": "The number of CPU cores allocated to the virtual machine",
-          "type": "string"
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "default": "",
           "description": "The amount of memory allocated to the virtual machine",
-          "type": "string"
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
         },
         "sockets": {
-          "default": "",
           "description": "The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)",
-          "type": "string"
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
         }
-      },
-      "type": "object"
+      }
     },
     "running": {
-      "default": true,
       "description": "Determines if the virtual machine should be running",
-      "type": "boolean"
+      "type": "boolean",
+      "default": true
     },
     "sshKeys": {
-      "default": [],
       "description": "List of SSH public keys for authentication. Can be a single key or a list of keys.",
-      "items": {},
-      "type": "array"
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
     }
-  },
-  "title": "Chart Values",
-  "type": "object"
+  }
 }

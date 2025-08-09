@@ -1,24 +1,28 @@
 ## @section Common parameters
 ##
-## @param replicas Number of MariaDB replicas
+## @param replicas {int} Number of MariaDB replicas
 replicas: 2
-## @param resources Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @param resources {*resources} Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU
+## @field resources.memory {*quantity} Memory
 resources: {}
   # resources:
   #   cpu: 4000m
   #   memory: 4Gi
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
 resourcesPreset: "nano"
-## @param size Persistent Volume size
+## @param size {quantity} Persistent Volume Claim size, available for application data
 size: 10Gi
-## @param storageClass StorageClass used to store the data
+## @param storageClass {string} StorageClass used to store the data
 storageClass: ""
-## @param external Enable external access from outside the cluster
+## @param external {bool} Enable external access from outside the cluster
 external: false
 
 ## @section Application-specific parameters
 ##
-## @param users [object] Users configuration
+## @param users {map[string]user} Users configuration
+## @field user.password {string} Password for the user
+## @field user.maxUserConnections {int} Maximum amount of connections
 ## Example:
 ## users:
 ##   user1:
@@ -30,7 +34,12 @@ external: false
 ##
 users: {}
 
-## @param databases [object] Databases configuration
+
+## @param databases {map[string]database} Databases configuration
+## @field database.roles {*databaseRoles} Roles for the database
+## @field databaseRoles.admin {[]string} List of users with admin privileges
+## @field databaseRoles.readonly {[]string} List of users with read-only privileges
+##
 ## Example:
 ## databases:
 ##   myapp1:
@@ -43,14 +52,15 @@ databases: {}
 
 ## @section Backup parameters
 ##
-## @param backup.enabled Enable periodic backups
-## @param backup.s3Region The AWS S3 region where backups are stored
-## @param backup.s3Bucket The S3 bucket used for storing backups
-## @param backup.schedule Cron schedule for automated backups
-## @param backup.cleanupStrategy The strategy for cleaning up old backups
-## @param backup.s3AccessKey The access key for S3, used for authentication
-## @param backup.s3SecretKey The secret key for S3, used for authentication
-## @param backup.resticPassword The password for Restic backup encryption
+## @param backup {backup} Backup configuration
+## @field backup.enabled {*bool} Enable regular backups, default is `false`.
+## @field backup.s3Region {*string} AWS S3 region where backups are stored
+## @field backup.s3Bucket {*string} S3 bucket used for storing backups
+## @field backup.schedule {*string} Cron schedule for automated backups
+## @field backup.cleanupStrategy {*string} Retention strategy for cleaning up old backups
+## @field backup.s3AccessKey {*string} Access key for S3, used for authentication
+## @field backup.s3SecretKey {*string} Secret key for S3, used for authentication
+## @field backup.resticPassword {*string} Password for Restic backup encryption
 backup:
   enabled: false
   s3Region: us-east-1

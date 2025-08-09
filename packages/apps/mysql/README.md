@@ -68,34 +68,45 @@ more details:
 
 ### Common parameters
 
-| Name              | Description                                                                                                                          | Value   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| `replicas`        | Number of MariaDB replicas                                                                                                           | `2`     |
-| `resources`       | Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
-| `resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.          | `nano`  |
-| `size`            | Persistent Volume size                                                                                                               | `10Gi`  |
-| `storageClass`    | StorageClass used to store the data                                                                                                  | `""`    |
-| `external`        | Enable external access from outside the cluster                                                                                      | `false` |
+| Name               | Description                                                                                                                               | Type        | Value   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `replicas`         | Number of MariaDB replicas                                                                                                                | `int`       | `2`     |
+| `resources`        | Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied.      | `*object`   | `{}`    |
+| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
+| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano`  |
+| `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
+| `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
+| `external`         | Enable external access from outside the cluster                                                                                           | `bool`      | `false` |
+
 
 ### Application-specific parameters
 
-| Name        | Description             | Value |
-| ----------- | ----------------------- | ----- |
-| `users`     | Users configuration     | `{}`  |
-| `databases` | Databases configuration | `{}`  |
+| Name                             | Description                             | Type                | Value   |
+| -------------------------------- | --------------------------------------- | ------------------- | ------- |
+| `users`                          | Users configuration                     | `map[string]object` | `{...}` |
+| `users[name].password`           | Password for the user                   | `string`            | `""`    |
+| `users[name].maxUserConnections` | Maximum amount of connections           | `int`               | `0`     |
+| `databases`                      | Databases configuration                 | `map[string]object` | `{...}` |
+| `databases[name].roles`          | Roles for the database                  | `*object`           | `null`  |
+| `databases[name].roles.admin`    | List of users with admin privileges     | `[]string`          | `[]`    |
+| `databases[name].roles.readonly` | List of users with read-only privileges | `[]string`          | `[]`    |
+
 
 ### Backup parameters
 
-| Name                     | Description                                    | Value                                                  |
-| ------------------------ | ---------------------------------------------- | ------------------------------------------------------ |
-| `backup.enabled`         | Enable periodic backups                        | `false`                                                |
-| `backup.s3Region`        | The AWS S3 region where backups are stored     | `us-east-1`                                            |
-| `backup.s3Bucket`        | The S3 bucket used for storing backups         | `s3.example.org/postgres-backups`                      |
-| `backup.schedule`        | Cron schedule for automated backups            | `0 2 * * *`                                            |
-| `backup.cleanupStrategy` | The strategy for cleaning up old backups       | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | The access key for S3, used for authentication | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`                     |
-| `backup.s3SecretKey`     | The secret key for S3, used for authentication | `ju3eum4dekeich9ahM1te8waeGai0oog`                     |
-| `backup.resticPassword`  | The password for Restic backup encryption      | `ChaXoveekoh6eigh4siesheeda2quai0`                     |
+| Name                     | Description                                    | Type      | Value                                                  |
+| ------------------------ | ---------------------------------------------- | --------- | ------------------------------------------------------ |
+| `backup`                 | Backup configuration                           | `object`  | `{}`                                                   |
+| `backup.enabled`         | Enable regular backups, default is `false`.    | `*bool`   | `false`                                                |
+| `backup.s3Region`        | AWS S3 region where backups are stored         | `*string` | `us-east-1`                                            |
+| `backup.s3Bucket`        | S3 bucket used for storing backups             | `*string` | `s3.example.org/postgres-backups`                      |
+| `backup.schedule`        | Cron schedule for automated backups            | `*string` | `0 2 * * *`                                            |
+| `backup.cleanupStrategy` | Retention strategy for cleaning up old backups | `*string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication     | `*string` | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`                     |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication     | `*string` | `ju3eum4dekeich9ahM1te8waeGai0oog`                     |
+| `backup.resticPassword`  | Password for Restic backup encryption          | `*string` | `ChaXoveekoh6eigh4siesheeda2quai0`                     |
+
 
 ## Parameter examples and reference
 

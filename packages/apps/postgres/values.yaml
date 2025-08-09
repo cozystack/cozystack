@@ -78,13 +78,13 @@ databases: {}
 ## @section Backup parameters
 
 ## @param backup {backup} Backup configuration
-## @field backup.enabled {bool} Enable regular backups
-## @field backup.schedule {string} Cron schedule for automated backups
-## @field backup.retentionPolicy {string} Retention policy
-## @field backup.destinationPath {string} Path to store the backup (i.e. s3://bucket/path/to/folder)
-## @field backup.endpointURL {string} S3 Endpoint used to upload data to the cloud
-## @field backup.s3AccessKey {string} Access key for S3, used for authentication
-## @field backup.s3SecretKey {string} Secret key for S3, used for authentication
+## @field backup.enabled {*bool} Enable regular backups
+## @field backup.schedule {*string} Cron schedule for automated backups
+## @field backup.retentionPolicy {*string} Retention policy
+## @field backup.destinationPath {*string} Path to store the backup (i.e. s3://bucket/path/to/folder)
+## @field backup.endpointURL {*string} S3 Endpoint used to upload data to the cloud
+## @field backup.s3AccessKey {*string} Access key for S3, used for authentication
+## @field backup.s3SecretKey {*string} Secret key for S3, used for authentication
 backup:
   enabled: false
   retentionPolicy: 30d

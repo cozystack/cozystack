@@ -36,15 +36,15 @@ systemDisk:
 gpus: []
 
 
-## @param resources {resources} Resources
+## @param resources {*resources} Resources
 ## @field resources.cpu {*quantity} The number of CPU cores allocated to the virtual machine
 ## @field resources.sockets {*quantity} The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)
 ## @field resources.memory {*quantity} The amount of memory allocated to the virtual machine
 ## Example:
 ## resources:
-##  cpu: "4"
-##  sockets: "1"
-##  memory: "8Gi"
+##   cpu: "4"
+##   sockets: "1"
+##   memory: "8Gi"
 resources: {}
 
 ## @param sshKeys {[]string} List of SSH public keys for authentication. Can be a single key or a list of keys.

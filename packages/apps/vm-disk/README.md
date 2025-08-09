@@ -6,9 +6,10 @@ A Virtual Machine Disk
 
 ### Common parameters
 
-| Name           | Description                                            | Value        |
-| -------------- | ------------------------------------------------------ | ------------ |
-| `source`       | The source image location used to create a disk        | `{}`         |
-| `optical`      | Defines is disk should be considered as optical        | `false`      |
-| `storage`      | The size of the disk allocated for the virtual machine | `5Gi`        |
-| `storageClass` | StorageClass used to store the data                    | `replicated` |
+| Name           | Description                                            | Type       | Value        |
+| -------------- | ------------------------------------------------------ | ---------- | ------------ |
+| `source`       | The source image location used to create a disk        | `object`   | `{}`         |
+| `optical`      | Defines if disk should be considered optical           | `bool`     | `false`      |
+| `storage`      | The size of the disk allocated for the virtual machine | `quantity` | `5Gi`        |
+| `storageClass` | StorageClass used to store the data                    | `string`   | `replicated` |
+

@@ -1,25 +1,29 @@
 ## @section Common parameters
 ##
-## @param replicas Number of HAProxy replicas
+## @param replicas {int} Number of HAProxy replicas
 replicas: 2
-## @param resources Explicit CPU and memory configuration for each TCP Balancer replica. When left empty, the preset defined in `resourcesPreset` is applied.
-resources: {}
+## @param resources {*resources} Explicit CPU and memory configuration for each TCP Balancer replica.  When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU
+## @field resources.memory {*quantity} Memory
+#resources: {}
 # resources:
 #   cpu: 4000m
 #   memory: 4Gi
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
 resourcesPreset: "nano"
 ##
-## @param external Enable external access from outside the cluster
+## @param external {bool} Enable external access from outside the cluster
 external: false
 
 
 ## @section Application-specific parameters
 ##
-## @param httpAndHttps.mode Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`
-## @param httpAndHttps.targetPorts.http HTTP port number.
-## @param httpAndHttps.targetPorts.https HTTPS port number.
-## @param httpAndHttps.endpoints Endpoint addresses list
+## @param httpAndHttps {httpAndHttps} HTTP and HTTPS configuration
+## @field httpAndHttps.mode {string enum:"tcp,tcp-with-proxy"} Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`
+## @field httpAndHttps.targetPorts {targetPorts} Target ports configuration
+## @field targetPorts.http {int} HTTP port number.
+## @field targetPorts.https {int} HTTPS port number.
+## @field httpAndHttps.endpoints {[]string} Endpoint addresses list
 ## Example:
 ##
 ## httpAndHttps:
@@ -42,8 +46,8 @@ httpAndHttps:
     https: 443
   endpoints: []
 
-## @param whitelistHTTP Secure HTTP by whitelisting client networks
-## @param whitelist List of client networks
+## @param whitelistHTTP {bool} Secure HTTP by whitelisting client networks, `false` by default.
+## @param whitelist {[]string} List of allowed client networks
 ## Example:
 ## whitelistHTTP: true
 ## whitelist:

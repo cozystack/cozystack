@@ -1,31 +1,35 @@
 ## @section Common parameters
 ##
-## @param replicas Number of replicas
+## @param replicas {int} Number of replicas
 replicas: 2
-## @param resources Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.
-resources: {}
+## @param resources {*resources} Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU
+## @field resources.memory {*quantity} Memory
 #  resources:
 #    cpu: 4000m
 #    memory: 4Gi
-## @param resourcesPreset Default sizing preset used when `resources` is omitted. Allowed values: none, nano, micro, small, medium, large, xlarge, 2xlarge.
-resourcesPreset: "micro"
-## @param size Persistent Volume size
-size: 10Gi
-## @param storageClass StorageClass used to store the data
-storageClass: ""
-## @param external Enable external access from outside the cluster
-external: false
+resources: {}
 
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+resourcesPreset: "micro"
+## @param size {quantity} Persistent Volume Claim size, available for application data
+size: 10Gi
+## @param storageClass {string} StorageClass used to store the data
+storageClass: ""
+## @param external {bool} Enable external access from outside the cluster
+external: false
 
 ## @section Application-specific parameters
 ##
-## Configuration for the quorum-based synchronous replication
-## @param quorum.minSyncReplicas Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed
-## @param quorum.maxSyncReplicas Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)
+## @param quorum {quorum} Configuration for the quorum-based synchronous replication
+## @field quorum.minSyncReplicas {int} Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed
+## @field quorum.maxSyncReplicas {int} Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)
 quorum:
   minSyncReplicas: 0
   maxSyncReplicas: 0
-## @param users [object] Users configuration
+
+## @param users {map[string]user} Users configuration
+## @field user.password {*string} Password for the user
 ## Example:
 ## users:
 ##   user1:
@@ -36,30 +40,34 @@ quorum:
 users: {}
 
 
+
 ## @section Backup parameters
 ##
-## @param backup.enabled Enable regular backups
-## @param backup.schedule Cron schedule for automated backups
-## @param backup.retentionPolicy Retention policy
-## @param backup.destinationPath Path to store the backup (i.e. s3://bucket/path/to/folder)
-## @param backup.endpointURL S3 Endpoint used to upload data to the cloud
-## @param backup.s3AccessKey Access key for S3, used for authentication
-## @param backup.s3SecretKey Secret key for S3, used for authentication
+
+## @param backup {backup} Backup configuration
+## @field backup.enabled {*bool} Enable regular backups, default is `false`.
+## @field backup.schedule {*string} Cron schedule for automated backups
+## @field backup.retentionPolicy {*string} Retention policy
+## @field backup.endpointURL {*string} S3 Endpoint used to upload data to the cloud
+## @field backup.destinationPath {*string} Path to store the backup (i.e. s3://bucket/path/to/folder)
+## @field backup.s3AccessKey {*string} Access key for S3, used for authentication
+## @field backup.s3SecretKey {*string} Secret key for S3, used for authentication
 backup:
   enabled: false
-  retentionPolicy: 30d
-  destinationPath: s3://bucket/path/to/folder/
-  endpointURL: http://minio-gateway-service:9000
   schedule: "0 2 * * * *"
+  retentionPolicy: 30d
+  endpointURL: http://minio-gateway-service:9000
+  destinationPath: s3://bucket/path/to/folder/
   s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
   s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
 
 
 ## @section Bootstrap (recovery) parameters
 ##
-## @param bootstrap.enabled Restore database cluster from a backup
-## @param bootstrap.recoveryTime Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest
-## @param bootstrap.oldName Name of database cluster before deleting
+## @param bootstrap {bootstrap} Bootstrap (recovery) configuration
+## @field bootstrap.enabled {*bool} Restore database cluster from a backup
+## @field bootstrap.recoveryTime {*string} Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest.
+## @field bootstrap.oldName {*string} Name of database cluster before deleting
 ##
 bootstrap:
   enabled: false

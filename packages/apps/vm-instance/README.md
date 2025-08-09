@@ -36,22 +36,27 @@ virtctl ssh <user>@<vm>
 
 ### Common parameters
 
-| Name                | Description                                                                                                | Value       |
-| ------------------- | ---------------------------------------------------------------------------------------------------------- | ----------- |
-| `external`          | Enable external access from outside the cluster                                                            | `false`     |
-| `externalMethod`    | specify method to passthrough the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList` | `PortList`  |
-| `externalPorts`     | Specify ports to forward from outside the cluster                                                          | `[]`        |
-| `running`           | Determines if the virtual machine should be running                                                        | `true`      |
-| `instanceType`      | Virtual Machine instance type                                                                              | `u1.medium` |
-| `instanceProfile`   | Virtual Machine preferences profile                                                                        | `ubuntu`    |
-| `disks`             | List of disks to attach                                                                                    | `[]`        |
-| `gpus`              | List of GPUs to attach                                                                                     | `[]`        |
-| `resources.cpu`     | The number of CPU cores allocated to the virtual machine                                                   | `""`        |
-| `resources.memory`  | The amount of memory allocated to the virtual machine                                                      | `""`        |
-| `resources.sockets` | The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)                  | `""`        |
-| `sshKeys`           | List of SSH public keys for authentication. Can be a single key or a list of keys.                         | `[]`        |
-| `cloudInit`         | cloud-init user data config. See cloud-init documentation for more details.                                | `""`        |
-| `cloudInitSeed`     | A seed string to generate an SMBIOS UUID for the VM.                                                       | `""`        |
+| Name                | Description                                                                                                                                                                                                                               | Type        | Value       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ----------- |
+| `external`          | Enable external access from outside the cluster                                                                                                                                                                                           | `bool`      | `false`     |
+| `externalMethod`    | Specify method to pass through the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`                                                                                                                               | `string`    | `PortList`  |
+| `externalPorts`     | Ports to forward from outside the cluster                                                                                                                                                                                                 | `[]int`     | `[22]`      |
+| `running`           | Determines if the virtual machine should be running                                                                                                                                                                                       | `bool`      | `true`      |
+| `instanceType`      | Virtual Machine instance type                                                                                                                                                                                                             | `string`    | `u1.medium` |
+| `instanceProfile`   | Virtual Machine preferences profile                                                                                                                                                                                                       | `string`    | `ubuntu`    |
+| `disks`             | List of disks to attach                                                                                                                                                                                                                   | `[]object`  | `[]`        |
+| `disks[i].name`     | Disk name                                                                                                                                                                                                                                 | `string`    | `""`        |
+| `disks[i].bus`      | Disk bus type, such as "sata"                                                                                                                                                                                                             | `string`    | `""`        |
+| `gpus`              | List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)                                                                                                                                                               | `[]object`  | `[]`        |
+| `gpus[i].name`      | Name of GPU, such as "nvidia.com/AD102GL_L40S"                                                                                                                                                                                            | `string`    | `""`        |
+| `resources`         | Resources                                                                                                                                                                                                                                 | `*object`   | `{}`        |
+| `resources.cpu`     | The number of CPU cores allocated to the virtual machine                                                                                                                                                                                  | `*quantity` | `null`      |
+| `resources.memory`  | The amount of memory allocated to the virtual machine                                                                                                                                                                                     | `*quantity` | `null`      |
+| `resources.sockets` | The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)                                                                                                                                                 | `*quantity` | `null`      |
+| `sshKeys`           | List of SSH public keys for authentication. Can be a single key or a list of keys.                                                                                                                                                        | `[]string`  | `[]`        |
+| `cloudInit`         | cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/explanation/format.html). | `object`    | `""`        |
+| `cloudInitSeed`     | A seed string to generate an SMBIOS UUID for the VM.                                                                                                                                                                                      | `string`    | `""`        |
+
 
 ## U Series
 

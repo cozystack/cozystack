@@ -1,18 +1,12 @@
 KUBERNETES_VERSION = v1.32
 KUBERNETES_PKG_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
-PRESET_ENUM := ["nano","micro","small","medium","large","xlarge","2xlarge"]
 
 include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
 generate:
-	readme-generator-for-helm -v values.yaml -s values.schema.json -r README.md
+	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
 	yq -o=json -i '.properties.version.enum = (load("files/versions.yaml") | keys)' values.schema.json
-	yq -o json -i '.properties.addons.properties.ingressNginx.properties.exposeMethod.enum = ["Proxied","LoadBalancer"]' values.schema.json
-	yq -o json -i '.properties.controlPlane.properties.apiServer.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
-	yq -o json -i '.properties.controlPlane.properties.controllerManager.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
-	yq -o json -i '.properties.controlPlane.properties.scheduler.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
-	yq -o json -i '.properties.controlPlane.properties.konnectivity.properties.server.properties.resourcesPreset.enum = $(PRESET_ENUM)' values.schema.json
 
 image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
 

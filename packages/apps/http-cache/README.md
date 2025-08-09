@@ -60,33 +60,43 @@ The deployment architecture is illustrated in the diagram below:
 
 ### Common parameters
 
-| Name           | Description                                     | Value   |
-| -------------- | ----------------------------------------------- | ------- |
-| `size`         | Persistent Volume size                          | `10Gi`  |
-| `storageClass` | StorageClass used to store the data             | `""`    |
-| `external`     | Enable external access from outside the cluster | `false` |
+| Name           | Description                                                  | Type       | Value   |
+| -------------- | ------------------------------------------------------------ | ---------- | ------- |
+| `size`         | Persistent Volume Claim size, available for application data | `quantity` | `10Gi`  |
+| `storageClass` | StorageClass used to store the data                          | `string`   | `""`    |
+| `external`     | Enable external access from outside the cluster              | `bool`     | `false` |
+
 
 ### Application-specific parameters
 
-| Name        | Description             | Value |
-| ----------- | ----------------------- | ----- |
-| `endpoints` | Endpoints configuration | `[]`  |
+| Name        | Description                                     | Type       | Value |
+| ----------- | ----------------------------------------------- | ---------- | ----- |
+| `endpoints` | Endpoints configuration, as a list of <ip:port> | `[]string` | `[]`  |
+
 
 ### HAProxy parameters
 
-| Name                      | Description                                                                                                                          | Value  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------ |
-| `haproxy.replicas`        | Number of HAProxy replicas                                                                                                           | `2`    |
-| `haproxy.resources`       | Explicit CPU and memory configuration for each HAProxy replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`   |
-| `haproxy.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.          | `nano` |
+| Name                       | Description                                                                                                                               | Type        | Value  |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------ |
+| `haproxy`                  | HAProxy configuration                                                                                                                     | `object`    | `{}`   |
+| `haproxy.replicas`         | Number of HAProxy replicas                                                                                                                | `int`       | `2`    |
+| `haproxy.resources`        | Explicit CPU and memory configuration for each replica. When left empty, the preset defined in `resourcesPreset` is applied.              | `object`    | `{}`   |
+| `haproxy.resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null` |
+| `haproxy.resources.memory` | Memory                                                                                                                                    | `*quantity` | `null` |
+| `haproxy.resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano` |
+
 
 ### Nginx parameters
 
-| Name                    | Description                                                                                                                        | Value  |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| `nginx.replicas`        | Number of Nginx replicas                                                                                                           | `2`    |
-| `nginx.resources`       | Explicit CPU and memory configuration for each nginx replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`   |
-| `nginx.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.        | `nano` |
+| Name                     | Description                                                                                                                               | Type        | Value  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------ |
+| `nginx`                  | Nginx configuration                                                                                                                       | `object`    | `{}`   |
+| `nginx.replicas`         | Number of Nginx replicas                                                                                                                  | `int`       | `2`    |
+| `nginx.resources`        | Explicit CPU and memory configuration for each replica. When left empty, the preset defined in `resourcesPreset` is applied.              | `*object`   | `null` |
+| `nginx.resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null` |
+| `nginx.resources.memory` | Memory                                                                                                                                    | `*quantity` | `null` |
+| `nginx.resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano` |
+
 
 ## Parameter examples and reference
 

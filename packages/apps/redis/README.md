@@ -13,20 +13,24 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 
 ### Common parameters
 
-| Name              | Description                                                                                                                        | Value   |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `replicas`        | Number of Redis replicas                                                                                                           | `2`     |
-| `resources`       | Explicit CPU and memory configuration for each Redis replica. When left empty, the preset defined in `resourcesPreset` is applied. | `{}`    |
-| `resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.        | `nano`  |
-| `size`            | Persistent Volume size                                                                                                             | `1Gi`   |
-| `storageClass`    | StorageClass used to store the data                                                                                                | `""`    |
-| `external`        | Enable external access from outside the cluster                                                                                    | `false` |
+| Name               | Description                                                                                                                               | Type        | Value   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `replicas`         | Number of Redis replicas                                                                                                                  | `int`       | `2`     |
+| `resources`        | Explicit CPU and memory configuration for each Redis replica.  When left empty, the preset defined in `resourcesPreset` is applied.       | `*object`   | `{}`    |
+| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
+| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano`  |
+| `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `1Gi`   |
+| `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
+| `external`         | Enable external access from outside the cluster                                                                                           | `bool`      | `false` |
+
 
 ### Application-specific parameters
 
-| Name          | Description                | Value  |
-| ------------- | -------------------------- | ------ |
-| `authEnabled` | Enable password generation | `true` |
+| Name          | Description                | Type   | Value  |
+| ------------- | -------------------------- | ------ | ------ |
+| `authEnabled` | Enable password generation | `bool` | `true` |
+
 
 ## Parameter examples and reference
 
