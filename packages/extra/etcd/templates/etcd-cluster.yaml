@@ -49,6 +49,14 @@ spec:
         {{- with .Values.resources }}
         resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 10 }}
         {{- end }}
+    {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
+    {{- $rawConstraints := "" }}
+    {{- if $configMap }}
+      {{- $rawConstraints = get $configMap.data "globalAppTopologySpreadConstraints" }}
+    {{- end }}
+    {{- if $rawConstraints }}
+      {{- $rawConstraints | fromYaml | toYaml | nindent 6 }}
+    {{- else }}
       topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: "kubernetes.io/hostname"
@@ -56,6 +64,7 @@ spec:
         labelSelector:
           matchLabels:
             app.kubernetes.io/instance: etcd
+    {{- end }}
   podDisruptionBudgetTemplate: {}
 ---
 apiVersion: cert-manager.io/v1

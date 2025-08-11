@@ -13,7 +13,8 @@ etcd 2.6.0 8c460528
 etcd 2.6.1 45a7416c
 etcd 2.7.0 632224a3
 etcd 2.8.0 4369b031
-etcd 2.9.0 HEAD
+etcd 2.9.0 8ddbe32e
+etcd 2.9.1 HEAD
 info 1.0.0 93bdf411
 info 1.0.1 632224a3
 info 1.1.0 HEAD
