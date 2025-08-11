@@ -269,6 +269,7 @@ jobs:
 
   test_apps:
     strategy:
+      fail-fast: false
       matrix: ${{ fromJson(needs.detect_test_matrix.outputs.matrix) }}
     name: Test ${{ matrix.app }}
     runs-on: [self-hosted]
