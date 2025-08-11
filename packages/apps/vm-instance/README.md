@@ -54,7 +54,7 @@ virtctl ssh <user>@<vm>
 | `resources.memory`  | The amount of memory allocated to the virtual machine                                                                                                                                                                                     | `*quantity` | `null`      |
 | `resources.sockets` | The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)                                                                                                                                                 | `*quantity` | `null`      |
 | `sshKeys`           | List of SSH public keys for authentication. Can be a single key or a list of keys.                                                                                                                                                        | `[]string`  | `[]`        |
-| `cloudInit`         | cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/explanation/format.html). | `string`    | `""`        |
+| `cloudInit`         | Cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/reference/examples.html). | `string`    | `""`        |
 | `cloudInitSeed`     | A seed string to generate an SMBIOS UUID for the VM.                                                                                                                                                                                      | `string`    | `""`        |
 
 

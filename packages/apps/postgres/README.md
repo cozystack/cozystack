@@ -70,8 +70,8 @@ See:
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
 | `replicas`         | Number of Postgres replicas                                                                                                               | `int`       | `2`     |
 | `resources`        | Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.   | `*object`   | `{}`    |
-| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
-| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
+| `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro` |
 | `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
 | `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
@@ -108,8 +108,8 @@ See:
 | `backup.retentionPolicy` | Retention policy                                           | `*string` | `30d`                               |
 | `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `*string` | `s3://bucket/path/to/folder/`       |
 | `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `*string` | `http://minio-gateway-service:9000` |
-| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `*string` | `<access key>`                      |
-| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `*string` | `<secret key>`                      |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `*string` | `<your-access-key>`                 |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `*string` | `<your-secret-key>`                 |
 
 
 ### Bootstrap (recovery) parameters

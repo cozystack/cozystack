@@ -10,8 +10,8 @@
         "enabled": false,
         "endpointURL": "http://minio-gateway-service:9000",
         "retentionPolicy": "30d",
-        "s3AccessKey": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu",
-        "s3SecretKey": "ju3eum4dekeich9ahM1te8waeGai0oog",
+        "s3AccessKey": "\u003cyour-access-key\u003e",
+        "s3SecretKey": "\u003cyour-secret-key\u003e",
         "schedule": "0 2 * * * *"
       },
       "required": [
@@ -47,12 +47,12 @@
         "s3AccessKey": {
           "description": "Access key for S3, used for authentication",
           "type": "string",
-          "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
+          "default": "\u003cyour-access-key\u003e"
         },
         "s3SecretKey": {
           "description": "Secret key for S3, used for authentication",
           "type": "string",
-          "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
+          "default": "\u003cyour-secret-key\u003e"
         },
         "schedule": {
           "description": "Cron schedule for automated backups",
@@ -125,7 +125,7 @@
       "default": {},
       "properties": {
         "cpu": {
-          "description": "CPU",
+          "description": "CPU available to each replica",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -138,7 +138,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "Memory",
+          "description": "Memory (RAM) available to each replica",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {

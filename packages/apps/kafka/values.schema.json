@@ -35,7 +35,7 @@
           "default": {},
           "properties": {
             "cpu": {
-              "description": "CPU",
+              "description": "CPU available to each replica",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -48,7 +48,7 @@
               "x-kubernetes-int-or-string": true
             },
             "memory": {
-              "description": "Memory",
+              "description": "Memory (RAM) available to each replica",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -157,7 +157,7 @@
           "default": {},
           "properties": {
             "cpu": {
-              "description": "CPU",
+              "description": "CPU available to each replica",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -170,7 +170,7 @@
               "x-kubernetes-int-or-string": true
             },
             "memory": {
-              "description": "Memory",
+              "description": "Memory (RAM) available to each replica",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {

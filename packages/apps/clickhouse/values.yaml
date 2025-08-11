@@ -5,8 +5,8 @@ replicas: 2
 ## @param shards {int} Number of Clickhouse shards
 shards: 1
 ## @param resources {*resources} Explicit CPU and memory configuration for each Clickhouse replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU
-## @field resources.memory {*quantity} Memory
+## @field resources.cpu {*quantity} CPU available to each replica
+## @field resources.memory {*quantity} Memory (RAM) available to each replica
 #  resources:
 #    cpu: 4000m
 #    memory: 4Gi
@@ -56,20 +56,20 @@ users: {}
 backup:
   enabled: false
   s3Region: us-east-1
-  s3Bucket: s3.example.org/clickhouse-backups
+  s3Bucket: "s3.example.org/clickhouse-backups"
   schedule: "0 2 * * *"
   cleanupStrategy: "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
-  s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
-  s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
-  resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
+  s3AccessKey: "<your-access-key>"
+  s3SecretKey: "<your-secret-key>"
+  resticPassword: "<password>"
 
 
 ## @section Clickhouse Keeper parameters
 ## @param clickhouseKeeper {*clickhouseKeeper} Clickhouse Keeper configuration
 ## @field clickhouseKeeper.enabled {*bool} Deploy ClickHouse Keeper for cluster coordination
 ## @field clickhouseKeeper.size {*quantity} Persistent Volume Claim size, available for application data
-## @field clickhouseKeeper.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
-## @field clickhouseKeeper.replicas {*int} Number of keeper replicas
+## @field clickhouseKeeper.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+## @field clickhouseKeeper.replicas {*int} Number of Keeper replicas
 clickhouseKeeper:
   enabled: true
   size: 1Gi

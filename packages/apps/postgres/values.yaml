@@ -3,8 +3,8 @@
 ## @param replicas {int} Number of Postgres replicas
 replicas: 2
 ## @param resources {*resources} Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU
-## @field resources.memory {*quantity} Memory
+## @field resources.cpu {*quantity} CPU available to each replica
+## @field resources.memory {*quantity} Memory (RAM) available to each replica
 resources: {}
   # resources:
   #   cpu: 4000m
@@ -91,8 +91,8 @@ backup:
   destinationPath: "s3://bucket/path/to/folder/"
   endpointURL: "http://minio-gateway-service:9000"
   schedule: "0 2 * * * *"
-  s3AccessKey: "<access key>"
-  s3SecretKey: "<secret key>"
+  s3AccessKey: "<your-access-key>"
+  s3SecretKey: "<your-secret-key>"
 
 ## @section Bootstrap (recovery) parameters
 

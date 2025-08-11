@@ -8,11 +8,11 @@
       "default": {
         "cleanupStrategy": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m",
         "enabled": false,
-        "resticPassword": "ChaXoveekoh6eigh4siesheeda2quai0",
-        "s3AccessKey": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu",
-        "s3Bucket": "s3.example.org/postgres-backups",
+        "resticPassword": "\u003cpassword\u003e",
+        "s3AccessKey": "\u003cyour-access-key\u003e",
+        "s3Bucket": "s3.example.org/mysql-backups",
         "s3Region": "us-east-1",
-        "s3SecretKey": "ju3eum4dekeich9ahM1te8waeGai0oog",
+        "s3SecretKey": "\u003cyour-secret-key\u003e",
         "schedule": "0 2 * * *"
       },
       "required": [
@@ -39,17 +39,17 @@
         "resticPassword": {
           "description": "Password for Restic backup encryption",
           "type": "string",
-          "default": "ChaXoveekoh6eigh4siesheeda2quai0"
+          "default": "\u003cpassword\u003e"
         },
         "s3AccessKey": {
           "description": "Access key for S3, used for authentication",
           "type": "string",
-          "default": "oobaiRus9pah8PhohL1ThaeTa4UVa7gu"
+          "default": "\u003cyour-access-key\u003e"
         },
         "s3Bucket": {
           "description": "S3 bucket used for storing backups",
           "type": "string",
-          "default": "s3.example.org/postgres-backups"
+          "default": "s3.example.org/mysql-backups"
         },
         "s3Region": {
           "description": "AWS S3 region where backups are stored",
@@ -59,7 +59,7 @@
         "s3SecretKey": {
           "description": "Secret key for S3, used for authentication",
           "type": "string",
-          "default": "ju3eum4dekeich9ahM1te8waeGai0oog"
+          "default": "\u003cyour-secret-key\u003e"
         },
         "schedule": {
           "description": "Cron schedule for automated backups",
@@ -114,7 +114,7 @@
       "default": {},
       "properties": {
         "cpu": {
-          "description": "CPU",
+          "description": "CPU available to each replica",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -127,7 +127,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "Memory",
+          "description": "Memory (RAM) available to each replica",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {

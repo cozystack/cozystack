@@ -3,8 +3,8 @@
 ## @param replicas {int} Number of replicas
 replicas: 2
 ## @param resources {*resources} Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU
-## @field resources.memory {*quantity} Memory
+## @field resources.cpu {*quantity} CPU available to each replica
+## @field resources.memory {*quantity} Memory (RAM) available to each replica
 #  resources:
 #    cpu: 4000m
 #    memory: 4Gi
@@ -58,8 +58,8 @@ backup:
   retentionPolicy: 30d
   endpointURL: http://minio-gateway-service:9000
   destinationPath: s3://bucket/path/to/folder/
-  s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
-  s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
+  s3AccessKey: "<your-access-key>"
+  s3SecretKey: "<your-secret-key>"
 
 
 ## @section Bootstrap (recovery) parameters
