@@ -24,7 +24,7 @@ run_one() {
 
   echo "╭ » Run test: $title"
   START=$(date +%s)
-  skip_next="+ $fn"      # первую строку трассировки с именем функции пропустим
+  skip_next="+ $fn"
 
   {
     (
@@ -83,11 +83,11 @@ awk '
     }
     printf("### %s\n", title)
     printf("%s() {\n", fname)
-    print "  set -e"           # ошибка → падение теста
+    print "  set -e"
     next
   }
   /^}$/ {
-    print "  return 0"         # если автор не сделал exit 1 — тест ОК
+    print "  return 0"
     print "}"
     next
   }
