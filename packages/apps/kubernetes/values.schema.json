@@ -329,7 +329,7 @@
               "default": {},
               "properties": {
                 "cpu": {
-                  "description": "Available CPU",
+                  "description": "CPU available to each worker node",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -342,7 +342,7 @@
                   "x-kubernetes-int-or-string": true
                 },
                 "memory": {
-                  "description": "Available memory (RAM)",
+                  "description": "Memory (RAM) available to each worker node",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -357,7 +357,7 @@
               }
             },
             "resourcesPreset": {
-              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
               "type": "string",
               "default": "medium",
               "enum": [
@@ -390,7 +390,7 @@
               "default": {},
               "properties": {
                 "cpu": {
-                  "description": "Available CPU",
+                  "description": "CPU available to each worker node",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -403,7 +403,7 @@
                   "x-kubernetes-int-or-string": true
                 },
                 "memory": {
-                  "description": "Available memory (RAM)",
+                  "description": "Memory (RAM) available to each worker node",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -418,7 +418,7 @@
               }
             },
             "resourcesPreset": {
-              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
               "type": "string",
               "default": "micro",
               "enum": [
@@ -464,7 +464,7 @@
                   "default": {},
                   "properties": {
                     "cpu": {
-                      "description": "Available CPU",
+                      "description": "CPU available to each worker node",
                       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                       "anyOf": [
                         {
@@ -477,7 +477,7 @@
                       "x-kubernetes-int-or-string": true
                     },
                     "memory": {
-                      "description": "Available memory (RAM)",
+                      "description": "Memory (RAM) available to each worker node",
                       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                       "anyOf": [
                         {
@@ -492,7 +492,7 @@
                   }
                 },
                 "resourcesPreset": {
-                  "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+                  "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
                   "type": "string",
                   "default": "micro",
                   "enum": [
@@ -532,7 +532,7 @@
               "default": {},
               "properties": {
                 "cpu": {
-                  "description": "Available CPU",
+                  "description": "CPU available to each worker node",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -545,7 +545,7 @@
                   "x-kubernetes-int-or-string": true
                 },
                 "memory": {
-                  "description": "Available memory (RAM)",
+                  "description": "Memory (RAM) available to each worker node",
                   "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                   "anyOf": [
                     {
@@ -560,7 +560,7 @@
               }
             },
             "resourcesPreset": {
-              "description": "Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.",
+              "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
               "type": "string",
               "default": "micro",
               "enum": [
@@ -649,11 +649,11 @@
             "type": "integer"
           },
           "resources": {
-            "description": "Available resources for each worker node",
+            "description": "Resources available to each worker node",
             "type": "object",
             "properties": {
               "cpu": {
-                "description": "Available CPU",
+                "description": "CPU available to each worker node",
                 "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                 "anyOf": [
                   {
@@ -666,7 +666,7 @@
                 "x-kubernetes-int-or-string": true
               },
               "memory": {
-                "description": "Available memory (RAM)",
+                "description": "Memory (RAM) available to each worker node",
                 "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                 "anyOf": [
                   {

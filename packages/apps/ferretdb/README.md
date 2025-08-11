@@ -12,8 +12,8 @@ Internally, FerretDB service is backed by Postgres.
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
 | `replicas`         | Number of replicas                                                                                                                        | `int`       | `2`     |
 | `resources`        | Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.     | `*object`   | `{}`    |
-| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
-| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
+| `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro` |
 | `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
 | `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
@@ -41,8 +41,8 @@ Internally, FerretDB service is backed by Postgres.
 | `backup.retentionPolicy` | Retention policy                                           | `string` | `30d`                               |
 | `backup.endpointURL`     | S3 Endpoint used to upload data to the cloud               | `string` | `http://minio-gateway-service:9000` |
 | `backup.destinationPath` | Path to store the backup (i.e. s3://bucket/path/to/folder) | `string` | `s3://bucket/path/to/folder/`       |
-| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `string` | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`  |
-| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `string` | `ju3eum4dekeich9ahM1te8waeGai0oog`  |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication                 | `string` | `<your-access-key>`                 |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication                 | `string` | `<your-secret-key>`                 |
 
 
 ### Bootstrap (recovery) parameters

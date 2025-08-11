@@ -3,7 +3,7 @@
   "type": "object",
   "properties": {
     "cloudInit": {
-      "description": "cloud-init user data config. See cloud-init documentation for more details.",
+      "description": "Cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/reference/examples.html).",
       "type": "string"
     },
     "cloudInitSeed": {

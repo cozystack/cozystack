@@ -17,8 +17,8 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
 | `replicas`         | Number of Redis replicas                                                                                                                  | `int`       | `2`     |
 | `resources`        | Explicit CPU and memory configuration for each Redis replica.  When left empty, the preset defined in `resourcesPreset` is applied.       | `*object`   | `{}`    |
-| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
-| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
+| `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano`  |
 | `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `1Gi`   |
 | `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |

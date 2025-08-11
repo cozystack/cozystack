@@ -28,8 +28,8 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 | `replicas`         | Number of Clickhouse replicas                                                                                                             | `int`       | `2`     |
 | `shards`           | Number of Clickhouse shards                                                                                                               | `int`       | `1`     |
 | `resources`        | Explicit CPU and memory configuration for each Clickhouse replica. When left empty, the preset defined in `resourcesPreset` is applied.   | `*object`   | `{}`    |
-| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
-| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
+| `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `small` |
 | `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
 | `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
@@ -56,20 +56,20 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 | `backup.s3Bucket`        | S3 bucket used for storing backups             | `string` | `s3.example.org/clickhouse-backups`                    |
 | `backup.schedule`        | Cron schedule for automated backups            | `string` | `0 2 * * *`                                            |
 | `backup.cleanupStrategy` | Retention strategy for cleaning up old backups | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | Access key for S3, used for authentication     | `string` | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`                     |
-| `backup.s3SecretKey`     | Secret key for S3, used for authentication     | `string` | `ju3eum4dekeich9ahM1te8waeGai0oog`                     |
-| `backup.resticPassword`  | Password for Restic backup encryption          | `string` | `ChaXoveekoh6eigh4siesheeda2quai0`                     |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication     | `string` | `<your-access-key>`                                    |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication     | `string` | `<your-secret-key>`                                    |
+| `backup.resticPassword`  | Password for Restic backup encryption          | `string` | `<password>`                                           |
 
 
 ### Clickhouse Keeper parameters
 
-| Name                               | Description                                                                                                                 | Type        | Value   |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
-| `clickhouseKeeper`                 | Clickhouse Keeper configuration                                                                                             | `*object`   | `{}`    |
-| `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination                                                                           | `*bool`     | `true`  |
-| `clickhouseKeeper.size`            | Persistent Volume Claim size, available for application data                                                                | `*quantity` | `1Gi`   |
-| `clickhouseKeeper.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge. | `string`    | `micro` |
-| `clickhouseKeeper.replicas`        | Number of keeper replicas                                                                                                   | `*int`      | `3`     |
+| Name                               | Description                                                                                                                               | Type        | Value   |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
+| `clickhouseKeeper`                 | Clickhouse Keeper configuration                                                                                                           | `*object`   | `{}`    |
+| `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination                                                                                         | `*bool`     | `true`  |
+| `clickhouseKeeper.size`            | Persistent Volume Claim size, available for application data                                                                              | `*quantity` | `1Gi`   |
+| `clickhouseKeeper.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro` |
+| `clickhouseKeeper.replicas`        | Number of Keeper replicas                                                                                                                 | `*int`      | `3`     |
 
 
 ## Parameter examples and reference

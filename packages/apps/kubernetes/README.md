@@ -101,9 +101,9 @@ See the reference for components utilized in this service:
 | `nodeGroups[name].instanceType`     | Virtual machine instance type                                                                                     | `string`            | `""`    |
 | `nodeGroups[name].ephemeralStorage` | Ephemeral storage size                                                                                            | `quantity`          | `""`    |
 | `nodeGroups[name].roles`            | List of node's roles                                                                                              | `[]string`          | `[]`    |
-| `nodeGroups[name].resources`        | Available resources for each worker node                                                                          | `object`            | `{}`    |
-| `nodeGroups[name].resources.cpu`    | Available CPU                                                                                                     | `*quantity`         | `null`  |
-| `nodeGroups[name].resources.memory` | Available memory (RAM)                                                                                            | `*quantity`         | `null`  |
+| `nodeGroups[name].resources`        | Resources available to each worker node                                                                           | `object`            | `{}`    |
+| `nodeGroups[name].resources.cpu`    | CPU available to each worker node                                                                                 | `*quantity`         | `null`  |
+| `nodeGroups[name].resources.memory` | Memory (RAM) available to each worker node                                                                        | `*quantity`         | `null`  |
 | `nodeGroups[name].gpus`             | List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)                                       | `[]object`          | `[]`    |
 | `nodeGroups[name].gpus.name`        | Name of GPU, such as "nvidia.com/AD102GL_L40S"                                                                    | `string`            | `""`    |
 
@@ -143,31 +143,31 @@ See the reference for components utilized in this service:
 
 ### Kubernetes Control Plane Configuration
 
-| Name                                                | Description                                                                                                                            | Type        | Value    |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------- |
-| `controlPlane`                                      | Control Plane Configuration                                                                                                            | `object`    | `{}`     |
-| `controlPlane.replicas`                             | Number of replicas for Kubernetes control plane components.                                                                            | `int`       | `2`      |
-| `controlPlane.apiServer`                            | Control plane API server configuration.                                                                                                | `object`    | `{}`     |
-| `controlPlane.apiServer.resources`                  | Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.         | `object`    | `{}`     |
-| `controlPlane.apiServer.resources.cpu`              | Available CPU                                                                                                                          | `*quantity` | `null`   |
-| `controlPlane.apiServer.resources.memory`           | Available memory (RAM)                                                                                                                 | `*quantity` | `null`   |
-| `controlPlane.apiServer.resourcesPreset`            | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.            | `string`    | `medium` |
-| `controlPlane.controllerManager`                    | Controller Manager configuration.                                                                                                      | `object`    | `{}`     |
-| `controlPlane.controllerManager.resources`          | Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied. | `object`    | `{}`     |
-| `controlPlane.controllerManager.resources.cpu`      | Available CPU                                                                                                                          | `*quantity` | `null`   |
-| `controlPlane.controllerManager.resources.memory`   | Available memory (RAM)                                                                                                                 | `*quantity` | `null`   |
-| `controlPlane.controllerManager.resourcesPreset`    | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.            | `string`    | `micro`  |
-| `controlPlane.scheduler`                            | Scheduler configuration.                                                                                                               | `object`    | `{}`     |
-| `controlPlane.scheduler.resources`                  | Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.          | `object`    | `{}`     |
-| `controlPlane.scheduler.resources.cpu`              | Available CPU                                                                                                                          | `*quantity` | `null`   |
-| `controlPlane.scheduler.resources.memory`           | Available memory (RAM)                                                                                                                 | `*quantity` | `null`   |
-| `controlPlane.scheduler.resourcesPreset`            | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.            | `string`    | `micro`  |
-| `controlPlane.konnectivity`                         | Konnectivity configuration.                                                                                                            | `object`    | `{}`     |
-| `controlPlane.konnectivity.server`                  | Konnectivity server configuration.                                                                                                     | `object`    | `{}`     |
-| `controlPlane.konnectivity.server.resources`        | Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.           | `object`    | `{}`     |
-| `controlPlane.konnectivity.server.resources.cpu`    | Available CPU                                                                                                                          | `*quantity` | `null`   |
-| `controlPlane.konnectivity.server.resources.memory` | Available memory (RAM)                                                                                                                 | `*quantity` | `null`   |
-| `controlPlane.konnectivity.server.resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.            | `string`    | `micro`  |
+| Name                                                | Description                                                                                                                               | Type        | Value    |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------- |
+| `controlPlane`                                      | Control Plane Configuration                                                                                                               | `object`    | `{}`     |
+| `controlPlane.replicas`                             | Number of replicas for Kubernetes control plane components.                                                                               | `int`       | `2`      |
+| `controlPlane.apiServer`                            | Control plane API server configuration.                                                                                                   | `object`    | `{}`     |
+| `controlPlane.apiServer.resources`                  | Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.            | `object`    | `{}`     |
+| `controlPlane.apiServer.resources.cpu`              | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
+| `controlPlane.apiServer.resources.memory`           | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
+| `controlPlane.apiServer.resourcesPreset`            | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `medium` |
+| `controlPlane.controllerManager`                    | Controller Manager configuration.                                                                                                         | `object`    | `{}`     |
+| `controlPlane.controllerManager.resources`          | Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.    | `object`    | `{}`     |
+| `controlPlane.controllerManager.resources.cpu`      | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
+| `controlPlane.controllerManager.resources.memory`   | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
+| `controlPlane.controllerManager.resourcesPreset`    | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro`  |
+| `controlPlane.scheduler`                            | Scheduler configuration.                                                                                                                  | `object`    | `{}`     |
+| `controlPlane.scheduler.resources`                  | Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.             | `object`    | `{}`     |
+| `controlPlane.scheduler.resources.cpu`              | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
+| `controlPlane.scheduler.resources.memory`           | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
+| `controlPlane.scheduler.resourcesPreset`            | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro`  |
+| `controlPlane.konnectivity`                         | Konnectivity configuration.                                                                                                               | `object`    | `{}`     |
+| `controlPlane.konnectivity.server`                  | Konnectivity server configuration.                                                                                                        | `object`    | `{}`     |
+| `controlPlane.konnectivity.server.resources`        | Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.              | `object`    | `{}`     |
+| `controlPlane.konnectivity.server.resources.cpu`    | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
+| `controlPlane.konnectivity.server.resources.memory` | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
+| `controlPlane.konnectivity.server.resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro`  |
 
 
 ## Parameter examples and reference

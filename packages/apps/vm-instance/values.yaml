@@ -52,7 +52,7 @@ resources: {}
 ##
 sshKeys: []
 
-## @param cloudInit {string} cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/explanation/format.html).
+## @param cloudInit {string} Cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/reference/examples.html).
 ## - https://cloudinit.readthedocs.io/en/latest/explanation/format.html
 ## - https://cloudinit.readthedocs.io/en/latest/reference/examples.html
 ## Example:
