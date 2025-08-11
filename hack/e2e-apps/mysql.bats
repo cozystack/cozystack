@@ -2,6 +2,7 @@
 
 @test "Create DB MySQL" {
   name='test'
+  kubectl -n tenant-test delete mysqls.apps.cozystack.io $name --ignore-not-found
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: MySQL

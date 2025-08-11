@@ -2,6 +2,7 @@
 
 @test "Create a Virtual Machine" {
   name='test'
+  kubectl -n tenant-test delete virtualmachines.apps.cozystack.io $name --ignore-not-found
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VirtualMachine
