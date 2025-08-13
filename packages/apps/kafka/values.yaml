@@ -37,8 +37,8 @@ kafka:
   ## @field kafka.replicas {int} Number of Kafka replicas
   replicas: 3
   ## @field kafka.resources {*resources} Explicit CPU and memory configuration for each replica. When left empty, the preset defined in `resourcesPreset` is applied.
-  ## @field resources.cpu {*quantity} CPU
-  ## @field resources.memory {*quantity} Memory
+  ## @field resources.cpu {*quantity} CPU available to each replica
+  ## @field resources.memory {*quantity} Memory (RAM) available to each replica
   # resources:
   #   cpu: 4000m
   #   memory: 4Gi

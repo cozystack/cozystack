@@ -3,8 +3,8 @@
 ## @param replicas {int} Number of VPN server replicas
 replicas: 2
 ## @param resources {*resources} Explicit CPU and memory configuration for each VPN server replica.  When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU
-## @field resources.memory {*quantity} Memory
+## @field resources.cpu {*quantity} CPU available to each replica
+## @field resources.memory {*quantity} Memory (RAM) available to each replica
 resources: {}
 # resources:
 #   cpu: 4000m

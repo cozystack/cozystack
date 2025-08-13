@@ -16,9 +16,9 @@ host: ""
 ## @field node.instanceType {string} Virtual machine instance type
 ## @field node.ephemeralStorage {quantity} Ephemeral storage size
 ## @field node.roles {[]string} List of node's roles
-## @field node.resources {resources} Available resources for each worker node
-## @field resources.cpu {*quantity} Available CPU
-## @field resources.memory {*quantity} Available memory (RAM)
+## @field node.resources {resources} Resources available to each worker node
+## @field resources.cpu {*quantity} CPU available to each worker node
+## @field resources.memory {*quantity} Memory (RAM) available to each worker node
 ## @field node.gpus {[]gpu} List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
 ## @field gpu.name {string} Name of GPU, such as "nvidia.com/AD102GL_L40S"
 ##
@@ -137,20 +137,20 @@ controlPlane:
     ##   memory: 4Gi
     ##
     resources: {}
-    ## @field apiServer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+    ## @field apiServer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
     resourcesPreset: "medium"
 
   ## @field controlPlane.controllerManager {controllerManager} Controller Manager configuration.
   controllerManager:
     ## @field controllerManager.resources {resources} Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.
-    ## @field controllerManager.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+    ## @field controllerManager.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
     resourcesPreset: "micro"
     resources: {}
 
   ## @field controlPlane.scheduler {scheduler} Scheduler configuration.
   scheduler:
     ## @field scheduler.resources {resources} Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.
-    ## @field scheduler.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+    ## @field scheduler.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
     resourcesPreset: "micro"
     resources: {}
 
@@ -159,6 +159,6 @@ controlPlane:
     ## @field konnectivity.server {konnectivityServer} Konnectivity server configuration.
     server:
       ## @field konnectivityServer.resources {resources} Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.
-      ## @field konnectivityServer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: nano, micro, small, medium, large, xlarge, 2xlarge.
+      ## @field konnectivityServer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
       resourcesPreset: "micro"
       resources: {}

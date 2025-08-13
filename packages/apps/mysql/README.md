@@ -14,12 +14,12 @@ This managed service is controlled by mariadb-operator, ensuring efficient manag
 
 ### How to switch master/slave replica
 
-```
+```bash
 kubectl edit mariadb <instnace>
 ```
 update:
 
-```
+```bash
 spec:
   replication:
     primary:
@@ -28,7 +28,7 @@ spec:
 
 check status:
 
-```
+```bash
 NAME        READY   STATUS    PRIMARY POD   AGE
 <instance>  True    Running   app-db1-1     41d
 ```
@@ -36,13 +36,13 @@ NAME        READY   STATUS    PRIMARY POD   AGE
 ### How to restore backup:
 
 find snapshot:
-```
+```bash
 restic -r s3:s3.example.org/mariadb-backups/database_name snapshots
 ```
 
 
 restore:
-```
+```bash
 restic -r s3:s3.example.org/mariadb-backups/database_name restore latest --target /tmp/
 ```
 
@@ -51,15 +51,16 @@ more details:
 
 ### Known issues
 
-- **Replication can't not be finished with various errors**
-- **Replication can't be finised in case if binlog purged**
-  Until mariadbbackup is not used to bootstrap a node by mariadb-operator (this feature is not inmplemented yet), follow these manual steps to fix it:
+- **Replication can't be finished with various errors**
+- **Replication can't be finished in case if `binlog` purged**
+
+  Until `mariadbbackup` is not used to bootstrap a node by mariadb-operator (this feature is not inmplemented yet), follow these manual steps to fix it:
   https://github.com/mariadb-operator/mariadb-operator/issues/141#issuecomment-1804760231
 
 - **Corrupted indicies**
   Sometimes some indecies can be corrupted on master replica, you can recover them from slave:
 
-  ```
+  ```bash
   mysqldump -h <slave> -P 3306 -u<user> -p<password> --column-statistics=0 <database> <table> ~/tmp/fix-table.sql
   mysql -h <master> -P 3306 -u<user> -p<password> <database> < ~/tmp/fix-table.sql
   ```
@@ -72,8 +73,8 @@ more details:
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
 | `replicas`         | Number of MariaDB replicas                                                                                                                | `int`       | `2`     |
 | `resources`        | Explicit CPU and memory configuration for each MariaDB replica. When left empty, the preset defined in `resourcesPreset` is applied.      | `*object`   | `{}`    |
-| `resources.cpu`    | CPU                                                                                                                                       | `*quantity` | `null`  |
-| `resources.memory` | Memory                                                                                                                                    | `*quantity` | `null`  |
+| `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
+| `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano`  |
 | `size`             | Persistent Volume Claim size, available for application data                                                                              | `quantity`  | `10Gi`  |
 | `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
@@ -100,12 +101,12 @@ more details:
 | `backup`                 | Backup configuration                           | `object` | `{}`                                                   |
 | `backup.enabled`         | Enable regular backups, default is `false`.    | `bool`   | `false`                                                |
 | `backup.s3Region`        | AWS S3 region where backups are stored         | `string` | `us-east-1`                                            |
-| `backup.s3Bucket`        | S3 bucket used for storing backups             | `string` | `s3.example.org/postgres-backups`                      |
+| `backup.s3Bucket`        | S3 bucket used for storing backups             | `string` | `s3.example.org/mysql-backups`                         |
 | `backup.schedule`        | Cron schedule for automated backups            | `string` | `0 2 * * *`                                            |
 | `backup.cleanupStrategy` | Retention strategy for cleaning up old backups | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | Access key for S3, used for authentication     | `string` | `oobaiRus9pah8PhohL1ThaeTa4UVa7gu`                     |
-| `backup.s3SecretKey`     | Secret key for S3, used for authentication     | `string` | `ju3eum4dekeich9ahM1te8waeGai0oog`                     |
-| `backup.resticPassword`  | Password for Restic backup encryption          | `string` | `ChaXoveekoh6eigh4siesheeda2quai0`                     |
+| `backup.s3AccessKey`     | Access key for S3, used for authentication     | `string` | `<your-access-key>`                                    |
+| `backup.s3SecretKey`     | Secret key for S3, used for authentication     | `string` | `<your-secret-key>`                                    |
+| `backup.resticPassword`  | Password for Restic backup encryption          | `string` | `<password>`                                           |
 
 
 ## Parameter examples and reference
