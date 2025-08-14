@@ -1,0 +1,13 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: CustomFormsPrefill
+metadata:
+  name: apps.cozystack.io.v1alpha1.buckets
+spec:
+  customizationId: default-/apps.cozystack.io/v1alpha1/buckets
+  values:
+    - path:
+        - metadata
+        - name
+      value: example
+{{ include "renderValues" (dict "values" .Values) | indent 4 }}
