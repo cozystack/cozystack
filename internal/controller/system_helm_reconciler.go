@@ -33,6 +33,7 @@ const requestedAt = "reconcile.fluxcd.io/requestedAt"
 
 func (r *CozystackConfigReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
+	time.Sleep(2 * time.Second)
 
 	digest, err := r.computeDigest(ctx)
 	if err != nil {

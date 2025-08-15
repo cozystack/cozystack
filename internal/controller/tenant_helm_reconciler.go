@@ -26,6 +26,7 @@ type TenantHelmReconciler struct {
 
 func (r *TenantHelmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	time.Sleep(2 * time.Second)
 
 	hr := &helmv2.HelmRelease{}
 	if err := r.Get(ctx, req.NamespacedName, hr); err != nil {
