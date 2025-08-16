@@ -1,0 +1,25 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-controller-deployment-patch-update
+  namespace: cozy-system
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["cozystack-api"]
+  verbs: ["patch", "update"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-controller-deployment-patch-update
+  namespace: cozy-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozystack-controller-deployment-patch-update
+subjects:
+- kind: ServiceAccount
+  name: cozystack-controller
+  namespace: cozy-system
