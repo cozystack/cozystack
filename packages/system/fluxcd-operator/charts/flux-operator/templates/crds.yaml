@@ -458,6 +458,57 @@ spec:
                   - type
                   type: object
                 type: array
+              history:
+                description: |-
+                  History contains the reconciliation history of the FluxInstance
+                  as a list of snapshots ordered by the last reconciled time.
+                items:
+                  description: |-
+                    Snapshot represents a point-in-time record of a group of resources reconciliation,
+                    including timing information, status, and a unique digest identifier.
+                  properties:
+                    digest:
+                      description: Digest is the checksum in the format `<algo>:<hex>`
+                        of the resources in this snapshot.
+                      type: string
+                    firstReconciled:
+                      description: FirstReconciled is the time when this revision
+                        was first reconciled to the cluster.
+                      format: date-time
+                      type: string
+                    lastReconciled:
+                      description: LastReconciled is the time when this revision was
+                        last reconciled to the cluster.
+                      format: date-time
+                      type: string
+                    lastReconciledDuration:
+                      description: LastReconciledDuration is time it took to reconcile
+                        the resources in this revision.
+                      type: string
+                    lastReconciledStatus:
+                      description: LastReconciledStatus is the status of the last
+                        reconciliation.
+                      type: string
+                    metadata:
+                      additionalProperties:
+                        type: string
+                      description: Metadata contains additional information about
+                        the snapshot.
+                      type: object
+                    totalReconciliations:
+                      description: TotalReconciliations is the total number of reconciliations
+                        that have occurred for this snapshot.
+                      format: int64
+                      type: integer
+                  required:
+                  - digest
+                  - firstReconciled
+                  - lastReconciled
+                  - lastReconciledDuration
+                  - lastReconciledStatus
+                  - totalReconciliations
+                  type: object
+                type: array
               inventory:
                 description: |-
                   Inventory contains a list of Kubernetes resource object references
@@ -1476,6 +1527,57 @@ spec:
                   - reason
                   - status
                   - type
+                  type: object
+                type: array
+              history:
+                description: |-
+                  History contains the reconciliation history of the ResourceSet
+                  as a list of snapshots ordered by the last reconciled time.
+                items:
+                  description: |-
+                    Snapshot represents a point-in-time record of a group of resources reconciliation,
+                    including timing information, status, and a unique digest identifier.
+                  properties:
+                    digest:
+                      description: Digest is the checksum in the format `<algo>:<hex>`
+                        of the resources in this snapshot.
+                      type: string
+                    firstReconciled:
+                      description: FirstReconciled is the time when this revision
+                        was first reconciled to the cluster.
+                      format: date-time
+                      type: string
+                    lastReconciled:
+                      description: LastReconciled is the time when this revision was
+                        last reconciled to the cluster.
+                      format: date-time
+                      type: string
+                    lastReconciledDuration:
+                      description: LastReconciledDuration is time it took to reconcile
+                        the resources in this revision.
+                      type: string
+                    lastReconciledStatus:
+                      description: LastReconciledStatus is the status of the last
+                        reconciliation.
+                      type: string
+                    metadata:
+                      additionalProperties:
+                        type: string
+                      description: Metadata contains additional information about
+                        the snapshot.
+                      type: object
+                    totalReconciliations:
+                      description: TotalReconciliations is the total number of reconciliations
+                        that have occurred for this snapshot.
+                      format: int64
+                      type: integer
+                  required:
+                  - digest
+                  - firstReconciled
+                  - lastReconciled
+                  - lastReconciledDuration
+                  - lastReconciledStatus
+                  - totalReconciliations
                   type: object
                 type: array
               inventory:
