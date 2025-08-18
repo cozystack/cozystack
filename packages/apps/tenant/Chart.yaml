@@ -4,4 +4,4 @@ description: Separated tenant namespace
 icon: /logos/tenant.svg
 
 type: application
-version: 1.11.2
+version: 1.12.0
