@@ -1,0 +1,89 @@
+diff --git a/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx b/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx
+index 577ba0f..018df9c 100644
+--- a/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx
++++ b/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx
+@@ -1,11 +1,16 @@
+ import React, { FC, useState } from 'react'
+ import { Button, Alert, Spin, Typography } from 'antd'
+-import { filterSelectOptions, Spacer, useBuiltinResources } from '@prorobotech/openapi-k8s-toolkit'
++import { filterSelectOptions, Spacer, useApiResources } from '@prorobotech/openapi-k8s-toolkit'
+ import { useNavigate } from 'react-router-dom'
+ import { useSelector, useDispatch } from 'react-redux'
+ import { RootState } from 'store/store'
+ import { setCluster } from 'store/cluster/cluster/cluster'
+ import { Styled } from './styled'
++import {
++  BASE_PROJECTS_API_GROUP,
++  BASE_PROJECTS_VERSION,
++  BASE_PROJECTS_RESOURCE_NAME,
++} from 'constants/customizationApiGroupAndVersion'
+ 
+ export const ListInsideClusterAndNs: FC = () => {
+   const clusterList = useSelector((state: RootState) => state.clusterList.clusterList)
+@@ -17,9 +22,11 @@ export const ListInsideClusterAndNs: FC = () => {
+   const [selectedCluster, setSelectedCluster] = useState<string>()
+   const [selectedNamespace, setSelectedNamespace] = useState<string>()
+ 
+-  const namespacesData = useBuiltinResources({
++  const namespacesData = useApiResources({
+     clusterName: cluster,
+-    typeName: 'namespaces',
++    apiGroup: BASE_PROJECTS_API_GROUP,
++    apiVersion: BASE_PROJECTS_VERSION,
++    typeName: BASE_PROJECTS_RESOURCE_NAME,
+     limit: null,
+   })
+ 
+diff --git a/src/hooks/useNavSelectorInside.ts b/src/hooks/useNavSelectorInside.ts
+index d69405e..5adbd5d 100644
+--- a/src/hooks/useNavSelectorInside.ts
++++ b/src/hooks/useNavSelectorInside.ts
+@@ -1,6 +1,11 @@
+-import { TClusterList, TSingleResource, useBuiltinResources } from '@prorobotech/openapi-k8s-toolkit'
++import { TClusterList, TSingleResource, useApiResources } from '@prorobotech/openapi-k8s-toolkit'
+ import { useSelector } from 'react-redux'
+ import { RootState } from 'store/store'
++import {
++  BASE_PROJECTS_API_GROUP,
++  BASE_PROJECTS_VERSION,
++  BASE_PROJECTS_RESOURCE_NAME,
++} from 'constants/customizationApiGroupAndVersion'
+ 
+ const mappedClusterToOptionInSidebar = ({ name }: TClusterList[number]): { value: string; label: string } => ({
+   value: name,
+@@ -15,9 +20,11 @@ const mappedNamespaceToOptionInSidebar = ({ metadata }: TSingleResource): { valu
+ export const useNavSelectorInside = (clusterName?: string) => {
+   const clusterList = useSelector((state: RootState) => state.clusterList.clusterList)
+ 
+-  const { data: namespaces } = useBuiltinResources({
++  const { data: namespaces } = useApiResources({
+     clusterName: clusterName || '',
+-    typeName: 'namespaces',
++    apiGroup: BASE_PROJECTS_API_GROUP,
++    apiVersion: BASE_PROJECTS_VERSION,
++    typeName: BASE_PROJECTS_RESOURCE_NAME,
+     limit: null,
+   })
+ 
+diff --git a/src/utils/getBacklink.ts b/src/utils/getBacklink.ts
+index a862354..f24e2bc 100644
+--- a/src/utils/getBacklink.ts
++++ b/src/utils/getBacklink.ts
+@@ -28,7 +28,7 @@ export const getFormsBackLink = ({
+   }
+ 
+   if (namespacesMode) {
+-    return `${baseprefix}/${clusterName}/builtin-table/namespaces`
++    return `${baseprefix}/${clusterName}/api-table/core.cozystack.io/v1alpha1/tenantnamespaces`
+   }
+ 
+   if (possibleProject) {
+@@ -64,7 +64,7 @@ export const getTablesBackLink = ({
+   }
+ 
+   if (namespacesMode) {
+-    return `${baseprefix}/${clusterName}/builtin-table/namespaces`
++    return `${baseprefix}/${clusterName}/api-table/core.cozystack.io/v1alpha1/tenantnamespaces`
+   }
+ 
+   if (possibleProject) {
