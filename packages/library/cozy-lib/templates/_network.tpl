@@ -13,7 +13,7 @@ in use and returns `true`.
 
 {{- define "cozy-lib.network.disableLoadBalancerNodePorts" }}
 {{-   include "cozy-lib.loadCozyConfig" (list "" .) }}
-{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   $cozyConfig := index . "cozyConfig" }}
 {{-   if not $cozyConfig }}
 {{-     include "cozy-lib.network.defaultDisableLoadBalancerNodePorts" . }}
 {{-   else }}

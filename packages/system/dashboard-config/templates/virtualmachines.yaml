@@ -9,7 +9,20 @@ spec:
   keysToParse:
     - metadata
     - name
-
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: cozystack-vm-secrets
+spec:
+  id: "factory-virtualmachine-detail-secrets"
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: NAME
+      type: string
+    - jsonPath: .data.userdata
+      name: DATA
+      type: string
 ---
 apiVersion: front.in-cloud.io/v1alpha1
 kind: CustomColumnsOverride
@@ -60,42 +73,6 @@ spec:
   additionalPrinterColumnsUndefinedValues:
     - key: Message
       value: "-"
----
-apiVersion: front.in-cloud.io/v1alpha1
-kind: CustomColumnsOverride
-metadata:
-  name: cozystack-workloadmonitors
-spec:
-  id: "factory-virtualmachine-detail-workloads"
-  additionalPrinterColumns:
-    - jsonPath: .metadata.name
-      name: NAME
-      type: string
-    - jsonPath: .status.kind
-      name: KIND
-      type: string
-    - jsonPath: .status.type
-      name: TYPE
-      type: string
-    - jsonPath: .metadata.labels["app.kubernetes.io/version"]
-      name: VERSION
-      type: string
-    - jsonPath: .status.replicas
-      name: REPLICAS
-      type: string
-    - jsonPath: .status.minReplicas
-      name: MINREPLICAS
-      type: string
-    - jsonPath: .status.availableReplicas
-      name: AVAILABLE
-      type: string
-    - jsonPath: .status.observedReplicas
-      name: OBSERVED
-      type: string
-    - jsonPath: .status.operational
-      name: OPERATIONAL
-      type: boolean
-
 ---
 apiVersion: front.in-cloud.io/v1alpha1
 kind: Factory
@@ -506,11 +483,11 @@ spec:
                   fetchUrl: "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloads"
                   clusterNamePartOfUrl: "{2}"
                   baseprefix: "/openapi-ui"
-                  customizationId: "factory-virtualmachine-detail-workloads"
+                  customizationId: "factory-detail-workloads"
                   pathToItems:
                     - items
                   labelsSelector:
-                    apps.cozystack.io/virtual-machine: "{reqs[0]['metadata','name']}"
+                    workloads.cozystack.io/monitor: "virtual-machine-{reqs[0]['metadata','name']}"
           - key: "services"
             label: "Services"
             children:
@@ -520,20 +497,22 @@ spec:
                   fetchUrl: "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services"
                   clusterNamePartOfUrl: "{2}"
                   baseprefix: "/openapi-ui"
+                  customizationId: "factory-detail-services"
                   pathToItems:
                     - items
                   labelsSelector:
-                    apps.cozystack.io/virtual-machine: "{reqs[0]['metadata','name']}"
+                    app.kubernetes.io/instance: "virtual-machine-{reqs[0]['metadata','name']}"
           - key: "secrets"
             label: "Secrets"
             children:
               - type: EnrichedTable
                 data:
                   id: 4003
-                  fetchUrl: "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/secrets"
+                  fetchUrl: "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecrets"
                   clusterNamePartOfUrl: "{2}"
                   baseprefix: "/openapi-ui"
+                  customizationId: "factory-virtualmachine-detail-secrets"
                   pathToItems:
                     - items
                   labelsSelector:
-                    apps.cozystack.io/virtual-machine: "{reqs[0]['metadata','name']}"
+                    apps.cozystack.io/virtual-machine: "virtual-machine-{reqs[0]['metadata','name']}"

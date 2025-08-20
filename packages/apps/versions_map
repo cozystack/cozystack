@@ -189,7 +189,8 @@ virtual-machine 0.12.0 acd4663a
 virtual-machine 0.12.1 909208ba
 virtual-machine 0.12.2 8ddbe32e
 virtual-machine 0.12.3 c02a3818
-virtual-machine 0.13.0 HEAD
+virtual-machine 0.13.0 ba6460ea
+virtual-machine 0.13.1 HEAD
 vm-disk 0.1.0 d971f2ff
 vm-disk 0.1.1 6130f43d
 vm-disk 0.1.2 632224a3

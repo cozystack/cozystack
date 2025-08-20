@@ -1,5 +1,5 @@
-NAME := cozy-dashboard
-NAMESPACE := default
+NAME := dashboard-config
+NAMESPACE := cozy-dashboard
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -19,5 +19,3 @@ delete: check ## Delete Helm release from a Kubernetes cluster
 check:
 	@if [ -z "$(NAME)" ]; then echo "env NAME is not set!" >&2; exit 1; fi
 	@if [ -z "$(NAMESPACE)" ]; then echo "env NAMESPACE is not set!" >&2; exit 1; fi
-
-
