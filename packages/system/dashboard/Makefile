@@ -22,7 +22,7 @@ image-openapi-ui:
 	docker buildx build images/openapi-ui \
 		--provenance false \
 		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
+		--platform=linux/amd64 \
 		--tag $(REGISTRY)/openapi-ui:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/openapi-ui:latest \
 		--cache-to type=inline \
@@ -38,7 +38,7 @@ image-openapi-ui-k8s-bff:
 	docker buildx build images/openapi-ui-k8s-bff \
 		--provenance false \
 		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
+		--platform=linux/amd64 \
 		--tag $(REGISTRY)/openapi-ui-k8s-bff:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/openapi-ui-k8s-bff:latest \
 		--cache-to type=inline \

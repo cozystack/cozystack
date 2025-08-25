@@ -1,0 +1,11 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: TableUriMapping
+metadata:
+  name: virtualmachine-detail
+spec:
+  id: "stock-namespace-/apps.cozystack.io/v1alpha1/virtualmachines"
+  pathToNavigate: "/openapi-ui/{2}/{3}/factory/virtualmachine-detail/~recordValue~"
+  keysToParse:
+    - metadata
+    - name

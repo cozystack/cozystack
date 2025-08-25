@@ -4,7 +4,7 @@ kind: TableUriMapping
 metadata:
   name: monitoring-detail
 spec:
-  id: "default-/apps.cozystack.io/v1alpha1/monitorings"
+  id: "stock-namespace-/apps.cozystack.io/v1alpha1/monitorings"
   pathToNavigate: "/openapi-ui/{clusterName}/{namespace}/factory/monitoring-detail/~recordValue~"
   keysToParse:
     - metadata
@@ -17,7 +17,7 @@ kind: CustomColumnsOverride
 metadata:
   name: apps-cozystack-monitoring-detail
 spec:
-  id: "default-/apps.cozystack.io/v1alpha1/monitorings"
+  id: "stock-namespace-/apps.cozystack.io/v1alpha1/monitorings"
   additionalPrinterColumns:
     - jsonPath: .metadata.name
       name: Name

@@ -124,6 +124,10 @@ spec:
               value: v1alpha1
             - name: USE_NAMESPACE_NAV
               value: "true"
+            - name: LOGIN_URL
+              value: "/oauth2/userinfo"
+            - name: LOGOUT_URL
+              value: "/oauth2/sign_out"
           image: {{ .Values.openapiUI.image | quote }}
           imagePullPolicy: IfNotPresent
           livenessProbe:

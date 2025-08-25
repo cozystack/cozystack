@@ -1,80 +1,5 @@
 ---
 apiVersion: front.in-cloud.io/v1alpha1
-kind: TableUriMapping
-metadata:
-  name: virtualmachine-detail
-spec:
-  id: "default-/apps.cozystack.io/v1alpha1/virtualmachines"
-  pathToNavigate: "/openapi-ui/{clusterName}/{namespace}/factory/virtualmachine-detail/~recordValue~"
-  keysToParse:
-    - metadata
-    - name
----
-apiVersion: front.in-cloud.io/v1alpha1
-kind: CustomColumnsOverride
-metadata:
-  name: cozystack-vm-secrets
-spec:
-  id: "factory-virtualmachine-detail-secrets"
-  additionalPrinterColumns:
-    - jsonPath: .metadata.name
-      name: NAME
-      type: string
-    - jsonPath: .data.userdata
-      name: DATA
-      type: string
----
-apiVersion: front.in-cloud.io/v1alpha1
-kind: CustomColumnsOverride
-metadata:
-  name: apps-cozystack-virtualmachine-detail
-spec:
-  id: "default-/apps.cozystack.io/v1alpha1/virtualmachines"
-  additionalPrinterColumns:
-    - jsonPath: .metadata.name
-      name: Name
-      type: string
-    - jsonPath: .metadata.namespace
-      name: Namespace
-      type: string
-    - jsonPath: .spec.running
-      name: Running
-      type: boolean
-    - jsonPath: .spec.instanceType
-      name: InstanceType
-      type: string
-    - jsonPath: .spec.instanceProfile
-      name: Profile
-      type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-
----
-apiVersion: front.in-cloud.io/v1alpha1
-kind: CustomColumnsOverride
-metadata:
-  name: virtualmachine-status-conditions
-spec:
-  id: "factory-virtualmachine-detail-status-conditions"
-  additionalPrinterColumns:
-    - jsonPath: .type
-      name: Type
-      type: string
-    - jsonPath: .status
-      name: Status
-      type: string
-    - jsonPath: .lastTransitionTime
-      name: LastTransitionTime
-      type: string
-    - jsonPath: .message
-      name: Message
-      type: string
-  additionalPrinterColumnsUndefinedValues:
-    - key: Message
-      value: "-"
----
-apiVersion: front.in-cloud.io/v1alpha1
 kind: Factory
 metadata:
   name: virtualmachine-detail
@@ -480,14 +405,14 @@ spec:
               - type: EnrichedTable
                 data:
                   id: 4001
-                  fetchUrl: "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloads"
+                  fetchUrl: "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors"
                   clusterNamePartOfUrl: "{2}"
                   baseprefix: "/openapi-ui"
-                  customizationId: "factory-detail-workloads"
+                  customizationId: "factory-detail-workloadmonitors"
                   pathToItems:
                     - items
                   labelsSelector:
-                    workloads.cozystack.io/monitor: "virtual-machine-{reqs[0]['metadata','name']}"
+                    helm.toolkit.fluxcd.io/name: "virtual-machine-{reqs[0]['metadata','name']}"
           - key: "services"
             label: "Services"
             children:
@@ -497,7 +422,7 @@ spec:
                   fetchUrl: "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services"
                   clusterNamePartOfUrl: "{2}"
                   baseprefix: "/openapi-ui"
-                  customizationId: "factory-detail-services"
+                  customizationId: "vm-factory-services"
                   pathToItems:
                     - items
                   labelsSelector:

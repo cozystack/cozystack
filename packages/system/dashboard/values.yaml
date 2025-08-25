@@ -1,4 +1,4 @@
 openapiUI:
-  image: "ghcr.io/cozystack/cozystack/openapi-ui:latest@sha256:99eede9cac3e4943c80fb1e7c53ae517fc8b050191ed086f5f4890072386b4bf"
+  image: "kklinch0/openapi-ui:latest@sha256:ddb661377df4f3e3336d1b60dd7f68006dccf9ada4e6fa1833ef4ade92ab3d5d"
 openapiUIK8sBff:
-  image: "ghcr.io/cozystack/cozystack/openapi-ui-k8s-bff:latest@sha256:e5178151aa8f4d168d9aee5581e896cb6086f254816280e1e979b970c0bf658c"
+  image: "kklinch0/openapi-ui-k8s-bff:latest@sha256:5afde89cdcdcbd17a9be617a4fa41e1bc641516a7125ac2be4bd03d6eb68fa0b"
