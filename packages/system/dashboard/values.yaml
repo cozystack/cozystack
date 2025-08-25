@@ -1,4 +1,4 @@
 openapiUI:
-  image: "kklinch0/openapi-ui:latest@sha256:ddb661377df4f3e3336d1b60dd7f68006dccf9ada4e6fa1833ef4ade92ab3d5d"
+  image: "kklinch0/openapi-ui:latest@sha256:3f18aefe270f77c66e98c0e7e11d728d006a8b7a5f3dd1e4b278e48dc296238c"
 openapiUIK8sBff:
   image: "kklinch0/openapi-ui-k8s-bff:latest@sha256:5afde89cdcdcbd17a9be617a4fa41e1bc641516a7125ac2be4bd03d6eb68fa0b"
