@@ -441,3 +441,15 @@ spec:
                     - items
                   labelsSelector:
                     apps.cozystack.io/virtual-machine: "virtual-machine-{reqs[0]['metadata','name']}"
+          - key: "yaml"
+            label: "YAML"
+            children:
+              - type: YamlEditorSingleton
+                data:
+                  id: yaml-editor
+                  cluster: "{2}"
+                  isNameSpaced: true
+                  type: "builtin"
+                  typeName: virtualmachines
+                  prefillValuesRequestIndex: 0
+                  substractHeight: 400
