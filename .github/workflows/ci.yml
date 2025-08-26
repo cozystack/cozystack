@@ -1,0 +1,48 @@
+---
+name: CI/CD Workflow
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.yaml'
+      - '**/Dockerfile'
+      - '**/charts/**'
+    tags:
+      - 'v*'
+
+env:
+  IMAGE_NGINX_CACHE: nginx-cache
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  PUSH: 1
+  LOAD: 1
+  NGINX_CACHE_TAG: v0.1.0
+  TAG: v0.3.1
+  PLATFORM_ARCH: linux/amd64
+
+jobs:
+  build-and-push:
+    name: Build Cozystack
+    runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    steps:
+      - name: Set up Docker Registry
+        run: |
+          if [ "$GITHUB_ACTIONS" = "true" ]; then
+            echo "REGISTRY=ghcr.io/${{ github.repository_owner }}" >> $GITHUB_ENV
+          else
+            echo "REGISTRY=localhost:5000/cozystack_local" >> $GITHUB_ENV
+          fi
+
+      - uses: actions/checkout@v3
+      - name: Build usig make
+        run: |
+          make
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
