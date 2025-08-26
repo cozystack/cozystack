@@ -31,7 +31,7 @@ kind: CustomFormsPrefill
 metadata:
   name: apps.cozystack.io.v1alpha1.{{ $name }}
 spec:
-  customizationId: default-/apps.cozystack.io/v1alpha1/{{ $name }}
+  customizationId: stock-cluster-/apps.cozystack.io/v1alpha1/{{ $name }}
   values:
 {{ $rendered | nindent 4 }}
 {{- end }}

@@ -1,4 +1,3 @@
-
 ---
 apiVersion: front.in-cloud.io/v1alpha1
 kind: CustomColumnsOverride
@@ -10,9 +9,16 @@ spec:
     - jsonPath: .metadata.name
       name: NAME
       type: string
-    - jsonPath: .data.userdata
-      name: DATA
-      type: string
+    - name: EternalCurse
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+          - type: SecretBase64Plain
+            data:
+              id: example-secterbase64
+              plainTextValue: "hello"
+              base64Value: "{reqsJsonPath[0]['.data.userdata']['-']}"
 ---
 apiVersion: front.in-cloud.io/v1alpha1
 kind: CustomColumnsOverride
