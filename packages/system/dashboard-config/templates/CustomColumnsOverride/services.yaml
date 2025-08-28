@@ -17,10 +17,10 @@ spec:
     type: string
   - jsonPath: .metadata.labels
     name: Labels
-    type: string
+    type: array
   - jsonPath: .spec.selector
     name: Pod Selector
-    type: string
+    type: array
   additionalPrinterColumnsTrimLengths:
   - key: Name
     value: 64
