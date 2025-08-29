@@ -26,6 +26,7 @@ spec:
   template:
     metadata:
       annotations:
+        policy.cozystack.io/allow-external-communication: "false"
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}

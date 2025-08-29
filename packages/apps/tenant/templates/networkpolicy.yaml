@@ -20,7 +20,11 @@ metadata:
   name: allow-external-communication
   namespace: {{ include "tenant.name" . }}
 spec:
-  endpointSelector: {}
+  endpointSelector:
+    matchExpressions:
+    - key: policy.cozystack.io/allow-external-communication
+      operator: NotIn
+      values: ["false"]
   ingress:
   - fromEntities:
       - world

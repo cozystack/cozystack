@@ -6,14 +6,12 @@ metadata:
   name: {{ include "virtual-machine.fullname" . }}
   labels:
     {{- include "virtual-machine.labels" . | nindent 4 }}
-  {{- if eq .Values.externalMethod "WholeIP" }}
   annotations:
     networking.cozystack.io/wholeIP: "true"
-  {{- end }}
 spec:
   type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
   externalTrafficPolicy: Local
-    {{- if (include "cozy-lib.network.disableLoadBalancerNodePorts" $ | fromYaml) }}
+    {{- if ((include "cozy-lib.network.disableLoadBalancerNodePorts" $) | fromYaml) }}
   allocateLoadBalancerNodePorts: false
     {{- end }}
   selector:
@@ -29,3 +27,27 @@ spec:
     {{- end }}
     {{- end }}
 {{- end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "virtual-machine.fullname" . }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "virtual-machine.selectorLabels" . | nindent 6 }}
+  ingress:
+  - fromEntities:
+      - cluster
+  - fromEntities:
+      - world
+    {{- if eq .Values.externalMethod "PortList" }}
+    toPorts:
+      - ports:
+          {{- range .Values.externalPorts }}
+          - port: {{ quote . }}
+          {{- end }}
+    {{- end }}
+  egress:
+  - toEntities:
+      - world
