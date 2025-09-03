@@ -1,0 +1,73 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+
+apiVersion: v1
+data:
+  nginx-config: |-
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+
+    server {
+      listen       8080 default_server;
+      listen       [::]:8080 default_server;
+      server_name  _;
+
+      location ~ ^(/clusterlist|/api/clusters)$ {
+        add_header Content-Type application/json;
+        set $cluster_list '[{"api":"{{ $host }}","baseDomain":"{{ $host }}","description":"dashboard.{{ $host }}","externalDomain":"dashboard.{{ $host }}","name":"default","tenant":"dev"}]';
+        return 200 $cluster_list;
+      }
+
+      location /api/clusters/default {
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Host $host;
+          proxy_read_timeout 86400s;
+          proxy_send_timeout 86400s;
+
+          rewrite /api/clusters/default/(.*) /$1  break;
+          proxy_pass http://incloud-web-nginx.{{ .Release.Namespace }}.svc:8080;
+      }
+
+      location /k8s {
+          rewrite /k8s/(.*) /$1  break;
+          proxy_pass https://kubernetes.default.svc:443;
+      }
+
+      location /openapi-bff {
+          proxy_pass http://incloud-web-web.{{ .Release.Namespace }}.svc:64231;
+      }
+
+
+      location /openapi-bff-ws/ {
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Host $host;
+          proxy_read_timeout 86400s;
+          proxy_send_timeout 86400s;
+
+          proxy_pass http://incloud-web-web.{{ .Release.Namespace }}.svc:64231;
+      }
+
+      location = / {
+          return 301 https://dashboard.{{ $host }}/openapi-ui;
+      }
+
+      location / {
+          proxy_pass http://incloud-web-web.{{ .Release.Namespace }}.svc:8080;
+      }
+
+      location /healthcheck {
+          access_log off;
+          return 200 "Healthy\n";
+      }
+    }
+kind: ConfigMap
+metadata:
+  name: incloud-web-nginx-config

@@ -1,0 +1,11 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: TableUriMapping
+metadata:
+  name: namespaces
+spec:
+  id: "stock-cluster-/core.cozystack.io/v1alpha1/tenantnamespaces"
+  pathToNavigate: "/openapi-ui/{clusterName}/~recordValue~/factory/marketplace"
+  keysToParse:
+    - metadata
+    - name

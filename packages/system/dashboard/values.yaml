@@ -377,3 +377,7 @@ kubeapps:
                       kind: HelmRepository
                       name: cozystack-extra
                       namespace: cozy-public
+openapiUI:
+  image: ghcr.io/cozystack/cozystack/openapi-ui:latest@sha256:64d06300d46c60264715d98c200c0c3af03a270ad06e75b4732323a6fb4953a9
+openapiUIK8sBff:
+  image: ghcr.io/cozystack/cozystack/openapi-ui-k8s-bff:latest@sha256:3b38261662b26fd37ea5d6178168d259d3e2ca44ce93bdb87a83b730d815998e
