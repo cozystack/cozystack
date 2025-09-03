@@ -27,4 +27,5 @@ args:
 {{- if .Values.config.gateway.enabled }}
 - -gatewayz
 {{- end }}
-- http://localhost:{{ .Values.config.monitor.port }}/
+{{- $monitorProto := ternary "https" "http" .Values.config.monitor.tls.enabled }}
+- {{ $monitorProto }}://{{ .Values.promExporter.monitorDomain }}:{{ .Values.config.monitor.port }}/

@@ -83,6 +83,8 @@ modules/340-monitoring-kubernetes/monitoring/grafana-dashboards//flux/flux-stats
 modules/340-monitoring-kubernetes/monitoring/grafana-dashboards//kafka/strimzi-kafka.json
 modules/340-monitoring-kubernetes/monitoring/grafana-dashboards//seaweedfs/seaweedfs.json
 modules/340-monitoring-kubernetes/monitoring/grafana-dashboards//goldpinger/goldpinger.json
+modules/340-monitoring-kubernetes/monitoring/grafana-dashboards//nats/nats-jetstream.json
+modules/340-monitoring-kubernetes/monitoring/grafana-dashboards//nats/nats-server.json
 EOT
 
 

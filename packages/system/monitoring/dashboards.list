@@ -43,3 +43,5 @@ hubble/overview
 hubble/dns-namespace
 hubble/l7-http-metrics
 hubble/network-overview
+nats/nats-jetstream
+nats/nats-server
