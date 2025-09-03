@@ -123,6 +123,7 @@ EOF
 
 @test "Configure Tenant and wait for applications" {
   # Patch root tenant and wait for its releases
+
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
@@ -188,7 +189,10 @@ spec:
   ingress: false
   isolated: true
   monitoring: false
-  resourceQuotas: {}
+  resourceQuotas:
+   cpu: "4"
+   memory: "4Gi"
+   storage: "100Gi"
   seaweedfs: false
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
