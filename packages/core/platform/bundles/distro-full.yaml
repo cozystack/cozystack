@@ -66,6 +66,8 @@ releases:
   values:
     cozystackController:
       disableTelemetry: true
+      extraArgs:
+      - --kubeovn-plunger=false
   {{- end }}
 
 - name: cert-manager
