@@ -14,20 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package registry
+package core
 
-import (
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
-	"k8s.io/apiserver/pkg/registry/rest"
+// GroupName is the group name used in this package
+const (
+	GroupName = "core.cozystack.io"
 )
-
-// REST is a thin wrapper around genericregistry.Store that also satisfies
-// the GroupVersionKindProvider interface if callers need it later.
-type REST struct {
-	*genericregistry.Store
-}
-
-// RESTInPeace is a tiny helper so the call-site code reads nicely.  It simply
-// returns its argument, letting us defer (and centralise) any future error
-// handling here.
-func RESTInPeace(storage rest.Storage) rest.Storage { return storage }
