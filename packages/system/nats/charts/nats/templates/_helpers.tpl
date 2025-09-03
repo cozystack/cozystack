@@ -147,10 +147,18 @@ app.kubernetes.io/component: nats-box
 Print the image
 */}}
 {{- define "nats.image" }}
-{{- $image := printf "%s:%s" .repository .tag }}
+{{- $image := "" }}
+{{- if .digest }}
+{{- $image = printf "%s@%s" .repository .digest }}
+{{- else }}
+{{- $image = printf "%s:%s" .repository .tag }}
+{{- end }}
 {{- if or .registry .global.image.registry }}
 {{- $image = printf "%s/%s" (.registry | default .global.image.registry) $image }}
-{{- end -}}
+{{- end }}
+{{- if .fullImageName }}
+{{- $image = .fullImageName }}
+{{- end }}
 image: {{ $image }}
 {{- if or .pullPolicy .global.image.pullPolicy }}
 imagePullPolicy: {{ .pullPolicy | default .global.image.pullPolicy }}
@@ -274,7 +282,7 @@ output: string with following format rules
 */}}
 {{- define "nats.formatConfig" -}}
   {{-
-    (regexReplaceAll "\"<<\\s+(.*)\\s+>>\""
+    (regexReplaceAll "\"<<\\s+(.*?)\\s+>>\""
       (regexReplaceAll "\".*\\$include\": \"(.*)\",?" (include "toPrettyRawJson" .) "include ${1};")
     "${1}")
   -}}
