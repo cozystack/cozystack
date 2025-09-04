@@ -100,7 +100,8 @@ nats 0.7.0 62cb694d
 nats 0.7.1 4369b031
 nats 0.8.0 08cb7c0f
 nats 0.8.1 c02a3818
-nats 0.9.0 HEAD
+nats 0.9.0 c0d5e52e
+nats 0.9.1 HEAD
 postgres 0.1.0 263e47be
 postgres 0.2.0 53f2365e
 postgres 0.2.1 d7cfa53c
