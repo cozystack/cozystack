@@ -190,9 +190,9 @@ spec:
   isolated: true
   monitoring: false
   resourceQuotas:
-   cpu: "4"
-   memory: "4Gi"
-   storage: "100Gi"
+    cpu: "4"
+    memory: "4Gi"
+    storage: "100Gi"
   seaweedfs: false
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
