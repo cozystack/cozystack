@@ -184,7 +184,7 @@ metadata:
   name: test
   namespace: tenant-root
 spec:
-  etcd: false
+  etcd: true
   host: ""
   ingress: false
   isolated: true
