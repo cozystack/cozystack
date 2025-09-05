@@ -5,7 +5,7 @@ storageClass: replicated
 
 ## @section Application-specific parameters
 ## @param version {string} Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.
-version: "v1.32"
+version: "v1.33"
 ## @param host {string} Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.
 host: ""
 
