@@ -184,15 +184,15 @@ metadata:
   name: test
   namespace: tenant-root
 spec:
-  etcd: true
+  etcd: false
   host: ""
   ingress: false
   isolated: true
   monitoring: false
   resourceQuotas:
-    cpu: "12"
-    memory: "32Gi"
-    storage: "150Gi"
+    cpu: "10"
+    memory: "16Gi"
+    storage: "100Gi"
   seaweedfs: false
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
