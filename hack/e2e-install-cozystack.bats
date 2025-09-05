@@ -190,7 +190,7 @@ spec:
   isolated: true
   monitoring: false
   resourceQuotas:
-    cpu: "10"
+    cpu: "10000m"
     memory: "16Gi"
     storage: "100Gi"
   seaweedfs: false
