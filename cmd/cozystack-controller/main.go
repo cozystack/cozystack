@@ -32,12 +32,14 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/kubeovnplunger"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -62,6 +64,7 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
+	var runKubeOVNPlunger bool
 	var enableHTTP2 bool
 	var disableTelemetry bool
 	var telemetryEndpoint string
@@ -74,6 +77,8 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&runKubeOVNPlunger, "kubeovn-plunger", true,
+		"If set, the Kube-OVN plunger will run. Use --kubeovn-plunger=false to disable.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
@@ -212,6 +217,17 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
 		os.Exit(1)
+	}
+
+	if runKubeOVNPlunger {
+		if err = (&kubeovnplunger.KubeOVNPlunger{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Registry: metrics.Registry,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "KubeOVNPlunger")
+			os.Exit(1)
+		}
 	}
 
 	// +kubebuilder:scaffold:builder

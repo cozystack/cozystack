@@ -29,3 +29,11 @@ spec:
         {{- if .Values.cozystackController.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
+        - --metrics-bind-address=:8080
+        - --metrics-secure=false
+        {{- range .Values.cozystackController.extraArgs }}
+        - {{ . }}
+        {{- end }}
+        ports:
+        - name: metrics
+          containerPort: 8080
