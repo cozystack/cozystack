@@ -95,9 +95,6 @@
 {{-   end }}
 {{-   range $k, $v := $args }}
 {{-     if eq $k "cpu" }}
-{{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
-{{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
-{{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
 {{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else if eq $k "memory" }}
 {{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
