@@ -95,9 +95,6 @@
 {{-   end }}
 {{-   range $k, $v := $args }}
 {{-     if eq $k "cpu" }}
-{{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
-{{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
-{{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
 {{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else if eq $k "memory" }}
 {{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
@@ -108,10 +105,8 @@
 {{-       $vEphemeralStorageRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $ephemeralStorageRequestF64 := divf $vEphemeralStorageRequestF64 $ephemeralStorageAllocationRatio }}
 {{-       $_ := set $output.requests $k ($ephemeralStorageRequestF64 | int | toString) }}
-{{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else }}
 {{-       $_ := set $output.requests $k $v }}
-{{-       $_ := set $output.limits $k $v }}
 {{-     end }}
 {{-   end }}
 {{-   $output | toYaml }}
@@ -182,5 +177,5 @@
     {{- $_ := set $out $key $v }}
   {{- end }}
 {{- end }}
-{{- dict "resourceQuotas" $out | toYaml }}
+{{- $out | toYaml }}
 {{- end }}
