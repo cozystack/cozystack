@@ -16,13 +16,10 @@ metadata:
 spec:
   limits:
     - default:
-        cpu: "500m"
-        memory: "512Mi"
+        cpu: "1"
+        memory: "1Gi"
       defaultRequest:
         cpu: "100m"
         memory: "128Mi"
-      max:
-        cpu: "2"
-        memory: "1Gi"
       type: Container
 {{- end }}
