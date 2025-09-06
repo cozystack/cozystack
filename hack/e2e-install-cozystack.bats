@@ -192,7 +192,7 @@ spec:
   resourceQuotas:
     cpu: "30"
     memory: "32Gi"
-    storage: "100Gi"
+    storage: "200Gi"
   seaweedfs: false
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
