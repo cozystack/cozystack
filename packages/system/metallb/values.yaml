@@ -4,8 +4,8 @@ metallb:
   controller:
     image:
       repository: ghcr.io/cozystack/cozystack/metallb-controller
-      tag: v0.15.2@sha256:0e9080234fc8eedab78ad2831fb38df375c383e901a752d72b353c8d13b9605f
+      tag: v0.15.2@sha256:5106869c470fcce9e1ef1e07efe5224190ad19e8006d5889230a75df4988b68d
   speaker:
     image:
       repository: ghcr.io/cozystack/cozystack/metallb-speaker
-      tag: v0.15.2@sha256:e14d4c328c3ab91a6eadfeea90da96388503492d165e7e8582f291b1872e53b2
+      tag: v0.15.2@sha256:2b837031e3c693c0fa0de0ad5a9036e2aabb5e90a7a235e19b089be73af11160

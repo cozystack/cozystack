@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozystack-controller
+  labels:
+    app: cozystack-controller
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: 9443
+      protocol: TCP
+      name: webhook
+  selector:
+    app: cozystack-controller
