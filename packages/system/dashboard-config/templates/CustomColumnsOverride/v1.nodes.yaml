@@ -1,0 +1,46 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: stock-cluster-v1.nodes
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "N"
+            "title" "node"
+            "backgroundColor" "#8476d1"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "factory" "node-details"
+          ) | nindent 12
+        }}
+    - name: Status
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.statuses.node" . | nindent 8 }}
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+  id: stock-cluster-/v1/nodes

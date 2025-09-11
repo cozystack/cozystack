@@ -12,7 +12,7 @@ spec:
     listKind: CozystackResourceDefinitionList
     plural: cozystackresourcedefinitions
     singular: cozystackresourcedefinition
-  scope: Namespaced
+  scope: Cluster
   versions:
   - name: v1alpha1
     schema:
@@ -59,6 +59,60 @@ spec:
                 required:
                 - kind
                 - openAPISchema
+                - plural
+                - singular
+                type: object
+              dashboard:
+                description: Dashboard configuration for this resource
+                properties:
+                  category:
+                    description: Category used to group resources in the UI (e.g.,
+                      "Storage", "Networking")
+                    type: string
+                  description:
+                    description: Short description shown in catalogs or headers (e.g.,
+                      "S3 compatible storage")
+                    type: string
+                  icon:
+                    description: Icon encoded as a string (e.g., inline SVG, base64,
+                      or data URI)
+                    type: string
+                  name:
+                    description: Hard-coded name used in the UI (e.g., "bucket")
+                    type: string
+                  plural:
+                    description: Plural human-readable name (e.g., "Buckets")
+                    type: string
+                  singular:
+                    description: Human-readable name shown in the UI (e.g., "Bucket")
+                    type: string
+                  singularResource:
+                    description: Whether this resource is singular (not a collection)
+                      in the UI
+                    type: boolean
+                  tabs:
+                    description: Which tabs to show for this resource
+                    items:
+                      description: DashboardTab enumerates allowed UI tabs.
+                      enum:
+                      - workloads
+                      - ingresses
+                      - services
+                      - secrets
+                      - yaml
+                      type: string
+                    type: array
+                  tags:
+                    description: Free-form tags for search and filtering
+                    items:
+                      type: string
+                    type: array
+                  weight:
+                    description: Order weight for sorting resources in the UI (lower
+                      first)
+                    type: integer
+                required:
+                - category
                 - plural
                 - singular
                 type: object

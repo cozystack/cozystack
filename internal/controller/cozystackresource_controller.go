@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cozystack/cozystack/internal/controller/dashboard"
 	"github.com/cozystack/cozystack/internal/shared/crdmem"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -48,6 +49,25 @@ func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, r
 	if err == nil {
 		if r.mem != nil {
 			r.mem.Upsert(crd)
+		}
+
+		mgr := dashboard.NewManager(
+			r.Client,
+			r.Scheme,
+			dashboard.WithCRDListFunc(func(c context.Context) ([]cozyv1alpha1.CozystackResourceDefinition, error) {
+				if r.mem != nil {
+					return r.mem.ListFromCacheOrAPI(c, r.Client)
+				}
+				var list cozyv1alpha1.CozystackResourceDefinitionList
+				if err := r.Client.List(c, &list); err != nil {
+					return nil, err
+				}
+				return list.Items, nil
+			}),
+		)
+
+		if res, derr := mgr.EnsureForCRD(ctx, crd); derr != nil || res.Requeue || res.RequeueAfter > 0 {
+			return res, derr
 		}
 
 		r.mu.Lock()
@@ -102,17 +122,23 @@ type crdHashView struct {
 	Spec cozyv1alpha1.CozystackResourceDefinitionSpec `json:"spec"`
 }
 
-func (r *CozystackResourceDefinitionReconciler) computeConfigHash() (string, error) {
-	if r.mem == nil {
-		return "", nil
+func (r *CozystackResourceDefinitionReconciler) computeConfigHash(ctx context.Context) (string, error) {
+	var items []cozyv1alpha1.CozystackResourceDefinition
+	if r.mem != nil {
+		list, err := r.mem.ListFromCacheOrAPI(ctx, r.Client)
+		if err != nil {
+			return "", err
+		}
+		items = list
 	}
-	snapshot := r.mem.Snapshot()
-	sort.Slice(snapshot, func(i, j int) bool { return snapshot[i].Name < snapshot[j].Name })
-	views := make([]crdHashView, 0, len(snapshot))
-	for i := range snapshot {
+
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+
+	views := make([]crdHashView, 0, len(items))
+	for i := range items {
 		views = append(views, crdHashView{
-			Name: snapshot[i].Name,
-			Spec: snapshot[i].Spec,
+			Name: items[i].Name,
+			Spec: items[i].Spec,
 		})
 	}
 	b, err := json.Marshal(views)
@@ -143,7 +169,7 @@ func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Con
 		return ctrl.Result{}, nil
 	}
 
-	newHash, err := r.computeConfigHash()
+	newHash, err := r.computeConfigHash(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

@@ -1,0 +1,511 @@
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Factory
+metadata:
+  name: node-details
+spec:
+  # Unique key for this factory configuration
+  key: node-details
+
+  # Sidebar category tags
+  sidebarTags:
+    - node-sidebar
+
+  # Enable scrollable content card for main section
+  withScrollableMainContentCard: true
+
+  # API endpoint for fetching Node details
+  urlsToFetch:
+    - "/api/clusters/{2}/k8s/api/v1/nodes/{5}"
+
+  data:
+    # === HEADER ROW ===
+    - type: antdFlex
+      data:
+        id: header-row
+        gap: 6
+        align: center
+        style:
+          marginBottom: 24px
+      children:
+        # Badge with resource short name
+        - type: antdText
+          data:
+            id: header-badge
+            text: "N"
+            title: nodes
+            style:
+              fontSize: 20px
+              lineHeight: 24px
+              padding: "0 9px"
+              borderRadius: "20px"
+              minWidth: 24
+              display: inline-block
+              textAlign: center
+              whiteSpace: nowrap
+              color: "#fff"
+              backgroundColor: "#8476d1"
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+              fontWeight: 400
+
+        # Node name
+        - type: parsedText
+          data:
+            id: header-name
+            text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+            style:
+              fontSize: 20px
+              lineHeight: 24px
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+
+        - type: antdFlex
+          data:
+            id: status-header-block
+            vertical: true
+            gap: 4
+          children:
+            {{ include "incloud-web-resources.factory.statuses.node" . | nindent 12 }}
+
+    # === MAIN TABS ===
+    - type: antdTabs
+      data:
+        id: tabs-root
+        defaultActiveKey: "details"
+        items:
+          # ------ DETAILS TAB ------
+          - key: "details"
+            label: "Details"
+            children:
+              # Main card container for details section
+              - type: ContentCard
+                data:
+                  id: details-card
+                style:
+                  marginBottom: 24px
+                children:
+                  # Section title
+                  - type: antdText
+                    data:
+                      id: details-title
+                      text: "Node details"
+                      strong: true
+                      style:
+                        fontSize: 20
+                        marginBottom: 12px
+
+                  # Spacer for visual separation
+                  - type: Spacer
+                    data:
+                      id: details-spacer
+                      "$space": 16
+
+                  # Grid layout: left and right columns
+                  - type: antdRow
+                    data:
+                      id: details-grid
+                      gutter: [48, 12]
+                    children:
+                      # LEFT COLUMN: general metadata
+                      - type: antdCol
+                        data:
+                          id: col-left
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: left-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              # Node name block
+                              - type: antdFlex
+                                data:
+                                  id: name-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: name-label
+                                      strong: true
+                                      text: "Name"
+                                  - type: parsedText
+                                    data:
+                                      id: name-value
+                                      text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+
+                              # External ID block
+                              - type: antdFlex
+                                data:
+                                  id: external-id-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: external-id-label
+                                      strong: true
+                                      text: "External ID"
+                                  - type: parsedText
+                                    data:
+                                      id: external-id-value
+                                      text: "{reqsJsonPath[0]['.spec.externalID']['-']}"
+
+                              # Uptime block (placeholder for future calculated value)
+                              # TODO To be done
+                              # - type: antdFlex
+                              #   data:
+                              #     id: uptime-block
+                              #     vertical: true
+                              #     gap: 4
+                              #   children:
+                              #     - type: antdText
+                              #       data:
+                              #         id: uptime-label
+                              #         strong: true
+                              #         text: "Uptime"
+                              #     - type: parsedText
+                              #       data:
+                              #         id: uptime-value
+                              #         text: "Function needed to calculate uptime"
+
+                              # Node address block
+                              - type: antdFlex
+                                data:
+                                  id: node-address-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: node-address-label
+                                      strong: true
+                                      text: "Node address"
+                                  - type: antdFlex
+                                    data:
+                                      id: node-address-stack
+                                      vertical: true
+                                      gap: 2
+                                    children:
+                                      - type: ArrayOfObjectsToKeyValues
+                                        data:
+                                          id: node-address
+                                          reqIndex: 0
+                                          jsonPathToArray: ".status.addresses"
+                                          keyFieldName: type
+                                          valueFieldName: address
+                                          keyFieldStyle:
+                                            color: "#aaabac"
+
+                              # Labels block
+                              - type: antdFlex
+                                data:
+                                  id: labels-block
+                                  vertical: true
+                                  gap: 8
+                                children:
+                                 {{ include "incloud-web-resources.factory.labels" (dict
+                                      "endpoint" "/api/clusters/{2}/k8s/api/v1/nodes/{5}"
+                                    ) | nindent 34
+                                  }}
+
+                              # Taints counter block
+                              - type: antdFlex
+                                data:
+                                  id: taints-counter-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  {{ include "incloud-web-resources.factory.taints.block" (dict 
+                                    "endpoint" "/api/clusters/{2}/k8s/api/v1/nodes/{5}"
+                                    "jsonPathToArray" ".spec.taints"
+                                    "pathToValue" "/spec/taints"
+                                    ) | nindent 34
+                                  }}
+
+                              # Annotations counter block
+                              - type: antdFlex
+                                data:
+                                  id: ds-annotations
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  {{ include "incloud-web-resources.factory.annotations.block" (dict
+                                      "endpoint" "/api/clusters/{2}/k8s/api/v1/nodes/{5}"
+                                    ) | nindent 34
+                                  }}
+
+                              # Provider ID block
+                              - type: antdFlex
+                                data:
+                                  id: provider-id-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: provider-id-label
+                                      strong: true
+                                      text: "Provider ID"
+                                  - type: parsedText
+                                    data:
+                                      id: provider-id-value
+                                      text: "{reqsJsonPath[0]['.spec.providerID']['-']}"
+
+                              # Creation time block
+                              - type: antdFlex
+                                data:
+                                  id: created-time-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  {{ include "incloud-web-resources.factory.time.create" (dict
+                                    "req" ".metadata.creationTimestamp"
+                                    "text" "Created"
+                                    ) | nindent 38
+                                  }}
+
+                      # RIGHT COLUMN: node info and status
+                      - type: antdCol
+                        data:
+                          id: col-right
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: right-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              # Status block
+                              - type: antdFlex
+                                data:
+                                  id: status-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: status-label
+                                      strong: true
+                                      text: "Status"
+                                  - type: antdFlex
+                                    data:
+                                      id: status-header-block
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      {{ include "incloud-web-resources.factory.statuses.node" . | nindent 38 }}
+
+                              # Operating system block
+                              - type: antdFlex
+                                data:
+                                  id: operating-system-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: operating-system-label
+                                      strong: true
+                                      text: "Operating system"
+                                  - type: parsedText
+                                    data:
+                                      id: operating-system-value
+                                      text: "{reqsJsonPath[0]['.status.nodeInfo.operatingSystem']['-']}"
+
+                              # OS image block
+                              - type: antdFlex
+                                data:
+                                  id: os-image-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: os-image-label
+                                      strong: true
+                                      text: "OS image"
+                                  - type: parsedText
+                                    data:
+                                      id: os-image-value
+                                      text: "{reqsJsonPath[0]['.status.nodeInfo.osImage']['-']}"
+
+                              # Architecture block
+                              - type: antdFlex
+                                data:
+                                  id: architecture-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: architecture-label
+                                      strong: true
+                                      text: "Architecture"
+                                  - type: parsedText
+                                    data:
+                                      id: architecture-value
+                                      text: "{reqsJsonPath[0]['.status.nodeInfo.architecture']['-']}"
+
+                              # Kernel version block
+                              - type: antdFlex
+                                data:
+                                  id: kernel-version-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: kernel-version-label
+                                      strong: true
+                                      text: "Kernel versions"
+                                  - type: parsedText
+                                    data:
+                                      id: kernel-version-value
+                                      text: "{reqsJsonPath[0]['.status.nodeInfo.kernelVersion']['-']}"
+
+                              # Boot ID block
+                              - type: antdFlex
+                                data:
+                                  id: boot-id-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: boot-id-label
+                                      strong: true
+                                      text: "Boot ID"
+                                  - type: parsedText
+                                    data:
+                                      id: boot-id-value
+                                      text: "{reqsJsonPath[0]['.status.nodeInfo.bootID']['-']}"
+
+                              # Container runtime block
+                              - type: antdFlex
+                                data:
+                                  id: container-runtime-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: container-runtime-label
+                                      strong: true
+                                      text: "Container runtime"
+                                  - type: parsedText
+                                    data:
+                                      id: container-runtime-value
+                                      text: "{reqsJsonPath[0]['.status.nodeInfo.containerRuntimeVersion']['-']}"
+
+                              # Kubelet version block
+                              - type: antdFlex
+                                data:
+                                  id: kubelet-version-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: kubelet-version-label
+                                      strong: true
+                                      text: "Kubelet version"
+                                  - type: parsedText
+                                    data:
+                                      id: kubelet-version-value
+                                      text: "{reqsJsonPath[0]['.status.nodeInfo.kubeletVersion']['-']}"
+
+                  # CONDITIONS SECTION
+                  - type: antdCol
+                    data:
+                      id: conditions-col
+                      style:
+                        marginTop: 32px
+                        padding: 16px
+                    children:
+                      - type: antdText
+                        data:
+                          id: conditions-title
+                          text: "Conditions"
+                          strong: true
+                          style:
+                            fontSize: 22
+                      - type: EnrichedTable
+                        data:
+                          id: conditions-table
+                          fetchUrl: "/api/clusters/{2}/k8s/api/v1/nodes/{5}"
+                          clusterNamePartOfUrl: "{2}"
+                          customizationId: "factory-status-conditions"
+                          baseprefix: "/openapi-ui"
+                          withoutControls: true
+                          pathToItems: ".status.conditions"
+
+                  # IMAGES SECTION
+                  - type: antdCol
+                    data:
+                      id: images-col
+                      style:
+                        marginTop: 32px
+                        padding: 16px
+                    children:
+                      - type: antdText
+                        data:
+                          id: images-title
+                          text: "Images"
+                          strong: true
+                          style:
+                            fontSize: 22
+                      - type: EnrichedTable
+                        data:
+                          id: images-table
+                          fetchUrl: "/api/clusters/{2}/k8s/api/v1/nodes/{5}"
+                          clusterNamePartOfUrl: "{2}"
+                          customizationId: "factory-node-images"
+                          baseprefix: "/openapi-ui"
+                          withoutControls: true
+                          pathToItems: ".status.images"
+
+          # ------ YAML TAB ------
+          - key: "yaml"
+            label: "YAML"
+            children:
+              # YAML editor for Node manifest
+              - type: YamlEditorSingleton
+                data:
+                  id: yaml-editor
+                  cluster: "{2}"
+                  isNameSpaced: false
+                  type: "builtin"
+                  typeName: nodes
+                  prefillValuesRequestIndex: 0
+                  substractHeight: 400
+
+          # ------ PODS TAB ------
+          - key: "pods"
+            label: "Pods"
+            children:
+              # Table of Pods scheduled on this Node
+              - type: EnrichedTable
+                data:
+                  id: pods-table
+                  fetchUrl: "/api/clusters/{2}/k8s/api/v1/pods"
+                  clusterNamePartOfUrl: "{2}"
+                  customizationId: "factory-node-details-/v1/pods"
+                  baseprefix: "/openapi-ui"
+                  withoutControls: true
+                  fieldSelector:
+                    fieldName: "spec.nodeName"
+                    parsedText: "{reqsJsonPath[0]['.metadata.name']['-']}"
+                  pathToItems: ".items"
+
+          # ------ TERMINAL TAB ------
+          - key: "terminal"
+            label: "Terminal"
+            children:
+              # Interactive node terminal
+              - type: NodeTerminal
+                data:
+                  id: terminal
+                  cluster: "{2}"
+                  nodeName: "{reqsJsonPath[0]['.metadata.name']['-']}"
+                  substractHeight: 400

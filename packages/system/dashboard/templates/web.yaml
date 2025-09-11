@@ -39,7 +39,7 @@ spec:
       containers:
         - env:
             - name: BASE_API_GROUP
-              value: front.in-cloud.io
+              value: dashboard.cozystack.io
             - name: BASE_API_VERSION
               value: v1alpha1
             - name: LOGGER
@@ -93,7 +93,7 @@ spec:
             - name: BASEPREFIX
               value: /openapi-ui
             - name: CUSTOMIZATION_API_GROUP
-              value: front.in-cloud.io
+              value: dashboard.cozystack.io
             - name: CUSTOMIZATION_API_VERSION
               value: v1alpha1
             - name: CUSTOMIZATION_NAVIGATION_RESOURCE
@@ -101,13 +101,13 @@ spec:
             - name: CUSTOMIZATION_NAVIGATION_RESOURCE_NAME
               value: navigations
             - name: INSTANCES_API_GROUP
-              value: in-cloud.io
+              value: dashboard.cozystack.io
             - name: INSTANCES_RESOURCE_NAME
               value: instances
             - name: INSTANCES_VERSION
               value: v1alpha1
             - name: MARKETPLACE_GROUP
-              value: front.in-cloud.io
+              value: dashboard.cozystack.io
             - name: MARKETPLACE_KIND
               value: MarketplacePanel
             - name: MARKETPLACE_RESOURCE_NAME

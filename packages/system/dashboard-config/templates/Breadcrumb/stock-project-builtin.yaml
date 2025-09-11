@@ -1,0 +1,38 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-project-builtin-table
+spec:
+  id: "stock-project-builtin-table"
+  breadcrumbItems:
+    - key: api
+      label: "v1/{typeName}"
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-project-builtin-form
+spec:
+  id: "stock-project-builtin-form"
+  breadcrumbItems:
+    - key: create-api-res-namespaced-table
+      label: "v1/{typeName}"
+      link: "/openapi-ui/{clusterName}/{namespace}/builtin-table/{typeName}"
+    - key: create-api-res-namespaced-typename
+      label: Create
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-project-builtin-form-edit
+spec:
+  id: "stock-project-builtin-form-edit"
+  breadcrumbItems:
+    - key: create-api-res-namespaced-table
+      label: "v1/{typeName}"
+      link: "/openapi-ui/{clusterName}/{namespace}/builtin-table/{typeName}"
+    - key: create-api-res-namespaced-typename
+      label: Update

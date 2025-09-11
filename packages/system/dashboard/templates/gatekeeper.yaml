@@ -60,6 +60,7 @@ spec:
             - --cookie-name=kc-access
             - --cookie-secure=true
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+            - --skip-provider-button
           #args: #for-token-proxy
           #  - --upstream=http://incloud-web-nginx.incloud-web.svc:8080
           #  - --http-address=0.0.0.0:8000

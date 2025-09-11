@@ -1,0 +1,33 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-node-images
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .names[0]
+      name: ImageID
+      type: string
+    - jsonPath: .sizeBytes
+      name: Size
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+          - type: ConverterBytes
+            data:
+              id: example-converter-bytes
+              bytesValue: "{reqsJsonPath[0]['.sizeBytes']['-']}"
+              format: true
+              precision: 1
+
+  additionalPrinterColumnsUndefinedValues:
+    - key: Message
+      value: "-"
+
+  additionalPrinterColumnsTrimLengths:
+    - key: ImageID
+      value: 128
+    - key: Size
+      value: 63
+  id: "factory-node-images"

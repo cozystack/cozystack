@@ -59,5 +59,6 @@
     reqIndex: {{$i}}
     jsonPathToLabels: "{{ $jsonPath }}"
     linkPrefix: "{{ .linkPrefix | default "/openapi-ui/{2}/search" }}"
+    errorText: "-"
 {{- end -}}
 

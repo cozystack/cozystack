@@ -1,0 +1,154 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: container-status-init-containers-list
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .name
+      name: Name
+      type: string
+    - jsonPath: .imageID
+      name: Image
+      type: string
+    - jsonPath: .started
+      name: Started
+      type: bool
+    - jsonPath: .ready
+      name: Ready
+      type: bool
+    - jsonPath: .restartCount
+      name: RestartCount
+      type: string
+    - jsonPath: .state.waiting.reason
+      name: WaitingdReason
+      type: string
+    - jsonPath: .state.terminated.reason
+      name: TerminatedReason
+      type: string
+
+  additionalPrinterColumnsUndefinedValues:
+    - key: TerminatedReason
+      value: "-"
+    - key: WaitingdReason
+      value: "-"
+
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 63
+    - key: Image
+      value: 63
+  id: "container-status-init-containers-list"
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: container-status-containers-list
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .name
+      name: Name
+      type: string
+    - jsonPath: .imageID
+      name: Image
+      type: string
+    - jsonPath: .started
+      name: Started
+      type: bool
+    - jsonPath: .ready
+      name: Ready
+      type: bool
+    - jsonPath: .restartCount
+      name: RestartCount
+      type: string
+    - jsonPath: .state.waiting.reason
+      name: WaitingdReason
+      type: string
+    - jsonPath: .state.terminated.reason
+      name: TerminatedReason
+      type: string
+
+  additionalPrinterColumnsUndefinedValues:
+    - key: TerminatedReason
+      value: "-"
+    - key: WaitingdReason
+      value: "-"
+
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 63
+    - key: Image
+      value: 63
+  id: "container-status-containers-list"
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: container-spec-init-containers-list
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .name
+      name: Name
+      type: string
+    - jsonPath: .image
+      name: Image
+      type: string
+    - jsonPath: .resources.requests
+      name: Resources requests
+      type: array
+    - jsonPath: .resources.limits
+      name: Resources limits
+      type: array
+  additionalPrinterColumnsTrimLengths:
+    - key: Image
+      value: 64
+  additionalPrinterColumnsUndefinedValues:
+    - key: Name
+      value: "-"
+    - key: Image
+      value: "-"
+    - key: Resources limits
+      value: "-"
+    - key: Resources requests
+      value: "-"
+  id: container-spec-init-containers-list
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: container-spec-containers-list
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .name
+      name: Name
+      type: string
+    - jsonPath: .image
+      name: Image
+      type: string
+    - jsonPath: .resources.requests
+      name: Resources requests
+      type: array
+    - jsonPath: .resources.limits
+      name: Resources limits
+      type: array
+    - jsonPath: .ports[*].containerPort
+      name: Ports
+      type: array
+  additionalPrinterColumnsTrimLengths:
+    - key: Image
+      value: 64
+  additionalPrinterColumnsUndefinedValues:
+    - key: Name
+      value: "-"
+    - key: Image
+      value: "-"
+    - key: Resources limits
+      value: "-"
+    - key: Resources requests
+      value: "-"
+    - key: Ports
+      value: "-"
+  id: container-spec-containers-list

@@ -1,0 +1,232 @@
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Factory
+metadata:
+  name: namespace-details
+spec:
+  # Unique key for this factory configuration
+  key: namespace-details
+
+  # Sidebar category tags
+  sidebarTags:
+    - namespace-sidebar
+
+  # Enable scrollable content card for main section
+  withScrollableMainContentCard: true
+
+  # API endpoint for fetching Namespace details
+  urlsToFetch:
+    - "/api/clusters/{2}/k8s/api/v1/namespaces/{5}"
+
+  data:
+    # === HEADER ROW ===
+    - type: antdFlex
+      data:
+        id: header-row
+        gap: 6
+        align: center
+        style:
+          marginBottom: 24px
+      children:
+        # Badge with resource short name
+        - type: antdText
+          data:
+            id: header-badge
+            text: "NS"
+            title: Namespace
+            style:
+              fontSize: 20px
+              lineHeight: 24px
+              padding: "0 9px"
+              borderRadius: "20px"
+              minWidth: 24
+              display: inline-block
+              textAlign: center
+              whiteSpace: nowrap
+              color: "#fff"
+              backgroundColor: "#a25792ff"
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+              fontWeight: 400
+
+        # Namespace name
+        - type: parsedText
+          data:
+            id: header-name
+            text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+            style:
+              fontSize: 20px
+              lineHeight: 24px
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+
+    # === MAIN TABS ===
+    - type: antdTabs
+      data:
+        id: tabs-root
+        defaultActiveKey: "details"
+        items:
+          # ------ DETAILS TAB ------
+          - key: "details"
+            label: "Details"
+            children:
+              # Main card container for details section
+              - type: ContentCard
+                data:
+                  id: details-card
+                  style:
+                    marginBottom: 24px
+                children:
+                  # Section title
+                  - type: antdText
+                    data:
+                      id: details-title
+                      text: "Namespace details"
+                      strong: true
+                      style:
+                        fontSize: 20
+                        marginBottom: 12px
+
+                  # Spacer for visual separation
+                  - type: Spacer
+                    data:
+                      id: details-spacer
+                      "$space": 16
+
+                  # Grid layout: left and right columns
+                  - type: antdRow
+                    data:
+                      id: details-grid
+                      gutter: [48, 12]
+                    children:
+                      # LEFT COLUMN: metadata
+                      - type: antdCol
+                        data:
+                          id: col-left
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: left-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              # Namespace name block
+                              - type: antdFlex
+                                data:
+                                  id: name-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: name-label
+                                      strong: true
+                                      text: "Name"
+                                  - type: parsedText
+                                    data:
+                                      id: name-value
+                                      text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+
+                              # Labels display block
+                              - type: antdFlex
+                                data:
+                                  id: labels-block
+                                  vertical: true
+                                  gap: 8
+                                children:
+                                 {{ include "incloud-web-resources.factory.labels" (dict
+                                      "endpoint" "/api/clusters/{2}/k8s/api/v1/namespaces/{5}"
+                                    ) | nindent 34
+                                  }}
+
+                              # Annotations counter block
+                              - type: antdFlex
+                                data:
+                                  id: ds-annotations
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  {{ include "incloud-web-resources.factory.annotations.block" (dict
+                                      "endpoint" "/api/clusters/{2}/k8s/api/v1/namespaces/{5}"
+                                    ) | nindent 34
+                                  }}
+
+                              # Creation time block
+                              - type: antdFlex
+                                data:
+                                  id: created-time-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  {{ include "incloud-web-resources.factory.time.create" (dict
+                                    "req" ".metadata.creationTimestamp"
+                                    "text" "Created"
+                                    ) | nindent 38
+                                  }}
+
+                              # Owner information block
+                              # - type: antdFlex
+                              #   data:
+                              #     id: owner-block
+                              #     vertical: true
+                              #     gap: 4
+                              #   children:
+                              #     - type: antdText
+                              #       data:
+                              #         id: owner-label
+                              #         strong: true
+                              #         text: "Owner"
+                              #     - type: antdFlex
+                              #       data:
+                              #         id: owner-value-container
+                              #         gap: 6
+                              #         align: center
+                              #       children:
+                              #         - type: antdText
+                              #           data:
+                              #             id: owner-value
+                              #             text: "No owner"
+                              #             style:
+                              #               color: "#FF0000"
+
+                      # RIGHT COLUMN: status
+                      - type: antdCol
+                        data:
+                          id: col-right
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: right-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              # Namespace status phase
+                              - type: antdFlex
+                                data:
+                                  id: status-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: status-label
+                                      strong: true
+                                      text: "Status"
+                                  - type: parsedText
+                                    data:
+                                      id: status-value
+                                      text: "{reqsJsonPath[0]['.status.phase']['-']}"
+
+          # ------ YAML TAB ------
+          - key: "yaml"
+            label: "YAML"
+            children:
+              # YAML editor for Namespace manifest
+              - type: YamlEditorSingleton
+                data:
+                  id: yaml-editor
+                  cluster: "{2}"
+                  isNameSpaced: false
+                  type: "builtin"
+                  typeName: namespaces
+                  prefillValuesRequestIndex: 0
+                  substractHeight: 400

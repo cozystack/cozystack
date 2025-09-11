@@ -23,3 +23,21 @@
     text: "{reqsJsonPath[{{$i}}]['{{ $jsonPath }}']['-']}"
     href: "/openapi-ui/{2}/{{$nsPart}}factory/{{ $factory }}/{reqsJsonPath[{{$i}}]['{{ $jsonPath }}']['-']}"
 {{- end -}}
+
+{{- define "incloud-web-resources.factory.linkblock" -}}
+{{- $i := (default 0 .reqIndex) -}}
+{{- $type := (default "" .type) -}}
+{{- $jsonPath := (default "" .jsonPath) -}}
+{{- $factory := (default "" .factory) -}}
+{{- $ns := (default "" .namespace) -}}
+
+{{- $nsPart := "" -}}
+{{- if ne $ns "" }}
+  {{- $nsPart = printf "%s/" $ns -}}
+{{- end }}
+- type: antdLink
+  data:
+    id: {{ printf "%s-link" $type }}
+    text: "{reqsJsonPath[{{$i}}]['{{ $jsonPath }}']['-']}"
+    href: "/openapi-ui/{2}/{{$nsPart}}factory/{{ $factory }}/{reqsJsonPath[{{$i}}]['{{ $jsonPath }}']['-']}"
+{{- end -}}

@@ -1,0 +1,364 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: "factory-node-details-v1.pods"
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "P"
+            "title" "pod"
+            "backgroundColor" "#009596"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "pod-details"
+          ) | nindent 12 
+        }}
+    - jsonPath: .metadata.namespace
+      name: Namespace
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "NS"
+            "title" "namespace"
+            "backgroundColor" "#a25792ff"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "namespace"
+            "jsonPath" ".metadata.namespace"
+            "factory" "namespace-details"
+          ) | nindent 12
+        }}
+    - jsonPath: .spec.restartPolicy
+      name: Restart Policy
+      type: string
+    - jsonPath: .status.podIP
+      name: Pod IP
+      type: string
+    # - jsonPath: .status.conditions[?(@.type=="ContainersReady")].status
+    #   name: Status Containers
+    #   type: string
+    # - jsonPath: .status.conditions[?(@.type=="PodScheduled")].status
+    #   name: Status Scheduled
+    #   type: string
+    - jsonPath: .status.qosClass
+      name: QOS
+      type: string
+    - name: Status
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.statuses.pod" . | nindent 8 }}
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: Node
+      value: Unschedulable
+    - key: Pod IP
+      value: NotAllocated
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+  id: "factory-node-details-/v1/pods"
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: "factory-v1.pods"
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "P"
+            "title" "pod"
+            "backgroundColor" "#009596"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "pod-details"
+          ) | nindent 12
+        }}
+    - name: Node
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "N"
+            "title" "node"
+            "backgroundColor" "#8476d1"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".spec.nodeName"
+            "factory" "node-details"
+          ) | nindent 12
+        }}
+    - jsonPath: .spec.restartPolicy
+      name: Restart Policy
+      type: string
+    - jsonPath: .status.podIP
+      name: Pod IP
+      type: string
+    # - jsonPath: .status.conditions[?(@.type=="ContainersReady" || @.type=="PodReady")].status
+    #   name: Status Containers
+    #   type: string
+    # - jsonPath: .status.conditions[?(@.type=="PodScheduled")].status
+    #   name: Status Scheduled
+    #   type: string
+    - jsonPath: .status.qosClass
+      name: QOS
+      type: string
+    - name: Status
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.statuses.pod" . | nindent 8 }}
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: Node
+      value: Unschedulable
+    - key: Pod IP
+      value: NotAllocated
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+  id: "factory-/v1/pods"
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: "stock-cluster-v1.pods"
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "P"
+            "title" "pod"
+            "backgroundColor" "#009596"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "pod-details"
+          ) | nindent 12
+        }}
+    - jsonPath: .metadata.namespace
+      name: Namespace
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "NS"
+            "title" "namespace"
+            "backgroundColor" "#a25792ff"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "namespace"
+            "jsonPath" ".metadata.namespace"
+            "factory" "namespace-details"
+          ) | nindent 12
+        }}
+    - jsonPath: .spec.nodeName
+      name: Node
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "N"
+            "title" "node"
+            "backgroundColor" "#8476d1"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".spec.nodeName"
+            "factory" "node-details"
+          ) | nindent 12
+        }}
+    - jsonPath: .spec.restartPolicy
+      name: Restart Policy
+      type: string
+    - jsonPath: .status.podIP
+      name: Pod IP
+      type: string
+    # - jsonPath: .status.conditions[?(@.type=="ContainersReady")].status
+    #   name: Status Containers
+    #   type: string
+    # - jsonPath: .status.conditions[?(@.type=="PodScheduled")].status
+    #   name: Status Scheduled
+    #   type: string
+    - jsonPath: .status.qosClass
+      name: QOS
+      type: string
+    - name: Status
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.statuses.pod" . | nindent 8 }}
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: Node
+      value: Unschedulable
+    - key: Pod IP
+      value: NotAllocated
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+  id: "stock-cluster-/v1/pods"
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: "stock-namespace-v1.pods"
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "P"
+            "title" "pod"
+            "backgroundColor" "#009596"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "pod-details"
+          ) | nindent 12 
+        }}
+    - name: Node
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "N"
+            "title" "node"
+            "backgroundColor" "#8476d1"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".spec.nodeName"
+            "factory" "node-details"
+          ) | nindent 12
+        }}
+    - jsonPath: .spec.restartPolicy
+      name: Restart Policy
+      type: string
+    - jsonPath: .status.podIP
+      name: Pod IP
+      type: string
+    # - jsonPath: .status.conditions[?(@.type=="ContainersReady")].status
+    #   name: Status Containers
+    #   type: string
+    # - jsonPath: .status.conditions[?(@.type=="PodScheduled")].status
+    #   name: Status Scheduled
+    #   type: string
+    - jsonPath: .status.qosClass
+      name: QOS
+      type: string
+    - name: Status
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.statuses.pod" . | nindent 8 }}
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: Node
+      value: Unschedulable
+    - key: Pod IP
+      value: NotAllocated
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+  id: "stock-namespace-/v1/pods"

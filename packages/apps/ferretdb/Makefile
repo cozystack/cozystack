@@ -2,6 +2,7 @@ include ../../../scripts/package.mk
 
 generate:
 	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
+	../../../hack/update-crd.sh
 
 update:
 	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/FerretDB/FerretDB | awk -F'[/^]' '{sub("^v", "", $$3)} END{print $$3}') && \

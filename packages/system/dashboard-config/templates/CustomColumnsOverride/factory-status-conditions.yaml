@@ -1,0 +1,40 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-status-conditions
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .type
+      name: Type
+      type: string
+    - jsonPath: .status
+      name: Status
+      type: bool
+    - jsonPath: .lastTransitionTime
+      name: Updated
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".lastTransitionTime"
+          ) | nindent 8
+        }}
+    - jsonPath: .reason
+      name: Reason
+      type: string
+    - jsonPath: .message
+      name: Message
+      type: string
+
+  additionalPrinterColumnsUndefinedValues:
+    - key: Reason
+      value: "-"
+    - key: Message
+      value: "-"
+
+  additionalPrinterColumnsTrimLengths:
+    - key: Message
+      value: 63
+  id: "factory-status-conditions"
