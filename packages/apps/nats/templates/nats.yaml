@@ -41,12 +41,15 @@ spec:
   values:
     nats:
       podTemplate:
-        merge:
-          spec:
-            containers:
-              - name: nats
-                image: nats:2.10.17-alpine
-                resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 22 }}
+        patch:
+          - op: replace
+            path: /spec/containers/0/image
+            value: nats:2.10.17-alpine
+          - op: add
+            path: /spec/containers/0/resources
+            value:
+          {{ include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | indent 4 }}
+
       fullnameOverride: {{ .Release.Name }}
       config:
         {{- if or (gt (len $passwords) 0) (gt (len .Values.config.merge) 0) }}
