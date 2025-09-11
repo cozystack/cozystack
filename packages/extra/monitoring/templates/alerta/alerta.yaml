@@ -121,7 +121,9 @@ spec:
             - name: TELEGRAM_DISABLE_NOTIFICATION_SEVERITY
               value: "{{ .Values.alerta.alerts.telegram.disabledSeverity }}"
             {{- end }}
-
+          {{- with .Values.alerta.extraEnvs }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080

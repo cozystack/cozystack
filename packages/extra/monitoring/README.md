@@ -67,6 +67,7 @@
 | `alerta.resources.limits`                 |                                                                                     | `*object`   | `null`  |
 | `alerta.resources.limits.cpu`             | CPU limit (maximum available CPU)                                                   | `*quantity` | `1`     |
 | `alerta.resources.limits.memory`          | Memory limit (maximum available memory)                                             | `*quantity` | `1Gi`   |
+| `alerta.extraEnvs`                        | Additional environment variables to inject into the alerta container                | `[]object`  | `[]`    |
 | `alerta.alerts`                           | Configuration for alerts                                                            | `*object`   | `null`  |
 | `alerta.alerts.telegram`                  | Configuration for Telegram alerts                                                   | `*object`   | `null`  |
 | `alerta.alerts.telegram.token`            | Telegram token for your bot                                                         | `string`    | `""`    |
