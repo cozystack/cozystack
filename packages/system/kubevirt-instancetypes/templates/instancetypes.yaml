@@ -405,6 +405,78 @@ kind: VirtualMachineClusterInstancetype
 metadata:
   annotations:
     instancetype.kubevirt.io/description: |-
+      The GN Series provides instances types intended for VMs with
+      NVIDIA GPU resources attached.
+
+      *GN* is the abbreviation of "GPU NVIDIA".
+
+      This series is intended to be used with VMs consuming GPUs
+      provided by the
+      [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator)
+      which can be installed on Kubernetes and also is made available
+      on OpenShift via OperatorHub.
+    instancetype.kubevirt.io/displayName: GPU NVIDIA
+  labels:
+    instancetype.kubevirt.io/class: gpu.nvidia
+    instancetype.kubevirt.io/cpu: "4"
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/gpus: "true"
+    instancetype.kubevirt.io/icon-pf: fa-microchip
+    instancetype.kubevirt.io/memory: 32Gi
+    instancetype.kubevirt.io/size: xlarge
+    instancetype.kubevirt.io/vendor: kubevirt.io
+    instancetype.kubevirt.io/version: "1"
+  name: gn1.lowcpu.xlarge
+spec:
+  cpu:
+    guest: 4
+  gpus:
+    - deviceName: nvidia.com/A400
+      name: gpu1
+  memory:
+    guest: 32Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  annotations:
+    instancetype.kubevirt.io/description: |-
+      The GN Series provides instances types intended for VMs with
+      NVIDIA GPU resources attached.
+
+      *GN* is the abbreviation of "GPU NVIDIA".
+
+      This series is intended to be used with VMs consuming GPUs
+      provided by the
+      [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator)
+      which can be installed on Kubernetes and also is made available
+      on OpenShift via OperatorHub.
+    instancetype.kubevirt.io/displayName: GPU NVIDIA
+  labels:
+    instancetype.kubevirt.io/class: gpu.nvidia
+    instancetype.kubevirt.io/cpu: "4"
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/gpus: "true"
+    instancetype.kubevirt.io/icon-pf: fa-microchip
+    instancetype.kubevirt.io/memory: 32Gi
+    instancetype.kubevirt.io/size: 2xlarge
+    instancetype.kubevirt.io/vendor: kubevirt.io
+    instancetype.kubevirt.io/version: "1"
+  name: gn1.lowcpu.2xlarge
+spec:
+  cpu:
+    guest: 4
+  gpus:
+    - deviceName: nvidia.com/A400
+      name: gpu1
+  memory:
+    guest: 64Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  annotations:
+    instancetype.kubevirt.io/description: |-
       The M Series provides resources for memory intensive
       applications.
 
