@@ -2,6 +2,18 @@
 
 @test "Create DB ClickHouse" {
   name='test'
+  withResources='true'
+  if [ "$withResources" == 'true' ]; then
+    resources=$(cat <<EOF
+  resources:
+    resources:
+      cpu: 500m
+      memory: 768Mi
+EOF
+  )
+  else
+    resources='  resources: {}'
+  fi
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: ClickHouse
