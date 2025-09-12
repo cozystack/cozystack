@@ -1,0 +1,203 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicas": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "title": "Number of replicas",
+      "description": "Total number of FoundationDB instances"
+    },
+    "cluster": {
+      "type": "object",
+      "title": "Cluster Configuration",
+      "properties": {
+        "processCounts": {
+          "type": "object",
+          "title": "Process Counts",
+          "properties": {
+            "stateless": {
+              "type": "integer",
+              "default": -1,
+              "title": "Stateless processes",
+              "description": "Number of stateless processes (-1 for automatic)"
+            },
+            "storage": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3,
+              "title": "Storage processes",
+              "description": "Number of storage processes"
+            },
+            "cluster_controller": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "title": "Cluster controllers",
+              "description": "Number of cluster controller processes"
+            }
+          }
+        },
+        "version": {
+          "type": "string",
+          "default": "7.4.1",
+          "title": "FoundationDB Version",
+          "description": "Version of FoundationDB to deploy"
+        },
+        "faultDomain": {
+          "type": "object",
+          "title": "Fault Domain",
+          "properties": {
+            "key": {
+              "type": "string",
+              "default": "foundationdb.org/none",
+              "title": "Fault domain key"
+            },
+            "valueFrom": {
+              "type": "string",
+              "default": "$FDB_ZONE_ID",
+              "title": "Fault domain value source"
+            }
+          }
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "title": "Storage Configuration",
+      "properties": {
+        "size": {
+          "type": "string",
+          "default": "16Gi",
+          "title": "Storage size",
+          "description": "Size of persistent volumes for each instance"
+        },
+        "storageClass": {
+          "type": "string",
+          "title": "Storage class",
+          "description": "Kubernetes storage class to use (optional)"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "title": "Resource Configuration",
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": ["small", "medium", "large", "xlarge"],
+          "default": "medium",
+          "title": "Resource preset",
+          "description": "Predefined resource configuration"
+        },
+        "limits": {
+          "type": "object",
+          "title": "Resource limits",
+          "properties": {
+            "cpu": {"type": "string"},
+            "memory": {"type": "string"}
+          }
+        },
+        "requests": {
+          "type": "object", 
+          "title": "Resource requests",
+          "properties": {
+            "cpu": {"type": "string"},
+            "memory": {"type": "string"}
+          }
+        }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "title": "Backup Configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "title": "Enable backups",
+          "description": "Enable automatic backups to S3"
+        },
+        "s3": {
+          "type": "object",
+          "title": "S3 Configuration",
+          "properties": {
+            "bucket": {
+              "type": "string",
+              "title": "S3 bucket name"
+            },
+            "endpoint": {
+              "type": "string",
+              "title": "S3 endpoint URL"
+            },
+            "region": {
+              "type": "string",
+              "default": "us-east-1",
+              "title": "S3 region"
+            },
+            "credentials": {
+              "type": "object",
+              "title": "S3 credentials",
+              "properties": {
+                "accessKeyId": {
+                  "type": "string",
+                  "title": "Access key ID"
+                },
+                "secretAccessKey": {
+                  "type": "string",
+                  "title": "Secret access key"
+                }
+              }
+            }
+          }
+        },
+        "retentionPolicy": {
+          "type": "string",
+          "default": "7d",
+          "title": "Retention policy",
+          "description": "How long to keep backups"
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "title": "Monitoring",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "title": "Enable monitoring",
+          "description": "Enable WorkloadMonitor integration"
+        }
+      }
+    },
+    "advanced": {
+      "type": "object",
+      "title": "Advanced Configuration",
+      "properties": {
+        "customParameters": {
+          "type": "array",
+          "title": "Custom parameters",
+          "description": "Custom FoundationDB parameters",
+          "items": {
+            "type": "string"
+          }
+        },
+        "imageType": {
+          "type": "string",
+          "enum": ["unified", "split"],
+          "default": "split",
+          "title": "Image type",
+          "description": "Container image deployment type"
+        },
+        "automaticReplacements": {
+          "type": "boolean",
+          "default": true,
+          "title": "Automatic replacements",
+          "description": "Enable automatic pod replacements"
+        }
+      }
+    }
+  }
+}

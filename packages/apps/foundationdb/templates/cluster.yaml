@@ -1,0 +1,86 @@
+---
+apiVersion: apps.foundationdb.org/v1beta2
+kind: FoundationDBCluster
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: foundationdb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  version: {{ .Values.cluster.version | quote }}
+  
+  processCounts:
+    {{- toYaml .Values.cluster.processCounts | nindent 4 }}
+  
+  automationOptions:
+    replacements:
+      enabled: {{ .Values.advanced.automaticReplacements }}
+    faultDomain:
+      key: {{ .Values.cluster.faultDomain.key }}
+      {{- if .Values.cluster.faultDomain.valueFrom }}
+      valueFrom: {{ .Values.cluster.faultDomain.valueFrom }}
+      {{- end }}
+    imageType: {{ .Values.advanced.imageType }}
+    labels:
+      filterOnOwnerReference: false
+      matchLabels:
+        foundationdb.org/fdb-cluster-name: {{ .Release.Name }}
+      processClassLabels:
+        - foundationdb.org/fdb-process-class
+      processGroupIDLabels:
+        - foundationdb.org/fdb-process-group-id
+    minimumUptimeSecondsForBounce: 60
+  
+  processes:
+    general:
+      {{- if .Values.advanced.customParameters }}
+      customParameters:
+        {{- range .Values.advanced.customParameters }}
+        - {{ . }}
+        {{- end }}
+      {{- end }}
+      podTemplate:
+        spec:
+          containers:
+            - name: foundationdb
+              resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resources.preset .Values.resources $) | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.advanced.securityContext | nindent 16 }}
+            - name: foundationdb-kubernetes-sidecar
+              resources:
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                {{- toYaml .Values.advanced.securityContext | nindent 16 }}
+          initContainers:
+            - name: foundationdb-kubernetes-init
+              resources:
+                limits:
+                  cpu: 100m
+                  memory: 128Mi
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+              securityContext:
+                {{- toYaml .Values.advanced.securityContext | nindent 16 }}
+  
+  volumeClaimTemplate:
+    spec:
+      {{- if .Values.storage.storageClass }}
+      storageClassName: {{ .Values.storage.storageClass }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.storage.size }}
+  
+  routing:
+    defineDNSLocalityFields: true
+  
+  sidecarContainer:
+    enableLivenessProbe: true
+    enableReadinessProbe: true

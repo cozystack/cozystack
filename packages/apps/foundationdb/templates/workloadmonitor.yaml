@@ -1,0 +1,20 @@
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: foundationdb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicas }}
+  minReplicas: 1
+  kind: foundationdb
+  type: foundationdb
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/name: foundationdb
+  version: {{ .Chart.Version }}
+{{- end }}

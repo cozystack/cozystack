@@ -33,6 +33,7 @@ ferretdb 0.7.1 4369b031
 ferretdb 0.8.0 08cb7c0f
 ferretdb 1.0.0 c02a3818
 ferretdb 1.1.0 HEAD
+foundationdb 0.1.0 HEAD
 http-cache 0.1.0 263e47be
 http-cache 0.2.0 53f2365e
 http-cache 0.3.0 6c5cf5bf

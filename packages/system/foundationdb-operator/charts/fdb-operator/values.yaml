@@ -1,0 +1,70 @@
+---
+image:
+  repository: foundationdb/fdb-kubernetes-operator
+  tag: v2.13.0
+  pullPolicy: IfNotPresent
+initContainers:
+  7.1:
+    image:
+      repository: foundationdb/fdb-kubernetes-monitor
+      tag: 7.1.67
+      pullPolicy: IfNotPresent
+  7.3:
+    image:
+      repository: foundationdb/fdb-kubernetes-monitor
+      tag: 7.3.63
+      pullPolicy: IfNotPresent
+  7.4:
+    image:
+      repository: foundationdb/fdb-kubernetes-monitor
+      tag: 7.4.1
+      pullPolicy: IfNotPresent
+globalMode:
+  enabled: false
+replicas: null
+imagePullSecrets: []
+annotations: {}
+podAnnotations: {}
+podLabels: {}
+serviceAccount:
+  create: true
+  name: null
+  imagePullSecrets: []
+  annotations: {}
+priorityClassName: null
+securityContext:
+  runAsUser: 4059
+  runAsGroup: 4059
+  fsGroup: 4059
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop:
+      - all
+  readOnlyRootFilesystem: true
+nodeSelector: {}
+affinity: {}
+tolerations: {}
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 500m
+    memory: 256Mi
+initContainersResources:
+  limits:
+    cpu: 10m
+    memory: 50Mi
+  requests:
+    cpu: 10m
+    memory: 50Mi
+initContainerSecurityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  capabilities:
+    drop:
+      - all
+  readOnlyRootFilesystem: true
+nodeReadClusterRole: true

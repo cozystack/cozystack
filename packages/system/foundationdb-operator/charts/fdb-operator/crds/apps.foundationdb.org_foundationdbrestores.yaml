@@ -1,0 +1,100 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+    foundationdb.org/release: v2.13.0
+  name: foundationdbrestores.apps.foundationdb.org
+spec:
+  group: apps.foundationdb.org
+  names:
+    kind: FoundationDBRestore
+    listKind: FoundationDBRestoreList
+    plural: foundationdbrestores
+    shortNames:
+    - fdbrestore
+    singular: foundationdbrestore
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .status.state
+      name: State
+      type: string
+    name: v1beta2
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              blobStoreConfiguration:
+                properties:
+                  accountName:
+                    maxLength: 100
+                    type: string
+                  backupName:
+                    maxLength: 1024
+                    type: string
+                  bucket:
+                    maxLength: 63
+                    minLength: 3
+                    type: string
+                  urlParameters:
+                    items:
+                      maxLength: 1024
+                      type: string
+                    maxItems: 100
+                    type: array
+                required:
+                - accountName
+                type: object
+              customParameters:
+                items:
+                  maxLength: 100
+                  type: string
+                maxItems: 100
+                type: array
+              destinationClusterName:
+                type: string
+              encryptionKeyPath:
+                maxLength: 4096
+                type: string
+              keyRanges:
+                items:
+                  properties:
+                    end:
+                      pattern: ^[A-Za-z0-9\/\\-]+$
+                      type: string
+                    start:
+                      pattern: ^[A-Za-z0-9\/\\-]+$
+                      type: string
+                  required:
+                  - end
+                  - start
+                  type: object
+                type: array
+            required:
+            - destinationClusterName
+            type: object
+          status:
+            properties:
+              running:
+                type: boolean
+              state:
+                maxLength: 50
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

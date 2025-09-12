@@ -1,0 +1,73 @@
+# Default values for foundationdb.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Number of replicas (total instances)
+replicas: 3
+
+# Cluster configuration
+cluster:
+  # Process counts for different roles
+  processCounts:
+    stateless: -1  # Automatically calculated
+    storage: 3     # Storage processes
+    cluster_controller: 1
+  
+  # Version of FoundationDB to use
+  version: "7.4.1"
+  
+  # Fault domain configuration
+  faultDomain:
+    key: "foundationdb.org/none"
+    valueFrom: "$FDB_ZONE_ID"
+
+# Storage configuration
+storage:
+  # Size of persistent volumes
+  size: "16Gi"
+  # Storage class (if not set, uses cluster default)
+  storageClass: ""
+
+# Resource configuration
+resources:
+  # Resource preset (will be used by cozy-lib)
+  preset: "medium"
+  # Custom resource overrides
+  limits: {}
+  requests: {}
+
+# Backup configuration
+backup:
+  enabled: false
+  # S3 configuration for backups
+  s3:
+    bucket: ""
+    endpoint: ""
+    region: "us-east-1"
+    credentials:
+      accessKeyId: ""
+      secretAccessKey: ""
+  # Retention policy for backups
+  retentionPolicy: "7d"
+
+# Monitoring
+monitoring:
+  enabled: true
+
+# Advanced configuration
+advanced:
+  # Custom parameters to pass to FoundationDB
+  customParameters: []
+  # Example:
+  # - knob_disable_posix_kernel_aio=1
+  
+  # Image type (split recommended for production)
+  imageType: "split"
+  
+  # Security context for containers
+  securityContext:
+    runAsUser: 0
+    runAsGroup: 0
+  
+  # Enable automatic replacements
+  automaticReplacements: true
