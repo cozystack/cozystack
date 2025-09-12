@@ -1,0 +1,14 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: TableUriMapping
+metadata:
+  name: stock-cluster-service-details
+spec:
+  id: "vm-factory-services"
+  pathToNavigate: "/openapi-ui/default/~recordValueSecond~/factory/service-details/~recordValue~"
+  keysToParse:
+    - metadata
+    - name
+  keysToParseSecond: 
+    - metadata
+    - namespace

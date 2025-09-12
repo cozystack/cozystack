@@ -1,0 +1,29 @@
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: cozystack-workloadmonitors
+spec:
+  id: "factory-detail-workloadmonitors"
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: NAME
+      type: string
+    - jsonPath: .spec.type
+      name: TYPE
+      type: string
+    - jsonPath: .spec.version
+      name: VERSION
+      type: string
+    - jsonPath: .spec.replicas
+      name: REPLICAS
+      type: string
+    - jsonPath: .spec.minReplicas
+      name: MINREPLICAS
+      type: string
+    - jsonPath: .status.availableReplicas
+      name: AVAILABLE
+      type: string
+    - jsonPath: .status.observedReplicas
+      name: OBSERVED
+      type: string

@@ -1,0 +1,79 @@
+{{- define "cozystack-api.frontend.renderValues" -}}
+{{- $prefix := .prefix | default (list "spec") -}}
+{{- range $key, $val := .values }}
+{{- $newPath := append $prefix $key }}
+{{- if kindIs "map" $val }}
+{{- include "cozystack-api.frontend.renderValues" (dict "prefix" $newPath "values" $val) }}
+{{- else }}
+- path:
+{{ toYaml $newPath | nindent 4 }}
+  value: {{ toJson $val }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- define "cozystack-api.frontend.renderValuesFromFile" -}}
+{{- $raw := .Files.Get .file }}
+{{- if $raw }}
+{{- $content := $raw | fromYaml }}
+{{- include "cozystack-api.frontend.renderValues" (dict "prefix" (list) "values" $content) }}
+{{- end }}
+{{- end }}
+
+{{- $filesRoot := .Files }}
+{{- range $path, $_ := .Files.Glob "values-external/*.yaml" }}
+{{- $base := base $path }}
+{{- $name := trimSuffix ".yaml" (trimSuffix ".yml" $base) }}
+{{- $rendered := include "cozystack-api.frontend.renderValuesFromFile" (dict "file" $path "Files" $filesRoot) }}
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: CustomFormsOverride
+metadata:
+  name: apps.cozystack.io.v1alpha1.{{ $name }}
+spec:
+  customizationId: default-/apps.cozystack.io/v1alpha1/{{ $name }}
+  hidden:
+    - - apiVersion
+    - - appVersion
+    - - kind
+    - - status
+    - - metadata
+      - creationTimestamp
+    - - metadata
+      - namespace
+    - - metadata
+      - deletionGracePeriodSeconds
+    - - metadata
+      - deletionTimestamp
+    - - metadata
+      - finalizers
+    - - metadata
+      - generateName
+    - - metadata
+      - generation
+    - - metadata
+      - managedFields
+    - - metadata
+      - labels
+    - - metadata
+      - annotations
+    - - metadata
+      - ownerReferences
+    - - metadata
+      - resourceVersion
+    - - metadata
+      - selfLink
+    - - metadata
+      - uid
+  schema: {}
+  strategy: merge
+---
+apiVersion: front.in-cloud.io/v1alpha1
+kind: CustomFormsPrefill
+metadata:
+  name: apps.cozystack.io.v1alpha1.{{ $name }}
+spec:
+  customizationId: default-/apps.cozystack.io/v1alpha1/{{ $name }}
+  values:
+{{ $rendered | nindent 4 }}
+{{- end }}

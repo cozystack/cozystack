@@ -1,0 +1,128 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incloud-web-gatekeeper
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: incloud-web
+      app.kubernetes.io/name: gatekeeper
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: incloud-web
+        app.kubernetes.io/name: gatekeeper
+    spec:
+      serviceAccountName: incloud-web-gatekeeper
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - appSpec
+                    - key: app.kubernetes.io/instance
+                      operator: In
+                      values:
+                        - incloud-web
+                topologyKey: kubernetes.io/hostname
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: false
+      restartPolicy: Always
+      priorityClassName: system-cluster-critical
+      containers:
+        - name: auth-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --provider=oidc
+            - --upstream=http://incloud-web-nginx.{{ .Release.Namespace }}.svc:8080
+            - --http-address=0.0.0.0:8000
+            - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
+            - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
+            - --email-domain=*
+            - --pass-access-token=true
+            - --pass-authorization-header=true
+            - --cookie-refresh=3m
+            - --cookie-name=kc-access
+            - --cookie-secure=true
+            - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+          #args: #for-token-proxy
+          #  - --upstream=http://incloud-web-nginx.incloud-web.svc:8080
+          #  - --http-address=0.0.0.0:8000
+          #  - --cookie-refresh=1h
+          #  - --cookie-name=kc-access
+          #  - --cookie-secure=true
+          #  - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+          #  - --token-check-url=http://incloud-web-nginx.incloud-web.svc:8080/api/clusters/default/k8s/apis/core.cozystack.io/v1alpha1/tenantnamespaces
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              value: dashboard
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-client
+                  key: client-secret-key
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth-config
+                  key: cookieSecret
+          ports:
+            - name: proxy
+              containerPort: 8000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 50Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
