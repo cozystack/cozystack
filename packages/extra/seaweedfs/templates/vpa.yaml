@@ -1,4 +1,5 @@
 {{- if not (eq .Values.topology "Client") }}
+# --- Filer ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
@@ -14,14 +15,15 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: 25m
-          memory: 64Mi
+          cpu: {{ default "25m" .Values.vpa.filer.minAllowed.cpu }}
+          memory: {{ default "64Mi" .Values.vpa.filer.minAllowed.memory }}
         maxAllowed:
-          cpu: "1"
-          memory: 2048Mi
+          cpu: {{ default "1" .Values.vpa.filer.maxAllowed.cpu }}
+          memory: {{ default "2048Mi" .Values.vpa.filer.maxAllowed.memory }}
 
 ---
 
+# --- Master ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
@@ -37,14 +39,42 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: 25m
-          memory: 64Mi
+          cpu: {{ default "25m" .Values.vpa.master.minAllowed.cpu }}
+          memory: {{ default "64Mi" .Values.vpa.master.minAllowed.memory }}
         maxAllowed:
-          cpu: "1"
-          memory: 2048Mi
+          cpu: {{ default "1" .Values.vpa.master.maxAllowed.cpu }}
+          memory: {{ default "2048Mi" .Values.vpa.master.maxAllowed.memory }}
 
 ---
 
+# --- Volume ---
+{{- if .Values.zones }}
+  {{- if gt (len .Values.zones) 0 }}
+    {{- range $zoneName, $zoneSpec := .Values.zones }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $zoneName }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: {{ $.Release.Name }}-volume-{{ $zoneName }}
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: seaweedfs
+        minAllowed:
+          cpu: {{ default "25m" $.Values.vpa.volume.minAllowed.cpu }}
+          memory: {{ default "64Mi" $.Values.vpa.volume.minAllowed.memory }}
+        maxAllowed:
+          cpu: {{ default "1" $.Values.vpa.volume.maxAllowed.cpu }}
+          memory: {{ default "2048Mi" $.Values.vpa.volume.maxAllowed.memory }}
+    {{- end }}
+  {{- else }}
+---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
@@ -60,9 +90,11 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: 25m
-          memory: 64Mi
+          cpu: {{ default "25m" .Values.vpa.volume.minAllowed.cpu }}
+          memory: {{ default "64Mi" .Values.vpa.volume.minAllowed.memory }}
         maxAllowed:
-          cpu: "1"
-          memory: 2048Mi
+          cpu: {{ default "1" .Values.vpa.volume.maxAllowed.cpu }}
+          memory: {{ default "2048Mi" .Values.vpa.volume.maxAllowed.memory }}
+  {{- end }}
+{{- end }}
 {{- end }}

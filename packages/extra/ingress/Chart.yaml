@@ -3,4 +3,4 @@ name: ingress
 description: NGINX Ingress Controller
 icon: /logos/ingress-nginx.svg
 type: application
-version: 1.8.0
+version: 1.9.0

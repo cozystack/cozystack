@@ -30,7 +30,8 @@ ingress 1.4.0 fd240701
 ingress 1.5.0 93bdf411
 ingress 1.6.0 632224a3
 ingress 1.7.0 c02a3818
-ingress 1.8.0 HEAD
+ingress 1.8.0 8f1975d1
+ingress 1.9.0 HEAD
 monitoring 1.0.0 d7cfa53c
 monitoring 1.1.0 25221fdc
 monitoring 1.2.0 f81be075
@@ -63,4 +64,5 @@ seaweedfs 0.3.0 45a7416c
 seaweedfs 0.4.0 632224a3
 seaweedfs 0.4.1 8c86905b
 seaweedfs 0.5.0 9584e5f5
-seaweedfs 0.6.0 HEAD
+seaweedfs 0.6.0 8f1975d1
+seaweedfs 0.7.0 HEAD

@@ -29,6 +29,7 @@ spec:
       controller:
         replicaCount: {{ .Values.replicas }}
         ingressClass: {{ .Release.Namespace }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
         ingressClassResource:
           name: {{ .Release.Namespace }}
           controllerValue: k8s.io/ingress-nginx-{{ .Release.Namespace }}

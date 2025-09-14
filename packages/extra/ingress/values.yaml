@@ -13,3 +13,13 @@ whitelist: []
 
 ## @param clouflareProxy {bool} Restoring original visitor IPs when Cloudflare proxied is enabled
 clouflareProxy: false
+
+## @param resources {*resources} Explicit CPU and memory configuration for each ingress-nginx replica. When left empty, the preset defined in `resourcesPreset` is applied.
+## @field resources.cpu {*quantity} CPU available to each replica
+## @field resources.memory {*quantity} Memory (RAM) available to each replica
+resources: {}
+  # resources:
+  #   cpu: 4000m
+  #   memory: 4Gi
+## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+resourcesPreset: "micro"

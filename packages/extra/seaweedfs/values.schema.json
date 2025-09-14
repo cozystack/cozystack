@@ -10,23 +10,22 @@
         "grpcPort": 443,
         "whitelist": {}
       },
+      "required": [
+        "maxAllowed",
+        "minAllowed"
+      ],
       "properties": {
-        "grpcHost": {
-          "description": "The hostname used to expose or access the filer service externally.",
-          "type": "string"
+        "maxAllowed": {
+          "description": "Maximum allowed CPU and memory for filer pods",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
         },
-        "grpcPort": {
-          "description": "The port used to access the filer service externally.",
-          "type": "integer",
-          "default": 443
-        },
-        "whitelist": {
-          "description": "A list of IP addresses or CIDR ranges that are allowed to access the filer service.",
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          }
+        "minAllowed": {
+          "description": "Minimum allowed CPU and memory for filer pods",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
         }
       }
     },
@@ -71,6 +70,25 @@
         "MultiZone",
         "Client"
       ]
+    },
+    "vpa": {
+      "description": "Vertical Pod Autoscaler configuration for each SeaweedFS component.",
+      "type": "object",
+      "default": {
+        "filer": {
+          "maxAllowed": {},
+          "minAllowed": {}
+        },
+        "master": {
+          "maxAllowed": {},
+          "minAllowed": {}
+        },
+        "volume": {
+          "maxAllowed": {},
+          "minAllowed": {}
+        }
+      },
+      "x-kubernetes-preserve-unknown-fields": true
     },
     "zones": {
       "description": "A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.",

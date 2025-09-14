@@ -43,3 +43,63 @@ filer:
   grpcHost: ""
   grpcPort: 443
   whitelist: []
+
+## @section Vertical Pod Autoscaler parameters
+
+## @param vpa {object} Vertical Pod Autoscaler configuration for each SeaweedFS component.
+## @param vpa.filer {object} VPA configuration for the filer StatefulSet
+## @param vpa.filer.minAllowed {object} Minimum allowed CPU and memory for filer pods
+## @field vpa.filer.minAllowed.cpu {string} Minimum CPU request for filer pods
+## @field vpa.filer.minAllowed.memory {string} Minimum memory request for filer pods
+## @param vpa.filer.maxAllowed {object} Maximum allowed CPU and memory for filer pods
+## @field vpa.filer.maxAllowed.cpu {string} Maximum CPU limit for filer pods
+## @field vpa.filer.maxAllowed.memory {string} Maximum memory limit for filer pods
+## @param vpa.master {object} VPA configuration for the master StatefulSet
+## @param vpa.master.minAllowed {object} Minimum allowed CPU and memory for master pods
+## @field vpa.master.minAllowed.cpu {string} Minimum CPU request for master pods
+## @field vpa.master.minAllowed.memory {string} Minimum memory request for master pods
+## @param vpa.master.maxAllowed {object} Maximum allowed CPU and memory for master pods
+## @field vpa.master.maxAllowed.cpu {string} Maximum CPU limit for master pods
+## @field vpa.master.maxAllowed.memory {string} Maximum memory limit for master pods
+## @param vpa.volume {object} VPA configuration for the volume StatefulSets
+## @param vpa.volume.minAllowed {object} Minimum allowed CPU and memory for volume pods
+## @field vpa.volume.minAllowed.cpu {string} Minimum CPU request for volume pods
+## @field vpa.volume.minAllowed.memory {string} Minimum memory request for volume pods
+## @param vpa.volume.maxAllowed {object} Maximum allowed CPU and memory for volume pods
+## @field vpa.volume.maxAllowed.cpu {string} Maximum CPU limit for volume pods
+## @field vpa.volume.maxAllowed.memory {string} Maximum memory limit for volume pods
+
+## Example:
+## vpa:
+##   filer:
+##     minAllowed:
+##       cpu: 25m
+##       memory: 64Mi
+##     maxAllowed:
+##       cpu: "1"
+##       memory: 2048Mi
+##   master:
+##     minAllowed:
+##       cpu: 25m
+##       memory: 64Mi
+##     maxAllowed:
+##       cpu: "1"
+##       memory: 2048Mi
+##   volume:
+##     minAllowed:
+##       cpu: 25m
+##       memory: 64Mi
+##     maxAllowed:
+##       cpu: "1"
+##       memory: 2048Mi
+
+vpa:
+  filer:
+    minAllowed: {}
+    maxAllowed: {}
+  master:
+    minAllowed: {}
+    maxAllowed: {}
+  volume:
+    minAllowed: {}
+    maxAllowed: {}

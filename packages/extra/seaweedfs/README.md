@@ -20,3 +20,22 @@
 | `filer.grpcPort`       | The port used to access the filer service externally.                                                  | `*int`              | `443`    |
 | `filer.whitelist`      | A list of IP addresses or CIDR ranges that are allowed to access the filer service.                    | `[]*string`         | `[]`     |
 
+
+### Vertical Pod Autoscaler parameters
+
+| Name                           | Description                                                         | Type     | Value                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `vpa`                          | Vertical Pod Autoscaler configuration for each SeaweedFS component. | `object` | `{"filer":{"maxAllowed":{},"minAllowed":{}},"master":{"maxAllowed":{},"minAllowed":{}},"volume":{"maxAllowed":{},"minAllowed":{}}}` |
+| `vpa.filer.minAllowed.cpu`     | Minimum CPU request for filer pods                                  | `string` | `""`                                                                                                                                |
+| `vpa.filer.minAllowed.memory`  | Minimum memory request for filer pods                               | `string` | `""`                                                                                                                                |
+| `vpa.filer.maxAllowed.cpu`     | Maximum CPU limit for filer pods                                    | `string` | `""`                                                                                                                                |
+| `vpa.filer.maxAllowed.memory`  | Maximum memory limit for filer pods                                 | `string` | `""`                                                                                                                                |
+| `vpa.master.minAllowed.cpu`    | Minimum CPU request for master pods                                 | `string` | `""`                                                                                                                                |
+| `vpa.master.minAllowed.memory` | Minimum memory request for master pods                              | `string` | `""`                                                                                                                                |
+| `vpa.master.maxAllowed.cpu`    | Maximum CPU limit for master pods                                   | `string` | `""`                                                                                                                                |
+| `vpa.master.maxAllowed.memory` | Maximum memory limit for master pods                                | `string` | `""`                                                                                                                                |
+| `vpa.volume.minAllowed.cpu`    | Minimum CPU request for volume pods                                 | `string` | `""`                                                                                                                                |
+| `vpa.volume.minAllowed.memory` | Minimum memory request for volume pods                              | `string` | `""`                                                                                                                                |
+| `vpa.volume.maxAllowed.cpu`    | Maximum CPU limit for volume pods                                   | `string` | `""`                                                                                                                                |
+| `vpa.volume.maxAllowed.memory` | Maximum memory limit for volume pods                                | `string` | `""`                                                                                                                                |
+
