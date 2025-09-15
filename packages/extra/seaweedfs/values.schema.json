@@ -10,22 +10,23 @@
         "grpcPort": 443,
         "whitelist": {}
       },
-      "required": [
-        "maxAllowed",
-        "minAllowed"
-      ],
       "properties": {
-        "maxAllowed": {
-          "description": "Maximum allowed CPU and memory for filer pods",
-          "type": "object",
-          "default": {},
-          "x-kubernetes-preserve-unknown-fields": true
+        "grpcHost": {
+          "description": "The hostname used to expose or access the filer service externally.",
+          "type": "string"
         },
-        "minAllowed": {
-          "description": "Minimum allowed CPU and memory for filer pods",
-          "type": "object",
-          "default": {},
-          "x-kubernetes-preserve-unknown-fields": true
+        "grpcPort": {
+          "description": "The port used to access the filer service externally.",
+          "type": "integer",
+          "default": 443
+        },
+        "whitelist": {
+          "description": "A list of IP addresses or CIDR ranges that are allowed to access the filer service.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -83,12 +84,327 @@
           "maxAllowed": {},
           "minAllowed": {}
         },
+        "s3": {
+          "maxAllowed": {},
+          "minAllowed": {}
+        },
         "volume": {
           "maxAllowed": {},
           "minAllowed": {}
         }
       },
-      "x-kubernetes-preserve-unknown-fields": true
+      "required": [
+        "filer",
+        "master",
+        "s3",
+        "volume"
+      ],
+      "properties": {
+        "filer": {
+          "description": "VPA configuration for the filer server",
+          "type": "object",
+          "default": {
+            "maxAllowed": {},
+            "minAllowed": {}
+          },
+          "properties": {
+            "maxAllowed": {
+              "description": "Maximum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "minAllowed": {
+              "description": "Minimum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        },
+        "master": {
+          "description": "VPA configuration for the master servers",
+          "type": "object",
+          "default": {
+            "maxAllowed": {},
+            "minAllowed": {}
+          },
+          "properties": {
+            "maxAllowed": {
+              "description": "Maximum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "minAllowed": {
+              "description": "Minimum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        },
+        "s3": {
+          "description": "VPA configuration for the S3 gateway",
+          "type": "object",
+          "default": {
+            "maxAllowed": {},
+            "minAllowed": {}
+          },
+          "properties": {
+            "maxAllowed": {
+              "description": "Maximum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "minAllowed": {
+              "description": "Minimum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        },
+        "volume": {
+          "description": "VPA configuration for the volume servers",
+          "type": "object",
+          "default": {
+            "maxAllowed": {},
+            "minAllowed": {}
+          },
+          "properties": {
+            "maxAllowed": {
+              "description": "Maximum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "minAllowed": {
+              "description": "Minimum resource requests",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "Minimum CPU request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Minimum memory request",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "zones": {
       "description": "A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.",
@@ -96,10 +412,6 @@
       "default": {},
       "additionalProperties": {
         "type": "object",
-        "required": [
-          "replicas",
-          "size"
-        ],
         "properties": {
           "replicas": {
             "description": "Number of replicas in the zone",

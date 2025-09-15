@@ -15,11 +15,35 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: {{ default "25m" .Values.vpa.filer.minAllowed.cpu }}
-          memory: {{ default "64Mi" .Values.vpa.filer.minAllowed.memory }}
+          cpu: {{ dig "filer" "minAllowed" "cpu" "25m" .Values.vpa }}
+          memory: {{ dig "filer" "minAllowed" "memory" "64Mi" .Values.vpa }}
         maxAllowed:
-          cpu: {{ default "1" .Values.vpa.filer.maxAllowed.cpu }}
-          memory: {{ default "2048Mi" .Values.vpa.filer.maxAllowed.memory }}
+          cpu: {{ dig "filer" "maxAllowed" "cpu" "1" .Values.vpa }}
+          memory: {{ dig "filer" "maxAllowed" "memory" "2048Mi" .Values.vpa }}
+
+---
+
+# --- S3 ---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-s3
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-s3
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: seaweedfs
+        minAllowed:
+          cpu: {{ dig "s3" "minAllowed" "cpu" "25m" .Values.vpa }}
+          memory: {{ dig "s3" "minAllowed" "memory" "64Mi" .Values.vpa }}
+        maxAllowed:
+          cpu: {{ dig "s3" "maxAllowed" "cpu" "1" .Values.vpa }}
+          memory: {{ dig "s3" "maxAllowed" "memory" "2048Mi" .Values.vpa }}
 
 ---
 
@@ -39,18 +63,17 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: {{ default "25m" .Values.vpa.master.minAllowed.cpu }}
-          memory: {{ default "64Mi" .Values.vpa.master.minAllowed.memory }}
+          cpu: {{ dig "master" "minAllowed" "cpu" "25m" .Values.vpa }}
+          memory: {{ dig "master" "minAllowed" "memory" "64Mi" .Values.vpa }}
         maxAllowed:
-          cpu: {{ default "1" .Values.vpa.master.maxAllowed.cpu }}
-          memory: {{ default "2048Mi" .Values.vpa.master.maxAllowed.memory }}
+          cpu: {{ dig "master" "maxAllowed" "cpu" "1" .Values.vpa }}
+          memory: {{ dig "master" "maxAllowed" "memory" "2048Mi" .Values.vpa }}
 
 ---
 
 # --- Volume ---
-{{- if .Values.zones }}
-  {{- if gt (len .Values.zones) 0 }}
-    {{- range $zoneName, $zoneSpec := .Values.zones }}
+{{- if and .Values.zones (gt (len .Values.zones) 0) }}
+  {{- range $zoneName, $zoneSpec := .Values.zones }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -67,13 +90,13 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: {{ default "25m" $.Values.vpa.volume.minAllowed.cpu }}
-          memory: {{ default "64Mi" $.Values.vpa.volume.minAllowed.memory }}
+          cpu: {{ dig "volume" "minAllowed" "cpu" "25m" $.Values.vpa }}
+          memory: {{ dig "volume" "minAllowed" "memory" "64Mi" $.Values.vpa }}
         maxAllowed:
-          cpu: {{ default "1" $.Values.vpa.volume.maxAllowed.cpu }}
-          memory: {{ default "2048Mi" $.Values.vpa.volume.maxAllowed.memory }}
-    {{- end }}
-  {{- else }}
+          cpu: {{ dig "volume" "maxAllowed" "cpu" "1" $.Values.vpa }}
+          memory: {{ dig "volume" "maxAllowed" "memory" "2048Mi" $.Values.vpa }}
+  {{- end }}
+{{- else }}
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -90,11 +113,10 @@ spec:
     containerPolicies:
       - containerName: seaweedfs
         minAllowed:
-          cpu: {{ default "25m" .Values.vpa.volume.minAllowed.cpu }}
-          memory: {{ default "64Mi" .Values.vpa.volume.minAllowed.memory }}
+          cpu: {{ dig "volume" "minAllowed" "cpu" "25m" .Values.vpa }}
+          memory: {{ dig "volume" "minAllowed" "memory" "64Mi" .Values.vpa }}
         maxAllowed:
-          cpu: {{ default "1" .Values.vpa.volume.maxAllowed.cpu }}
-          memory: {{ default "2048Mi" .Values.vpa.volume.maxAllowed.memory }}
-  {{- end }}
+          cpu: {{ dig "volume" "maxAllowed" "cpu" "1" .Values.vpa }}
+          memory: {{ dig "volume" "maxAllowed" "memory" "2048Mi" .Values.vpa }}
 {{- end }}
 {{- end }}

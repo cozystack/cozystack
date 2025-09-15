@@ -150,6 +150,13 @@ spec:
             - hosts:
               - {{ .Values.host | default (printf "s3.%s" $host) }}
               secretName: {{ .Release.Name }}-s3-ingress-tls
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
         bucketClassName: "{{ .Release.Namespace }}"

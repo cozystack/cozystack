@@ -19,8 +19,8 @@ size: 10Gi
 storageClass: ""
 
 ## @param zones {map[string]zone} A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
-## @field zone.replicas {int} Number of replicas in the zone
-## @field zone.size {quantity} Zone storage size
+## @field zone.replicas {*int} Number of replicas in the zone
+## @field zone.size {*quantity} Zone storage size
 ## Example:
 ## zones:
 ##   dc1:
@@ -46,28 +46,15 @@ filer:
 
 ## @section Vertical Pod Autoscaler parameters
 
-## @param vpa {object} Vertical Pod Autoscaler configuration for each SeaweedFS component.
-## @param vpa.filer {object} VPA configuration for the filer StatefulSet
-## @param vpa.filer.minAllowed {object} Minimum allowed CPU and memory for filer pods
-## @field vpa.filer.minAllowed.cpu {string} Minimum CPU request for filer pods
-## @field vpa.filer.minAllowed.memory {string} Minimum memory request for filer pods
-## @param vpa.filer.maxAllowed {object} Maximum allowed CPU and memory for filer pods
-## @field vpa.filer.maxAllowed.cpu {string} Maximum CPU limit for filer pods
-## @field vpa.filer.maxAllowed.memory {string} Maximum memory limit for filer pods
-## @param vpa.master {object} VPA configuration for the master StatefulSet
-## @param vpa.master.minAllowed {object} Minimum allowed CPU and memory for master pods
-## @field vpa.master.minAllowed.cpu {string} Minimum CPU request for master pods
-## @field vpa.master.minAllowed.memory {string} Minimum memory request for master pods
-## @param vpa.master.maxAllowed {object} Maximum allowed CPU and memory for master pods
-## @field vpa.master.maxAllowed.cpu {string} Maximum CPU limit for master pods
-## @field vpa.master.maxAllowed.memory {string} Maximum memory limit for master pods
-## @param vpa.volume {object} VPA configuration for the volume StatefulSets
-## @param vpa.volume.minAllowed {object} Minimum allowed CPU and memory for volume pods
-## @field vpa.volume.minAllowed.cpu {string} Minimum CPU request for volume pods
-## @field vpa.volume.minAllowed.memory {string} Minimum memory request for volume pods
-## @param vpa.volume.maxAllowed {object} Maximum allowed CPU and memory for volume pods
-## @field vpa.volume.maxAllowed.cpu {string} Maximum CPU limit for volume pods
-## @field vpa.volume.maxAllowed.memory {string} Maximum memory limit for volume pods
+## @param vpa {vpa} Vertical Pod Autoscaler configuration for each SeaweedFS component.
+## @field vpa.master {vpaConfig} VPA configuration for the master servers
+## @field vpa.filer {vpaConfig} VPA configuration for the filer server
+## @field vpa.volume {vpaConfig} VPA configuration for the volume servers
+## @field vpa.s3 {vpaConfig} VPA configuration for the S3 gateway
+## @field vpaConfig.minAllowed {*vpaResourceConfig} Minimum resource requests
+## @field vpaConfig.maxAllowed {*vpaResourceConfig} Maximum resource requests
+## @field vpaResourceConfig.cpu {*quantity} Minimum CPU request
+## @field vpaResourceConfig.memory {*quantity} Minimum memory request
 
 ## Example:
 ## vpa:
@@ -95,6 +82,9 @@ filer:
 
 vpa:
   filer:
+    minAllowed: {}
+    maxAllowed: {}
+  s3:
     minAllowed: {}
     maxAllowed: {}
   master:
