@@ -3,4 +3,4 @@ name: monitoring
 description: Monitoring and observability stack
 icon: /logos/monitoring.svg
 type: application
-version: 1.13.0
+version: 1.14.0

@@ -85,6 +85,7 @@ logsStorages:
 ## @field alerta.storage {*string} Persistent Volume size for the database
 ## @field alerta.storageClassName {*string} StorageClass used to store the data
 ## @field alerta.resources {*resources} Resources configuration
+## @field alerta.extraEnvs {[]object} Additional environment variables to inject into the alerta container
 ## @field alerta.alerts {*alerts} Configuration for alerts
 ## @field alerts.telegram {*telegramAlerts} Configuration for Telegram alerts
 ## @field telegramAlerts.token {string} Telegram token for your bot
@@ -93,6 +94,18 @@ logsStorages:
 alerta:
   storage: 10Gi
   storageClassName: ""
+  ## example:
+  ## extraEnvs:
+  ##   - name: CUSTOM_FEATURE
+  ##     value: "enabled"
+  ##   - name: LOG_LEVEL
+  ##     value: "debug"
+  ##   - name: CONFIG_FROM_CM
+  ##     valueFrom:
+  ##       configMapKeyRef:
+  ##         name: my-config
+  ##         key: some-key
+  extraEnvs: []
   resources:
     limits:
       cpu: "1"
