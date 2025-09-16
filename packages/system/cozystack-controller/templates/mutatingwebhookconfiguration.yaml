@@ -16,10 +16,14 @@ webhooks:
         namespace: {{ .Release.Namespace }}
         path: /mutate-lineage
     rules:
-      - operations: ["CREATE"]
+      - operations: ["CREATE", "UPDATE"]
         apiGroups: [""]
         apiVersions: ["v1"]
         resources: ["pods","secrets", "services", "persistentvolumeclaims"]
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["workloadmonitors"]
     failurePolicy: Fail
     namespaceSelector:
       matchExpressions:
