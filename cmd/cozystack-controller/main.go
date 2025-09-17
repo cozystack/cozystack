@@ -38,7 +38,7 @@ import (
 
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
-	lcw "github.com/cozystack/cozystack/internal/lineagecontrollerwebhook"
+	"github.com/cozystack/cozystack/internal/controller/lineagelabeler"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -68,6 +68,7 @@ func main() {
 	var telemetryEndpoint string
 	var telemetryInterval string
 	var cozystackVersion string
+	var watchResources string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -87,6 +88,9 @@ func main() {
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
 	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
 		"Version of Cozystack")
+	flag.StringVar(&watchResources, "watch-resources",
+		"v1/Pod,v1/Service,v1/Secret,v1/PersistentVolumeClaim",
+		"Comma-separated list of resources to watch in the form 'group/version/Kind'.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -215,17 +219,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// special one that's both a webhook and a reconciler
-	lineageControllerWebhook := &lcw.LineageControllerWebhook{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}
-	if err := lineageControllerWebhook.SetupWithManagerAsController(mgr); err != nil {
-		setupLog.Error(err, "unable to setup controller", "controller", "LineageController")
-		os.Exit(1)
-	}
-	if err := lineageControllerWebhook.SetupWithManagerAsWebhook(mgr); err != nil {
-		setupLog.Error(err, "unable to setup webhook", "webhook", "LineageWebhook")
+	if err := (&lineagelabeler.LineageLabelerReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		WatchResourceCSV: watchResources,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "LineageLabeler")
 		os.Exit(1)
 	}
 
