@@ -238,6 +238,20 @@ kubeapps:
                       name: cozystack-apps
                       namespace: cozy-public
               - application:
+                  kind: FoundationDB
+                  singular: foundationdb
+                  plural: foundationdbs
+                release:
+                  prefix: foundationdb-
+                  labels:
+                    cozystack.io/ui: "true"
+                  chart:
+                    name: foundationdb
+                    sourceRef:
+                      kind: HelmRepository
+                      name: cozystack-apps
+                      namespace: cozy-public
+              - application:
                   kind: FerretDB
                   singular: ferretdb
                   plural: ferretdb

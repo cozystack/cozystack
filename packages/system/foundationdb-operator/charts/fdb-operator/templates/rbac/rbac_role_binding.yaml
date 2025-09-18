@@ -1,0 +1,44 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+{{- if .Values.globalMode.enabled }}
+kind: ClusterRoleBinding
+{{- else }}
+kind: RoleBinding
+{{- end }}
+metadata:
+  name: {{ include "fdb-operator.fullname" . }}
+  labels:
+    {{- include "fdb-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  {{- if .Values.globalMode.enabled }}
+  kind: ClusterRole
+  {{- else }}
+  kind: Role
+  {{- end }}
+  name: {{ include "fdb-operator.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "fdb-operator.serviceAccountName" . }}
+  {{- if .Values.globalMode.enabled }}
+  namespace: {{ .Release.Namespace }}
+  {{- end }}
+{{- if .Values.nodeReadClusterRole }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "fdb-operator.fullname" . }}-clusterrolebinding
+  labels:
+    {{- include "fdb-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "fdb-operator.fullname" . }}-clusterrole
+subjects:
+- kind: ServiceAccount
+  name: {{ include "fdb-operator.serviceAccountName" . }}
+  {{- if .Values.globalMode.enabled }}
+  namespace: {{ .Release.Namespace }}
+  {{- end }}
+{{- end }}

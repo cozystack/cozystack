@@ -123,6 +123,12 @@ releases:
   namespace: cozy-clickhouse-operator
   dependsOn: [victoria-metrics-operator]
 
+- name: foundationdb-operator
+  releaseName: foundationdb-operator
+  chart: cozy-foundationdb-operator
+  namespace: cozy-foundationdb-operator
+  dependsOn: [cert-manager]
+
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
   chart: cozy-rabbitmq-operator

@@ -309,6 +309,28 @@ spec:
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
 metadata:
+  name: foundationdb
+spec:
+  application:
+    kind: FoundationDB
+    singular: foundationdb
+    plural: foundationdbs
+    openAPISchema: |
+      {{- .Files.Get "openapi-schemas/foundationdb.json" | fromJson | toJson | nindent 6 }}
+  release:
+    prefix: foundationdb-
+    labels:
+      cozystack.io/ui: "true"
+    chart:
+      name: foundationdb
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
+---
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackResourceDefinition
+metadata:
   name: kafka
 spec:
   application:
