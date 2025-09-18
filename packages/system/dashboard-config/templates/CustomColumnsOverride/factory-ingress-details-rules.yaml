@@ -1,0 +1,47 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-ingress-details-rules
+spec:
+  id: factory-ingress-details-rules
+  # Each item is a rule. We'll display the first HTTP path data where present
+  additionalPrinterColumns:
+    - jsonPath: .host
+      name: Host
+      type: string
+    - jsonPath: .http.paths[0].backend.service.name
+      name: Service
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "S"
+            "title" "service"
+            "backgroundColor" "#6ca100"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".http.paths[0].backend.service.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "service-details"
+          ) | nindent 12 
+        }}
+    - jsonPath: .http.paths[0].backend.service.port.number
+      name: Port
+      type: string
+    - jsonPath: .http.paths[0].path
+      name: Path
+      type: string
+  additionalPrinterColumnsUndefinedValues:
+    - key: Service
+      value: "-"
+    - key: Port
+      value: "-"
+    - key: Path
+      value: "-"
+
+

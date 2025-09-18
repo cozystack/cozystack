@@ -41,6 +41,9 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	if flags.Workloads {
 		tabs = append(tabs, workloadsTab(kind))
 	}
+	if flags.Ingresses {
+		tabs = append(tabs, ingressesTab(kind))
+	}
 	if flags.Services {
 		tabs = append(tabs, servicesTab(kind))
 	}
@@ -317,6 +320,31 @@ func servicesTab(kind string) map[string]any {
 					"clusterNamePartOfUrl": "{2}",
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1.services",
+					"pathToItems":          []any{"items"},
+					"labelsSelector": map[string]any{
+						"apps.cozystack.io/application.group": "apps.cozystack.io",
+						"apps.cozystack.io/application.kind":  kind,
+						"apps.cozystack.io/application.name":  "{reqs[0]['metadata','name']}",
+					},
+				},
+			},
+		},
+	}
+}
+
+func ingressesTab(kind string) map[string]any {
+	return map[string]any{
+		"key":   "ingresses",
+		"label": "Ingresses",
+		"children": []any{
+			map[string]any{
+				"type": "EnrichedTable",
+				"data": map[string]any{
+					"id":                   "ingresses-table",
+					"fetchUrl":             "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses",
+					"clusterNamePartOfUrl": "{2}",
+					"baseprefix":           "/openapi-ui",
+					"customizationId":      "factory-details-networking.k8s.io.v1.ingresses",
 					"pathToItems":          []any{"items"},
 					"labelsSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",

@@ -160,6 +160,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 
 		// stock-project sidebars
 		"stock-project-factory-marketplace",
+		"stock-project-factory-workloadmonitor-details",
 		"stock-project-api-form",
 		"stock-project-api-table",
 		"stock-project-builtin-form",
