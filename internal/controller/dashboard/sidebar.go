@@ -2,13 +2,15 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	dashv1alpha1 "github.com/cozystack/cozystack/api/dashboard/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -185,7 +187,7 @@ func (m *Manager) upsertMultipleSidebars(
 			"menuItems":   menuItems,
 		}
 
-		obj := &unstructured.Unstructured{}
+		obj := &dashv1alpha1.Sidebar{}
 		obj.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   "dashboard.cozystack.io",
 			Version: "v1alpha1",
@@ -197,7 +199,12 @@ func (m *Manager) upsertMultipleSidebars(
 			if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 				return err
 			}
-			return unstructured.SetNestedField(obj.Object, spec, "spec")
+			b, err := json.Marshal(spec)
+			if err != nil {
+				return err
+			}
+			obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+			return nil
 		}); err != nil {
 			return err
 		}

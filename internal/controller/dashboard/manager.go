@@ -297,7 +297,6 @@ func normalizeJSON(v any) any {
 	case int32:
 		return float64(t)
 	case int64:
-		// можно вернуть как float64 для единообразия:
 		return float64(t)
 	case uint, uint8, uint16, uint32, uint64:
 		return float64(reflect.ValueOf(t).Convert(reflect.TypeOf(uint64(0))).Uint())

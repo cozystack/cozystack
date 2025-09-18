@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	dashv1alpha1 "github.com/cozystack/cozystack/api/dashboard/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -35,7 +37,7 @@ func (m *Manager) ensureCustomColumnsOverride(ctx context.Context, crd *cozyv1al
 	badgeText := initialsFromKind(kind) // e.g., "VirtualMachine" -> "VM", "Bucket" -> "B"
 	badgeColor := hexColorForKind(kind) // deterministic, dark enough for white text
 
-	obj := &unstructured.Unstructured{}
+	obj := &dashv1alpha1.CustomColumnsOverride{}
 	obj.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "dashboard.cozystack.io",
 		Version: "v1alpha1",
@@ -146,17 +148,16 @@ func (m *Manager) ensureCustomColumnsOverride(ctx context.Context, crd *cozyv1al
 		},
 	}
 
-	// CreateOrUpdate using server-side merge with unstructured
+	// CreateOrUpdate using typed resource
 	_, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
-		// Set owner reference to the CozystackResourceDefinition
 		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 			return err
 		}
-		// Keep name, GVK as set above; apply desired .spec
-		spec := normalizeJSON(desired["spec"])
-		if err := unstructured.SetNestedField(obj.Object, spec, "spec"); err != nil {
+		b, err := json.Marshal(desired["spec"])
+		if err != nil {
 			return err
 		}
+		obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
 		return nil
 	})
 	// Return OperationResultCreated/Updated is not available here with unstructured; we can mimic Updated when no error.

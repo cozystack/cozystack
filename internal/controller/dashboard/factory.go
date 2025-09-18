@@ -7,9 +7,10 @@ import (
 	"sort"
 	"strings"
 
+	dashv1alpha1 "github.com/cozystack/cozystack/api/dashboard/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -48,7 +49,6 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	}
 	tabs = append(tabs, yamlTab(plural))
 
-	// header с бейджем формы (инициалы Kind) — как просили
 	badgeText := initialsFromKind(kind)
 	badgeColor := hexColorForKind(kind)
 	header := map[string]any{
@@ -115,7 +115,7 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		},
 	}
 
-	obj := &unstructured.Unstructured{}
+	obj := &dashv1alpha1.Factory{}
 	obj.SetGroupVersionKind(schema.GroupVersionKind{Group: "dashboard.cozystack.io", Version: "v1alpha1", Kind: "Factory"})
 	obj.SetName(factoryName)
 
@@ -123,7 +123,12 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 			return err
 		}
-		return unstructured.SetNestedField(obj.Object, normalizeJSON(spec), "spec")
+		b, err := json.Marshal(spec)
+		if err != nil {
+			return err
+		}
+		obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+		return nil
 	})
 	return err
 }
@@ -131,19 +136,17 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 // ---------------- Tabs builders ----------------
 
 func detailsTab(kind, endpoint, schemaJSON string) map[string]any {
-	// ПРАВАЯ колонка: элементы параметров (без заголовка)
 	paramsBlocks := buildOpenAPIParamsBlocks(schemaJSON)
 	paramsList := map[string]any{
 		"type": "antdFlex",
 		"data": map[string]any{
 			"id":       "params-list",
 			"vertical": true,
-			"gap":      float64(24), // такой же шаг между «блоками», как слева
+			"gap":      float64(24),
 		},
 		"children": paramsBlocks,
 	}
 
-	// ЛЕВАЯ колонка (как у сервисов: title -> Spacer 16 -> блоки с шагом 24)
 	leftColStack := []any{
 		antdText("details-title", true, kind, map[string]any{
 			"fontSize":     float64(20),
@@ -212,7 +215,6 @@ func detailsTab(kind, endpoint, schemaJSON string) map[string]any {
 		}),
 	}
 
-	// ПРАВАЯ колонка (title -> Spacer 16 -> список с шагом 24)
 	rightColStack := []any{
 		antdText("params-title", true, "Parameters", map[string]any{
 			"fontSize":     float64(20),
@@ -257,7 +259,6 @@ func detailsTab(kind, endpoint, schemaJSON string) map[string]any {
 						},
 					},
 				},
-				// Conditions в той же карточке
 				spacer("conditions-top-spacer", float64(16)),
 				antdText("conditions-title", true, "Conditions", map[string]any{"fontSize": float64(20)}),
 				spacer("conditions-spacer", float64(8)),
@@ -290,7 +291,7 @@ func workloadsTab(kind string) map[string]any {
 					"fetchUrl":             "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors",
 					"clusterNamePartOfUrl": "{2}",
 					"baseprefix":           "/openapi-ui",
-					"customizationId":      "factory-details-v1alpha1.apps.cozystack.io.workloadmonitors",
+					"customizationId":      "factory-details-v1alpha1.cozystack.io.workloadmonitors",
 					"pathToItems":          []any{"items"},
 					"labelsSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
@@ -315,7 +316,7 @@ func servicesTab(kind string) map[string]any {
 					"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
 					"clusterNamePartOfUrl": "{2}",
 					"baseprefix":           "/openapi-ui",
-					"customizationId":      "stock-namespace-/v1/services",
+					"customizationId":      "factory-details-v1.services",
 					"pathToItems":          []any{"items"},
 					"labelsSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
@@ -337,10 +338,10 @@ func secretsTab(kind string) map[string]any {
 				"type": "EnrichedTable",
 				"data": map[string]any{
 					"id":                   "secrets-table",
-					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecrets",
+					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecretstables",
 					"clusterNamePartOfUrl": "{2}",
 					"baseprefix":           "/openapi-ui",
-					"customizationId":      "stock-namespace-/v1/secrets",
+					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecretstables",
 					"pathToItems":          []any{"items"},
 					"labelsSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
@@ -549,6 +550,10 @@ func collectOpenAPILeafFields(schemaJSON string, maxDepth, maxFields int) []fiel
 	var visit func(prefix []string, n node, depth int)
 
 	addField := func(path []string, schema node) {
+		// Skip excluded paths (backup/bootstrap/password)
+		if shouldExcludeParamPath(path) {
+			return
+		}
 		// build label "Foo Bar / Baz"
 		label := humanizePath(path)
 		desc := getString(schema, "description")
@@ -667,13 +672,21 @@ func getString(n map[string]any, key string) string {
 	return ""
 }
 
+// shouldExcludeParamPath returns true if any part of the path contains
+// backup / bootstrap / password (case-insensitive)
+func shouldExcludeParamPath(parts []string) bool {
+	for _, p := range parts {
+		lp := strings.ToLower(p)
+		if strings.Contains(lp, "backup") || strings.Contains(lp, "bootstrap") || strings.Contains(lp, "password") || strings.Contains(lp, "cloudInit") {
+			return true
+		}
+	}
+	return false
+}
+
 func humanizePath(parts []string) string {
 	// "systemDisk.image" -> "System Disk / Image"
-	h := make([]string, len(parts))
-	for i, p := range parts {
-		h[i] = titleFromKindPlural(p, p) // reuse TitleCase helper; plural arg unused here
-	}
-	return strings.Join(h, " / ")
+	return strings.Join(parts, " / ")
 }
 
 // ---------------- Feature flags ----------------

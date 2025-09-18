@@ -1,0 +1,126 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-details-v1.services
+spec:
+  id: factory-details-v1.services
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "S"
+            "title" "service"
+            "backgroundColor" "#6ca100"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "service-details"
+          ) | nindent 12 
+        }}
+    - jsonPath: .spec.clusterIP
+      name: ClusterIP
+      type: string
+    - jsonPath: .spec.loadBalancerIP
+      name: LoadbalancerIP
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: ClusterIP
+      value: "-"
+    - key: LoadbalancerIP
+      value: "-"
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: stock-namespace-v1.services
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "S"
+            "title" "service"
+            "backgroundColor" "#6ca100"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "service-details"
+          ) | nindent 12 
+        }}
+    - jsonPath: .spec.clusterIP
+      name: ClusterIP
+      type: string
+    - jsonPath: .spec.loadBalancerIP
+      name: LoadbalancerIP
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: ClusterIP
+      value: "-"
+    - key: LoadbalancerIP
+      value: "-"
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+  id: stock-namespace-/v1/services
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-service-details-port-mapping
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .name
+      name: Name
+      type: string
+    - jsonPath: .port
+      name: Port
+      type: string
+    - jsonPath: .protocol
+      name: Protocol
+      type: string
+    - jsonPath: .targetPort
+      name: Pod port or name
+      type: string
+  id: factory-service-details-port-mapping

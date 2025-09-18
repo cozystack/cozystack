@@ -10,7 +10,6 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -35,7 +34,7 @@ func (m *Manager) ensureTableUriMapping(ctx context.Context, crd *cozyv1alpha1.C
 	id := fmt.Sprintf("stock-namespace-/%s/%s/%s", g, v, plural)
 	path := fmt.Sprintf("/openapi-ui/{2}/{3}/factory/%s-details/~recordValue~", lowerKind)
 
-	obj := &unstructured.Unstructured{}
+	obj := &dashv1alpha1.TableUriMapping{}
 	obj.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "dashboard.cozystack.io",
 		Version: "v1alpha1",
@@ -56,7 +55,12 @@ func (m *Manager) ensureTableUriMapping(ctx context.Context, crd *cozyv1alpha1.C
 		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 			return err
 		}
-		return unstructured.SetNestedField(obj.Object, spec, "spec")
+		b, err := json.Marshal(spec)
+		if err != nil {
+			return err
+		}
+		obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+		return nil
 	})
 	return err
 }
@@ -76,7 +80,7 @@ func (m *Manager) ensureBreadcrumb(ctx context.Context, crd *cozyv1alpha1.Cozyst
 		labelPlural = crd.Spec.Dashboard.Plural
 	}
 
-	obj := &unstructured.Unstructured{}
+	obj := &dashv1alpha1.Breadcrumb{}
 	obj.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "dashboard.cozystack.io",
 		Version: "v1alpha1",
@@ -105,7 +109,12 @@ func (m *Manager) ensureBreadcrumb(ctx context.Context, crd *cozyv1alpha1.Cozyst
 		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 			return err
 		}
-		return unstructured.SetNestedField(obj.Object, spec, "spec")
+		b, err := json.Marshal(spec)
+		if err != nil {
+			return err
+		}
+		obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+		return nil
 	})
 	return err
 }
@@ -119,7 +128,7 @@ func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alph
 	name := fmt.Sprintf("%s.%s.%s", g, v, plural)
 	customizationID := fmt.Sprintf("default-/%s/%s/%s", g, v, plural)
 
-	obj := &unstructured.Unstructured{}
+	obj := &dashv1alpha1.CustomFormsOverride{}
 	obj.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "dashboard.cozystack.io",
 		Version: "v1alpha1",
@@ -151,7 +160,12 @@ func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alph
 		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
 			return err
 		}
-		return unstructured.SetNestedField(obj.Object, spec, "spec")
+		b, err := json.Marshal(spec)
+		if err != nil {
+			return err
+		}
+		obj.Spec = dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+		return nil
 	})
 	return err
 }

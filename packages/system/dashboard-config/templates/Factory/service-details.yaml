@@ -399,6 +399,5 @@ spec:
                       withoutControls: false
                       labelsSelectorFull:
                         reqIndex: 0
-                        # TODO требуется обработка нулевого значения
                         pathToLabels: ".spec.selector"
                       pathToItems: ".items"
