@@ -59,7 +59,9 @@ func RegisterStaticTypes(scheme *runtime.Scheme) {
 		&TenantNamespaceList{},
 		&TenantSecret{},
 		&TenantSecretList{},
+		&TenantSecretsTable{},
+		&TenantSecretsTableList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
-	klog.V(1).Info("Registered static kinds: TenantNamespace, TenantSecret")
+	klog.V(1).Info("Registered static kinds: TenantNamespace, TenantSecret, TenantSecretsTable")
 }
