@@ -1,0 +1,228 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Factory
+metadata:
+  name: ingress-details
+spec:
+  key: ingress-details
+  sidebarTags:
+    - ingress-sidebar
+  withScrollableMainContentCard: true
+  urlsToFetch:
+    - "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses/{6}"
+  data:
+    - type: antdFlex
+      data:
+        id: header-row
+        align: center
+        gap: 6
+        style:
+          marginBottom: 24
+      children:
+        - type: antdText
+          data:
+            id: badge-ingress
+            text: "I"
+            title: ingresses
+            style:
+              backgroundColor: "#2e7dff"
+              borderRadius: "20px"
+              color: "#fff"
+              display: inline-block
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+              fontSize: 20
+              fontWeight: 400
+              lineHeight: "24px"
+              minWidth: 24
+              padding: "0 9px"
+              textAlign: center
+              whiteSpace: nowrap
+        - type: parsedText
+          data:
+            id: ingress-name
+            text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+            style:
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+              fontSize: 20
+              lineHeight: "24px"
+
+    - type: antdTabs
+      data:
+        id: ingress-tabs
+        defaultActiveKey: details
+        items:
+          - key: details
+            label: Details
+            children:
+              - type: ContentCard
+                data:
+                  id: details-card
+                  style:
+                    marginBottom: 24
+                children:
+                  - type: antdRow
+                    data:
+                      id: details-grid
+                      gutter: [48, 12]
+                    children:
+                      - type: antdCol
+                        data:
+                          id: col-left
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: col-left-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              - type: antdFlex
+                                data:
+                                  id: meta-name-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: meta-name-label
+                                      text: Name
+                                      strong: true
+                                  - type: parsedText
+                                    data:
+                                      id: meta-name-value
+                                      text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+
+                              - type: antdFlex
+                                data:
+                                  id: meta-namespace-block
+                                  vertical: true
+                                  gap: 8
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: meta-namespace-label
+                                      text: Namespace
+                                      strong: true
+                                  - type: antdFlex
+                                    data:
+                                      id: namespace-row
+                                      align: center
+                                      gap: 6
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: ns-badge
+                                          text: NS
+                                          style:
+                                            backgroundColor: "#a25792ff"
+                                            borderRadius: "20px"
+                                            color: "#fff"
+                                            display: inline-block
+                                            fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+                                            fontSize: 15
+                                            fontWeight: 400
+                                            lineHeight: "24px"
+                                            minWidth: 24
+                                            padding: "0 9px"
+                                            textAlign: center
+                                            whiteSpace: nowrap
+                                      - type: antdLink
+                                        data:
+                                          id: namespace-link
+                                          text: "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+                                          href: "/openapi-ui/{2}/factory/namespace-details/{reqsJsonPath[0]['.metadata.namespace']['-']}"
+
+                              - type: antdFlex
+                                data:
+                                  id: meta-created-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  {{ include "incloud-web-resources.factory.time.create" (dict
+                                    "req" ".metadata.creationTimestamp"
+                                    "text" "Created"
+                                    ) | nindent 34
+                                  }}
+
+                      - type: antdCol
+                        data:
+                          id: col-right
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: col-right-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              - type: antdFlex
+                                data:
+                                  id: status-ingress-ip
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: status-ingress-ip-label
+                                      text: LoadBalancer IP
+                                      strong: true
+                                  - type: parsedText
+                                    data:
+                                      id: status-ingress-ip-value
+                                      text: "{reqsJsonPath[0]['.status.loadBalancer.ingress[0].ip']['-']}"
+
+                              - type: antdFlex
+                                data:
+                                  id: status-ingress-hostname
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: status-ingress-hostname-label
+                                      text: LoadBalancer Hostname
+                                      strong: true
+                                  - type: parsedText
+                                    data:
+                                      id: status-ingress-hostname-value
+                                      text: "{reqsJsonPath[0]['.status.loadBalancer.ingress[0].hostname']['-']}"
+
+                  - type: Spacer
+                    data:
+                      id: rules-title-spacer
+                      "$space": 16
+                  - type: antdText
+                    data:
+                      id: rules-title
+                      text: Rules
+                      strong: true
+                      style:
+                        fontSize: 20
+                  - type: Spacer
+                    data:
+                      id: rules-spacer
+                      "$space": 8
+                  - type: EnrichedTable
+                    data:
+                      id: rules-table
+                      fetchUrl: "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses/{6}"
+                      clusterNamePartOfUrl: "{2}"
+                      customizationId: "factory-ingress-details-rules"
+                      baseprefix: "/openapi-ui"
+                      withoutControls: true
+                      pathToItems: ["spec", "rules"]
+
+          - key: yaml
+            label: YAML
+            children:
+              - type: YamlEditorSingleton
+                data:
+                  id: yaml-editor
+                  cluster: "{2}"
+                  isNameSpaced: true
+                  type: builtin
+                  typeName: ingresses
+                  prefillValuesRequestIndex: 0
+                  substractHeight: 400
+
+

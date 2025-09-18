@@ -1,0 +1,13 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomFormsOverride
+metadata:
+  name: default-v1.persistentvolumeclaims
+spec:
+  customizationId: "default-/v1/persistentvolumeclaims"
+  hidden:
+    {{ include "incloud-web-resources.customformoverride.hidden.metadata.system" . | nindent 4 }}
+    {{ include "incloud-web-resources.customformoverride.hidden.metadata.api" . | nindent 4 }}
+    {{ include "incloud-web-resources.customformoverride.hidden.status" . | nindent 4 }}
+  schema: {}
+  strategy: merge

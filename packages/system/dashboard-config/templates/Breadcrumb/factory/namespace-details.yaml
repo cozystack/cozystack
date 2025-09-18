@@ -1,0 +1,13 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-cluster-factory-namespace-details
+spec:
+  id: "stock-cluster-factory-namespace-details"
+  breadcrumbItems:
+    - key: namespaces
+      label: "v1/namespaces"
+      link: "/openapi-ui/{clusterName}/builtin-table/namespaces"
+    - key: namespace
+      label: "{5}"

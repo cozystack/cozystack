@@ -1,0 +1,117 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-details-networking.k8s.io.v1.ingresses
+spec:
+  id: factory-details-networking.k8s.io.v1.ingresses
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "I"
+            "title" "ingress"
+            "backgroundColor" "#2e7dff"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "ingress-details"
+          ) | nindent 12 
+        }}
+    - jsonPath: .spec.rules[*].host
+      name: Hosts
+      type: string
+    - jsonPath: .status.loadBalancer.ingress[0].ip
+      name: Address
+      type: string
+    - jsonPath: .spec.defaultBackend.service.port.number
+      name: Port
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: Hosts
+      value: "-"
+    - key: Address
+      value: "-"
+    - key: Port
+      value: "-"
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: stock-namespace-networking.k8s.io.v1.ingresses
+spec:
+  id: stock-namespace-/networking.k8s.io/v1/ingresses
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.icon" (dict
+            "text" "I"
+            "title" "ingress"
+            "backgroundColor" "#2e7dff"
+          )| nindent 8
+        }}
+        {{ include "incloud-web-resources.factory.linkblock" (dict
+            "reqIndex" 0
+            "type" "name"
+            "jsonPath" ".metadata.name"
+            "namespace" "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+            "factory" "ingress-details"
+          ) | nindent 12 
+        }}
+    - jsonPath: .spec.rules[*].host
+      name: Hosts
+      type: string
+    - jsonPath: .status.loadBalancer.ingress[0].ip
+      name: Address
+      type: string
+    - jsonPath: .spec.defaultBackend.service.port.number
+      name: Port
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Created
+      type: factory
+      customProps:
+        disableEventBubbling: true
+        items:
+        {{ include "incloud-web-resources.factory.timeblock" (dict
+          "req" ".metadata.creationTimestamp"
+          ) | nindent 8
+        }}
+  additionalPrinterColumnsUndefinedValues:
+    - key: Hosts
+      value: "-"
+    - key: Address
+      value: "-"
+    - key: Port
+      value: "-"
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+
+

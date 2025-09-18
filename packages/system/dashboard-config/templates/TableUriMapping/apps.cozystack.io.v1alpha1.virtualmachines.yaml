@@ -1,0 +1,26 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: TableUriMapping
+metadata:
+  name: virtualmachine-details
+  name: stock-namespace-default-apps.cozystack.io.v1alpha1.virtualmachines.yaml
+spec:
+  id: "stock-namespace-/apps.cozystack.io/v1alpha1/virtualmachines"
+  pathToNavigate: "/openapi-ui/{2}/{3}/factory/virtualmachine-details/~recordValue~"
+  keysToParse:
+    - metadata
+    - name
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: TableUriMapping
+metadata:
+  name: stock-cluster-service-details
+spec:
+  id: "vm-factory-services"
+  pathToNavigate: "/openapi-ui/default/~recordValueSecond~/factory/service-details/~recordValue~"
+  keysToParse:
+    - metadata
+    - name
+  keysToParseSecond: 
+    - metadata
+    - namespace

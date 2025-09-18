@@ -1,0 +1,38 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-cluster-api-table
+spec:
+  id: "stock-cluster-api-table"
+  breadcrumbItems:
+    - key: api
+      label: "{apiGroup}/{apiVersion}/{typeName}"
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-cluster-api-form
+spec:
+  id: "stock-cluster-api-form"
+  breadcrumbItems:
+    - key: create-api-res-namespaced-table
+      label: "{apiGroup}/{apiVersion}/{typeName}"
+      link: "/openapi-ui/{clusterName}/api-table/{apiGroup}/{apiVersion}/{typeName}"
+    - key: create-api-res-namespaced-typename
+      label: Create
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-cluster-api-form-edit
+spec:
+  id: "stock-cluster-api-form-edit"
+  breadcrumbItems:
+    - key: create-api-res-namespaced-table
+      label: "{apiGroup}/{apiVersion}/{typeName}"
+      link: "/openapi-ui/{clusterName}/api-table/{apiGroup}/{apiVersion}/{typeName}"
+    - key: create-api-res-namespaced-typename
+      label: Update

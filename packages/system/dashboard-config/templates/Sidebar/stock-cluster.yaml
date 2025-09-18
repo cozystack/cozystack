@@ -1,0 +1,59 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: stock-cluster-api-form
+spec:
+  id: stock-cluster-api-form
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.cluster" . | nindent 4 }}
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: stock-cluster-api-table
+spec:
+  id: stock-cluster-api-table
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.cluster" . | nindent 4 }}
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: stock-cluster-builtin-form
+spec:
+  id: stock-cluster-builtin-form
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.cluster" . | nindent 4 }}
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: stock-cluster-builtin-table
+spec:
+  id: stock-cluster-builtin-table
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.cluster" . | nindent 4 }}
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: stock-cluster-projects-form
+spec:
+  id: stock-cluster-projects-form
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.cluster" . | nindent 4 }}
+
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: stock-cluster-projects-list
+spec:
+  id: stock-cluster-projects-list
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.cluster" . | nindent 4 }}

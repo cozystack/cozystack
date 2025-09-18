@@ -1,0 +1,13 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-cluster-factory-node-details
+spec:
+  id: "stock-cluster-factory-node-details"
+  breadcrumbItems:
+    - key: node
+      label: "v1/nodes"
+      link: "/openapi-ui/{clusterName}/builtin-table/nodes"
+    - key: node
+      label: "{5}"

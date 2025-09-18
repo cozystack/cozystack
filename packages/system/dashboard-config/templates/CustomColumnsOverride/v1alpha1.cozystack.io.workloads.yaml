@@ -1,0 +1,42 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-details-v1alpha1.cozystack.io.workloads
+spec:
+  id: factory-details-v1alpha1.cozystack.io.workloads
+  additionalPrinterColumns:
+    - jsonPath: .metadata.name
+      name: Name
+      type: string
+    - jsonPath: .status.kind
+      name: Kind
+      type: string
+    - jsonPath: .status.type
+      name: Type
+      type: string
+    - jsonPath: .status.resources.cpu
+      name: CPU
+      type: string
+    - jsonPath: .status.resources.memory
+      name: Memory
+      type: string
+    - jsonPath: .status.operational
+      name: Operational
+      type: string
+  additionalPrinterColumnsTrimLengths:
+    - key: Name
+      value: 64
+  additionalPrinterColumnsUndefinedValues:
+    - key: Name
+      value: "-"
+    - key: Kind
+      value: "-"
+    - key: Type
+      value: "-"
+    - key: CPU
+      value: "-"
+    - key: Memory
+      value: "-"
+    - key: Operational
+      value: "-"

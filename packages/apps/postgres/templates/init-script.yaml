@@ -20,6 +20,8 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+labels:
+  internal.cozystack.io/tenantsecret: "true"
 stringData:
   {{- range $user, $u := .Values.users }}
   {{ quote $user }}: {{ quote (index $passwords $user) }}

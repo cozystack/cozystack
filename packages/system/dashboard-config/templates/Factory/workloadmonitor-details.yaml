@@ -1,0 +1,328 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Factory
+metadata:
+  name: workloadmonitor-details
+spec:
+  key: workloadmonitor-details
+  sidebarTags:
+    - workloadmonitor-sidebar
+  withScrollableMainContentCard: true
+  urlsToFetch:
+    - "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors/{6}"
+  data:
+    - type: antdFlex
+      data:
+        id: header-row
+        gap: 6
+        align: center
+        style:
+          marginBottom: 24
+      children:
+        - type: antdText
+          data:
+            id: badge-workloadmonitor
+            text: "W"
+            title: workloadmonitors
+            style:
+              backgroundColor: "#c46100"
+              borderRadius: "20px"
+              color: "#fff"
+              display: inline-block
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+              fontSize: 20
+              fontWeight: 400
+              lineHeight: "24px"
+              minWidth: 24
+              padding: "0 9px"
+              textAlign: center
+              whiteSpace: nowrap
+        - type: parsedText
+          data:
+            id: workloadmonitor-name
+            text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+            style:
+              fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+              fontSize: 20
+              lineHeight: "24px"
+
+    - type: antdTabs
+      data:
+        id: workloadmonitor-tabs
+        defaultActiveKey: details
+        items:
+          - key: details
+            label: Details
+            children:
+              - type: ContentCard
+                data:
+                  id: details-card
+                  style:
+                    marginBottom: 24
+                children:
+                  - type: antdRow
+                    data:
+                      id: details-grid
+                      gutter: [48, 12]
+                    children:
+                      - type: antdCol
+                        data:
+                          id: col-left
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: col-left-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              - type: antdFlex
+                                data:
+                                  id: meta-name-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: meta-name-label
+                                      text: Name
+                                      strong: true
+                                  - type: parsedText
+                                    data:
+                                      id: meta-name-value
+                                      text: "{reqsJsonPath[0]['.metadata.name']['-']}"
+
+                              - type: antdFlex
+                                data:
+                                  id: meta-namespace-block
+                                  vertical: true
+                                  gap: 8
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: meta-namespace-label
+                                      text: Namespace
+                                      strong: true
+                                  - type: antdFlex
+                                    data:
+                                      id: namespace-row
+                                      align: center
+                                      gap: 6
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: ns-badge
+                                          text: NS
+                                          style:
+                                            backgroundColor: "#a25792ff"
+                                            borderRadius: "20px"
+                                            color: "#fff"
+                                            display: inline-block
+                                            fontFamily: RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif
+                                            fontSize: 15
+                                            fontWeight: 400
+                                            lineHeight: "24px"
+                                            minWidth: 24
+                                            padding: "0 9px"
+                                            textAlign: center
+                                            whiteSpace: nowrap
+                                      - type: antdLink
+                                        data:
+                                          id: namespace-link
+                                          text: "{reqsJsonPath[0]['.metadata.namespace']['-']}"
+                                          href: "/openapi-ui/{2}/factory/namespace-details/{reqsJsonPath[0]['.metadata.namespace']['-']}"
+
+                              - type: antdFlex
+                                data:
+                                  id: meta-created-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  {{ include "incloud-web-resources.factory.time.create" (dict
+                                    "req" ".metadata.creationTimestamp"
+                                    "text" "Created"
+                                    ) | nindent 34
+                                  }}
+
+                              - type: antdFlex
+                                data:
+                                  id: meta-kind-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: kind-label
+                                      text: Kind
+                                      strong: true
+                                  - type: parsedText
+                                    data:
+                                      id: kind-value
+                                      text: "{reqsJsonPath[0]['.spec.kind']['-']}"
+
+                              - type: antdFlex
+                                data:
+                                  id: meta-type-block
+                                  vertical: true
+                                  gap: 4
+                                children:
+                                  - type: antdText
+                                    data:
+                                      id: type-label
+                                      text: Type
+                                      strong: true
+                                  - type: parsedText
+                                    data:
+                                      id: type-value
+                                      text: "{reqsJsonPath[0]['.spec.type']['-']}"
+
+                      - type: antdCol
+                        data:
+                          id: col-right
+                          span: 12
+                        children:
+                          - type: antdFlex
+                            data:
+                              id: col-right-stack
+                              vertical: true
+                              gap: 24
+                            children:
+                              - type: antdText
+                                data:
+                                  id: params-title
+                                  text: Parameters
+                                  strong: true
+                                  style:
+                                    fontSize: 20
+                                    marginBottom: 12
+
+                              - type: antdFlex
+                                data:
+                                  id: params-list
+                                  vertical: true
+                                  gap: 24
+                                children:
+                                  - type: antdFlex
+                                    data:
+                                      id: param-version
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: param-version-label
+                                          text: Version
+                                          strong: true
+                                      - type: parsedText
+                                        data:
+                                          id: param-version-value
+                                          text: "{reqsJsonPath[0]['.spec.version']['-']}"
+
+                                  - type: antdFlex
+                                    data:
+                                      id: param-replicas
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: param-replicas-label
+                                          text: Replicas
+                                          strong: true
+                                      - type: parsedText
+                                        data:
+                                          id: param-replicas-value
+                                          text: "{reqsJsonPath[0]['.spec.replicas']['-']}"
+
+                                  - type: antdFlex
+                                    data:
+                                      id: param-minreplicas
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: param-minreplicas-label
+                                          text: MinReplicas
+                                          strong: true
+                                      - type: parsedText
+                                        data:
+                                          id: param-minreplicas-value
+                                          text: "{reqsJsonPath[0]['.spec.minReplicas']['-']}"
+
+                                  - type: antdFlex
+                                    data:
+                                      id: param-available
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: param-available-label
+                                          text: AvailableReplicas
+                                          strong: true
+                                      - type: parsedText
+                                        data:
+                                          id: param-available-value
+                                          text: "{reqsJsonPath[0]['.status.availableReplicas']['-']}"
+
+                                  - type: antdFlex
+                                    data:
+                                      id: param-observed
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: param-observed-label
+                                          text: ObservedReplicas
+                                          strong: true
+                                      - type: parsedText
+                                        data:
+                                          id: param-observed-value
+                                          text: "{reqsJsonPath[0]['.status.observedReplicas']['-']}"
+
+                                  - type: antdFlex
+                                    data:
+                                      id: param-operational
+                                      vertical: true
+                                      gap: 4
+                                    children:
+                                      - type: antdText
+                                        data:
+                                          id: param-operational-label
+                                          text: Operational
+                                          strong: true
+                                      - type: parsedText
+                                        data:
+                                          id: param-operational-value
+                                          text: "{reqsJsonPath[0]['.status.operational']['-']}"
+
+          - key: workloads
+            label: Workloads
+            children:
+              - type: EnrichedTable
+                data:
+                  id: workloads-table
+                  fetchUrl: "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloads"
+                  clusterNamePartOfUrl: "{2}"
+                  baseprefix: "/openapi-ui"
+                  customizationId: "factory-details-v1alpha1.cozystack.io.workloads"
+                  pathToItems: ["items"]
+                  labelsSelector:
+                    workloads.cozystack.io/monitor: "{reqs[0]['metadata','name']}"
+
+          - key: yaml
+            label: YAML
+            children:
+              - type: YamlEditorSingleton
+                data:
+                  id: yaml-editor
+                  cluster: "{2}"
+                  isNameSpaced: true
+                  type: builtin
+                  typeName: workloadmonitors
+                  prefillValuesRequestIndex: 0
+                  substractHeight: 400
+
+

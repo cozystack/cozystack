@@ -1,0 +1,13 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-project-factory-configmap-details
+spec:
+  id: "stock-project-factory-configmap-details"
+  breadcrumbItems:
+    - key: configmaps
+      label: "v1/configmaps"
+      link: "/openapi-ui/{clusterName}/{namespace}/builtin-table/configmaps"
+    - key: configmap
+      label: "{6}"

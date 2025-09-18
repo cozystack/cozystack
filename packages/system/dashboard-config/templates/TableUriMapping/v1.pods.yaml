@@ -1,0 +1,54 @@
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: stock-cluster-pod-details
+# spec:
+#   keysToParse: ".metadata.name"
+#   keysToParseSecond: ".metadata.namespace"
+#   id: "stock-cluster-/v1/pods"
+#   pathToNavigate: "/openapi-ui/{clusterName}/~recordValueSecond~/factory/pod-details/~recordValue~"
+
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: stock-namespace-pod-details
+# spec:
+#   keysToParse: ".metadata.name"
+#   keysToParseSecond: ".metadata.namespace"
+#   id: "stock-namespace-/v1/pods"
+#   pathToNavigate: "/openapi-ui/{clusterName}/~recordValueSecond~/factory/pod-details/~recordValue~"
+
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: factory-node-details-table-pods
+# spec:
+#   keysToParse: ".metadata.name"
+#   keysToParseSecond: ".metadata.namespace"
+#   id: "factory-node-details-/v1/pods"
+#   pathToNavigate: "/openapi-ui/{2}/~recordValueSecond~/factory/pod-details/~recordValue~"
+
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: factory-service-details-endpointslice
+# spec:
+#   keysToParse: ".targetRef.name"
+#   keysToParseSecond: ".targetRef.namespace"
+#   id: "factory-service-details-endpointslice"
+#   pathToNavigate: "/openapi-ui/{2}/~recordValueSecond~/factory/pod-details/~recordValue~"
+
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: "factory-v1.pods"
+# spec:
+#   keysToParse: ".metadata.name"
+#   keysToParseSecond: ".metadata.namespace"
+#   id: "factory-/v1/pods"
+#   pathToNavigate: "/openapi-ui/{2}/~recordValueSecond~/factory/pod-details/~recordValue~"

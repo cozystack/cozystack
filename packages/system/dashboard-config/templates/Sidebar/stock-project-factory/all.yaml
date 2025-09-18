@@ -1,0 +1,14 @@
+{{ range (list "stock-instance-api-form" "stock-instance-api-table" "stock-instance-builtin-form" "stock-instance-builtin-table" "stock-project-api-form" "stock-project-api-table" "stock-project-builtin-form" "stock-project-builtin-table" "stock-project-crd-form" "stock-project-crd-table" "stock-project-factory-clusterclaims-details" "stock-project-factory-deployment-details" "stock-project-factory-pod-details" "stock-project-factory-secret-details" "stock-project-factory-service-details" "stock-project-factory-cozy-monitoring-detail" "stock-project-factory-marketplace") }}
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: {{ . }}
+spec:
+  keysAndTags:
+    virtualmachines:
+      - virtualmachine-sidebar
+  id: {{ . }}
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.namespaced" . | nindent 4 }}
+{{- end }}

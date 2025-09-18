@@ -1,0 +1,21 @@
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: stock-cluster-configmap-details
+# spec:
+#   keysToParse: ".metadata.name"
+#   keysToParseSecond: ".metadata.namespace"
+#   id: "stock-cluster-/v1/configmaps"
+#   pathToNavigate: "/openapi-ui/{clusterName}/~recordValueSecond~/factory/configmap-details/~recordValue~"
+
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: stock-namespace-configmap-details
+# spec:
+#   keysToParse: ".metadata.name"
+#   keysToParseSecond: ".metadata.namespace"
+#   id: "stock-namespace-/v1/configmaps"
+#   pathToNavigate: "/openapi-ui/{clusterName}/~recordValueSecond~/factory/configmap-details/~recordValue~"

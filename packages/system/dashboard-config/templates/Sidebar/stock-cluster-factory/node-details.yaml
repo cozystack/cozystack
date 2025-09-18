@@ -1,0 +1,12 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Sidebar
+metadata:
+  name: stock-cluster-factory-node-details
+spec:
+  id: stock-cluster-factory-node-details
+  keysAndTags:
+    nodes:
+      - node-sidebar
+  menuItems:
+    {{ include "incloud-web-resources.sidebar.menu.items.cluster" . | nindent 4 }}

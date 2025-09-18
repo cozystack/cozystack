@@ -1,0 +1,9 @@
+# ---
+# apiVersion: dashboard.cozystack.io/v1alpha1
+# kind: TableUriMapping
+# metadata:
+#   name: stock-cluster-namespace-details
+# spec:
+#   keysToParse: ".metadata.name"
+#   id: "stock-cluster-/v1/namespaces"
+#   pathToNavigate: "/openapi-ui/{clusterName}/factory/namespace-details/~recordValue~"

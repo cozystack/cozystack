@@ -1,0 +1,13 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: Breadcrumb
+metadata:
+  name: stock-project-factory-service-details
+spec:
+  id: "stock-project-factory-service-details"
+  breadcrumbItems:
+    - key: services
+      label: "v1/services"
+      link: "/openapi-ui/{clusterName}/{namespace}/builtin-table/services"
+    - key: service
+      label: "{6}"

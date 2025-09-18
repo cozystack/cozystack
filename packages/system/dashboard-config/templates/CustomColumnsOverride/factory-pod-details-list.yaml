@@ -1,0 +1,11 @@
+---
+apiVersion: dashboard.cozystack.io/v1alpha1
+kind: CustomColumnsOverride
+metadata:
+  name: factory-pod-details-volume-list
+spec:
+  additionalPrinterColumns:
+    - jsonPath: .name
+      name: Name
+      type: string
+  id: "factory-pod-details-volume-list"
