@@ -240,7 +240,7 @@ kubeapps:
               - application:
                   kind: FerretDB
                   singular: ferretdb
-                  plural: ferretdb
+                  plural: ferretdbs
                 release:
                   prefix: ferretdb-
                   labels:
