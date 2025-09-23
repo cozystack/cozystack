@@ -5,17 +5,149 @@
     "alerta": {
       "description": "Configuration for Alerta service",
       "type": "object",
-      "default": {},
+      "default": {
+        "alerts": {
+          "slack": {
+            "alertaUsername": "",
+            "attachments": false,
+            "channel": "",
+            "channelEnvMap": {},
+            "channelEventMap": {},
+            "channelMap": {},
+            "channelSeverityMap": {},
+            "iconEmoji": "",
+            "webhookURL": ""
+          },
+          "telegram": {
+            "chatID": "",
+            "disabledSeverity": "",
+            "token": ""
+          }
+        },
+        "resources": {
+          "limits": {
+            "cpu": "1",
+            "memory": "1Gi"
+          },
+          "requests": {
+            "cpu": "100m",
+            "memory": "256Mi"
+          }
+        },
+        "storage": "10Gi",
+        "storageClassName": ""
+      },
       "properties": {
         "alerts": {
           "description": "Configuration for alerts",
           "type": "object",
-          "default": {},
+          "default": {
+            "slack": {
+              "alertaUsername": "",
+              "attachments": false,
+              "channel": "",
+              "channelEnvMap": {},
+              "channelEventMap": {},
+              "channelMap": {},
+              "channelSeverityMap": {},
+              "iconEmoji": "",
+              "webhookURL": ""
+            },
+            "telegram": {
+              "chatID": "",
+              "disabledSeverity": "",
+              "token": ""
+            }
+          },
           "properties": {
+            "slack": {
+              "description": "Configuration for Slack alerts",
+              "type": "object",
+              "default": {
+                "alertaUsername": "",
+                "attachments": false,
+                "channel": "",
+                "channelEnvMap": {},
+                "channelEventMap": {},
+                "channelMap": {},
+                "channelSeverityMap": {},
+                "iconEmoji": "",
+                "webhookURL": ""
+              },
+              "required": [
+                "alertaUsername",
+                "attachments",
+                "channel",
+                "iconEmoji",
+                "webhookURL"
+              ],
+              "properties": {
+                "alertaUsername": {
+                  "description": "Username to use for messages from Alerta (default: \"alerta\")",
+                  "type": "string"
+                },
+                "attachments": {
+                  "description": "Whether to include attachments in Slack messages (default: false)",
+                  "type": "boolean",
+                  "default": false
+                },
+                "channel": {
+                  "description": "Default Slack channel (e.g. \"#alerts\"). If empty, channel from webhook configuration is used.",
+                  "type": "string"
+                },
+                "channelEnvMap": {
+                  "description": "Mapping of environment name to Slack channel. Example: { Production: \"#alert-prod\" }",
+                  "type": "object",
+                  "default": {},
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "channelEventMap": {
+                  "description": "Mapping of event name to Slack channel. Example: { \"Node offline\": \"#critical-alerts\" }",
+                  "type": "object",
+                  "default": {},
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "channelMap": {
+                  "description": "Nested mapping of environment -\u003e severity -\u003e channel. Example: { Production: { critical: \"#prod-alerts\" } }",
+                  "type": "object",
+                  "default": {},
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "channelSeverityMap": {
+                  "description": "Mapping of severity to Slack channel. Example: { critical: \"#critical-alerts\" }",
+                  "type": "object",
+                  "default": {},
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "iconEmoji": {
+                  "description": "Emoji to use as an icon for messages (e.g. \":warning:\")",
+                  "type": "string"
+                },
+                "webhookURL": {
+                  "description": "Incoming Webhook URL for Slack (example: 'https://hooks.slack.com/services/T000/B000/XXXXX')",
+                  "type": "string"
+                }
+              }
+            },
             "telegram": {
               "description": "Configuration for Telegram alerts",
               "type": "object",
-              "default": {},
+              "default": {
+                "chatID": "",
+                "disabledSeverity": "",
+                "token": ""
+              },
               "required": [
                 "chatID",
                 "disabledSeverity",
@@ -41,11 +173,23 @@
         "resources": {
           "description": "Resources configuration",
           "type": "object",
-          "default": {},
+          "default": {
+            "limits": {
+              "cpu": "1",
+              "memory": "1Gi"
+            },
+            "requests": {
+              "cpu": "100m",
+              "memory": "256Mi"
+            }
+          },
           "properties": {
             "limits": {
               "type": "object",
-              "default": {},
+              "default": {
+                "cpu": "1",
+                "memory": "1Gi"
+              },
               "properties": {
                 "cpu": {
                   "description": "CPU limit (maximum available CPU)",
@@ -79,7 +223,10 @@
             },
             "requests": {
               "type": "object",
-              "default": {},
+              "default": {
+                "cpu": "100m",
+                "memory": "256Mi"
+              },
               "properties": {
                 "cpu": {
                   "description": "CPU request (minimum available CPU)",
@@ -127,12 +274,28 @@
     "grafana": {
       "description": "Configuration for Grafana",
       "type": "object",
-      "default": {},
+      "default": {
+        "db": {
+          "size": "10Gi"
+        },
+        "resources": {
+          "limits": {
+            "cpu": "1",
+            "memory": "1Gi"
+          },
+          "requests": {
+            "cpu": "100m",
+            "memory": "256Mi"
+          }
+        }
+      },
       "properties": {
         "db": {
           "description": "Database configuration",
           "type": "object",
-          "default": {},
+          "default": {
+            "size": "10Gi"
+          },
           "properties": {
             "size": {
               "description": "Persistent Volume size for the database",
@@ -144,11 +307,23 @@
         "resources": {
           "description": "Resources configuration",
           "type": "object",
-          "default": {},
+          "default": {
+            "limits": {
+              "cpu": "1",
+              "memory": "1Gi"
+            },
+            "requests": {
+              "cpu": "100m",
+              "memory": "256Mi"
+            }
+          },
           "properties": {
             "limits": {
               "type": "object",
-              "default": {},
+              "default": {
+                "cpu": "1",
+                "memory": "1Gi"
+              },
               "properties": {
                 "cpu": {
                   "description": "CPU limit (maximum available CPU)",
@@ -182,7 +357,10 @@
             },
             "requests": {
               "type": "object",
-              "default": {},
+              "default": {
+                "cpu": "100m",
+                "memory": "256Mi"
+              },
               "properties": {
                 "cpu": {
                   "description": "CPU request (minimum available CPU)",
@@ -247,8 +425,7 @@
           },
           "retentionPeriod": {
             "description": "Retention period for the logs in the storage instance",
-            "type": "string",
-            "default": "1"
+            "type": "string"
           },
           "storage": {
             "description": "Persistent Volume size for the storage instance",

@@ -48,30 +48,40 @@
 | ---------------------------------- | ----------------------------------------------------- | ---------- | ------------ |
 | `logsStorages`                     | Configuration of logs storage instances               | `[]object` | `[...]`      |
 | `logsStorages[i].name`             | Name of the storage instance                          | `string`   | `""`         |
-| `logsStorages[i].retentionPeriod`  | Retention period for the logs in the storage instance | `string`   | `1`          |
+| `logsStorages[i].retentionPeriod`  | Retention period for the logs in the storage instance | `string`   | `{}`         |
 | `logsStorages[i].storage`          | Persistent Volume size for the storage instance       | `string`   | `10Gi`       |
 | `logsStorages[i].storageClassName` | StorageClass used to store the data                   | `*string`  | `replicated` |
 
 
 ### Alerta configuration
 
-| Name                                      | Description                                                                         | Type        | Value   |
-| ----------------------------------------- | ----------------------------------------------------------------------------------- | ----------- | ------- |
-| `alerta`                                  | Configuration for Alerta service                                                    | `object`    | `{}`    |
-| `alerta.storage`                          | Persistent Volume size for the database                                             | `*string`   | `10Gi`  |
-| `alerta.storageClassName`                 | StorageClass used to store the data                                                 | `*string`   | `""`    |
-| `alerta.resources`                        | Resources configuration                                                             | `*object`   | `null`  |
-| `alerta.resources.requests`               |                                                                                     | `*object`   | `null`  |
-| `alerta.resources.requests.cpu`           | CPU request (minimum available CPU)                                                 | `*quantity` | `100m`  |
-| `alerta.resources.requests.memory`        | Memory request (minimum available memory)                                           | `*quantity` | `256Mi` |
-| `alerta.resources.limits`                 |                                                                                     | `*object`   | `null`  |
-| `alerta.resources.limits.cpu`             | CPU limit (maximum available CPU)                                                   | `*quantity` | `1`     |
-| `alerta.resources.limits.memory`          | Memory limit (maximum available memory)                                             | `*quantity` | `1Gi`   |
-| `alerta.alerts`                           | Configuration for alerts                                                            | `*object`   | `null`  |
-| `alerta.alerts.telegram`                  | Configuration for Telegram alerts                                                   | `*object`   | `null`  |
-| `alerta.alerts.telegram.token`            | Telegram token for your bot                                                         | `string`    | `""`    |
-| `alerta.alerts.telegram.chatID`           | Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot | `string`    | `""`    |
-| `alerta.alerts.telegram.disabledSeverity` | List of severity without alerts, separated by comma like: "informational,warning"   | `string`    | `""`    |
+| Name                                      | Description                                                                                                 | Type                           | Value   |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------ | ------- |
+| `alerta`                                  | Configuration for Alerta service                                                                            | `object`                       | `{}`    |
+| `alerta.storage`                          | Persistent Volume size for the database                                                                     | `*string`                      | `10Gi`  |
+| `alerta.storageClassName`                 | StorageClass used to store the data                                                                         | `*string`                      | `""`    |
+| `alerta.resources`                        | Resources configuration                                                                                     | `*object`                      | `null`  |
+| `alerta.resources.requests`               |                                                                                                             | `*object`                      | `null`  |
+| `alerta.resources.requests.cpu`           | CPU request (minimum available CPU)                                                                         | `*quantity`                    | `100m`  |
+| `alerta.resources.requests.memory`        | Memory request (minimum available memory)                                                                   | `*quantity`                    | `256Mi` |
+| `alerta.resources.limits`                 |                                                                                                             | `*object`                      | `null`  |
+| `alerta.resources.limits.cpu`             | CPU limit (maximum available CPU)                                                                           | `*quantity`                    | `1`     |
+| `alerta.resources.limits.memory`          | Memory limit (maximum available memory)                                                                     | `*quantity`                    | `1Gi`   |
+| `alerta.alerts`                           | Configuration for alerts                                                                                    | `*object`                      | `null`  |
+| `alerta.alerts.telegram`                  | Configuration for Telegram alerts                                                                           | `*object`                      | `null`  |
+| `alerta.alerts.telegram.token`            | Telegram token for your bot                                                                                 | `string`                       | `""`    |
+| `alerta.alerts.telegram.chatID`           | Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot                         | `string`                       | `""`    |
+| `alerta.alerts.telegram.disabledSeverity` | List of severity without alerts, separated by comma like: "informational,warning"                           | `string`                       | `""`    |
+| `alerta.alerts.slack`                     | Configuration for Slack alerts                                                                              | `*object`                      | `null`  |
+| `alerta.alerts.slack.webhookURL`          | Incoming Webhook URL for Slack (example: 'https://hooks.slack.com/services/T000/B000/XXXXX')                | `string`                       | `""`    |
+| `alerta.alerts.slack.channel`             | Default Slack channel (e.g. "#alerts"). If empty, channel from webhook configuration is used.               | `string`                       | `""`    |
+| `alerta.alerts.slack.attachments`         | Whether to include attachments in Slack messages (default: false)                                           | `bool`                         | `false` |
+| `alerta.alerts.slack.channelEnvMap`       | Mapping of environment name to Slack channel. Example: { Production: "#alert-prod" }                        | `map[string]string`            | `{}`    |
+| `alerta.alerts.slack.channelEventMap`     | Mapping of event name to Slack channel. Example: { "Node offline": "#critical-alerts" }                     | `map[string]string`            | `{}`    |
+| `alerta.alerts.slack.channelSeverityMap`  | Mapping of severity to Slack channel. Example: { critical: "#critical-alerts" }                             | `map[string]string`            | `{}`    |
+| `alerta.alerts.slack.channelMap`          | Nested mapping of environment -> severity -> channel. Example: { Production: { critical: "#prod-alerts" } } | `map[string]map[string]string` | `{}`    |
+| `alerta.alerts.slack.iconEmoji`           | Emoji to use as an icon for messages (e.g. ":warning:")                                                     | `string`                       | `""`    |
+| `alerta.alerts.slack.alertaUsername`      | Username to use for messages from Alerta (default: "alerta")                                                | `string`                       | `""`    |
 
 
 ### Grafana configuration

@@ -10,7 +10,8 @@
 {{- if $existingSecret }}
 {{- $apiKey = index $existingSecret.data "alerta-api-key" | b64dec }}
 {{- end }}
----
+{{- /* build list of plugins to enable */}}
+{{- $plugins := list }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -110,8 +111,7 @@ spec:
               value: "True"
 
             {{- if and .Values.alerta.alerts.telegram.chatID .Values.alerta.alerts.telegram.token }}
-            - name: "PLUGINS"
-              value: "telegram"
+            {{- $plugins = append $plugins "telegram" }}
             - name: TELEGRAM_CHAT_ID
               value: "{{ .Values.alerta.alerts.telegram.chatID }}"
             - name: TELEGRAM_TOKEN
@@ -120,6 +120,50 @@ spec:
               value: "https://{{ printf "alerta.%s" (.Values.host | default $host) }}/api/webhooks/telegram?api-key={{ $apiKey }}"
             - name: TELEGRAM_DISABLE_NOTIFICATION_SEVERITY
               value: "{{ .Values.alerta.alerts.telegram.disabledSeverity }}"
+            {{- end }}
+
+            {{- if .Values.alerta.alerts.slack.webhookURL }}
+            {{- $plugins = append $plugins "slack" }}
+            - name: SLACK_WEBHOOK_URL
+              value: "{{ .Values.alerta.alerts.slack.webhookURL }}"
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.channel }}
+            - name: SLACK_CHANNEL
+              value: "{{ .Values.alerta.alerts.slack.channel }}"
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.attachments }}
+            - name: SLACK_ATTACHMENTS
+              value: "{{ .Values.alerta.alerts.slack.attachments }}"
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.channelEnvMap }}
+            - name: SLACK_CHANNEL_ENV_MAP
+              value: '{{ toJson .Values.alerta.alerts.slack.channelEnvMap }}'
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.channelEventMap }}
+            - name: SLACK_CHANNEL_EVENT_MAP
+              value: '{{ toJson .Values.alerta.alerts.slack.channelEventMap }}'
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.channelSeverityMap }}
+            - name: SLACK_CHANNEL_SEVERITY_MAP
+              value: '{{ toJson .Values.alerta.alerts.slack.channelSeverityMap }}'
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.channelMap }}
+            - name: SLACK_CHANNEL_MAP
+              value: '{{ toJson .Values.alerta.alerts.slack.channelMap }}'
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.iconEmoji }}
+            - name: ICON_EMOJI
+              value: "{{ .Values.alerta.alerts.slack.iconEmoji }}"
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.alertaUsername }}
+            - name: ALERTA_USERNAME
+              value: "{{ .Values.alerta.alerts.slack.alertaUsername }}"
+            {{- end }}
+            {{- end }}
+
+            {{- if gt (len $plugins) 0 }}
+            - name: PLUGINS
+              value: "{{ join "," $plugins }}"
             {{- end }}
 
           ports:

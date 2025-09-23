@@ -90,6 +90,16 @@ logsStorages:
 ## @field telegramAlerts.token {string} Telegram token for your bot
 ## @field telegramAlerts.chatID {string} Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
 ## @field telegramAlerts.disabledSeverity {string} List of severity without alerts, separated by comma like: "informational,warning"
+## @field alerts.slack {*slackAlerts} Configuration for Slack alerts
+## @field slackAlerts.webhookURL {string} Incoming Webhook URL for Slack (example: 'https://hooks.slack.com/services/T000/B000/XXXXX')
+## @field slackAlerts.channel {string} Default Slack channel (e.g. "#alerts"). If empty, channel from webhook configuration is used.
+## @field slackAlerts.attachments {bool} Whether to include attachments in Slack messages (default: false)
+## @field slackAlerts.channelEnvMap {map[string]string} Mapping of environment name to Slack channel. Example: { Production: "#alert-prod" }
+## @field slackAlerts.channelEventMap {map[string]string} Mapping of event name to Slack channel. Example: { "Node offline": "#critical-alerts" }
+## @field slackAlerts.channelSeverityMap {map[string]string} Mapping of severity to Slack channel. Example: { critical: "#critical-alerts" }
+## @field slackAlerts.channelMap {map[string]map[string]string} Nested mapping of environment -> severity -> channel. Example: { Production: { critical: "#prod-alerts" } }
+## @field slackAlerts.iconEmoji {string} Emoji to use as an icon for messages (e.g. ":warning:")
+## @field slackAlerts.alertaUsername {string} Username to use for messages from Alerta (default: "alerta")
 alerta:
   storage: 10Gi
   storageClassName: ""
@@ -111,6 +121,25 @@ alerta:
       token: ""
       chatID: ""
       disabledSeverity: ""
+    slack:
+      # Incoming Webhook URL for Slack. If set, the slack plugin will be enabled.
+      webhookURL: ""
+      # Optional channel (e.g. "#alerts")
+      channel: ""
+      # Whether to include attachments in Slack messages (default: false)
+      attachments: false
+      # Optional mapping of environment name -> channel. Example: { Production: "#alert-prod" }
+      channelEnvMap: {}
+      # Optional mapping of event name -> channel. Example: { "Node offline": "#critical-alerts" }
+      channelEventMap: {}
+      # Optional mapping of severity -> channel. Example: { critical: "#critical-alerts" }
+      channelSeverityMap: {}
+      # Optional nested mapping of environment -> (severity -> channel). Example: { Production: { critical: "#prod-alerts" } }
+      channelMap: {}
+      # Optional emoji to use as an icon (e.g. ":warning:")
+      iconEmoji: ""
+      # Optional username for messages from Alerta (default: alerta)
+      alertaUsername: ""
 
 ## @section Grafana configuration
 
