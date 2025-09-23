@@ -32,7 +32,7 @@ type CozystackResourceDefinition struct {
 
 // +kubebuilder:object:root=true
 
-// CozystackResourceDefinitionList contains a list of CozystackResourceDefinition
+// CozystackResourceDefinitionList contains a list of CozystackResourceDefinitions
 type CozystackResourceDefinitionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
@@ -48,6 +48,8 @@ type CozystackResourceDefinitionSpec struct {
 	Application CozystackResourceDefinitionApplication `json:"application"`
 	// Release configuration
 	Release CozystackResourceDefinitionRelease `json:"release"`
+	// Secret selectors
+	Secrets CozystackResourceDefinitionSecrets `json:"secrets,omitempty"`
 }
 
 type CozystackResourceDefinitionChart struct {
@@ -86,4 +88,16 @@ type CozystackResourceDefinitionRelease struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// Prefix for the release name
 	Prefix string `json:"prefix"`
+}
+
+type CozystackResourceDefinitionSecrets struct {
+	// Exclude contains an array of label selectors that target secrets.
+	// If a secret matches the selector in any of the elements in the array, it is
+	// hidden from the user, regardless of the matches in the include array.
+	Exclude []*metav1.LabelSelector `json:"exclude,omitempty"`
+	// Include contains an array of label selectors that target secrets.
+	// If a secret matches the selector in any of the elements in the array, and
+	// matches none of the selectors in the exclude array that secret is marked
+	// as a tenant secret and is visible to users.
+	Include []*metav1.LabelSelector `json:"include,omitempty"`
 }
