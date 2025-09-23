@@ -1,0 +1,65 @@
+{{- if .Values.backup.enabled }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-s3-creds
+  labels:
+    app.kubernetes.io/name: foundationdb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+type: Opaque
+data:
+  AWS_ACCESS_KEY_ID: {{ .Values.backup.s3.credentials.accessKeyId | b64enc }}
+  AWS_SECRET_ACCESS_KEY: {{ .Values.backup.s3.credentials.secretAccessKey | b64enc }}
+
+---
+apiVersion: apps.foundationdb.org/v1beta2
+kind: FoundationDBBackup
+metadata:
+  name: {{ .Release.Name }}-backup
+  labels:
+    app.kubernetes.io/name: foundationdb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  clusterName: {{ .Release.Name }}
+  
+  backupState: Running
+  
+  backupDeploymentSpec:
+    podTemplateSpec:
+      spec:
+        containers:
+          - name: foundationdb
+            resources:
+              limits:
+                cpu: 100m
+                memory: 128Mi
+              requests:
+                cpu: 100m
+                memory: 128Mi
+            securityContext:
+              runAsUser: 0
+  
+  customParameters:
+    - backup_agent_snapshot_mode=0
+  
+  snapshotPeriodSeconds: 3600
+  
+  blobStoreConfiguration:
+    accountName: {{ .Values.backup.s3.bucket }}
+    bucket: {{ .Values.backup.s3.bucket }}
+    {{- if .Values.backup.s3.endpoint }}
+    endpoint: {{ .Values.backup.s3.endpoint }}
+    {{- end }}
+    credentials:
+      AWS_ACCESS_KEY_ID:
+        secretKeyRef:
+          name: {{ .Release.Name }}-s3-creds
+          key: AWS_ACCESS_KEY_ID
+      AWS_SECRET_ACCESS_KEY:
+        secretKeyRef:
+          name: {{ .Release.Name }}-s3-creds
+          key: AWS_SECRET_ACCESS_KEY
+{{- end }}
