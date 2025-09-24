@@ -78,7 +78,7 @@ spec:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"
       app.kubernetes.io/name: postgres.apps.cozystack.io
-      app.kubernets.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -91,5 +91,5 @@ spec:
   type: postgres
   selector:
     app.kubernetes.io/name: postgres.apps.cozystack.io
-    app.kubernets.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
   version: {{ $.Chart.Version }}

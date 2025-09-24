@@ -127,7 +127,8 @@ postgres 0.16.0 70f82667
 postgres 0.17.0 acd4663a
 postgres 0.17.1 08cb7c0f
 postgres 0.17.3 c02a3818
-postgres 0.18.0 HEAD
+postgres 0.18.0 53fbe7c2
+postgres 0.18.1 HEAD
 rabbitmq 0.1.0 263e47be
 rabbitmq 0.2.0 53f2365e
 rabbitmq 0.3.0 6c5cf5bf

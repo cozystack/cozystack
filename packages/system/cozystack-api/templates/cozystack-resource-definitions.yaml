@@ -19,6 +19,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -41,6 +46,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -63,6 +73,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -85,6 +100,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -107,6 +127,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -129,6 +154,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -151,6 +181,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -173,6 +208,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -195,6 +235,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -217,6 +262,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -239,6 +289,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -261,6 +316,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -283,6 +343,13 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    - matchLabels:
+        cnpg.io/userType: superuser
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -305,6 +372,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -327,6 +399,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -349,6 +426,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -371,6 +453,11 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -393,6 +480,11 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -415,6 +507,11 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -437,6 +534,11 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -459,6 +561,11 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -481,6 +588,11 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -503,3 +615,8 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
+  secrets:
+    exclude:
+    - matchLabels:
+        apps.cozystack.io/tenantresource: "false"
+    include: [{}]
