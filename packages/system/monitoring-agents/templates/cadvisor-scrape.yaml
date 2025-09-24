@@ -9,14 +9,15 @@ spec:
   honorLabels: true
   interval: 30s
   metricRelabelConfigs:
-  - action: labeldrop
-    regex: (uid)
-  - action: labeldrop
-    regex: (id|name)
-  - action: drop
-    regex: (rest_client_request_duration_seconds_bucket|rest_client_request_duration_seconds_sum|rest_client_request_duration_seconds_count)
-    source_labels:
-    - __name__
+    - action: labeldrop
+      regex: (uid)
+    - action: labeldrop
+      regex: (id|name)
+    - action: drop
+      regex: (rest_client_request_duration_seconds_bucket|rest_client_request_duration_seconds_sum|rest_client_request_duration_seconds_count)
+      source_labels: [__name__]
+    - action: labeldrop
+      regex: "(beta_kubernetes_io_.*|kubernetes_io_.*|topology_kubernetes_io_.*|extensions_talos_dev_.*|aenix_io_.*)"
   path: /metrics/cadvisor
   relabelConfigs:
   - action: labelmap
