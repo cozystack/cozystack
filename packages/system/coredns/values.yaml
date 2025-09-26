@@ -1,4 +1,5 @@
 coredns:
   image:
     repository: registry.k8s.io/coredns/coredns
+    tag: v1.12.4
   replicaCount: 2
