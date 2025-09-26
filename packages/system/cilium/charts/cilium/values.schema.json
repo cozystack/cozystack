@@ -535,10 +535,16 @@
             "default": {
               "properties": {
                 "burstLimit": {
-                  "type": "null"
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
                 },
                 "rateLimit": {
-                  "type": "null"
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
                 }
               },
               "type": "object"
@@ -2346,14 +2352,6 @@
           "type": "array"
         },
         "ssl": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "externalIPs": {
-      "properties": {
-        "enabled": {
           "type": "boolean"
         }
       },
@@ -4647,6 +4645,14 @@
     "podSecurityContext": {
       "properties": {
         "appArmorProfile": {
+          "properties": {
+            "type": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "seccompProfile": {
           "properties": {
             "type": {
               "type": "string"
