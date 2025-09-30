@@ -972,7 +972,7 @@ func createSecretBase64Column(name, jsonPath string) map[string]any {
 					"data": map[string]any{
 						"id":             "example-secretbase64",
 						"plainTextValue": "hello",
-						"base64Value":    "{reqsJsonPath[0]['" + jsonPath + "']['-']}",
+						"base64Value":    "{reqsJsonPath[0]['" + jsonPath + "']['']}",
 					},
 				},
 			},
