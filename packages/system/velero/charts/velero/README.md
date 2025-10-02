@@ -102,6 +102,107 @@ CSI plugin has been merged into velero repo in v1.14 release. It will be install
 
 This version removes the `nodeAgent.privileged` field, you should use `nodeAgent.containerSecurityContext.privileged` instead
 
+## Repository Maintenance Configuration
+
+Starting from Velero v1.15, you can configure repository maintenance jobs with different resource limits and node affinity settings per repository using a ConfigMap. This feature is supported through the Helm chart.
+
+### Basic Usage
+
+To enable per-repository maintenance configuration, provide repository-specific configurations and provide global configurations that will be applied across all repositories:
+
+```yaml
+configuration:
+  repositoryMaintenanceJob:
+    repositoryConfigData:
+      name: "my-repo-maintenance-config"  # Optional, defaults to "velero-repo-maintenance"
+      global:
+        podResources:
+          cpuRequest: "100m"
+          cpuLimit: "200m"
+          memoryRequest: "100Mi"
+          memoryLimit: "200Mi"
+        keepLatestMaintenanceJobs: 1
+```
+
+### Per-Repository Configuration
+
+You can configure specific settings for individual repositories using repository keys. Repository keys are formed as: `{namespace}-{storageLocation}-{repositoryType}`.
+
+For example, if you have a BackupRepository for namespace `prod` using storage location `s3-backup` with repository type `kopia`, the key would be `prod-s3-backup-kopia`.
+
+```yaml
+configuration:
+  repositoryMaintenanceJob:
+    repositoryConfigData:
+      global:
+        podResources:
+          cpuRequest: "100m"
+          cpuLimit: "200m"
+          memoryRequest: "100Mi"
+          memoryLimit: "200Mi"
+      repositories:
+        "prod-s3-backup-kopia":
+          podResources:
+            cpuRequest: "500m"
+            cpuLimit: "1000m"
+            memoryRequest: "512Mi"
+            memoryLimit: "1024Mi"
+          loadAffinity:
+            - nodeSelector:
+                matchLabels:
+                  dedicated: "backup"
+```
+
+### Node Affinity and Priority Class
+
+You can specify node affinity and priority class for maintenance jobs:
+
+```yaml
+configuration:
+  repositoryMaintenanceJob:
+    repositoryConfigData:
+      global:
+        podResources:
+          cpuRequest: "100m"
+          cpuLimit: "200m"
+          memoryRequest: "100Mi"
+          memoryLimit: "200Mi"
+        loadAffinity:
+          - nodeSelector:
+              matchExpressions:
+                - key: "cloud.google.com/machine-family"
+                  operator: "In"
+                  values: ["e2"]
+          - nodeSelector:
+              matchExpressions:
+                - key: "topology.kubernetes.io/zone"
+                  operator: "In"
+                  values: ["us-central1-a", "us-central1-b", "us-central1-c"]
+        priorityClassName: "low-priority"
+```
+
+**Note**: `priorityClassName` is only supported in the global configuration section and applies to all maintenance jobs.
+
+### Backward Compatibility
+
+When `repositoryConfigData.global` and `repositoryConfigData.repositories` are not provided (default), the chart continues to use the legacy global settings:
+
+```yaml
+configuration:
+  repositoryMaintenanceJob:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1024Mi
+    latestJobsCount: 3
+```
+
+Note: The legacy parameters (`--maintenance-job-cpu-request`, `--maintenance-job-mem-request`, `--maintenance-job-cpu-limit`, `--maintenance-job-mem-limit`) are deprecated in Velero v1.15 and will be removed in v1.17.
+
+For more information, see the [Velero Repository Maintenance documentation](https://velero.io/docs/main/repository-maintenance/).
+
 ## Upgrading Velero
 
 ### Upgrading to v1.16

@@ -23,6 +23,12 @@ spec:
   {{- if .Values.metrics.service.internalTrafficPolicy }}
   internalTrafficPolicy: {{ .Values.metrics.service.internalTrafficPolicy }}
   {{- end }}
+  {{- if .Values.metrics.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.metrics.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if .Values.metrics.service.ipFamilies }}
+  ipFamilies: {{ toYaml .Values.metrics.service.ipFamilies | nindent 4 }}
+  {{- end }}
   type: {{ .Values.metrics.service.type }}
   ports:
     - name: http-monitoring

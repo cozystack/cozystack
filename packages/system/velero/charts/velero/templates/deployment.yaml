@@ -3,7 +3,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "velero.fullname" . }}
+  name: velero
   namespace: {{ .Release.Namespace }}
   {{- with .Values.annotations }}
   annotations:
@@ -21,7 +21,7 @@ metadata:
     {{- end }}
 spec:
   replicas: 1
-  {{- if .Values.revisionHistoryLimit }}
+  {{- if hasKey .Values "revisionHistoryLimit" }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   {{- end }}
   strategy:
@@ -57,7 +57,7 @@ spec:
       {{- end }}
     {{- end }}
     spec:
-      {{- with .Values.hostAliases -}}
+      {{- with .Values.hostAliases }}
       hostAliases:
       {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -180,24 +180,9 @@ spec:
             - --namespace={{ . }}
             {{- end }}
             {{- with .repositoryMaintenanceJob }}
-            {{- with .requests }}
-            {{- with .cpu }}
-            - --maintenance-job-cpu-request={{ . }}
-            {{- end }}
-            {{- with .memory }}
-            - --maintenance-job-mem-request={{ . }}
-            {{- end }}
-            {{- end }}
-            {{- with .limits }}
-            {{- with .cpu }}
-            - --maintenance-job-cpu-limit={{ . }}
-            {{- end }}
-            {{- with .memory }}
-            - --maintenance-job-mem-limit={{ . }}
-            {{- end }}
-            {{- end }}
-            {{- with .latestJobsCount }}
-            - --keep-latest-maintenance-jobs={{ . }}
+            {{- if and .repositoryConfigData (or .repositoryConfigData.global .repositoryConfigData.repositories) }}
+            - --repo-maintenance-job-configmap={{ default "velero-repo-maintenance" .repositoryConfigData.name }}
+            {{- else }}
             {{- end }}
             {{- end }}
             {{- with .extraArgs }}
@@ -207,6 +192,10 @@ spec:
           {{- end }}
           {{- with .Values.resources }}
           resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resizePolicy }}
+          resizePolicy:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- if .Values.metrics.enabled }}

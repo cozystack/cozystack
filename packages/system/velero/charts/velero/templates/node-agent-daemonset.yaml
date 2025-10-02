@@ -49,7 +49,7 @@ spec:
       {{- end }}
     {{- end }}
     spec:
-      {{ with .Values.hostAliases -}}
+      {{- with .Values.nodeAgent.hostAliases }}
       hostAliases:
       {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -68,7 +68,7 @@ spec:
       {{- if .Values.nodeAgent.priorityClassName }}
       priorityClassName: {{ include "velero.nodeAgent.priorityClassName" . }}
       {{- end }}
-      {{- if .Values.runtimeClassName }}
+      {{- if .Values.nodeAgent.runtimeClassName }}
       runtimeClassName: {{ include "velero.nodeAgent.runtimeClassName" . }}
       {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
@@ -195,6 +195,10 @@ spec:
             {{- end }}
           {{- with .Values.nodeAgent.resources }}
           resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.nodeAgent.resizePolicy }}
+          resizePolicy:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- with .Values.nodeAgent.tolerations }}
