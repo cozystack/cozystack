@@ -33,3 +33,9 @@ spec:
     include:
       - resourceNames:
           - mysql-{{ .name }}-credentials
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - mysql-{{ .name }}-primary
+          - mysql-{{ .name }}-secondary

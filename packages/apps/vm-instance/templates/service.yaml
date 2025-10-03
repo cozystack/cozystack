@@ -5,6 +5,7 @@ kind: Service
 metadata:
   name: {{ include "virtual-machine.fullname" . }}
   labels:
+    apps.cozystack.io/user-service: "true"
     {{- include "virtual-machine.labels" . | nindent 4 }}
   annotations:
     networking.cozystack.io/wholeIP: "true"

@@ -33,3 +33,11 @@ spec:
     include:
       - resourceNames:
           - redis-{{ .name }}-auth
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - rfs-redis-{{ .name }}
+          - rfrm-redis-{{ .name }}
+          - rfrs-redis-{{ .name }}
+          - redis-{{ .name }}-external-lb

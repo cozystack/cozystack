@@ -62,12 +62,12 @@ func matchResourceToSelectorArray(ctx context.Context, name string, templateCont
 	return false
 }
 
-func matchResourceToExcludeInclude(ctx context.Context, name string, templateContext, l map[string]string, ex, in []*cozyv1alpha1.CozystackResourceDefinitionResourceSelector) bool {
-	if matchResourceToSelectorArray(ctx, name, templateContext, l, ex) {
+func matchResourceToExcludeInclude(ctx context.Context, name string, templateContext, l map[string]string, resources *cozyv1alpha1.CozystackResourceDefinitionResources) bool {
+	if resources == nil {
 		return false
 	}
-	if matchResourceToSelectorArray(ctx, name, templateContext, l, in) {
-		return true
+	if matchResourceToSelectorArray(ctx, name, templateContext, l, resources.Exclude) {
+		return false
 	}
-	return false
+	return matchResourceToSelectorArray(ctx, name, templateContext, l, resources.Include)
 }

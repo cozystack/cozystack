@@ -32,3 +32,8 @@ spec:
   secrets:
     exclude: []
     include: []
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - {{ slice .namespace 7 }}-ingress-controller

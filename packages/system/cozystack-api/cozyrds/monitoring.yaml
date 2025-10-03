@@ -34,3 +34,15 @@ spec:
     include:
       - resourceNames:
           - grafana-admin-password
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - grafana-service
+          - alerta
+  ingresses:
+    exclude: []
+    include:
+      - resourceNames:
+          - grafana-ingress
+          - alerta

@@ -32,3 +32,8 @@ spec:
   secrets:
     exclude: []
     include: []
+  services:
+    exclude: []
+    include:
+      - matchLabels:
+          apps.cozystack.io/user-service: "true"

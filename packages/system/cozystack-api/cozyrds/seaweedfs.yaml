@@ -32,3 +32,13 @@ spec:
   secrets:
     exclude: []
     include: []
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - seaweedfs-{{ .name }}-s3
+  ingresses:
+    exclude: []
+    include:
+      - resourceNames:
+          - ingress-seaweedfs-{{ .name }}-s3

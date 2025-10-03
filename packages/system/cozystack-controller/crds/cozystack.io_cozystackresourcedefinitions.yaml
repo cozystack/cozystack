@@ -126,6 +126,173 @@ spec:
                 - plural
                 - singular
                 type: object
+              ingresses:
+                description: Ingress selectors
+                properties:
+                  exclude:
+                    description: |-
+                      Exclude contains an array of resource selectors that target resources.
+                      If a resource matches the selector in any of the elements in the array, it is
+                      hidden from the user, regardless of the matches in the include array.
+                    items:
+                      description: |-
+                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+                        A resource matches this selector only if it satisfies ALL criteria:
+                        - Label selector conditions (matchExpressions and matchLabels)
+                        - AND has a name that matches one of the names in resourceNames (if specified)
+
+                        The resourceNames field supports Go templates with the following variables available:
+                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
+                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+                        - {{ .namespace }}: The namespace of the resource being processed
+
+                        Example YAML:
+                          secrets:
+                            include:
+                            - matchExpressions:
+                              - key: badlabel
+                                operator: DoesNotExist
+                              matchLabels:
+                                goodlabel: goodvalue
+                              resourceNames:
+                              - "{{ .name }}-secret"
+                              - "{{ .kind }}-{{ .name }}-tls"
+                              - "specificname"
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                        resourceNames:
+                          description: |-
+                            ResourceNames is a list of resource names to match
+                            If specified, the resource must have one of these exact names to match the selector
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                  include:
+                    description: |-
+                      Include contains an array of resource selectors that target resources.
+                      If a resource matches the selector in any of the elements in the array, and
+                      matches none of the selectors in the exclude array that resource is marked
+                      as a tenant resource and is visible to users.
+                    items:
+                      description: |-
+                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+                        A resource matches this selector only if it satisfies ALL criteria:
+                        - Label selector conditions (matchExpressions and matchLabels)
+                        - AND has a name that matches one of the names in resourceNames (if specified)
+
+                        The resourceNames field supports Go templates with the following variables available:
+                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
+                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+                        - {{ .namespace }}: The namespace of the resource being processed
+
+                        Example YAML:
+                          secrets:
+                            include:
+                            - matchExpressions:
+                              - key: badlabel
+                                operator: DoesNotExist
+                              matchLabels:
+                                goodlabel: goodvalue
+                              resourceNames:
+                              - "{{ .name }}-secret"
+                              - "{{ .kind }}-{{ .name }}-tls"
+                              - "specificname"
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                        resourceNames:
+                          description: |-
+                            ResourceNames is a list of resource names to match
+                            If specified, the resource must have one of these exact names to match the selector
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                type: object
               release:
                 description: Release configuration
                 properties:
@@ -172,6 +339,173 @@ spec:
                 type: object
               secrets:
                 description: Secret selectors
+                properties:
+                  exclude:
+                    description: |-
+                      Exclude contains an array of resource selectors that target resources.
+                      If a resource matches the selector in any of the elements in the array, it is
+                      hidden from the user, regardless of the matches in the include array.
+                    items:
+                      description: |-
+                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+                        A resource matches this selector only if it satisfies ALL criteria:
+                        - Label selector conditions (matchExpressions and matchLabels)
+                        - AND has a name that matches one of the names in resourceNames (if specified)
+
+                        The resourceNames field supports Go templates with the following variables available:
+                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
+                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+                        - {{ .namespace }}: The namespace of the resource being processed
+
+                        Example YAML:
+                          secrets:
+                            include:
+                            - matchExpressions:
+                              - key: badlabel
+                                operator: DoesNotExist
+                              matchLabels:
+                                goodlabel: goodvalue
+                              resourceNames:
+                              - "{{ .name }}-secret"
+                              - "{{ .kind }}-{{ .name }}-tls"
+                              - "specificname"
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                        resourceNames:
+                          description: |-
+                            ResourceNames is a list of resource names to match
+                            If specified, the resource must have one of these exact names to match the selector
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                  include:
+                    description: |-
+                      Include contains an array of resource selectors that target resources.
+                      If a resource matches the selector in any of the elements in the array, and
+                      matches none of the selectors in the exclude array that resource is marked
+                      as a tenant resource and is visible to users.
+                    items:
+                      description: |-
+                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+                        A resource matches this selector only if it satisfies ALL criteria:
+                        - Label selector conditions (matchExpressions and matchLabels)
+                        - AND has a name that matches one of the names in resourceNames (if specified)
+
+                        The resourceNames field supports Go templates with the following variables available:
+                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
+                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
+                        - {{ .namespace }}: The namespace of the resource being processed
+
+                        Example YAML:
+                          secrets:
+                            include:
+                            - matchExpressions:
+                              - key: badlabel
+                                operator: DoesNotExist
+                              matchLabels:
+                                goodlabel: goodvalue
+                              resourceNames:
+                              - "{{ .name }}-secret"
+                              - "{{ .kind }}-{{ .name }}-tls"
+                              - "specificname"
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                        resourceNames:
+                          description: |-
+                            ResourceNames is a list of resource names to match
+                            If specified, the resource must have one of these exact names to match the selector
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                type: object
+              services:
+                description: Service selectors
                 properties:
                   exclude:
                     description: |-
