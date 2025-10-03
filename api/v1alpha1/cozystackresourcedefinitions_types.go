@@ -52,6 +52,10 @@ type CozystackResourceDefinitionSpec struct {
 
 	// Secret selectors
 	Secrets CozystackResourceDefinitionResources `json:"secrets,omitempty"`
+	// Service selectors
+	Services CozystackResourceDefinitionResources `json:"services,omitempty"`
+	// Ingress selectors
+	Ingresses CozystackResourceDefinitionResources `json:"ingresses,omitempty"`
 
 	// Dashboard configuration for this resource
 	Dashboard *CozystackResourceDefinitionDashboard `json:"dashboard,omitempty"`

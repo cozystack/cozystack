@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -26,6 +27,20 @@ var (
 	NoAncestors       = fmt.Errorf("no managed apps found in lineage")
 	AncestryAmbiguous = fmt.Errorf("object ancestry is ambiguous")
 )
+
+// getResourceSelectors returns the appropriate CozystackResourceDefinitionResources for a given GroupKind
+func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.CozystackResourceDefinition) *cozyv1alpha1.CozystackResourceDefinitionResources {
+	switch {
+	case gk.Group == "" && gk.Kind == "Secret":
+		return &crd.Spec.Secrets
+	case gk.Group == "" && gk.Kind == "Service":
+		return &crd.Spec.Services
+	case gk.Group == "networking.k8s.io" && gk.Kind == "Ingress":
+		return &crd.Spec.Ingresses
+	default:
+		return nil
+	}
+}
 
 // SetupWithManager registers the handler with the webhook server.
 func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) error {
@@ -138,19 +153,16 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		"name":      obj.GetName(),
 		"namespace": o.GetNamespace(),
 	}
-	if o.GetAPIVersion() != "v1" || o.GetKind() != "Secret" {
-		return labels, err
-	}
 	cfg := h.config.Load().(*runtimeConfig)
 	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
+	resourceSelectors := h.getResourceSelectors(o.GroupVersionKind().GroupKind(), crd)
 
-	// TODO: expand this to work with other resources than Secrets
 	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
 		if b {
 			return corev1alpha1.TenantResourceLabelValue
 		}
 		return "false"
-	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), crd.Spec.Secrets.Exclude, crd.Spec.Secrets.Include))
+	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), resourceSelectors))
 	return labels, err
 }
 

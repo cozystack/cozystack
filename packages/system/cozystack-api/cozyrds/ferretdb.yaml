@@ -33,3 +33,8 @@ spec:
     include:
       - resourceNames:
           - ferretdb-{{ .name }}-credentials
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - ferretdb-{{ .name }}

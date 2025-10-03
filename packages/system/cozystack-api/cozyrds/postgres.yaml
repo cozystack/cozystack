@@ -41,3 +41,11 @@ spec:
     include:
       - resourceNames:
           - postgres-{{ .name }}-credentials
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - postgres-{{ .name }}-r
+          - postgres-{{ .name }}-ro
+          - postgres-{{ .name }}-rw
+          - postgres-{{ .name }}-external-write

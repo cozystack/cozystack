@@ -31,3 +31,13 @@ spec:
   secrets:
     exclude: []
     include: []
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - bootbox
+  ingresses:
+    exclude: []
+    include:
+      - resourceNames:
+          - bootbox

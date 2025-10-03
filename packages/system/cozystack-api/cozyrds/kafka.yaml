@@ -33,3 +33,8 @@ spec:
     include:
       - resourceNames:
           - kafka-{{ .name }}-clients-ca
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - kafka-{{ .name }}-kafka-bootstrap

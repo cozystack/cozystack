@@ -237,6 +237,8 @@ func (in *CozystackResourceDefinitionSpec) DeepCopyInto(out *CozystackResourceDe
 	out.Application = in.Application
 	in.Release.DeepCopyInto(&out.Release)
 	in.Secrets.DeepCopyInto(&out.Secrets)
+	in.Services.DeepCopyInto(&out.Services)
+	in.Ingresses.DeepCopyInto(&out.Ingresses)
 	if in.Dashboard != nil {
 		in, out := &in.Dashboard, &out.Dashboard
 		*out = new(CozystackResourceDefinitionDashboard)

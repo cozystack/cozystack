@@ -32,3 +32,8 @@ spec:
     include:
       - resourceNames:
           - clickhouse-{{ .name }}-credentials
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - chendpoint-clickhouse-{{ .name }}
