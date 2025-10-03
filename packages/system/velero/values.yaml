@@ -6,14 +6,10 @@ velero:
       volumeMounts:
         - mountPath: /target
           name: plugins
-  # deployNodeAgent: true
+  deployNodeAgent: true
   configuration:
     # defaultVolumesToFsBackup: true
     backupStorageLocation: null
     volumeSnapshotLocation: null
     namespace: cozy-velero
     features: EnableCSI
-  kubectl:
-    image:
-      repository: docker.io/alpine/k8s
-      tag: 1.33.4

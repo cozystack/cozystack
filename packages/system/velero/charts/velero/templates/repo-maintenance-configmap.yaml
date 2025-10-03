@@ -1,0 +1,21 @@
+{{- if and .Values.configuration .Values.configuration.repositoryMaintenanceJob .Values.configuration.repositoryMaintenanceJob.repositoryConfigData (or .Values.configuration.repositoryMaintenanceJob.repositoryConfigData.global .Values.configuration.repositoryMaintenanceJob.repositoryConfigData.repositories) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ default "velero-repo-maintenance" .Values.configuration.repositoryMaintenanceJob.repositoryConfigData.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "velero.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ include "velero.chart" . }}
+data:
+  {{- with .Values.configuration.repositoryMaintenanceJob.repositoryConfigData.global }}
+  global: |
+    {{- . | toPrettyJson | nindent 4 }}
+  {{- end }}
+  {{- range $repoKey, $repoConfig := .Values.configuration.repositoryMaintenanceJob.repositoryConfigData.repositories }}
+  {{ $repoKey }}: |
+    {{- $repoConfig | toPrettyJson | nindent 4 }}
+  {{- end }}
+{{- end }}
