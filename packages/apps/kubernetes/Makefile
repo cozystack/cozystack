@@ -1,4 +1,4 @@
-KUBERNETES_VERSION = v1.32
+KUBERNETES_VERSION = v1.33
 KUBERNETES_PKG_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
 
 include ../../../scripts/common-envs.mk
