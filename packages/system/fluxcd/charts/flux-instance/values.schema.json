@@ -326,7 +326,8 @@
                             "helm-controller",
                             "notification-controller",
                             "image-reflector-controller",
-                            "image-automation-controller"
+                            "image-automation-controller",
+                            "source-watcher"
                         ]
                     }
                 },
