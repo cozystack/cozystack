@@ -1,0 +1,50 @@
+openshift-console:
+  fullnameOverride: console
+  console:
+    baseUrl: https://console.infra.aenix.org
+    oidc:
+      enabled: true
+      issuerUrl: https://keycloak.infra.aenix.org/realms/cozy
+      clientId: console-test
+      clientSecret: Sgq1yrmmEwPKy9YxGmg37b1EgsLu3P9g
+  extraEnv:
+    BRIDGE_K8S_AUTH_BEARER_TOKEN: null
+    BRIDGE_GRAFANA_PUBLIC_URL: https://grafana.infra.aenix.org
+    BRIDGE_KUBECTL_CLIENT_ID: console
+    BRIDGE_K8S_MODE: in-cluster
+    BRIDGE_COOKIE_AUTHENTICATION_KEY_FILE: /etc/openshift-console-secrets/cookie_auth_key
+    BRIDGE_COOKIE_ENCRYPTION_KEY_FILE: /etc/openshift-console-secrets/cookie_enc_key
+    BRIDGE_PLUGINS: kubevirt-plugin=http://kubevirt-plugin.cozy-console.svc:9443/
+    BRIDGE_ALERMANAGER_PUBLIC_URL: http://vmalertmanager-alertmanager.tenant-root.svc:9093
+    BRIDGE_THANOS_PUBLIC_URL: http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus
+    BRIDGE_SKIP_VERIFY_TLS: true
+  volumes:
+  - name: cookie-secrets
+    mountPath: /etc/openshift-console-secrets
+    config:
+      secret:
+        secretName: openshift-console
+  - name: tmp
+    mountPath: /tmp
+    config:
+      emptyDir: {}
+  ingress:
+    enabled: true
+    annotations:
+      acme.cert-manager.io/http01-ingress-class: tenant-root
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    className: 'tenant-root'
+    hosts:
+    - host: console.infra.aenix.org
+      paths: ["/"]
+    tls:
+    - secretName: console-tls
+      hosts:
+        - console.infra.aenix.org
+  resources:
+    limits:
+      cpu: 500m
+      memory: 2048Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi
