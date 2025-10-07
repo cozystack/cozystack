@@ -3,7 +3,7 @@
 https://github.com/cozystack/cozystack/releases/tag/v0..
 -->
 
-## Major Features and Improvements
+## Features and Improvements
 
 ## Security
 
@@ -11,10 +11,8 @@ https://github.com/cozystack/cozystack/releases/tag/v0..
 
 ## Dependencies
 
-## Documentation
-
 ## Development, Testing, and CI/CD
 
 ---
 
-**Full Changelog**: https://github.com/cozystack/cozystack/compare/v0.34.0...v0.35.0
+**Full Changelog**: https://github.com/cozystack/cozystack/compare/v0.36.0...main
