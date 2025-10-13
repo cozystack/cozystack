@@ -64,19 +64,19 @@ spec:
 EOF
   # Wait for the tenant-test namespace to be active
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
-  
+
   # Wait for the Kamaji control plane to be created (retry for up to 10 seconds)
   timeout 10 sh -ec 'until kubectl get kamajicontrolplane -n tenant-test kubernetes-'"${test_name}"'; do sleep 1; done'
 
   # Wait for the tenant control plane to be fully created (timeout after 4 minutes)
   kubectl wait --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=4m
-  
+
   # Wait for Kubernetes resources to be ready (timeout after 2 minutes)
   kubectl wait tcp -n tenant-test kubernetes-${test_name} --timeout=2m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
-  
+
   # Wait for all required deployments to be available (timeout after 4 minutes)
   kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
-  
+
   # Wait for the machine deployment to scale to 2 replicas (timeout after 1 minute)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
@@ -105,9 +105,11 @@ EOF
   versions=$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')
   node_ok=true
 
-  if [[ "$k8s_version" == v1.32* ]]; then
-    echo "⚠️  TODO: Temporary stub — allowing nodes with v1.33 while k8s_version is v1.32"
-  fi
+  case "$k8s_version" in
+    v1.32*)
+      echo "⚠️  TODO: Temporary stub — allowing nodes with v1.33 while k8s_version is v1.32"
+      ;;
+  esac
 
   for v in $versions; do
     case "$k8s_version" in
@@ -134,7 +136,7 @@ EOF
     esac
   done
 
-  if ! $node_ok; then
+  if [ "$node_ok" != true ]; then
     echo "Kubelet versions did not match expected ${k8s_version}" >&2
     exit 1
   fi
