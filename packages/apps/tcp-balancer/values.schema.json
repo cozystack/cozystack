@@ -10,14 +10,7 @@
     "httpAndHttps": {
       "description": "HTTP and HTTPS configuration",
       "type": "object",
-      "default": {
-        "endpoints": {},
-        "mode": "tcp",
-        "targetPorts": {
-          "http": 80,
-          "https": 443
-        }
-      },
+      "default": {},
       "required": [
         "mode",
         "targetPorts"
@@ -43,10 +36,7 @@
         "targetPorts": {
           "description": "Target ports configuration",
           "type": "object",
-          "default": {
-            "http": 80,
-            "https": 443
-          },
+          "default": {},
           "required": [
             "http",
             "https"

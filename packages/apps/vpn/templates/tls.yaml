@@ -14,7 +14,7 @@ data:
   tls.key: {{ index $existingSecret.data "tls.key" }}
   {{- else }}
   {{- with genSignedCert $cn nil nil 3650 $ca }}
-  cacert: {{ b64enc $ca.Cert }}
+  ca.crt: {{ b64enc $ca.Cert }}
   tls.crt: {{ b64enc .Cert }}
   tls.key: {{ b64enc .Key }}
   {{- end }}

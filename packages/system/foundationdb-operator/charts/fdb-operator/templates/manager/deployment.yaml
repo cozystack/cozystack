@@ -1,0 +1,117 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fdb-operator.fullname" . }}
+  labels:
+    {{- include "fdb-operator.labels" . | nindent 4 }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.replicas }}
+  replicas: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "fdb-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fdb-operator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "fdb-operator.serviceAccountName" . }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 10
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      {{- range $version, $params := .Values.initContainers }}
+      - name: foundationdb-kubernetes-init-{{ $version | replace "." "-" }}
+        image: {{ $params.image.repository }}:{{ $params.image.tag }}
+        imagePullPolicy: {{ $params.image.pullPolicy }}
+        args:
+        - "--copy-library"
+        - "{{ $version }}"
+        - "--copy-binary"
+        - "fdbcli"
+        - "--copy-binary"
+        - "fdbbackup"
+        - "--copy-binary"
+        - "fdbrestore"
+        - "--output-dir"
+        - "/var/output-files"
+        - "--mode"
+        - "init"
+        volumeMounts:
+        - name: fdb-binaries
+          mountPath: /var/output-files
+        resources:
+          {{- toYaml $.Values.initContainersResources | nindent 10 }}
+        securityContext:
+          {{- toYaml $.Values.initContainerSecurityContext | nindent 10 }}      
+      {{- end }}
+      containers:
+      - name: manager
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /manager
+        {{- if not .Values.globalMode.enabled }}
+        env:
+        - name: WATCH_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        {{- end }}
+        ports:
+        - containerPort: 8080
+          name: metrics
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: logs
+          mountPath: /var/log/fdb
+        - name: fdb-binaries
+          mountPath: /usr/bin/fdb
+        securityContext:
+          {{- toYaml .Values.containerSecurityContext | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      - name: fdb-binaries
+        emptyDir: {}

@@ -1,7 +1,7 @@
 name: Pull Request
 
 env:
-  REGISTRY: ${{ secrets.OCIR_REPO }}
+  REGISTRY: ${{ vars.OCIR_REPO }}
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -32,7 +32,14 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
       - name: Login to GitHub Container Registry
+        if: ${{ !github.event.pull_request.head.repo.fork }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.OCIR_USER}}

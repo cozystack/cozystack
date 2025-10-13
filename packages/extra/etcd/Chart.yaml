@@ -3,4 +3,4 @@ name: etcd
 description: Storage for Kubernetes clusters
 icon: /logos/etcd.svg
 type: application
-version: 2.10.0
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process

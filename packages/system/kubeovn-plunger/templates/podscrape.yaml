@@ -1,0 +1,11 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: kube-ovn-plunger
+spec:
+  podMetricsEndpoints:
+    - port: metrics
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-ovn-plunger
+      app.kubernetes.io/instance: {{ .Release.Name }}

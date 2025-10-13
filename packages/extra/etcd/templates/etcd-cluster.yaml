@@ -56,6 +56,9 @@ spec:
     {{- end }}
     {{- if $rawConstraints }}
       {{- $rawConstraints | fromYaml | toYaml | nindent 6 }}
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/instance: etcd
     {{- else }}
       topologySpreadConstraints:
       - maxSkew: 1

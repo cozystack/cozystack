@@ -179,8 +179,10 @@
 {{- range $section, $values := $res }}
   {{- range $k, $v := $values }}
     {{- $key := printf "%s.%s" $section $k }}
-    {{- $_ := set $out $key $v }}
+    {{- if ne $key "limits.storage" }}
+        {{- $_ := set $out $key $v }}
+    {{- end }}
   {{- end }}
 {{- end }}
-{{- dict "resourceQuotas" $out | toYaml }}
+{{- $out | toYaml }}
 {{- end }}

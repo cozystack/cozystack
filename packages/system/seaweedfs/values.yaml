@@ -70,6 +70,7 @@ seaweedfs:
           key: password
           name: seaweedfs-db-app
     s3:
+      replicas: 2
       enabled: true
       port: 8333
       httpsPort: 0
@@ -83,6 +84,8 @@ seaweedfs:
       auditLogConfig: {}
   s3:
     enabled: true
+    extraArgs:
+      - -idleTimeout=60
     enableAuth: false
     readinessProbe:
       scheme: HTTPS
@@ -99,19 +102,16 @@ seaweedfs:
         nginx.ingress.kubernetes.io/proxy-buffering: "off"
         nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
         nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+        nginx.ingress.kubernetes.io/client-body-timeout: "3600"
+        nginx.ingress.kubernetes.io/client-header-timeout: "120"
         acme.cert-manager.io/http01-ingress-class: tenant-root
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls:
         - hosts:
             - seaweedfs.demo.cozystack.io
           secretName: seaweedfs-s3-ingress-tls
-    resources:
-      limits:
-        cpu: "2"
-        memory: "2Gi"
-      requests:
-        cpu: "500m"
-        memory: "1Gi"
   cosi:
     enabled: true
     podLabels:
@@ -120,7 +120,7 @@ seaweedfs:
     bucketClassName: "seaweedfs"
     region: ""
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v0.36.0-beta.1@sha256:a9a7dbc95c75fc3457014705d1b7b566c39648c80b80f0e9351260f3c16572a5"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v0.37.0@sha256:f166f09cdc9cdbb758209883819ab8261a3793bc1d7a6b6685efd5a2b2930847"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []
@@ -128,3 +128,7 @@ seaweedfs:
     keySize: 2048
     duration: 2160h # 90d
     renewBefore: 360h # 15d
+db:
+  replicas: 2
+  size: 10Gi
+  storageClass: ""

@@ -10,14 +10,11 @@
     "resources": {
       "description": "Resource configuration for etcd",
       "type": "object",
-      "default": {
-        "cpu": 4,
-        "memory": "1Gi"
-      },
+      "default": {},
       "properties": {
         "cpu": {
           "description": "The number of CPU cores allocated",
-          "default": 4,
+          "default": "1000m",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -31,7 +28,7 @@
         },
         "memory": {
           "description": "The amount of memory allocated",
-          "default": "1Gi",
+          "default": "512Mi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {

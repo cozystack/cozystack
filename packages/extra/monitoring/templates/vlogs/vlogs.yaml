@@ -4,6 +4,11 @@ kind: VLogs
 metadata:
   name: {{ .name }}
 spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
   image:
     tag: v1.17.0-victorialogs
   storage:

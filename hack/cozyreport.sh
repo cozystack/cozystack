@@ -48,7 +48,7 @@ kubectl get ns --no-headers | awk '$2 != "Active"' |
 
 echo "Collecting helmreleases..."
 kubectl get hr -A > $REPORT_DIR/kubernetes/helmreleases.txt 2>&1
-kubectl get hr -A | awk '$4 != "True"' | \
+kubectl get hr -A --no-headers | awk '$4 != "True"' | \
   while read NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/helmreleases/$NAMESPACE/$NAME
     mkdir -p $DIR
@@ -105,7 +105,7 @@ kubectl get svc -A --no-headers | awk '$4 == "<pending>"' |
 
 echo "Collecting pvcs..."
 kubectl get pvc -A > $REPORT_DIR/kubernetes/pvcs.txt 2>&1
-kubectl get pvc -A | awk '$3 != "Bound"'  |
+kubectl get pvc -A --no-headers | awk '$3 != "Bound"'  |
   while read NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/pvc/$NAMESPACE/$NAME
     mkdir -p $DIR

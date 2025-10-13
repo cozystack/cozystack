@@ -31,8 +31,8 @@ spec:
         - /bin/sh
         - -c
         - |
-          {{- range .Values.namespace.labels }}
-          kubectl label namespace {{ $.Release.Namespace }} {{ .key }}={{ .value }}
+          {{- range $key, $value := .Values.namespace.labels }}
+          kubectl label namespace {{ $.Release.Namespace }} {{ $key }}={{ $value }}
           {{- end }}
         {{- if .Values.kubectl.extraVolumeMounts }}
         volumeMounts:

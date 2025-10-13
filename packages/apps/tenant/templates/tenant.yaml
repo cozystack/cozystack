@@ -5,17 +5,7 @@ metadata:
   name: {{ include "tenant.name" . }}
   namespace: {{ include "tenant.name" . }}
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ include "tenant.name" . }}
-  namespace: {{ include "tenant.name" . }}
-  annotations:
-    kubernetes.io/service-account.name: {{ include "tenant.name" . }}
-type: kubernetes.io/service-account-token
----
 # == default role ==
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -38,6 +28,13 @@ rules:
   - cozystack.io
   resources:
   - workloadmonitors
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - tenantmodules
+  - tenantsecrets
+  - tenantsecretstables
   verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -188,6 +185,13 @@ rules:
     resources:
     - workloadmonitors
     verbs: ["get", "list", "watch"]
+  - apiGroups:
+    - core.cozystack.io
+    resources:
+    - tenantmodules
+    - tenantsecrets
+    - tenantsecretstables
+    verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -279,6 +283,13 @@ rules:
     resources:
     - workloadmonitors
     verbs: ["get", "list", "watch"]
+  - apiGroups:
+    - core.cozystack.io
+    resources:
+    - tenantmodules
+    - tenantsecrets
+    - tenantsecretstables
+    verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -345,6 +356,13 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    verbs: ["get", "list", "watch"]
+  - apiGroups:
+    - core.cozystack.io
+    resources:
+    - tenantmodules
+    - tenantsecrets
+    - tenantsecretstables
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding

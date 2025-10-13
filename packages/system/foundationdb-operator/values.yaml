@@ -1,0 +1,4 @@
+fdb-operator:
+  globalMode:
+    enabled: true
+  nodeReadClusterRole: true

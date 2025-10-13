@@ -77,7 +77,7 @@ spec:
   {{-   $values = merge . $values }}
   {{- end }}
   {{- with index $cozyConfig.data (printf "values-%s" $x.name) }}
-  {{-   $values = merge (fromYaml .) $values }}
+  {{-   $values = mergeOverwrite $values (fromYaml .) }}
   {{- end }}
   {{- with $values }}
   values:

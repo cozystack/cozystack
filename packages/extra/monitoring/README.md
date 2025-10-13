@@ -17,7 +17,7 @@
 | `metricsStorages[i].name`                        | Name of the storage instance                                   | `string`    | `""`    |
 | `metricsStorages[i].retentionPeriod`             | Retention period for the metrics in the storage instance       | `string`    | `""`    |
 | `metricsStorages[i].deduplicationInterval`       | Deduplication interval for the metrics in the storage instance | `string`    | `""`    |
-| `metricsStorages[i].storage`                     | Persistent Volume size for the storage instance                | `string`    | `""`    |
+| `metricsStorages[i].storage`                     | Persistent Volume size for the storage instance                | `string`    | `10Gi`  |
 | `metricsStorages[i].storageClassName`            | StorageClass used to store the data                            | `*string`   | `null`  |
 | `metricsStorages[i].vminsert`                    | Configuration for vminsert component of the storage instance   | `*object`   | `null`  |
 | `metricsStorages[i].vminsert.minAllowed`         | Requests (minimum allowed/available resources)                 | `*object`   | `null`  |
@@ -44,13 +44,13 @@
 
 ### Logs storage configuration
 
-| Name                               | Description                                           | Type       | Value   |
-| ---------------------------------- | ----------------------------------------------------- | ---------- | ------- |
-| `logsStorages`                     | Configuration of logs storage instances               | `[]object` | `[...]` |
-| `logsStorages[i].name`             | Name of the storage instance                          | `string`   | `""`    |
-| `logsStorages[i].retentionPeriod`  | Retention period for the logs in the storage instance | `string`   | `""`    |
-| `logsStorages[i].storage`          | Persistent Volume size for the storage instance       | `string`   | `""`    |
-| `logsStorages[i].storageClassName` | StorageClass used to store the data                   | `*string`  | `null`  |
+| Name                               | Description                                           | Type       | Value        |
+| ---------------------------------- | ----------------------------------------------------- | ---------- | ------------ |
+| `logsStorages`                     | Configuration of logs storage instances               | `[]object` | `[...]`      |
+| `logsStorages[i].name`             | Name of the storage instance                          | `string`   | `""`         |
+| `logsStorages[i].retentionPeriod`  | Retention period for the logs in the storage instance | `string`   | `1`          |
+| `logsStorages[i].storage`          | Persistent Volume size for the storage instance       | `string`   | `10Gi`       |
+| `logsStorages[i].storageClassName` | StorageClass used to store the data                   | `*string`  | `replicated` |
 
 
 ### Alerta configuration

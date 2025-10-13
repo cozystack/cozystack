@@ -75,6 +75,22 @@ More info on the official site: https://velero.io/docs
 {{- end }}
 {{- end }}
 
+{{- if eq .Values.configuration.uploaderType "restic" }}
+{{- $breaking = print $breaking "\n\nERROR: restic uploaderType was removed, please use a different one" }}
+{{- end }}
+
+{{- if hasKey .Values.configuration.repositoryMaintenanceJob "requests" }}
+{{- $breaking = print $breaking "\n\nREMOVED: configuration.repositoryMaintenanceJob.requests has been removed, please use the configmap" }}
+{{- end }}
+
+{{- if hasKey .Values.configuration.repositoryMaintenanceJob "limits" }}
+{{- $breaking = print $breaking "\n\nREMOVED: configuration.repositoryMaintenanceJob.limits has been removed, please use the configmap" }}
+{{- end }}
+
+{{- if hasKey .Values.configuration.repositoryMaintenanceJob "latestJobsCount" }}
+{{- $breaking = print $breaking "\n\nREMOVED: configuration.repositoryMaintenanceJob.latestJobsCount has been removed, please use the configmap" }}
+{{- end }}
+
 {{- if $breaking }}
 {{- fail (print $breaking_title $breaking) }}
 {{- end }}

@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-ovn-plunger
+  labels:
+    app.kubernetes.io/name: kube-ovn-plunger
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-ovn-plunger
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kube-ovn-plunger
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: kube-ovn-plunger
+      containers:
+      - name: kube-ovn-plunger
+        image: "{{ .Values.image }}"
+        args:
+        {{- if .Values.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        - --metrics-bind-address=:8080
+        - --metrics-secure=false
+        ports:
+        - name: metrics
+          containerPort: 8080

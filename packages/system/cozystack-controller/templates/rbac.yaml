@@ -3,10 +3,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: cozystack-controller
 rules:
-- apiGroups: [""]
-  resources: ["configmaps", "pods", "namespaces", "nodes", "services", "persistentvolumes", "persistentvolumeclaims"]
-  verbs: ["get", "watch", "list"]
-- apiGroups: ['cozystack.io']
+- apiGroups: ['cozystack.io', 'dashboard.cozystack.io']
   resources: ['*']
   verbs: ['*']
 - apiGroups: ["helm.toolkit.fluxcd.io"]
@@ -15,6 +12,6 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch", "patch", "update"]
-- apiGroups: ["apps"]
-  resources: ["deployments"]
+- apiGroups: ['*']
+  resources: ['*']
   verbs: ["get", "list", "watch"]

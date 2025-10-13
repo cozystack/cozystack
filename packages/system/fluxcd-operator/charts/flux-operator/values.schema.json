@@ -216,13 +216,20 @@
         "multitenancy": {
             "type": "object",
             "required": [
-                "defaultServiceAccount"
+                "defaultServiceAccount",
+                "defaultWorkloadIdentityServiceAccount"
             ],
             "properties": {
                 "defaultServiceAccount": {
                     "type": "string"
                 },
+                "defaultWorkloadIdentityServiceAccount": {
+                    "type": "string"
+                },
                 "enabled": {
+                    "type": "boolean"
+                },
+                "enabledForWorkloadIdentity": {
                     "type": "boolean"
                 }
             }

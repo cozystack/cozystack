@@ -5,16 +5,7 @@
     "backup": {
       "description": "Backup configuration",
       "type": "object",
-      "default": {
-        "cleanupStrategy": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m",
-        "enabled": false,
-        "resticPassword": "\u003cpassword\u003e",
-        "s3AccessKey": "\u003cyour-access-key\u003e",
-        "s3Bucket": "s3.example.org/mysql-backups",
-        "s3Region": "us-east-1",
-        "s3SecretKey": "\u003cyour-secret-key\u003e",
-        "schedule": "0 2 * * *"
-      },
+      "default": {},
       "required": [
         "cleanupStrategy",
         "enabled",

@@ -38,6 +38,8 @@ import (
 
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/dashboard"
+	lcw "github.com/cozystack/cozystack/internal/lineagecontrollerwebhook"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -53,6 +55,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
+	utilruntime.Must(dashboard.AddToScheme(scheme))
 	utilruntime.Must(helmv2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -150,7 +153,12 @@ func main() {
 		// this setup is not recommended for production.
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	// Configure rate limiting for the Kubernetes client
+	config := ctrl.GetConfigOrDie()
+	config.QPS = 50.0  // Increased from default 5.0
+	config.Burst = 100 // Increased from default 10
+
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -211,6 +219,20 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
+		os.Exit(1)
+	}
+
+	// special one that's both a webhook and a reconciler
+	lineageControllerWebhook := &lcw.LineageControllerWebhook{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err := lineageControllerWebhook.SetupWithManagerAsController(mgr); err != nil {
+		setupLog.Error(err, "unable to setup controller", "controller", "LineageController")
+		os.Exit(1)
+	}
+	if err := lineageControllerWebhook.SetupWithManagerAsWebhook(mgr); err != nil {
+		setupLog.Error(err, "unable to setup webhook", "webhook", "LineageWebhook")
 		os.Exit(1)
 	}
 

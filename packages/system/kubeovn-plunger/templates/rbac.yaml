@@ -1,0 +1,39 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-ovn-plunger
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - pods/exec
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+  - watch
+  resourceNames:
+  - {{ .Values.ovnCentralName }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-ovn-plunger
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kube-ovn-plunger
+subjects:
+- kind: ServiceAccount
+  name: kube-ovn-plunger
+  namespace: {{ .Release.Namespace }}

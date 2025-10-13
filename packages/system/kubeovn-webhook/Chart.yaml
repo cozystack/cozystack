@@ -2,5 +2,5 @@ apiVersion: v2
 name: cozy-kubeovn-webhook
 description: Helm chart for a mutating admission webhook that copies Namespace annotations into Pods
 type: application
-version: 0.1.0
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
 appVersion: "1.0.0"

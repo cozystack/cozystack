@@ -53,6 +53,9 @@ spec:
             {{- if .Values.multitenancy.enabled }}
             - --default-service-account={{ .Values.multitenancy.defaultServiceAccount }}
             {{- end }}
+            {{- if .Values.multitenancy.enabledForWorkloadIdentity }}
+            - --default-workload-identity-service-account={{ .Values.multitenancy.defaultWorkloadIdentityServiceAccount }}
+            {{- end }}
             {{- range .Values.extraArgs }}
             - {{ . }}
             {{- end }}

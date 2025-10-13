@@ -70,6 +70,12 @@ releases:
   privileged: true
   dependsOn: [cilium,kubeovn,cert-manager]
 
+- name: kubeovn-plunger
+  releaseName: kubeovn-plunger
+  chart: cozy-kubeovn-plunger
+  namespace: cozy-kubeovn
+  dependsOn: [cilium,kubeovn]
+
 - name: cozy-proxy
   releaseName: cozystack
   chart: cozy-cozy-proxy
@@ -86,7 +92,7 @@ releases:
   releaseName: cozystack-api
   chart: cozy-cozystack-api
   namespace: cozy-system
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,cozystack-controller]
 
 - name: cozystack-controller
   releaseName: cozystack-controller
@@ -98,6 +104,18 @@ releases:
     cozystackController:
       disableTelemetry: true
   {{- end }}
+
+- name: cozystack-resource-definition-crd
+  releaseName: cozystack-resource-definition-crd
+  chart: cozystack-resource-definition-crd
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
+
+- name: cozystack-resource-definitions
+  releaseName: cozystack-resource-definitions
+  chart: cozystack-resource-definitions
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
 
 - name: cert-manager
   releaseName: cert-manager
@@ -223,6 +241,12 @@ releases:
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
   dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+
+- name: foundationdb-operator
+  releaseName: foundationdb-operator
+  chart: cozy-foundationdb-operator
+  namespace: cozy-foundationdb-operator
+  dependsOn: [cilium,kubeovn,cert-manager]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator

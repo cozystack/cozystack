@@ -1,14 +1,12 @@
-OUT=../_out/repos/extra
-TMP := $(shell mktemp -d)
+OUT=../../_out/repos/extra
+CHARTS := $(shell find . -maxdepth 2 -name Chart.yaml | awk -F/ '{print $$2}')
+
+include ../../scripts/common-envs.mk
 
 repo:
-	cd .. && ../hack/package_chart.sh extra $(OUT) $(TMP) library
+	rm -rf "$(OUT)"
+	helm package -d "$(OUT)" $(CHARTS) --version $(COZYSTACK_VERSION)
+	helm repo index "$(OUT)"
 
-fix-chartnames:
-	find . -maxdepth 2 -name Chart.yaml | awk -F/ '{print $$2}' | while read i; do sed "s/^name: .*/name: $$i/" "$$i/Chart.yaml"; done
-
-gen-versions-map: fix-chartnames
-	../../hack/gen_versions_map.sh
-
-check-version-map: gen-versions-map
-	git diff --exit-code -- versions_map
+fix-charts:
+	find . -maxdepth 2 -name Chart.yaml | awk -F/ '{print $$2}' | while read i; do sed -i -e "s/^name: .*/name: $$i/" -e "s/^version: .*/version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process/g" "$$i/Chart.yaml"; done

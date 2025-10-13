@@ -1,5 +1,5 @@
 export NAME=coredns
-export NAMESPACE=coredns
+export NAMESPACE=kube-system
 
 include ../../../scripts/package.mk
 

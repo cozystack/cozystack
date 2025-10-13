@@ -15,20 +15,22 @@ spec:
         name: cozystack-system
         namespace: cozy-system
       version: '>= 0.0.0-0'
+  interval: 5m
+  timeout: 10m
   install:
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
-  interval: 1m0s
-  timeout: 10m0s
   values:
     ingress-nginx:
       fullnameOverride: {{ trimPrefix "tenant-" .Release.Namespace }}-ingress
       controller:
         replicaCount: {{ .Values.replicas }}
         ingressClass: {{ .Release.Namespace }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
         ingressClassResource:
           name: {{ .Release.Namespace }}
           controllerValue: k8s.io/ingress-nginx-{{ .Release.Namespace }}
@@ -49,12 +51,12 @@ spec:
           type: LoadBalancer
           externalTrafficPolicy: Local
           {{- end }}
-        {{- if or .Values.whitelist .Values.clouflareProxy }}
+        {{- if or .Values.whitelist .Values.cloudflareProxy }}
         config:
           {{- with .Values.whitelist }}
           whitelist-source-range: "{{ join "," . }}"
           {{- end }}
-          {{- if .Values.clouflareProxy }}
+          {{- if .Values.cloudflareProxy }}
           set_real_ip_from: "{{ include "ingress.cloudflare-ips" . }}"
           use-forwarded-headers: "true"
           server-snippet: "real_ip_header CF-Connecting-IP;"

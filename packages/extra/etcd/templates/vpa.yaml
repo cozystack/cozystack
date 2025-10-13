@@ -1,0 +1,21 @@
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: etcd
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: etcd
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+    - containerName: etcd
+      {{- with dict "cpu" "250m" "memory" "256Mi" }}
+      minAllowed: {{- get (include "cozy-lib.resources.sanitize" (list . $) | fromYaml) "requests" | toYaml | nindent 8 }}
+      {{- end }}
+      {{- with dict "cpu" "5000m" "memory" "8Gi" }}
+      maxAllowed: {{- get (include "cozy-lib.resources.sanitize" (list . $) | fromYaml) "requests" | toYaml | nindent 8 }}
+      {{- end }}

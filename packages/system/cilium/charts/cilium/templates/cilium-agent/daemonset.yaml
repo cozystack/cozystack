@@ -399,6 +399,7 @@ spec:
         {{- with .Values.extraVolumeMounts }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- include "cilium-agent.volumeMounts.extra" . | nindent 8 }}
       {{- if .Values.monitor.enabled }}
       - name: cilium-monitor
         image: {{ include "cilium.image" .Values.image | quote }}
@@ -768,9 +769,7 @@ spec:
       automountServiceAccountToken: {{ .Values.serviceAccounts.cilium.automount }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       hostNetwork: true
-      {{- if .Values.dnsPolicy }}
-      dnsPolicy: {{ .Values.dnsPolicy }}
-      {{- end }}
+      {{- include "cilium-agent.dnsPolicy" . | nindent 6 }}
       {{- if (eq .Values.scheduling.mode "anti-affinity")  }}
       {{- with .Values.affinity }}
       affinity:
@@ -1063,4 +1062,5 @@ spec:
       {{- with .Values.extraVolumes }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
+      {{- include "cilium-agent.volumes.extra" . | nindent 6 }}
 {{- end }}

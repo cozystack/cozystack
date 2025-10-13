@@ -9,7 +9,7 @@ host: ""
 ## @field metricsStorage.name {string} Name of the storage instance
 ## @field metricsStorage.retentionPeriod {string} Retention period for the metrics in the storage instance
 ## @field metricsStorage.deduplicationInterval {string} Deduplication interval for the metrics in the storage instance
-## @field metricsStorage.storage {string} Persistent Volume size for the storage instance
+## @field metricsStorage.storage {string default="10Gi"} Persistent Volume size for the storage instance
 ## @field metricsStorage.storageClassName {*string} StorageClass used to store the data
 ## @field metricsStorage.vminsert {*vmcomponent} Configuration for vminsert component of the storage instance
 ## @field metricsStorage.vmselect {*vmcomponent} Configuration for vmselect component of the storage instance
@@ -69,9 +69,9 @@ metricsStorages:
 
 ## @param logsStorages {[]logsStorage} Configuration of logs storage instances
 ## @field logsStorage.name {string} Name of the storage instance
-## @field logsStorage.retentionPeriod {string} Retention period for the logs in the storage instance
-## @field logsStorage.storage {string} Persistent Volume size for the storage instance
-## @field logsStorage.storageClassName {*string} StorageClass used to store the data
+## @field logsStorage.retentionPeriod {string default=1} Retention period for the logs in the storage instance
+## @field logsStorage.storage {string default="10Gi"} Persistent Volume size for the storage instance
+## @field logsStorage.storageClassName {*string default="replicated"} StorageClass used to store the data
 ##
 logsStorages:
 - name: generic

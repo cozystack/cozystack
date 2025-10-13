@@ -9,11 +9,11 @@
 {{-   fail "Invalid value for .Values.replicationFactor. Must be at least 1." }}
 {{- end }}
 {{- if eq .Values.topology "MultiZone" }}
-{{-   if (eq (len .Values.zones) 0) }}
+{{-   if (eq (len .Values.volume.zones) 0) }}
 {{-     fail "Zones must be defined for MultiZone topology." }}
 {{-   end }}
-{{-   if and (hasKey .Values "zones") (gt (int .Values.replicationFactor) (len .Values.zones)) }}
-{{-     fail "replicationFactor must be less than or equal to the number of zones defined in .Values.zones." }}
+{{-   if and (hasKey .Values.volume "zones") (gt (int .Values.replicationFactor) (len .Values.volume.zones)) }}
+{{-     fail "replicationFactor must be less than or equal to the number of zones defined in .Values.volume.zones." }}
 {{-   end }}
 {{- end }}
 
@@ -51,17 +51,25 @@ spec:
         name: cozystack-system
         namespace: cozy-system
       version: '>= 0.0.0-0'
+  interval: 5m
+  timeout: 10m
   install:
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
-  interval: 1m0s
-  timeout: 10m0s
   values:
     global:
       serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"
+    db:
+      replicas: {{ .Values.db.replicas }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.db.resourcesPreset .Values.db.resources $) | nindent 8 }}
+      size: {{ .Values.db.size }}
+      {{- with .Values.db.storageClass }}
+      storageClass: {{ . }}
+      {{- end }}
     seaweedfs:
       master:
         {{ if eq .Values.topology "Simple" }}
@@ -69,36 +77,25 @@ spec:
         {{- else if eq .Values.topology "MultiZone" }}
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
+        replicas: {{ .Values.master.replicas }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | nindent 10 }}
       volume:
         {{ if eq .Values.topology "MultiZone" }}
         enabled: false
         {{- end }}
-        replicas: {{ .Values.replicas }}
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
+        replicas: {{ .Values.volume.replicas }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.volume.resourcesPreset .Values.volume.resources $) | nindent 10 }}
         dataDirs:
         - name: data1
           type: "persistentVolumeClaim"
-          size: "{{ .Values.size }}"
-          {{- with .Values.storageClass }}
+          size: "{{ .Values.volume.size }}"
+          {{- with .Values.volume.storageClass }}
           storageClass: {{ . }}
           {{- end }}
           maxVolumes: 0
       {{ if eq .Values.topology "MultiZone" }}
       volumes:
-        {{- range $zoneName, $zone := .Values.zones }}
+        {{- range $zoneName, $zone := .Values.volume.zones }}
         {{ $zoneName }}:
           {{ with $zone.replicas }}
           replicas: {{ . }}
@@ -109,12 +106,12 @@ spec:
             {{- if $zone.size }}
             size: "{{ $zone.size }}"
             {{- else }}
-            size: "{{ $.Values.size }}"
+            size: "{{ $.Values.volume.size }}"
             {{- end }}
             {{- if $zone.storageClass }}
             storageClass: {{ $zone.storageClass }}
-            {{- else if $.Values.storageClass }}
-            storageClass: {{ $.Values.storageClass }}
+            {{- else if $.Values.volume.storageClass }}
+            storageClass: {{ $.Values.volume.storageClass }}
             {{- end }}
             maxVolumes: 0
           nodeSelector: |
@@ -130,13 +127,7 @@ spec:
         {{- end }}
         s3:
           domainName: {{ .Values.host | default (printf "s3.%s" $host) }}
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.filer.resourcesPreset .Values.filer.resources $) | nindent 10 }}
       s3:
         ingress:
           className: {{ $ingress }}
@@ -150,6 +141,7 @@ spec:
             - hosts:
               - {{ .Values.host | default (printf "s3.%s" $host) }}
               secretName: {{ .Release.Name }}-s3-ingress-tls
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.s3.resourcesPreset .Values.s3.resources $) | nindent 10 }}
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
         bucketClassName: "{{ .Release.Namespace }}"
@@ -166,8 +158,8 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-master
 spec:
-  replicas: 3
-  minReplicas: 2
+  replicas: {{ .Values.master.replicas }}
+  minReplicas: {{ div .Values.master.replicas 2 | add1 }}
   kind: seaweedfs
   type: master
   selector:
@@ -180,7 +172,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-filer
 spec:
-  replicas: 2
+  replicas: {{ .Values.filer.replicas }}
   minReplicas: 1
   kind: seaweedfs
   type: filer
@@ -188,32 +180,66 @@ spec:
     app.kubernetes.io/component: filer
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+
+{{ if eq .Values.topology "Simple" }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-volume
 spec:
-  replicas: {{ .Values.replicas }}
-  minReplicas: {{ div .Values.replicas 2 | add1 }}
+  replicas: {{ .Values.volume.replicas }}
+  minReplicas: 1
   kind: seaweedfs
   type: volume
   selector:
     app.kubernetes.io/component: volume
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+{{- else if eq .Values.topology "MultiZone" }}
+{{- range $zoneName, $zoneSpec := .Values.volume.zones }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $zoneName }}
+spec:
+  replicas: {{ default $.Values.volume.replicas $zoneSpec.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $zoneName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-db
 spec:
-  replicas: 2
+  replicas: {{ .Values.db.replicas }}
   minReplicas: 1
   kind: seaweedfs
   type: postgres
   selector:
     cnpg.io/cluster: seaweedfs-db
     cnpg.io/podRole: instance
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-s3
+spec:
+  replicas: {{ .Values.s3.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: s3
+  selector:
+    app.kubernetes.io/component: s3
+    app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
 {{- end }}

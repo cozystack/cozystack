@@ -5,6 +5,11 @@ kind: VMAlert
 metadata:
   name: vmalert-{{ .name }}
 spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
   datasource:
     url: http://vmselect-{{ .name }}.{{ $.Release.Namespace }}.svc:8481/select/0/prometheus
   evaluationInterval: 15s

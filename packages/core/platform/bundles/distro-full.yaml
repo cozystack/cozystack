@@ -155,6 +155,13 @@ releases:
   optional: true
   dependsOn: [cilium,victoria-metrics-operator]
 
+- name: foundationdb-operator
+  releaseName: foundationdb-operator
+  chart: cozy-foundationdb-operator
+  namespace: cozy-foundationdb-operator
+  optional: true
+  dependsOn: [cilium,cert-manager]
+
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
   chart: cozy-rabbitmq-operator

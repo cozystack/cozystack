@@ -1,0 +1,22 @@
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-resourcemap
+  labels:
+    app.kubernetes.io/name: foundationdb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.cozystack.io/type: dashboard-resourcemap
+data:
+  resources: |
+    - apiVersion: apps.foundationdb.org/v1beta2
+      kind: FoundationDBCluster
+      name: {{ .Release.Name }}
+    {{- if .Values.backup.enabled }}
+    - apiVersion: apps.foundationdb.org/v1beta2
+      kind: FoundationDBBackup
+      name: {{ .Release.Name }}-backup
+    {{- end }}
+{{- end }}

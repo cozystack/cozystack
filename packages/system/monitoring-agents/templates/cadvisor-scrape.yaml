@@ -19,10 +19,8 @@ spec:
     - __name__
   path: /metrics/cadvisor
   relabelConfigs:
-  - action: labelmap
-    regex: __meta_kubernetes_node_label_(.+)
-  - action: labeldrop
-    regex: '.*node_kubevirt_io.*'
+  - action: labelkeep
+    regex: "__address__|instance|__scheme__|__scrape_timeout__|__scrape_interval__|metrics_path|node|job|__metrics_path__"
   - sourceLabels: [__metrics_path__]
     targetLabel: metrics_path
   - replacement: cadvisor

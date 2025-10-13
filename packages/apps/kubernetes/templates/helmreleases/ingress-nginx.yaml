@@ -26,7 +26,6 @@ metadata:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
-  interval: 5m
   releaseName: ingress-nginx
   chart:
     spec:
@@ -43,11 +42,14 @@ spec:
       key: super-admin.svc
   targetNamespace: cozy-ingress-nginx
   storageNamespace: cozy-ingress-nginx
+  interval: 5m
+  timeout: 10m
   install:
     createNamespace: true
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
   values:

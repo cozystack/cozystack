@@ -12,7 +12,6 @@ metadata:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
-  interval: 5m
   releaseName: coredns
   chart:
     spec:
@@ -27,13 +26,15 @@ spec:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
       key: super-admin.svc
-  targetNamespace: cozy-coredns
-  storageNamespace: cozy-coredns
+  targetNamespace: kube-system
+  storageNamespace: kube-system
+  interval: 5m
+  timeout: 10m
   install:
-    createNamespace: true
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
   values:

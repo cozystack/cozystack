@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: incloud-web-web
+spec:
+  ports:
+    - name: bff-http
+      port: 64231
+      protocol: TCP
+      targetPort: 64231
+    - name: web-http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+  selector:
+    app.kubernetes.io/instance: incloud-web
+    app.kubernetes.io/name: web
+  type: ClusterIP

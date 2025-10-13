@@ -7,7 +7,6 @@ metadata:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
-  interval: 5m
   releaseName: gateway-api-crds
   chart:
     spec:
@@ -24,11 +23,13 @@ spec:
       key: super-admin.svc
   targetNamespace: kube-system
   storageNamespace: kube-system
+  interval: 5m
+  timeout: 10m
   install:
-    createNamespace: false
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
   dependsOn:

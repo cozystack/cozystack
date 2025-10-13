@@ -1,18 +1,11 @@
 repos:
 - repo: local
   hooks:
-    - id: gen-versions-map
-      name: Generate versions map and check for changes
-      entry: sh -c 'make -C packages/apps check-version-map && make -C packages/extra check-version-map'
-      language: system
-      types: [file]
-      pass_filenames: false
-      description: Run the script and fail if it generates changes
     - id: run-make-generate
       name: Run 'make generate' in all app directories
       entry: |
         flock -x .git/pre-commit.lock sh -c '
-          for dir in ./packages/apps/*/ ./packages/extra/*/ ./packages/system/cozystack-api/; do
+          for dir in ./packages/apps/*/ ./packages/extra/*/; do
             if [ -d "$dir" ]; then
               echo "Running make generate in $dir"
               make generate -C "$dir" || exit $?

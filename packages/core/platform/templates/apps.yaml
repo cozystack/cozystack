@@ -48,6 +48,7 @@ spec:
   chart:
     spec:
       chart: tenant
+      version: '>= 0.0.0-0'
       sourceRef:
         kind: HelmRepository
         name: cozystack-apps

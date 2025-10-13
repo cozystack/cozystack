@@ -5,6 +5,11 @@ kind: VMCluster
 metadata:
   name: {{ .name }}
 spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
   replicationFactor: 2
   retentionPeriod: {{ .retentionPeriod | quote }}
   vminsert:

@@ -1,0 +1,45 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozystack-controller-webhook-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozystack-controller-webhook-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: cozystack-controller-webhook-ca
+  duration: 43800h  # 5 years
+  commonName: cozystack-controller-webhook-ca
+  issuerRef:
+    name: cozystack-controller-webhook-selfsigned
+  isCA: true
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozystack-controller-webhook-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: cozystack-controller-webhook-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozystack-controller-webhook
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: cozystack-controller-webhook-cert
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: cozystack-controller-webhook-ca
+  commonName: cozystack-controller
+  dnsNames:
+    - cozystack-controller
+    - cozystack-controller.{{ .Release.Namespace }}.svc

@@ -205,6 +205,29 @@ spec:
           - mountPath: /etc/kubernetes/kubeconfig
             name: kubeconfig
             readOnly: true
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.13.1
+          args:
+            - "-csi-address=/csi/csi.sock"
+            - "-kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+            - "-v=5"
+            - "-timeout=3m"
+            - '-handle-volume-inuse-error=false'
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /etc/kubernetes/kubeconfig
+              name: kubeconfig
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 20Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
       volumes:
         - name: socket-dir
           emptyDir: {}

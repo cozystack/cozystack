@@ -27,7 +27,7 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
 | `replicas`         | Number of Clickhouse replicas                                                                                                             | `int`       | `2`     |
 | `shards`           | Number of Clickhouse shards                                                                                                               | `int`       | `1`     |
-| `resources`        | Explicit CPU and memory configuration for each Clickhouse replica. When left empty, the preset defined in `resourcesPreset` is applied.   | `*object`   | `{}`    |
+| `resources`        | Explicit CPU and memory configuration for each Clickhouse replica. When left empty, the preset defined in `resourcesPreset` is applied.   | `*object`   | `null`  |
 | `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
 | `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `small` |
@@ -65,7 +65,7 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 
 | Name                               | Description                                                                                                                               | Type        | Value   |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
-| `clickhouseKeeper`                 | Clickhouse Keeper configuration                                                                                                           | `*object`   | `{}`    |
+| `clickhouseKeeper`                 | Clickhouse Keeper configuration                                                                                                           | `*object`   | `null`  |
 | `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination                                                                                         | `*bool`     | `true`  |
 | `clickhouseKeeper.size`            | Persistent Volume Claim size, available for application data                                                                              | `*quantity` | `1Gi`   |
 | `clickhouseKeeper.resourcesPreset` | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro` |

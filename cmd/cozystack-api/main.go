@@ -26,8 +26,8 @@ import (
 
 func main() {
 	ctx := genericapiserver.SetupSignalContext()
-	options := server.NewAppsServerOptions(os.Stdout, os.Stderr)
-	cmd := server.NewCommandStartAppsServer(ctx, options)
+	options := server.NewCozyServerOptions(os.Stdout, os.Stderr)
+	cmd := server.NewCommandStartCozyServer(ctx, options)
 	code := cli.Run(cmd)
 	os.Exit(code)
 }

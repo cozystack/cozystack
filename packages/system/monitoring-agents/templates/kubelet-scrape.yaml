@@ -19,10 +19,8 @@ spec:
     - __name__
   path: /metrics/probes
   relabelConfigs:
-  - action: labelmap
-    regex: __meta_kubernetes_node_label_(.+)
-  - action: labeldrop
-    regex: '.*node_kubevirt_io.*'
+  - action: labelkeep
+    regex: "__address__|instance|__scheme__|__scrape_timeout__|__scrape_interval__|metrics_path|node|job|__metrics_path__|container|pod|namespace"
   - sourceLabels: [__metrics_path__]
     targetLabel: metrics_path
   - replacement: kubelet
@@ -51,10 +49,8 @@ spec:
     regex: (rest_client_request_duration_seconds_bucket|rest_client_request_duration_seconds_sum|rest_client_request_duration_seconds_count)
     source_labels: [__name__]
   relabelConfigs:
-  - action: labelmap
-    regex: __meta_kubernetes_node_label_(.+)
-  - action: labeldrop
-    regex: '.*node_kubevirt_io.*'
+  - action: labelkeep
+    regex: "__address__|instance|__scheme__|__scrape_timeout__|__scrape_interval__|metrics_path|node|job|__metrics_path__|container|pod|namespace"
   - sourceLabels:
     - __metrics_path__
     targetLabel: metrics_path

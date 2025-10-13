@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.19.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -73,6 +73,12 @@ spec:
                     description: Multitenant enables the multitenancy lockdown. Defaults
                       to false.
                     type: boolean
+                  multitenantWorkloadIdentity:
+                    default: false
+                    description: |-
+                      MultitenantWorkloadIdentity enables the multitenancy lockdown for
+                      workload identity. Defaults to false.
+                    type: boolean
                   networkPolicy:
                     default: true
                     description: |-
@@ -95,10 +101,29 @@ spec:
                     - medium
                     - large
                     type: string
+                  tenantDefaultDecryptionServiceAccount:
+                    description: |-
+                      TenantDefaultDecryptionServiceAccount is the name of the service account
+                      to use as default for kustomize-controller SOPS decryption when the
+                      multitenant lockdown for workload identity is enabled. Defaults to the
+                      'default' service account from the tenant namespace.
+                    type: string
+                  tenantDefaultKubeConfigServiceAccount:
+                    description: |-
+                      TenantDefaultKubeConfigServiceAccount is the name of the service account
+                      to use as default for kustomize-controller and helm-controller remote
+                      cluster access via spec.kubeConfig.configMapRef when the multitenant
+                      lockdown for workload identity is enabled. Defaults to the 'default'
+                      service account from the tenant namespace.
+                    type: string
                   tenantDefaultServiceAccount:
                     description: |-
                       TenantDefaultServiceAccount is the name of the service account
-                      to use as default when the multitenant lockdown is enabled.
+                      to use as default when the multitenant lockdown is enabled, for
+                      kustomize-controller and helm-controller.
+                      This field will also be used for multitenant workload identity
+                      lockdown for source-controller, notification-controller,
+                      image-reflector-controller and image-automation-controller.
                       Defaults to the 'default' service account from the tenant namespace.
                     type: string
                   type:
@@ -114,6 +139,11 @@ spec:
                     - gcp
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: .objectLevelWorkloadIdentity must be set to true when .multitenantWorkloadIdentity
+                    is set to true
+                  rule: (has(self.objectLevelWorkloadIdentity) && self.objectLevelWorkloadIdentity)
+                    || !has(self.multitenantWorkloadIdentity) || !self.multitenantWorkloadIdentity
               commonMetadata:
                 description: |-
                   CommonMetadata specifies the common labels and annotations that are
@@ -572,7 +602,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.19.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -875,7 +905,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.19.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -1243,7 +1273,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.18.0
+    controller-gen.kubebuilder.io/version: v0.19.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -1351,6 +1381,34 @@ spec:
                   - name
                   type: object
                 type: array
+              inputStrategy:
+                description: |-
+                  InputStrategy defines how the inputs are combined when multiple
+                  input provider objects are used. Defaults to flattening all inputs
+                  from all providers into a single list of input sets.
+                properties:
+                  name:
+                    description: |-
+                      Name defines how the inputs are combined when multiple
+                      input provider objects are used. Supported values are:
+                      - Flatten: all inputs sets from all input provider objects are
+                        flattened into a single list of input sets.
+                      - Permute: all inputs sets from all input provider objects are
+                        combined using a Cartesian product, resulting in a list of input sets
+                        that contains every possible combination of input values.
+                        For example, if provider A has inputs [{x: 1}, {x: 2}] and provider B has
+                        inputs [{y: "a"}, {y: "b"}], the resulting input sets will be:
+                        [{x: 1, y: "a"}, {x: 1, y: "b"}, {x: 2, y: "a"}, {x: 2, y: "b"}].
+                        This strategy can lead to a large number of input sets and should be
+                        used with caution. Users should use filtering features from
+                        ResourceSetInputProvider to limit the amount of exported inputs.
+                    enum:
+                    - Flatten
+                    - Permute
+                    type: string
+                required:
+                - name
+                type: object
               inputs:
                 description: Inputs contains the list of ResourceSet inputs.
                 items:
@@ -1374,6 +1432,8 @@ spec:
                       description: |-
                         APIVersion of the input provider resource.
                         When not set, the APIVersion of the ResourceSet is used.
+                      enum:
+                      - fluxcd.controlplane.io/v1
                       type: string
                     kind:
                       description: Kind of the input provider resource.
@@ -1433,8 +1493,6 @@ spec:
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
-                  required:
-                  - kind
                   type: object
                   x-kubernetes-validations:
                   - message: at least one of name or selector must be set for input

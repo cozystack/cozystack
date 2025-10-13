@@ -16,16 +16,11 @@ image: image-e2e-sandbox
 
 image-e2e-sandbox:
 	docker buildx build -f images/e2e-sandbox/Dockerfile images/e2e-sandbox \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/e2e-sandbox:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/e2e-sandbox:latest \
 		--cache-to type=inline \
 		--metadata-file images/e2e-sandbox.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
-		--load=$(LOAD)
+		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/e2e-sandbox:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/e2e-sandbox.json -o json -r)" \
 		yq -i '.e2e.image = strenv(IMAGE)' values.yaml
 	rm -f images/e2e-sandbox.json

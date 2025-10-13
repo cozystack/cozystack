@@ -91,21 +91,21 @@ See the reference for components utilized in this service:
 
 ### Application-specific parameters
 
-| Name                                | Description                                                                                                       | Type                | Value   |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------- | ------- |
-| `version`                           | Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.                               | `string`            | `v1.32` |
-| `host`                              | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `string`            | `""`    |
-| `nodeGroups`                        | Worker nodes configuration                                                                                        | `map[string]object` | `{...}` |
-| `nodeGroups[name].minReplicas`      | Minimum amount of replicas                                                                                        | `int`               | `0`     |
-| `nodeGroups[name].maxReplicas`      | Maximum amount of replicas                                                                                        | `int`               | `0`     |
-| `nodeGroups[name].instanceType`     | Virtual machine instance type                                                                                     | `string`            | `""`    |
-| `nodeGroups[name].ephemeralStorage` | Ephemeral storage size                                                                                            | `quantity`          | `""`    |
-| `nodeGroups[name].roles`            | List of node's roles                                                                                              | `[]string`          | `[]`    |
-| `nodeGroups[name].resources`        | Resources available to each worker node                                                                           | `object`            | `{}`    |
-| `nodeGroups[name].resources.cpu`    | CPU available to each worker node                                                                                 | `*quantity`         | `null`  |
-| `nodeGroups[name].resources.memory` | Memory (RAM) available to each worker node                                                                        | `*quantity`         | `null`  |
-| `nodeGroups[name].gpus`             | List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)                                       | `[]object`          | `[]`    |
-| `nodeGroups[name].gpus.name`        | Name of GPU, such as "nvidia.com/AD102GL_L40S"                                                                    | `string`            | `""`    |
+| Name                                | Description                                                                                                       | Type                | Value       |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------- | ----------- |
+| `version`                           | Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.                               | `string`            | `v1.33`     |
+| `host`                              | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `string`            | `""`        |
+| `nodeGroups`                        | Worker nodes configuration                                                                                        | `map[string]object` | `{...}`     |
+| `nodeGroups[name].minReplicas`      | Minimum amount of replicas                                                                                        | `int`               | `0`         |
+| `nodeGroups[name].maxReplicas`      | Maximum amount of replicas                                                                                        | `int`               | `10`        |
+| `nodeGroups[name].instanceType`     | Virtual machine instance type                                                                                     | `string`            | `u1.medium` |
+| `nodeGroups[name].ephemeralStorage` | Ephemeral storage size                                                                                            | `quantity`          | `20Gi`      |
+| `nodeGroups[name].roles`            | List of node's roles                                                                                              | `[]string`          | `[]`        |
+| `nodeGroups[name].resources`        | Resources available to each worker node                                                                           | `object`            | `{}`        |
+| `nodeGroups[name].resources.cpu`    | CPU available to each worker node                                                                                 | `*quantity`         | `null`      |
+| `nodeGroups[name].resources.memory` | Memory (RAM) available to each worker node                                                                        | `*quantity`         | `null`      |
+| `nodeGroups[name].gpus`             | List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)                                       | `[]object`          | `{}`        |
+| `nodeGroups[name].gpus[i].name`     | Name of GPU, such as "nvidia.com/AD102GL_L40S"                                                                    | `string`            | `""`        |
 
 
 ### Cluster Addons

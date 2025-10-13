@@ -1,0 +1,42 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: lineage
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/cozystack-controller-webhook
+  labels:
+    app: cozystack-controller
+webhooks:
+  - name: lineage.cozystack.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    clientConfig:
+      service:
+        name: cozystack-controller
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-lineage
+    rules:
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods","secrets", "services", "persistentvolumeclaims"]
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        resources: ["ingresses"]
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["workloadmonitors"]
+    failurePolicy: Fail
+    namespaceSelector:
+      matchExpressions:
+        - key: cozystack.io/system
+          operator: NotIn
+          values:
+            - "true"
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - default

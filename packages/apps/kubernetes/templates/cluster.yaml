@@ -266,6 +266,10 @@ metadata:
     {{- end }}
 spec:
   clusterName: {{ $.Release.Name }}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
+      cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ $groupName }}
   template:
     metadata:
       labels:

@@ -10,7 +10,7 @@ It provides a data layer for cloud native applications, IoT messaging, and micro
 | Name               | Description                                                                                                                               | Type        | Value   |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
 | `replicas`         | Number of replicas                                                                                                                        | `int`       | `2`     |
-| `resources`        | Explicit CPU and memory configuration for each NATS replica. When left empty, the preset defined in `resourcesPreset` is applied.         | `*object`   | `{}`    |
+| `resources`        | Explicit CPU and memory configuration for each NATS replica. When left empty, the preset defined in `resourcesPreset` is applied.         | `*object`   | `null`  |
 | `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
 | `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano`  |

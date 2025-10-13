@@ -32,15 +32,14 @@ RUN make repos
 
 FROM alpine:3.22
 
-RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.1.0
+RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.2.0
 
-RUN apk add --no-cache make kubectl coreutils
+RUN apk add --no-cache make kubectl helm coreutils git jq
 
 COPY --from=builder /src/scripts /cozystack/scripts
 COPY --from=builder /src/packages/core /cozystack/packages/core
 COPY --from=builder /src/packages/system /cozystack/packages/system
 COPY --from=builder /src/_out/repos /cozystack/assets/repos
-COPY --from=builder /src/_out/logos /cozystack/assets/logos
 COPY --from=builder /cozystack-assets-server /usr/bin/cozystack-assets-server
 COPY --from=k8s-await-election-builder /k8s-await-election /usr/bin/k8s-await-election
 COPY --from=builder /src/dashboards /cozystack/assets/dashboards

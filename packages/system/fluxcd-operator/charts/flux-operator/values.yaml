@@ -6,7 +6,9 @@ fullnameOverride: ""
 # -- Enable [multitenancy lockdown](https://fluxcd.control-plane.io/operator/resourceset/#role-based-access-control) for the ResourceSet APIs.
 multitenancy:
   enabled: false
+  enabledForWorkloadIdentity: false
   defaultServiceAccount: "flux-operator" # @schema required: true
+  defaultWorkloadIdentityServiceAccount: "flux-operator" # @schema required: true
 
 # -- Flux [reporting](https://fluxcd.control-plane.io/operator/fluxreport/) settings.
 reporting:

@@ -35,7 +35,6 @@ metadata:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
-  interval: 5m
   releaseName: vertical-pod-autoscaler
   chart:
     spec:
@@ -52,11 +51,14 @@ spec:
       key: super-admin.svc
   targetNamespace: cozy-vertical-pod-autoscaler
   storageNamespace: cozy-vertical-pod-autoscaler
+  interval: 5m
+  timeout: 10m
   install:
     createNamespace: true
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
   values:

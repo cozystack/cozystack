@@ -12,5 +12,5 @@ replicas: 3
 ## @field resources.cpu {*quantity} The number of CPU cores allocated
 ## @field resources.memory {*quantity} The amount of memory allocated
 resources:
-  cpu: 4
-  memory: 1Gi
+  cpu: 1000m
+  memory: 512Mi

@@ -17,17 +17,12 @@ update:
 
 image:
 	docker buildx build images/cilium \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/cilium:$(call settag,$(CILIUM_TAG)) \
 		--tag $(REGISTRY)/cilium:$(call settag,$(CILIUM_TAG)-$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/cilium:latest \
 		--cache-to type=inline \
 		--metadata-file images/cilium.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
-		--load=$(LOAD)
+		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/cilium" \
 		yq -i '.cilium.image.repository = strenv(REPOSITORY)' values.yaml
 	TAG=$(call settag,$(CILIUM_TAG)) \

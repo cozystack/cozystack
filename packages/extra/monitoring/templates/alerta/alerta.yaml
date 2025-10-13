@@ -230,6 +230,11 @@ kind: VMAlertmanager
 metadata:
   name: alertmanager
 spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
   replicaCount: 3
   configSecret: alertmanager
   podMetadata:

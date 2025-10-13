@@ -1,8 +1,17 @@
 REGISTRY ?= ghcr.io/cozystack/cozystack
+TAG = $(shell git describe --tags --exact-match 2>/dev/null || echo latest)
 PUSH := 1
 LOAD := 0
+BUILDER ?=
+PLATFORM ?= 
+BUILDX_EXTRA_ARGS ?=
 COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags))
-TAG = $(shell git describe --tags --exact-match 2>/dev/null || echo latest)
+
+BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
+  --label org.opencontainers.image.source=https://github.com/cozystack/cozystack \
+  $(if $(strip $(BUILDER)),--builder=$(BUILDER)) \
+  $(if $(strip $(PLATFORM)),--platform=$(PLATFORM)) \
+  $(BUILDX_EXTRA_ARGS)
 
 # Returns 'latest' if the git tag is not assigned, otherwise returns the provided value
 define settag
@@ -15,10 +24,3 @@ ifeq ($(COZYSTACK_VERSION),)
     COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags))
 endif
 
-# Get the name of the selected docker buildx builder
-BUILDER ?= $(shell docker buildx inspect --bootstrap | head -n2 | awk '/^Name:/{print $$NF}')
-
-# Get platforms supported by the builder (only if PLATFORM is not provided)
-ifeq ($(origin PLATFORM), undefined)
-PLATFORM := $(shell docker buildx ls --format=json | jq -r 'select(.Name == "$(BUILDER)") | [.Nodes[].Platforms // []] | flatten | unique | map(select(test("^linux/amd64$$|^linux/arm64$$"))) | join(",")')
-endif

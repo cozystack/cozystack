@@ -5,47 +5,17 @@
     "alerta": {
       "description": "Configuration for Alerta service",
       "type": "object",
-      "default": {
-        "alerts": {
-          "telegram": {
-            "chatID": "",
-            "disabledSeverity": "",
-            "token": ""
-          }
-        },
-        "resources": {
-          "limits": {
-            "cpu": "1",
-            "memory": "1Gi"
-          },
-          "requests": {
-            "cpu": "100m",
-            "memory": "256Mi"
-          }
-        },
-        "storage": "10Gi",
-        "storageClassName": ""
-      },
+      "default": {},
       "properties": {
         "alerts": {
           "description": "Configuration for alerts",
           "type": "object",
-          "default": {
-            "telegram": {
-              "chatID": "",
-              "disabledSeverity": "",
-              "token": ""
-            }
-          },
+          "default": {},
           "properties": {
             "telegram": {
               "description": "Configuration for Telegram alerts",
               "type": "object",
-              "default": {
-                "chatID": "",
-                "disabledSeverity": "",
-                "token": ""
-              },
+              "default": {},
               "required": [
                 "chatID",
                 "disabledSeverity",
@@ -71,23 +41,11 @@
         "resources": {
           "description": "Resources configuration",
           "type": "object",
-          "default": {
-            "limits": {
-              "cpu": "1",
-              "memory": "1Gi"
-            },
-            "requests": {
-              "cpu": "100m",
-              "memory": "256Mi"
-            }
-          },
+          "default": {},
           "properties": {
             "limits": {
               "type": "object",
-              "default": {
-                "cpu": "1",
-                "memory": "1Gi"
-              },
+              "default": {},
               "properties": {
                 "cpu": {
                   "description": "CPU limit (maximum available CPU)",
@@ -121,10 +79,7 @@
             },
             "requests": {
               "type": "object",
-              "default": {
-                "cpu": "100m",
-                "memory": "256Mi"
-              },
+              "default": {},
               "properties": {
                 "cpu": {
                   "description": "CPU request (minimum available CPU)",
@@ -172,28 +127,12 @@
     "grafana": {
       "description": "Configuration for Grafana",
       "type": "object",
-      "default": {
-        "db": {
-          "size": "10Gi"
-        },
-        "resources": {
-          "limits": {
-            "cpu": "1",
-            "memory": "1Gi"
-          },
-          "requests": {
-            "cpu": "100m",
-            "memory": "256Mi"
-          }
-        }
-      },
+      "default": {},
       "properties": {
         "db": {
           "description": "Database configuration",
           "type": "object",
-          "default": {
-            "size": "10Gi"
-          },
+          "default": {},
           "properties": {
             "size": {
               "description": "Persistent Volume size for the database",
@@ -205,23 +144,11 @@
         "resources": {
           "description": "Resources configuration",
           "type": "object",
-          "default": {
-            "limits": {
-              "cpu": "1",
-              "memory": "1Gi"
-            },
-            "requests": {
-              "cpu": "100m",
-              "memory": "256Mi"
-            }
-          },
+          "default": {},
           "properties": {
             "limits": {
               "type": "object",
-              "default": {
-                "cpu": "1",
-                "memory": "1Gi"
-              },
+              "default": {},
               "properties": {
                 "cpu": {
                   "description": "CPU limit (maximum available CPU)",
@@ -255,10 +182,7 @@
             },
             "requests": {
               "type": "object",
-              "default": {
-                "cpu": "100m",
-                "memory": "256Mi"
-              },
+              "default": {},
               "properties": {
                 "cpu": {
                   "description": "CPU request (minimum available CPU)",
@@ -323,15 +247,18 @@
           },
           "retentionPeriod": {
             "description": "Retention period for the logs in the storage instance",
-            "type": "string"
+            "type": "string",
+            "default": "1"
           },
           "storage": {
             "description": "Persistent Volume size for the storage instance",
-            "type": "string"
+            "type": "string",
+            "default": "10Gi"
           },
           "storageClassName": {
             "description": "StorageClass used to store the data",
-            "type": "string"
+            "type": "string",
+            "default": "replicated"
           }
         }
       }
@@ -378,7 +305,8 @@
           },
           "storage": {
             "description": "Persistent Volume size for the storage instance",
-            "type": "string"
+            "type": "string",
+            "default": "10Gi"
           },
           "storageClassName": {
             "description": "StorageClass used to store the data",

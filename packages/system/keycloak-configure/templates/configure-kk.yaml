@@ -16,20 +16,6 @@
   {{- $k8sClient = randAlphaNum 32 }}
 {{- end }}
 
-{{ $kubeappsClient := "" }}
-{{- if $existingKubeappsSecret }}
-  {{- $kubeappsClient = index $existingKubeappsSecret.data "client-secret-key" | b64dec }}
-{{- else }}
-  {{- $kubeappsClient = randAlphaNum 32 }}
-{{- end }}
-
-{{ $cookieSecret := "" }}
-{{- if $existingAuthConfig }}
-  {{- $cookieSecret = index $existingAuthConfig.data "cookieSecret" | b64dec }}
-{{- else }}
-  {{- $cookieSecret = randAlphaNum 16 }}
-{{- end }}
-
 {{ $branding := "" }}
 {{- if $cozystackBranding }}
   {{- $branding = index $cozystackBranding.data "branding" }}
@@ -45,28 +31,6 @@ metadata:
 type: Opaque
 data:
   client-secret-key: {{ $k8sClient | b64enc }}
-
----
-
-apiVersion: v1
-kind: Secret
-metadata:
-  name: kubeapps-client
-  namespace: {{ .Release.Namespace }}
-type: Opaque
-data:
-  client-secret-key: {{ $kubeappsClient | b64enc }}
-
----
-
-apiVersion: v1
-kind: Secret
-metadata:
-  name: kubeapps-auth-config
-  namespace: cozy-dashboard
-type: Opaque
-data:
-  cookieSecret: {{ $cookieSecret | b64enc }}
 
 ---
 
@@ -175,57 +139,6 @@ spec:
         "access.token.claim": "true"
         "lightweight.claim": "false"
         "introspection.token.claim": "true"
-
----
-
-apiVersion: v1.edp.epam.com/v1
-kind: KeycloakClient
-metadata:
-  name: kubeapps-client
-spec:
-  serviceAccount:
-    enabled: true
-  realmRef:
-    name: keycloakrealm-cozy
-    kind: ClusterKeycloakRealm
-  secret: $kubeapps-client:client-secret-key
-  advancedProtocolMappers: true
-  authorizationServicesEnabled: true
-  name: kubeapps
-  clientId: kubeapps
-  directAccess: true
-  public: false
-  webUrl: "https://dashboard.{{ $host }}"
-  defaultClientScopes:
-    - groups
-    - kubernetes-client
-  redirectUris:
-    - "https://dashboard.{{ $host }}/oauth2/callback/*"
-    {{- range $i, $v := $extraRedirectUris }}
-    - "{{ $v }}"
-    {{- end }}
-
----
-
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: kubeapps-auth-config
-  namespace: cozy-dashboard
-data:
-  values.yaml: |
-    kubeapps:
-      authProxy:
-        resourcesPreset: "none"
-        enabled: true
-        provider: "oidc"
-        clientID: "kubeapps"
-        clientSecret: {{ $kubeappsClient }}
-        cookieSecret: {{ $cookieSecret }}
-        extraFlags:
-          - --cookie-secure
-          - --scope=openid email groups
-          - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
 
 ---
 

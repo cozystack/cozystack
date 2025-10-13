@@ -4,9 +4,12 @@ kind: Cluster
 metadata:
   name: seaweedfs-db
 spec:
-  instances: 2
+  instances: {{ .Values.db.replicas }}
   storage:
-    size: 10Gi
+    size: {{ .Values.db.size }}
+    {{- with .Values.db.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
 
   monitoring:
     enablePodMonitor: true

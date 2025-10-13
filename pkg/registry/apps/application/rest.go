@@ -45,7 +45,6 @@ import (
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
-	schemadefault "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 
 	// Importing API errors package to construct appropriate error responses
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -89,12 +88,24 @@ type REST struct {
 // NewREST creates a new REST storage for Application with specific configuration
 func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
 	var specSchema *structuralschema.Structural
+
 	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
-		var js internalapiext.JSONSchemaProps
-		if err := json.Unmarshal([]byte(raw), &js); err != nil {
-			klog.Errorf("Failed to unmarshal OpenAPI schema: %v", err)
-		} else if specSchema, err = structuralschema.NewStructural(&js); err != nil {
-			klog.Errorf("Failed to create structural schema: %v", err)
+		var v1js apiextv1.JSONSchemaProps
+		if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
+			klog.Errorf("Failed to unmarshal v1 OpenAPI schema: %v", err)
+		} else {
+			scheme := runtime.NewScheme()
+			_ = internalapiext.AddToScheme(scheme)
+			_ = apiextv1.AddToScheme(scheme)
+
+			var ijs internalapiext.JSONSchemaProps
+			if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
+				klog.Errorf("Failed to convert v1->internal JSONSchemaProps: %v", err)
+			} else if s, err := structuralschema.NewStructural(&ijs); err != nil {
+				klog.Errorf("Failed to create structural schema: %v", err)
+			} else {
+				specSchema = s
+			}
 		}
 	}
 
@@ -957,7 +968,6 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 			APIVersion: "apps.cozystack.io/v1alpha1",
 			Kind:       r.kindName,
 		},
-		AppVersion: hr.Spec.Chart.Spec.Version,
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              strings.TrimPrefix(hr.Name, r.releaseConfig.Prefix),
 			Namespace:         hr.Namespace,
@@ -987,6 +997,12 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 		}
 	}
 	app.SetConditions(conditions)
+
+	// Add namespace field for Tenant applications
+	if r.kindName == "Tenant" {
+		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
+	}
+
 	return app, nil
 }
 
@@ -1009,13 +1025,24 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			Chart: &helmv2.HelmChartTemplate{
 				Spec: helmv2.HelmChartTemplateSpec{
 					Chart:             r.releaseConfig.Chart.Name,
-					Version:           app.AppVersion,
+					Version:           ">= 0.0.0-0",
 					ReconcileStrategy: "Revision",
 					SourceRef: helmv2.CrossNamespaceObjectReference{
 						Kind:      r.releaseConfig.Chart.SourceRef.Kind,
 						Name:      r.releaseConfig.Chart.SourceRef.Name,
 						Namespace: r.releaseConfig.Chart.SourceRef.Namespace,
 					},
+				},
+			},
+			Interval: metav1.Duration{Duration: 5 * time.Minute},
+			Install: &helmv2.Install{
+				Remediation: &helmv2.InstallRemediation{
+					Retries: -1,
+				},
+			},
+			Upgrade: &helmv2.Upgrade{
+				Remediation: &helmv2.UpgradeRemediation{
+					Retries: -1,
 				},
 			},
 			Values: app.Spec,
@@ -1162,6 +1189,25 @@ func getReadyStatus(conditions []metav1.Condition) string {
 	return "Unknown"
 }
 
+// computeTenantNamespace computes the namespace for a Tenant application based on the specified logic
+func (r *REST) computeTenantNamespace(currentNamespace, tenantName string) string {
+	hrName := r.releaseConfig.Prefix + tenantName
+
+	switch {
+	case currentNamespace == "tenant-root" && hrName == "tenant-root":
+		// 1) root tenant inside root namespace
+		return "tenant-root"
+
+	case currentNamespace == "tenant-root":
+		// 2) any other tenant in root namespace
+		return fmt.Sprintf("tenant-%s", tenantName)
+
+	default:
+		// 3) tenant in a dedicated namespace
+		return fmt.Sprintf("%s-%s", currentNamespace, tenantName)
+	}
+}
+
 // Destroy releases resources associated with REST
 func (r *REST) Destroy() {
 	// No additional actions needed to release resources.
@@ -1204,29 +1250,4 @@ func (e errNotAcceptable) Status() metav1.Status {
 		Reason:  metav1.StatusReason("NotAcceptable"),
 		Message: e.Error(),
 	}
-}
-
-// applySpecDefaults applies default values to the Application spec based on the schema
-func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
-	if r.specSchema == nil {
-		return nil
-	}
-	var m map[string]any
-	if app.Spec != nil && len(app.Spec.Raw) > 0 {
-		if err := json.Unmarshal(app.Spec.Raw, &m); err != nil {
-			return err
-		}
-	}
-	if m == nil {
-		m = map[string]any{}
-	}
-
-	schemadefault.Default(m, r.specSchema)
-
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	app.Spec = &apiextv1.JSON{Raw: raw}
-	return nil
 }

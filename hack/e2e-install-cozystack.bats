@@ -123,6 +123,7 @@ EOF
 
 @test "Configure Tenant and wait for applications" {
   # Patch root tenant and wait for its releases
+
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
@@ -188,9 +189,22 @@ spec:
   ingress: false
   isolated: true
   monitoring: false
-  resourceQuotas: {}
+  resourceQuotas:
+    cpu: "60"
+    memory: "128Gi"
+    storage: "100Gi"
   seaweedfs: false
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
+  # Wait for ResourceQuota to appear and assert values
+  timeout 60 sh -ec 'until [ "$(kubectl get quota -n tenant-test --no-headers 2>/dev/null | wc -l)" -ge 1 ]; do sleep 1; done'
+  kubectl get quota -n tenant-test \
+    -o jsonpath='{range .items[*]}{.spec.hard.requests\.memory}{" "}{.spec.hard.requests\.storage}{"\n"}{end}' \
+    | grep -qx '137438953472 100Gi'
+
+  # Assert LimitRange defaults for containers
+  kubectl get limitrange -n tenant-test \
+  -o jsonpath='{range .items[*].spec.limits[*]}{.default.cpu}{" "}{.default.memory}{" "}{.defaultRequest.cpu}{" "}{.defaultRequest.memory}{"\n"}{end}' \
+  | grep -qx '250m 128Mi 25m 128Mi'
 }

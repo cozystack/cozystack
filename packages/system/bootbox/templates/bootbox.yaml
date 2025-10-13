@@ -16,6 +16,6 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
-      version: '*'
+      version: '>= 0.0.0-0'
   interval: 1m0s
   timeout: 5m0s

@@ -4,42 +4,93 @@
 host: ""
 
 ## @param topology {string enum:"Simple,MultiZone,Client"} The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone, Client)
-##
 topology: Simple
 
 ## @param replicationFactor {int} Replication factor: number of replicas for each volume in the SeaweedFS cluster.
 replicationFactor: 2
 
-## @param replicas {int} Number of replicas
+## @section SeaweedFS Components Configuration
 ##
-replicas: 2
-## @param size {quantity} Persistent Volume size
-size: 10Gi
-## @param storageClass {*string} StorageClass used to store the data
-storageClass: ""
+## @param db {db} Database Configuration
+db:
+  ## @field db.replicas {*int} Number of database replicas
+  ## @field db.size {*quantity} Persistent Volume size
+  ## @field db.storageClass {*string} StorageClass used to store the data
+  replicas: 2
+  size: "10Gi"
+  storageClass: ""
+  ## @field db.resources {resources} Explicit CPU and memory configuration for the database. When left empty, the preset defined in `resourcesPreset` is applied.
+  ## @field resources {*resources} Resource configuration for etcd
+  ## @field resources.cpu {*quantity} The number of CPU cores allocated
+  ## @field resources.memory {*quantity} The amount of memory allocated
+  ## e.g:
+  ## resources:
+  ##   cpu: 4000m
+  ##   memory: 4Gi
+  ##
+  ## @field db.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+  resources: {}
+  resourcesPreset: "small"
 
-## @param zones {map[string]zone} A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
-## @field zone.replicas {int} Number of replicas in the zone
-## @field zone.size {quantity} Zone storage size
-## Example:
-## zones:
-##   dc1:
-##     replicas: 2
-##     size: 10Gi
-##   dc2:
-##     replicas: 2
-##     size: 10Gi
-##   dc3:
-##     replicas: 2
-##     size: 10Gi
-zones: {}
+## @param master {*master} Master service configuration
+master:
+  ## @field master.replicas {*int} Number of master replicas
+  ## @field master.resources {resources} Explicit CPU and memory configuration for the master. When left empty, the preset defined in `resourcesPreset` is applied.
+  ## @field master.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+  replicas: 3
+  resources: {}
+  resourcesPreset: "small"
 
 ## @param filer {*filer} Filer service configuration
-## @field filer.grpcHost {*string} The hostname used to expose or access the filer service externally.
-## @field filer.grpcPort {*int} The port used to access the filer service externally.
-## TODO: select a more appropriate type after resolving https://github.com/cozystack/cozyvalues-gen/issues/4
-## @field filer.whitelist {[]*string} A list of IP addresses or CIDR ranges that are allowed to access the filer service.
 filer:
+  ## @field filer.replicas {*int} Number of filer replicas
+  ## @field filer.resources {resources} Explicit CPU and memory configuration for the filer. When left empty, the preset defined in `resourcesPreset` is applied.
+  ## @field filer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+  replicas: 2
+  resources: {}
+  resourcesPreset: "small"
+
+  ## @field filer.grpcHost {*string} The hostname used to expose or access the filer service externally.
+  ## @field filer.grpcPort {*int} The port used to access the filer service externally.
+  ## @field filer.whitelist {[]*string} A list of IP addresses or CIDR ranges that are allowed to access the filer service.
   grpcHost: ""
   grpcPort: 443
   whitelist: []
+
+## @param volume {*volume} Volume service configuration
+volume:
+  ## @field volume.replicas {*int} Number of volume replicas
+  ## @field volume.size {*quantity} Persistent Volume size
+  ## @field volume.storageClass {*string} StorageClass used to store the data
+  ## @field volume.resources {resources} Explicit CPU and memory configuration for the volume. When left empty, the preset defined in `resourcesPreset` is applied.
+  ## @field volume.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+  replicas: 2
+  size: 10Gi
+  storageClass: ""
+  resources: {}
+  resourcesPreset: "small"
+
+  ## @field volume.zones {map[string]zone} A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
+  ## @field zone.replicas {*int} Number of replicas in the zone
+  ## @field zone.size {*quantity} Zone storage size
+  ## Example:
+  ## zones:
+  ##   dc1:
+  ##     replicas: 2
+  ##     size: 10Gi
+  ##   dc2:
+  ##     replicas: 2
+  ##     size: 10Gi
+  ##   dc3:
+  ##     replicas: 2
+  ##     size: 10Gi
+  zones: {}
+
+## @param s3 {*s3} S3 service configuration
+s3:
+  ## @field s3.replicas {*int} Number of s3 replicas
+  ## @field s3.resources {resources} Explicit CPU and memory configuration for the s3. When left empty, the preset defined in `resourcesPreset` is applied.
+  ## @field s3.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+  replicas: 2
+  resources: {}
+  resourcesPreset: "small"

@@ -1,4 +1,5 @@
 API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1,ApplicationStatus,Conditions
+API rule violation: list_type_missing,github.com/cozystack/cozystack/pkg/apis/core/v1alpha1,TenantModuleStatus,Conditions
 API rule violation: names_match,k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1,JSONSchemaProps,Ref
 API rule violation: names_match,k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1,JSONSchemaProps,Schema
 API rule violation: names_match,k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1,JSONSchemaProps,XEmbeddedResource

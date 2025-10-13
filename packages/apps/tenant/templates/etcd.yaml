@@ -6,6 +6,7 @@ metadata:
   namespace: {{ include "tenant.name" . }}
   labels:
     cozystack.io/ui: "true"
+    internal.cozystack.io/tenantmodule: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
@@ -17,6 +18,14 @@ spec:
         kind: HelmRepository
         name: cozystack-extra
         namespace: cozy-public
-  interval: 1m0s
-  timeout: 5m0s
+      version: '>= 0.0.0-0'
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
 {{- end }}

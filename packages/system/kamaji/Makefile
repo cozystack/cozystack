@@ -13,16 +13,11 @@ update:
 
 image:
 	docker buildx build images/kamaji \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/kamaji:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/kamaji:latest \
 		--cache-to type=inline \
 		--metadata-file images/kamaji.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack"
-		--load=$(LOAD)
+		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/kamaji" \
 		yq -i '.kamaji.image.repository = strenv(REPOSITORY)' values.yaml
 	TAG=$(TAG)@$$(yq e '."containerimage.digest"' images/kamaji.json -o json -r) \

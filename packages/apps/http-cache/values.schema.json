@@ -18,11 +18,7 @@
     "haproxy": {
       "description": "HAProxy configuration",
       "type": "object",
-      "default": {
-        "replicas": 2,
-        "resources": {},
-        "resourcesPreset": "nano"
-      },
+      "default": {},
       "required": [
         "replicas",
         "resources",
@@ -86,11 +82,7 @@
     "nginx": {
       "description": "Nginx configuration",
       "type": "object",
-      "default": {
-        "replicas": 2,
-        "resources": {},
-        "resourcesPreset": "nano"
-      },
+      "default": {},
       "required": [
         "replicas",
         "resourcesPreset"

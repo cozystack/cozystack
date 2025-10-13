@@ -5,46 +5,7 @@
     "addons": {
       "description": "Cluster addons configuration",
       "type": "object",
-      "default": {
-        "certManager": {
-          "enabled": false,
-          "valuesOverride": {}
-        },
-        "cilium": {
-          "valuesOverride": {}
-        },
-        "coredns": {
-          "valuesOverride": {}
-        },
-        "fluxcd": {
-          "enabled": false,
-          "valuesOverride": {}
-        },
-        "gatewayAPI": {
-          "enabled": false
-        },
-        "gpuOperator": {
-          "enabled": false,
-          "valuesOverride": {}
-        },
-        "ingressNginx": {
-          "enabled": false,
-          "exposeMethod": "Proxied",
-          "hosts": {},
-          "valuesOverride": {}
-        },
-        "monitoringAgents": {
-          "enabled": false,
-          "valuesOverride": {}
-        },
-        "velero": {
-          "enabled": false,
-          "valuesOverride": {}
-        },
-        "verticalPodAutoscaler": {
-          "valuesOverride": {}
-        }
-      },
+      "default": {},
       "required": [
         "certManager",
         "cilium",
@@ -61,10 +22,7 @@
         "certManager": {
           "description": "Cert-manager: automatically creates and manages SSL/TLS certificate",
           "type": "object",
-          "default": {
-            "enabled": false,
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "enabled",
             "valuesOverride"
@@ -86,9 +44,7 @@
         "cilium": {
           "description": "Cilium CNI plugin",
           "type": "object",
-          "default": {
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "valuesOverride"
           ],
@@ -104,9 +60,7 @@
         "coredns": {
           "description": "Coredns",
           "type": "object",
-          "default": {
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "valuesOverride"
           ],
@@ -122,10 +76,7 @@
         "fluxcd": {
           "description": "Flux CD",
           "type": "object",
-          "default": {
-            "enabled": false,
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "enabled",
             "valuesOverride"
@@ -147,9 +98,7 @@
         "gatewayAPI": {
           "description": "Gateway API",
           "type": "object",
-          "default": {
-            "enabled": false
-          },
+          "default": {},
           "required": [
             "enabled"
           ],
@@ -164,10 +113,7 @@
         "gpuOperator": {
           "description": "GPU-operator: NVIDIA GPU Operator",
           "type": "object",
-          "default": {
-            "enabled": false,
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "enabled",
             "valuesOverride"
@@ -189,12 +135,7 @@
         "ingressNginx": {
           "description": "Ingress-NGINX Controller",
           "type": "object",
-          "default": {
-            "enabled": false,
-            "exposeMethod": "Proxied",
-            "hosts": {},
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "enabled",
             "exposeMethod",
@@ -234,10 +175,7 @@
         "monitoringAgents": {
           "description": "MonitoringAgents",
           "type": "object",
-          "default": {
-            "enabled": false,
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "enabled",
             "valuesOverride"
@@ -259,10 +197,7 @@
         "velero": {
           "description": "Velero",
           "type": "object",
-          "default": {
-            "enabled": false,
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "enabled",
             "valuesOverride"
@@ -284,9 +219,7 @@
         "verticalPodAutoscaler": {
           "description": "VerticalPodAutoscaler",
           "type": "object",
-          "default": {
-            "valuesOverride": {}
-          },
+          "default": {},
           "required": [
             "valuesOverride"
           ],
@@ -304,27 +237,7 @@
     "controlPlane": {
       "description": "Control Plane Configuration",
       "type": "object",
-      "default": {
-        "apiServer": {
-          "resources": {},
-          "resourcesPreset": "medium"
-        },
-        "controllerManager": {
-          "resources": {},
-          "resourcesPreset": "micro"
-        },
-        "konnectivity": {
-          "server": {
-            "resources": {},
-            "resourcesPreset": "micro"
-          }
-        },
-        "replicas": 2,
-        "scheduler": {
-          "resources": {},
-          "resourcesPreset": "micro"
-        }
-      },
+      "default": {},
       "required": [
         "apiServer",
         "controllerManager",
@@ -336,10 +249,7 @@
         "apiServer": {
           "description": "Control plane API server configuration.",
           "type": "object",
-          "default": {
-            "resources": {},
-            "resourcesPreset": "medium"
-          },
+          "default": {},
           "required": [
             "resources",
             "resourcesPreset"
@@ -397,10 +307,7 @@
         "controllerManager": {
           "description": "Controller Manager configuration.",
           "type": "object",
-          "default": {
-            "resources": {},
-            "resourcesPreset": "micro"
-          },
+          "default": {},
           "required": [
             "resources",
             "resourcesPreset"
@@ -458,12 +365,7 @@
         "konnectivity": {
           "description": "Konnectivity configuration.",
           "type": "object",
-          "default": {
-            "server": {
-              "resources": {},
-              "resourcesPreset": "micro"
-            }
-          },
+          "default": {},
           "required": [
             "server"
           ],
@@ -471,10 +373,7 @@
             "server": {
               "description": "Konnectivity server configuration.",
               "type": "object",
-              "default": {
-                "resources": {},
-                "resourcesPreset": "micro"
-              },
+              "default": {},
               "required": [
                 "resources",
                 "resourcesPreset"
@@ -539,10 +438,7 @@
         "scheduler": {
           "description": "Scheduler configuration.",
           "type": "object",
-          "default": {
-            "resources": {},
-            "resourcesPreset": "micro"
-          },
+          "default": {},
           "required": [
             "resources",
             "resourcesPreset"
@@ -609,7 +505,7 @@
       "default": {
         "md0": {
           "ephemeralStorage": "20Gi",
-          "gpus": {},
+          "gpus": [],
           "instanceType": "u1.medium",
           "maxReplicas": 10,
           "minReplicas": 0,
@@ -631,6 +527,7 @@
         "properties": {
           "ephemeralStorage": {
             "description": "Ephemeral storage size",
+            "default": "20Gi",
             "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
             "anyOf": [
               {
@@ -645,6 +542,7 @@
           "gpus": {
             "description": "List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)",
             "type": "array",
+            "default": [],
             "items": {
               "type": "object",
               "required": [
@@ -660,19 +558,23 @@
           },
           "instanceType": {
             "description": "Virtual machine instance type",
-            "type": "string"
+            "type": "string",
+            "default": "u1.medium"
           },
           "maxReplicas": {
             "description": "Maximum amount of replicas",
-            "type": "integer"
+            "type": "integer",
+            "default": 10
           },
           "minReplicas": {
             "description": "Minimum amount of replicas",
-            "type": "integer"
+            "type": "integer",
+            "default": 0
           },
           "resources": {
             "description": "Resources available to each worker node",
             "type": "object",
+            "default": {},
             "properties": {
               "cpu": {
                 "description": "CPU available to each worker node",
@@ -720,7 +622,7 @@
     "version": {
       "description": "Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.",
       "type": "string",
-      "default": "v1.32",
+      "default": "v1.33",
       "enum": [
         "v1.28",
         "v1.29",

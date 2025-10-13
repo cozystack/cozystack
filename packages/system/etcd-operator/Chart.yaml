@@ -1,2 +1,2 @@
 name: cozy-etcd-operator
-version: 0.4.0
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process

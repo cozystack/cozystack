@@ -39,7 +39,7 @@ releases:
   releaseName: cozystack-api
   chart: cozy-cozystack-api
   namespace: cozy-system
-  dependsOn: []
+  dependsOn: [cozystack-controller]
 
 - name: cozystack-controller
   releaseName: cozystack-controller
@@ -51,6 +51,18 @@ releases:
     cozystackController:
       disableTelemetry: true
   {{- end }}
+
+- name: cozystack-resource-definition-crd
+  releaseName: cozystack-resource-definition-crd
+  chart: cozystack-resource-definition-crd
+  namespace: cozy-system
+  dependsOn: [cozystack-api,cozystack-controller]
+
+- name: cozystack-resource-definitions
+  releaseName: cozystack-resource-definitions
+  chart: cozystack-resource-definitions
+  namespace: cozy-system
+  dependsOn: [cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
 
 - name: cert-manager
   releaseName: cert-manager
@@ -123,6 +135,12 @@ releases:
   namespace: cozy-clickhouse-operator
   dependsOn: [victoria-metrics-operator]
 
+- name: foundationdb-operator
+  releaseName: foundationdb-operator
+  chart: cozy-foundationdb-operator
+  namespace: cozy-foundationdb-operator
+  dependsOn: [cert-manager]
+
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
   chart: cozy-rabbitmq-operator
@@ -177,7 +195,7 @@ releases:
     {{- $dashboardKCValues := dig "data" "values.yaml" (dict) $dashboardKCconfig }}
     {{- toYaml (deepCopy $dashboardKCValues | mergeOverwrite (fromYaml (include "cozystack.defaultDashboardValues" .))) | nindent 4 }}
   {{- if eq $oidcEnabled "true" }}
-  dependsOn: [keycloak-configure]
+  dependsOn: [keycloak-configure,cozystack-api]
   {{- else }}
   dependsOn: []
   {{- end }}

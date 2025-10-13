@@ -7,19 +7,15 @@ include ../../../scripts/package.mk
 
 generate:
 	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
+	../../../hack/update-crd.sh
 
 image:
 	docker buildx build images/grafana \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/grafana:$(call settag,$(GRAFANA_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/grafana:latest \
 		--cache-to type=inline \
 		--metadata-file images/grafana.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
-		--load=$(LOAD)
+		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/grafana:$(call settag,$(GRAFANA_TAG))@$$(yq e '."containerimage.digest"' images/grafana.json -o json -r)" \
 		> images/grafana.tag
 	rm -f images/grafana.json

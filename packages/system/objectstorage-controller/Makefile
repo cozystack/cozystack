@@ -22,8 +22,7 @@ image-controller image-sidecar:
 		--cache-from type=registry,ref=$(REGISTRY)/objectstorage-$(TARGET):latest \
 		--cache-to   type=inline \
 		--metadata-file images/$(TARGET).json \
-		--push=$(PUSH) --provenance=false --load=$(LOAD) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack"
+		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/objectstorage-$(TARGET):$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/$(TARGET).json -r)" \
 		yq -i '$(YAML_PATH) = strenv(IMAGE)' $(VALUES_FILE)
 	rm -f images/$(TARGET).json

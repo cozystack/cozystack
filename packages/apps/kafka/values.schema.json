@@ -10,13 +10,7 @@
     "kafka": {
       "description": "Kafka configuration",
       "type": "object",
-      "default": {
-        "replicas": 3,
-        "resources": {},
-        "resourcesPreset": "small",
-        "size": "10Gi",
-        "storageClass": ""
-      },
+      "default": {},
       "required": [
         "replicas",
         "resourcesPreset",
@@ -132,13 +126,7 @@
     "zookeeper": {
       "description": "Zookeeper configuration",
       "type": "object",
-      "default": {
-        "replicas": 3,
-        "resources": {},
-        "resourcesPreset": "small",
-        "size": "5Gi",
-        "storageClass": ""
-      },
+      "default": {},
       "required": [
         "replicas",
         "resourcesPreset",

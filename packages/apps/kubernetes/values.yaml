@@ -5,21 +5,21 @@ storageClass: replicated
 
 ## @section Application-specific parameters
 ## @param version {string} Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.
-version: "v1.32"
+version: "v1.33"
 ## @param host {string} Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty.
 host: ""
 
-## @param nodeGroups {map[string]node} Worker nodes configuration
-## @field node {node} Node configuration
-## @field node.minReplicas {int} Minimum amount of replicas
-## @field node.maxReplicas {int} Maximum amount of replicas
-## @field node.instanceType {string} Virtual machine instance type
-## @field node.ephemeralStorage {quantity} Ephemeral storage size
-## @field node.roles {[]string} List of node's roles
-## @field node.resources {resources} Resources available to each worker node
+## @param nodeGroups {map[string]nodeGroup} Worker nodes configuration
+## @field nodeGroup {nodeGroup} Node configuration
+## @field nodeGroup.minReplicas {int default=0} Minimum amount of replicas
+## @field nodeGroup.maxReplicas {int default=10} Maximum amount of replicas
+## @field nodeGroup.instanceType {string default="u1.medium"} Virtual machine instance type
+## @field nodeGroup.ephemeralStorage {quantity default="20Gi"} Ephemeral storage size
+## @field nodeGroup.roles {[]string default=[]} List of node's roles
+## @field nodeGroup.resources {resources default={}} Resources available to each worker node
 ## @field resources.cpu {*quantity} CPU available to each worker node
 ## @field resources.memory {*quantity} Memory (RAM) available to each worker node
-## @field node.gpus {[]gpu} List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
+## @field nodeGroup.gpus {[]gpu default={}} List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)
 ## @field gpu.name {string} Name of GPU, such as "nvidia.com/AD102GL_L40S"
 ##
 nodeGroups:

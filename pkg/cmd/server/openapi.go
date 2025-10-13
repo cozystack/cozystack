@@ -224,7 +224,7 @@ func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 		base, ok1 := doc.Components.Schemas[baseRef]
 		list, ok2 := doc.Components.Schemas[baseListRef]
 		stat, ok3 := doc.Components.Schemas[baseStatusRef]
-		if !(ok1 && ok2 && ok3) {
+		if !(ok1 && ok2 && ok3) && len(kindSchemas) > 0 {
 			return doc, fmt.Errorf("base Application* schemas not found")
 		}
 
@@ -339,7 +339,7 @@ func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spe
 		base, ok1 := defs[baseRef]
 		list, ok2 := defs[baseListRef]
 		stat, ok3 := defs[baseStatusRef]
-		if !(ok1 && ok2 && ok3) {
+		if !(ok1 && ok2 && ok3) && len(kindSchemas) > 0 {
 			return sw, fmt.Errorf("base Application* schemas not found")
 		}
 

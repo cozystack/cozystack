@@ -1,0 +1,40 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $issuerType := (index $cozyConfig.data "clusterissuer") | default "http01" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- $exposeServices := splitList "," ((index $cozyConfig.data "expose-services") | default "") }}
+{{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
+
+{{- if and (has "dashboard" $exposeServices) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    {{- if eq $issuerType "cloudflare" }}
+    {{- else }}
+    acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/client-max-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 100m
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+  name: dashboard-web-ingress
+spec:
+  ingressClassName: {{ $exposeIngress }}
+  rules:
+    - host: dashboard.{{ $host }}
+      http:
+        paths:
+          - backend:
+              service:
+                name: incloud-web-gatekeeper
+                port:
+                  number: 8000
+            path: /
+            pathType: Prefix
+  tls:
+    - hosts:
+        - dashboard.{{ $host }}
+      secretName: dashboard-web-tls
+{{- end }}

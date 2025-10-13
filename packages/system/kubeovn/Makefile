@@ -19,17 +19,12 @@ update:
 
 image:
 	docker buildx build images/kubeovn \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=$(PLATFORM) \
 		--tag $(REGISTRY)/kubeovn:$(call settag,$(KUBEOVN_TAG)) \
 		--tag $(REGISTRY)/kubeovn:$(call settag,$(KUBEOVN_TAG)-$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/kubeovn:latest \
 		--cache-to type=inline \
 		--metadata-file images/kubeovn.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
-		--load=$(LOAD)
+		$(BUILDX_ARGS)
 	REGISTRY="$(REGISTRY)" \
 		yq -i '.global.registry.address = strenv(REGISTRY)' values.yaml
 	REPOSITORY="kubeovn" \

@@ -37,6 +37,9 @@ type ApplicationStatus struct {
 	// +optional
 	Version    string             `json:"version,omitempty"`
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Namespace holds the computed namespace for Tenant applications.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // GetConditions returns the status conditions of the object.

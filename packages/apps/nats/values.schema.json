@@ -5,10 +5,7 @@
     "config": {
       "description": "NATS configuration",
       "type": "object",
-      "default": {
-        "merge": {},
-        "resolver": {}
-      },
+      "default": {},
       "properties": {
         "merge": {
           "description": "Additional configuration to merge into NATS config (see example)",
@@ -32,10 +29,7 @@
     "jetstream": {
       "description": "Jetstream configuration",
       "type": "object",
-      "default": {
-        "enabled": true,
-        "size": "10Gi"
-      },
+      "default": {},
       "required": [
         "enabled",
         "size"

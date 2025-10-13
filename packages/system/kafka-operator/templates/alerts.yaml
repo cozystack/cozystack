@@ -1,7 +1,11 @@
-{{- $files := .Files.Glob "alerts/*.yaml" -}}
-{{- range $path, $file := $files }}
----
-# from: {{ $path }}
-{{ toString $file }}
-
-{{- end -}}
+{{- /*
+# Disabled due to https://github.com/cozystack/cozystack/issues/790
+# {{- $files := .Files.Glob "alerts/*.yaml" -}}
+# {{- range $path, $file := $files }}
+# ---
+# # from: {{ $path }}
+# {{ toString $file }}
+# 
+# {{- end -}}
+#
+*/ -}}

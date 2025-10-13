@@ -79,7 +79,7 @@ annotations:
     Pod IP Pool\n  description: |\n    CiliumPodIPPool defines an IP pool that can
     be used for pooled IPAM (i.e. the multi-pool IPAM mode).\n"
 apiVersion: v2
-appVersion: 1.17.5
+appVersion: 1.17.8
 description: eBPF-based Networking, Security, and Observability
 home: https://cilium.io/
 icon: https://cdn.jsdelivr.net/gh/cilium/cilium@main/Documentation/images/logo-solo.svg
@@ -95,4 +95,4 @@ kubeVersion: '>= 1.21.0-0'
 name: cilium
 sources:
 - https://github.com/cilium/cilium
-version: 1.17.5
+version: 1.17.8

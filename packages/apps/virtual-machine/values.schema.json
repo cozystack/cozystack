@@ -168,11 +168,7 @@
     "systemDisk": {
       "description": "System disk configuration",
       "type": "object",
-      "default": {
-        "image": "ubuntu",
-        "storage": "5Gi",
-        "storageClass": "replicated"
-      },
+      "default": {},
       "required": [
         "image",
         "storage"

@@ -1,6 +1,6 @@
 # flux-operator
 
-![Version: 0.28.0](https://img.shields.io/badge/Version-0.28.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.28.0](https://img.shields.io/badge/AppVersion-v0.28.0-informational?style=flat-square)
+![Version: 0.29.0](https://img.shields.io/badge/Version-0.29.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.29.0](https://img.shields.io/badge/AppVersion-v0.29.0-informational?style=flat-square)
 
 The [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator) provides a
 declarative API for the installation and upgrade of CNCF [Flux](https://fluxcd.io) and the
@@ -47,7 +47,7 @@ see the Flux Operator [documentation](https://fluxcd.control-plane.io/operator/)
 | livenessProbe | object | `{"httpGet":{"path":"/healthz","port":8081},"initialDelaySeconds":15,"periodSeconds":20}` | Container liveness probe settings. |
 | logLevel | string | `"info"` | Container logging level flag. |
 | marketplace | object | `{"account":"","license":"","type":""}` | Marketplace settings. |
-| multitenancy | object | `{"defaultServiceAccount":"flux-operator","enabled":false}` | Enable [multitenancy lockdown](https://fluxcd.control-plane.io/operator/resourceset/#role-based-access-control) for the ResourceSet APIs. |
+| multitenancy | object | `{"defaultServiceAccount":"flux-operator","defaultWorkloadIdentityServiceAccount":"flux-operator","enabled":false,"enabledForWorkloadIdentity":false}` | Enable [multitenancy lockdown](https://fluxcd.control-plane.io/operator/resourceset/#role-based-access-control) for the ResourceSet APIs. |
 | nameOverride | string | `""` |  |
 | nodeSelector | object | `{}` | Pod Node Selector settings. |
 | podSecurityContext | object | `{}` | Pod security context settings. |

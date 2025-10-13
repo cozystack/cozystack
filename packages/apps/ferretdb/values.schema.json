@@ -5,15 +5,7 @@
     "backup": {
       "description": "Backup configuration",
       "type": "object",
-      "default": {
-        "destinationPath": "s3://bucket/path/to/folder/",
-        "enabled": false,
-        "endpointURL": "http://minio-gateway-service:9000",
-        "retentionPolicy": "30d",
-        "s3AccessKey": "\u003cyour-access-key\u003e",
-        "s3SecretKey": "\u003cyour-secret-key\u003e",
-        "schedule": "0 2 * * * *"
-      },
+      "default": {},
       "required": [
         "destinationPath",
         "enabled",
@@ -64,11 +56,7 @@
     "bootstrap": {
       "description": "Bootstrap (recovery) configuration",
       "type": "object",
-      "default": {
-        "enabled": false,
-        "oldName": "",
-        "recoveryTime": ""
-      },
+      "default": {},
       "properties": {
         "enabled": {
           "description": "Restore database cluster from a backup",
@@ -93,10 +81,7 @@
     "quorum": {
       "description": "Configuration for the quorum-based synchronous replication",
       "type": "object",
-      "default": {
-        "maxSyncReplicas": 0,
-        "minSyncReplicas": 0
-      },
+      "default": {},
       "required": [
         "maxSyncReplicas",
         "minSyncReplicas"
