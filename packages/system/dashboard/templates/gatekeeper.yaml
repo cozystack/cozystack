@@ -55,6 +55,8 @@ spec:
             - --http-address=0.0.0.0:8000
             - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
             - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
+            - --backend-logout-url=https://keycloak.{{ $host }}/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+            - --whitelist-domain=keycloak.{{ $host }}
             - --email-domain=*
             - --pass-access-token=true
             - --pass-authorization-header=true
