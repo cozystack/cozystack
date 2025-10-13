@@ -138,8 +138,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
 		tenantnamespacestorage.NewREST(
 			clientset.CoreV1(),
-			clientset.AuthorizationV1(),
-			20,
+			clientset.RbacV1(),
 		),
 	)
 	coreV1alpha1Storage["tenantsecrets"] = cozyregistry.RESTInPeace(

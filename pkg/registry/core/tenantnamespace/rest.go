@@ -7,13 +7,10 @@ package tenantnamespace
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -24,9 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-	"k8s.io/klog/v2"
+	rbacv1client "k8s.io/client-go/kubernetes/typed/rbac/v1"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -50,21 +46,18 @@ var (
 )
 
 type REST struct {
-	core       corev1client.CoreV1Interface
-	authClient authorizationv1client.AuthorizationV1Interface
-	maxWorkers int
-	gvr        schema.GroupVersionResource
+	core corev1client.CoreV1Interface
+	rbac rbacv1client.RbacV1Interface
+	gvr  schema.GroupVersionResource
 }
 
 func NewREST(
 	coreCli corev1client.CoreV1Interface,
-	authCli authorizationv1client.AuthorizationV1Interface,
-	maxWorkers int,
+	rbacCli rbacv1client.RbacV1Interface,
 ) *REST {
 	return &REST{
-		core:       coreCli,
-		authClient: authCli,
-		maxWorkers: maxWorkers,
+		core: coreCli,
+		rbac: rbacCli,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -271,74 +264,48 @@ func (r *REST) filterAccessible(
 	ctx context.Context,
 	names []string,
 ) ([]string, error) {
-	workers := int(math.Min(float64(r.maxWorkers), float64(len(names))))
-	type job struct{ name string }
-	type res struct {
-		name    string
-		allowed bool
-		err     error
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return []string{}, fmt.Errorf("user missing in context")
 	}
-	jobs := make(chan job, workers)
-	out := make(chan res, workers)
-
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := range jobs {
-				ok, err := r.sar(ctx, j.name)
-				out <- res{j.name, ok, err}
-			}
-		}()
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
 	}
-	go func() { wg.Wait(); close(out) }()
-
-	go func() {
-		for _, n := range names {
-			jobs <- job{n}
-		}
-		close(jobs)
-	}()
-
-	var allowed []string
-	for r := range out {
-		if r.err != nil {
-			klog.Errorf("SAR failed for %s: %v", r.name, r.err)
+	if _, ok = groups["cozystack-cluster-admin"]; ok {
+		return names, nil
+	}
+	nameSet := make(map[string]struct{})
+	for _, name := range names {
+		nameSet[name] = struct{}{}
+	}
+	rbs, err := r.rbac.RoleBindings("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return []string{}, fmt.Errorf("failed to list rolebindings")
+	}
+	allowedNameSet := make(map[string]struct{})
+	for i := range rbs.Items {
+		if _, ok := allowedNameSet[rbs.Items[i].Namespace]; ok {
 			continue
 		}
-		if r.allowed {
-			allowed = append(allowed, r.name)
+		if _, ok := nameSet[rbs.Items[i].Namespace]; !ok {
+			continue
+		}
+		for j := range rbs.Items[i].Subjects {
+			if rbs.Items[i].Subjects[j].Kind != "Group" {
+				continue
+			}
+			if _, ok = groups[rbs.Items[i].Subjects[j].Name]; ok {
+				allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+				break
+			}
 		}
 	}
+	allowed := make([]string, 0, len(allowedNameSet))
+	for name := range allowedNameSet {
+		allowed = append(allowed, name)
+	}
 	return allowed, nil
-}
-
-func (r *REST) sar(ctx context.Context, ns string) (bool, error) {
-	u, ok := request.UserFrom(ctx)
-	if !ok || u == nil {
-		return false, fmt.Errorf("user missing in context")
-	}
-
-	sar := &authorizationv1.SubjectAccessReview{
-		Spec: authorizationv1.SubjectAccessReviewSpec{
-			User:   u.GetName(),
-			Groups: u.GetGroups(),
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Group:     "cozystack.io",
-				Resource:  "workloadmonitors",
-				Verb:      "get",
-				Namespace: ns,
-			},
-		},
-	}
-
-	rsp, err := r.authClient.SubjectAccessReviews().
-		Create(ctx, sar, metav1.CreateOptions{})
-	if err != nil {
-		return false, err
-	}
-	return rsp.Status.Allowed, nil
 }
 
 // -----------------------------------------------------------------------------
