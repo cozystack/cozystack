@@ -28,6 +28,8 @@ cozypkg -n cozy-system -C packages/system/cozystack-api apply cozystack-api --pl
 helm upgrade --install -n cozy-system cozystack-controller ./packages/system/cozystack-controller/ --take-ownership
 
 sleep 5
+timeout 60 sh -c 'until kubectl create service clusterip lineage-webhook-test --clusterip="None" --dry-run=server; do sleep 1; done'
+
 kubectl wait deployment/cozystack-api -n cozy-system --timeout=4m --for=condition=available || exit 1
 kubectl wait deployment/cozystack-controller -n cozy-system --timeout=4m --for=condition=available || exit 1
 
