@@ -272,6 +272,9 @@ func (r *REST) filterAccessible(
 	for _, group := range u.GetGroups() {
 		groups[group] = struct{}{}
 	}
+	if _, ok = groups["system:masters"]; ok {
+		return names, nil
+	}
 	if _, ok = groups["cozystack-cluster-admin"]; ok {
 		return names, nil
 	}
