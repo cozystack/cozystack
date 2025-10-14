@@ -36,6 +36,12 @@ releases:
       disableTelemetry: true
   {{- end }}
 
+- name: lineage-controller-webhook
+  releaseName: lineage-controller-webhook
+  chart: cozy-lineage-controller-webhook
+  namespace: cozy-system
+  dependsOn: [cozystack-controller,cert-manager]
+
 - name: cert-manager
   releaseName: cert-manager
   chart: cozy-cert-manager

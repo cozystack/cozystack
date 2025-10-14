@@ -1,0 +1,8 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: lineage-controller-webhook
+rules:
+- apiGroups: ['*']
+  resources: ['*']
+  verbs: ["get", "list", "watch"]

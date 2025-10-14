@@ -26,6 +26,13 @@ var (
 	AncestryAmbiguous = fmt.Errorf("object ancestry is ambiguous")
 )
 
+const (
+	ManagedObjectKey = "internal.cozystack.io/managed-by-cozystack"
+	ManagerGroupKey  = "apps.cozystack.io/application.group"
+	ManagerKindKey   = "apps.cozystack.io/application.kind"
+	ManagerNameKey   = "apps.cozystack.io/application.name"
+)
+
 // getResourceSelectors returns the appropriate CozystackResourceDefinitionResources for a given GroupKind
 func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.CozystackResourceDefinition) *cozyv1alpha1.CozystackResourceDefinitionResources {
 	switch {
@@ -91,7 +98,7 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 	labels, err := h.computeLabels(ctx, obj)
 	for {
 		if err != nil && errors.Is(err, NoAncestors) {
-			return admission.Allowed("object not managed by app")
+			break // not a problem, mark object as unmanaged
 		}
 		if err != nil && errors.Is(err, AncestryAmbiguous) {
 			warn = append(warn, "object ancestry ambiguous, using first ancestor found")
@@ -119,7 +126,7 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstructured.Unstructured) (map[string]string, error) {
 	owners := lineage.WalkOwnershipGraph(ctx, h.dynClient, h.mapper, h, o)
 	if len(owners) == 0 {
-		return nil, NoAncestors
+		return map[string]string{ManagedObjectKey: "false"}, NoAncestors
 	}
 	obj, err := owners[0].GetUnstructured(ctx, h.dynClient, h.mapper)
 	if err != nil {
@@ -135,7 +142,8 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 	}
 	labels := map[string]string{
 		// truncate apigroup to first 63 chars
-		"apps.cozystack.io/application.group": func(s string) string {
+		ManagedObjectKey: "true",
+		ManagerGroupKey: func(s string) string {
 			if len(s) < 63 {
 				return s
 			}
@@ -145,8 +153,8 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 			}
 			return s
 		}(gv.Group),
-		"apps.cozystack.io/application.kind": obj.GetKind(),
-		"apps.cozystack.io/application.name": obj.GetName(),
+		ManagerKindKey: obj.GetKind(),
+		ManagerNameKey: obj.GetName(),
 	}
 	templateLabels := map[string]string{
 		"kind":      strings.ToLower(obj.GetKind()),

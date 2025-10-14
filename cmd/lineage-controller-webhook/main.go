@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
-	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -37,11 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
-	"github.com/cozystack/cozystack/internal/controller"
-	"github.com/cozystack/cozystack/internal/controller/dashboard"
-	"github.com/cozystack/cozystack/internal/telemetry"
-
-	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	lcw "github.com/cozystack/cozystack/internal/lineagecontrollerwebhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -54,8 +49,6 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
-	utilruntime.Must(dashboard.AddToScheme(scheme))
-	utilruntime.Must(helmv2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -65,10 +58,6 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
-	var disableTelemetry bool
-	var telemetryEndpoint string
-	var telemetryInterval string
-	var cozystackVersion string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -80,34 +69,11 @@ func main() {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	flag.BoolVar(&disableTelemetry, "disable-telemetry", false,
-		"Disable telemetry collection")
-	flag.StringVar(&telemetryEndpoint, "telemetry-endpoint", "https://telemetry.cozystack.io",
-		"Endpoint for sending telemetry data")
-	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
-		"Interval between telemetry data collection (e.g. 15m, 1h)")
-	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
-		"Version of Cozystack")
 	opts := zap.Options{
 		Development: false,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
-
-	// Parse telemetry interval
-	interval, err := time.ParseDuration(telemetryInterval)
-	if err != nil {
-		setupLog.Error(err, "invalid telemetry interval")
-		os.Exit(1)
-	}
-
-	// Configure telemetry
-	telemetryConfig := telemetry.Config{
-		Disabled:         disableTelemetry,
-		Endpoint:         telemetryEndpoint,
-		Interval:         interval,
-		CozystackVersion: cozystackVersion,
-	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -163,7 +129,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "19a0338c.cozystack.io",
+		LeaderElectionID:       "8796f12d.cozystack.io",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -181,43 +147,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.WorkloadMonitorReconciler{
+	lineageControllerWebhook := &lcw.LineageControllerWebhook{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkloadMonitor")
+	}
+	if err := lineageControllerWebhook.SetupWithManagerAsController(mgr); err != nil {
+		setupLog.Error(err, "unable to setup controller", "controller", "LineageController")
 		os.Exit(1)
 	}
-
-	if err = (&controller.WorkloadReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkloadReconciler")
-		os.Exit(1)
-	}
-
-	if err = (&controller.TenantHelmReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TenantHelmReconciler")
-		os.Exit(1)
-	}
-
-	if err = (&controller.CozystackConfigReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackConfigReconciler")
-		os.Exit(1)
-	}
-
-	if err = (&controller.CozystackResourceDefinitionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
+	if err := lineageControllerWebhook.SetupWithManagerAsWebhook(mgr); err != nil {
+		setupLog.Error(err, "unable to setup webhook", "webhook", "LineageWebhook")
 		os.Exit(1)
 	}
 
@@ -230,19 +169,6 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
-	}
-
-	// Initialize telemetry collector
-	collector, err := telemetry.NewCollector(mgr.GetClient(), &telemetryConfig, mgr.GetConfig())
-	if err != nil {
-		setupLog.V(1).Error(err, "unable to create telemetry collector, telemetry will be disabled")
-	}
-
-	if collector != nil {
-		if err := mgr.Add(collector); err != nil {
-			setupLog.Error(err, "unable to set up telemetry collector")
-			setupLog.V(1).Error(err, "unable to set up telemetry collector, continuing without telemetry")
-		}
 	}
 
 	setupLog.Info("starting manager")
