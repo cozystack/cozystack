@@ -3,7 +3,7 @@ kind: MutatingWebhookConfiguration
 metadata:
   name: lineage
   annotations:
-    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/lineage-controller-webhook
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/cozystack-controller-webhook
   labels:
     app: cozystack-controller
 webhooks:
@@ -12,7 +12,7 @@ webhooks:
     sideEffects: None
     clientConfig:
       service:
-        name: lineage-controller-webhook
+        name: cozystack-controller
         namespace: {{ .Release.Namespace }}
         path: /mutate-lineage
     rules:
@@ -40,7 +40,3 @@ webhooks:
           values:
             - kube-system
             - default
-    objectSelector:
-      matchExpressions:
-        - key: internal.cozystack.io/managed-by-cozystack
-          operator: DoesNotExist
