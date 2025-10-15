@@ -294,13 +294,25 @@ func (r *REST) filterAccessible(
 		if _, ok := nameSet[rbs.Items[i].Namespace]; !ok {
 			continue
 		}
+	subjectLoop:
 		for j := range rbs.Items[i].Subjects {
-			if rbs.Items[i].Subjects[j].Kind != "Group" {
-				continue
-			}
-			if _, ok = groups[rbs.Items[i].Subjects[j].Name]; ok {
-				allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
-				break
+			subj := rbs.Items[i].Subjects[j]
+			switch subj.Kind {
+			case "Group":
+				if _, ok = groups[subj.Name]; ok {
+					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+					break subjectLoop
+				}
+			case "User":
+				if subj.Name == u.GetName() {
+					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+					break subjectLoop
+				}
+			case "ServiceAccount":
+				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", subj.Namespace, subj.Name) {
+					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+					break subjectLoop
+				}
 			}
 		}
 	}
