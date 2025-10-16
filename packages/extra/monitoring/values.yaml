@@ -90,6 +90,8 @@ logsStorages:
 ## @field telegramAlerts.token {string} Telegram token for your bot
 ## @field telegramAlerts.chatID {string} Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
 ## @field telegramAlerts.disabledSeverity {string} List of severity without alerts, separated by comma like: "informational,warning"
+## @field alerts.slack {*slackAlerts} Configuration for Slack alerts
+## @field slackAlerts.url {string} Slack webhook URL
 alerta:
   storage: 10Gi
   storageClassName: ""
@@ -111,6 +113,9 @@ alerta:
       token: ""
       chatID: ""
       disabledSeverity: ""
+
+    slack:
+      url: ""
 
 ## @section Grafana configuration
 

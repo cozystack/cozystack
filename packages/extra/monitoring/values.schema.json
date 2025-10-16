@@ -12,6 +12,20 @@
           "type": "object",
           "default": {},
           "properties": {
+            "slack": {
+              "description": "Configuration for Slack alerts",
+              "type": "object",
+              "default": {},
+              "required": [
+                "url"
+              ],
+              "properties": {
+                "url": {
+                  "description": "Slack webhook URL",
+                  "type": "string"
+                }
+              }
+            },
             "telegram": {
               "description": "Configuration for Telegram alerts",
               "type": "object",
