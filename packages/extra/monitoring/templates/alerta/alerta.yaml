@@ -122,6 +122,13 @@ spec:
               value: "{{ .Values.alerta.alerts.telegram.disabledSeverity }}"
             {{- end }}
 
+            {{- if .Values.alerta.alerts.slack.url }}
+            - name: "PLUGINS"
+              value: "slack"
+            - name: "SLACK_WEBHOOK_URL"
+              value: "{{ .Values.alerta.alerts.slack.url }}"
+            {{- end }}
+
           ports:
             - name: http
               containerPort: 8080
