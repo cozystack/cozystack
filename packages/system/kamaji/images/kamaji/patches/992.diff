@@ -1,0 +1,156 @@
+diff --git a/internal/resources/api_server_certificate.go b/internal/resources/api_server_certificate.go
+index 436cdf9..4702b6c 100644
+--- a/internal/resources/api_server_certificate.go
++++ b/internal/resources/api_server_certificate.go
+@@ -108,6 +108,7 @@ func (r *APIServerCertificate) mutate(ctx context.Context, tenantControlPlane *k
+ 		}
+ 
+ 		r.resource.SetLabels(utilities.MergeMaps(
++			r.resource.GetLabels(),
+ 			utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()),
+ 			map[string]string{
+ 				constants.ControllerLabelResource: "x509",
+diff --git a/internal/resources/api_server_kubelet_client_certificate.go b/internal/resources/api_server_kubelet_client_certificate.go
+index 85b4d42..da18db4 100644
+--- a/internal/resources/api_server_kubelet_client_certificate.go
++++ b/internal/resources/api_server_kubelet_client_certificate.go
+@@ -95,6 +95,7 @@ func (r *APIServerKubeletClientCertificate) mutate(ctx context.Context, tenantCo
+ 		}
+ 
+ 		r.resource.SetLabels(utilities.MergeMaps(
++			r.resource.GetLabels(),
+ 			utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()),
+ 			map[string]string{
+ 				constants.ControllerLabelResource: "x509",
+diff --git a/internal/resources/ca_certificate.go b/internal/resources/ca_certificate.go
+index 5425b0b..625273f 100644
+--- a/internal/resources/ca_certificate.go
++++ b/internal/resources/ca_certificate.go
+@@ -137,7 +137,7 @@ func (r *CACertificate) mutate(ctx context.Context, tenantControlPlane *kamajiv1
+ 			corev1.TLSPrivateKeyKey: ca.PrivateKey,
+ 		}
+ 
+-		r.resource.SetLabels(utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()))
++		r.resource.SetLabels(utilities.MergeMaps(r.resource.GetLabels(), utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName())))
+ 
+ 		utilities.SetObjectChecksum(r.resource, r.resource.Data)
+ 
+diff --git a/internal/resources/datastore/datastore_certificate.go b/internal/resources/datastore/datastore_certificate.go
+index dea45ae..8492a5e 100644
+--- a/internal/resources/datastore/datastore_certificate.go
++++ b/internal/resources/datastore/datastore_certificate.go
+@@ -94,6 +94,7 @@ func (r *Certificate) mutate(ctx context.Context, tenantControlPlane *kamajiv1al
+ 			r.resource.Data["ca.crt"] = ca
+ 
+ 			r.resource.SetLabels(utilities.MergeMaps(
++				r.resource.GetLabels(),
+ 				utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()),
+ 				map[string]string{
+ 					constants.ControllerLabelResource: "x509",
+diff --git a/internal/resources/datastore/datastore_storage_config.go b/internal/resources/datastore/datastore_storage_config.go
+index 7d03420..4ea9e64 100644
+--- a/internal/resources/datastore/datastore_storage_config.go
++++ b/internal/resources/datastore/datastore_storage_config.go
+@@ -181,7 +181,7 @@ func (r *Config) mutate(ctx context.Context, tenantControlPlane *kamajiv1alpha1.
+ 
+ 		utilities.SetObjectChecksum(r.resource, r.resource.Data)
+ 
+-		r.resource.SetLabels(utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()))
++		r.resource.SetLabels(utilities.MergeMaps(r.resource.GetLabels(), utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName())))
+ 
+ 		return ctrl.SetControllerReference(tenantControlPlane, r.resource, r.Client.Scheme())
+ 	}
+diff --git a/internal/resources/front-proxy-client-certificate.go b/internal/resources/front-proxy-client-certificate.go
+index f5ed67c..2dd4eda 100644
+--- a/internal/resources/front-proxy-client-certificate.go
++++ b/internal/resources/front-proxy-client-certificate.go
+@@ -95,6 +95,7 @@ func (r *FrontProxyClientCertificate) mutate(ctx context.Context, tenantControlP
+ 		}
+ 
+ 		r.resource.SetLabels(utilities.MergeMaps(
++			r.resource.GetLabels(),
+ 			utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()),
+ 			map[string]string{
+ 				constants.ControllerLabelResource: "x509",
+diff --git a/internal/resources/front_proxy_ca_certificate.go b/internal/resources/front_proxy_ca_certificate.go
+index d410720..ccadc70 100644
+--- a/internal/resources/front_proxy_ca_certificate.go
++++ b/internal/resources/front_proxy_ca_certificate.go
+@@ -114,7 +114,7 @@ func (r *FrontProxyCACertificate) mutate(ctx context.Context, tenantControlPlane
+ 			kubeadmconstants.FrontProxyCAKeyName:  ca.PrivateKey,
+ 		}
+ 
+-		r.resource.SetLabels(utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()))
++		r.resource.SetLabels(utilities.MergeMaps(r.resource.GetLabels(), utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName())))
+ 
+ 		utilities.SetObjectChecksum(r.resource, r.resource.Data)
+ 
+diff --git a/internal/resources/k8s_ingress_resource.go b/internal/resources/k8s_ingress_resource.go
+index f2e014f..e1aef59 100644
+--- a/internal/resources/k8s_ingress_resource.go
++++ b/internal/resources/k8s_ingress_resource.go
+@@ -147,7 +147,7 @@ func (r *KubernetesIngressResource) Define(_ context.Context, tenantControlPlane
+ 
+ func (r *KubernetesIngressResource) mutate(tenantControlPlane *kamajiv1alpha1.TenantControlPlane) controllerutil.MutateFn {
+ 	return func() error {
+-		labels := utilities.MergeMaps(utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()), tenantControlPlane.Spec.ControlPlane.Ingress.AdditionalMetadata.Labels)
++		labels := utilities.MergeMaps(r.resource.GetLabels(), utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()), tenantControlPlane.Spec.ControlPlane.Ingress.AdditionalMetadata.Labels)
+ 		r.resource.SetLabels(labels)
+ 
+ 		annotations := utilities.MergeMaps(r.resource.GetAnnotations(), tenantControlPlane.Spec.ControlPlane.Ingress.AdditionalMetadata.Annotations)
+diff --git a/internal/resources/k8s_service_resource.go b/internal/resources/k8s_service_resource.go
+index 7e7f11f..9c30145 100644
+--- a/internal/resources/k8s_service_resource.go
++++ b/internal/resources/k8s_service_resource.go
+@@ -76,7 +76,12 @@ func (r *KubernetesServiceResource) mutate(ctx context.Context, tenantControlPla
+ 	address, _ := tenantControlPlane.DeclaredControlPlaneAddress(ctx, r.Client)
+ 
+ 	return func() error {
+-		labels := utilities.MergeMaps(utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()), tenantControlPlane.Spec.ControlPlane.Service.AdditionalMetadata.Labels)
++		labels := utilities.MergeMaps(
++			r.resource.GetLabels(),
++			utilities.KamajiLabels(
++				tenantControlPlane.GetName(), r.GetName()),
++			tenantControlPlane.Spec.ControlPlane.Service.AdditionalMetadata.Labels,
++		)
+ 		r.resource.SetLabels(labels)
+ 
+ 		annotations := utilities.MergeMaps(r.resource.GetAnnotations(), tenantControlPlane.Spec.ControlPlane.Service.AdditionalMetadata.Annotations)
+diff --git a/internal/resources/kubeadm_config.go b/internal/resources/kubeadm_config.go
+index ae4cfc0..98dc36d 100644
+--- a/internal/resources/kubeadm_config.go
++++ b/internal/resources/kubeadm_config.go
+@@ -89,7 +89,7 @@ func (r *KubeadmConfigResource) mutate(ctx context.Context, tenantControlPlane *
+ 			return err
+ 		}
+ 
+-		r.resource.SetLabels(utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()))
++		r.resource.SetLabels(utilities.MergeMaps(r.resource.GetLabels(), utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName())))
+ 
+ 		params := kubeadm.Parameters{
+ 			TenantControlPlaneAddress:       address,
+diff --git a/internal/resources/kubeconfig.go b/internal/resources/kubeconfig.go
+index a87da7f..bd77676 100644
+--- a/internal/resources/kubeconfig.go
++++ b/internal/resources/kubeconfig.go
+@@ -163,6 +163,7 @@ func (r *KubeconfigResource) mutate(ctx context.Context, tenantControlPlane *kam
+ 		}
+ 
+ 		r.resource.SetLabels(utilities.MergeMaps(
++			r.resource.GetLabels(),
+ 			utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()),
+ 			map[string]string{
+ 				constants.ControllerLabelResource: "kubeconfig",
+diff --git a/internal/resources/sa_certificate.go b/internal/resources/sa_certificate.go
+index b53c7b0..4001eca 100644
+--- a/internal/resources/sa_certificate.go
++++ b/internal/resources/sa_certificate.go
+@@ -113,7 +113,7 @@ func (r *SACertificate) mutate(ctx context.Context, tenantControlPlane *kamajiv1
+ 			kubeadmconstants.ServiceAccountPrivateKeyName: sa.PrivateKey,
+ 		}
+ 
+-		r.resource.SetLabels(utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName()))
++		r.resource.SetLabels(utilities.MergeMaps(r.resource.GetLabels(), utilities.KamajiLabels(tenantControlPlane.GetName(), r.GetName())))
+ 
+ 		utilities.SetObjectChecksum(r.resource, r.resource.Data)
+ 
