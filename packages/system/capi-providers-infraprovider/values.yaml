@@ -1,0 +1,3 @@
+providers:
+  kubevirt: true
+  proxmox: false
