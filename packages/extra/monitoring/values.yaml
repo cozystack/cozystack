@@ -112,6 +112,9 @@ alerta:
       chatID: ""
       disabledSeverity: ""
 
+    slack:
+      url: ""
+
 ## @section Grafana configuration
 
 ## @param grafana {grafana} Configuration for Grafana
