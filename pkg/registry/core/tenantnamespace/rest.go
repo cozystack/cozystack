@@ -12,17 +12,18 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-	rbacv1client "k8s.io/client-go/kubernetes/typed/rbac/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -46,18 +47,18 @@ var (
 )
 
 type REST struct {
-	core corev1client.CoreV1Interface
-	rbac rbacv1client.RbacV1Interface
-	gvr  schema.GroupVersionResource
+	c   client.Client
+	w   client.WithWatch
+	gvr schema.GroupVersionResource
 }
 
 func NewREST(
-	coreCli corev1client.CoreV1Interface,
-	rbacCli rbacv1client.RbacV1Interface,
+	c client.Client,
+	w client.WithWatch,
 ) *REST {
 	return &REST{
-		core: coreCli,
-		rbac: rbacCli,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -89,7 +90,8 @@ func (r *REST) List(
 	ctx context.Context,
 	_ *metainternal.ListOptions,
 ) (runtime.Object, error) {
-	nsList, err := r.core.Namespaces().List(ctx, metav1.ListOptions{})
+	nsList := &corev1.NamespaceList{}
+	err := r.c.List(ctx, nsList)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +120,8 @@ func (r *REST) Get(
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
-	ns, err := r.core.Namespaces().Get(ctx, name, *opts)
+	ns := &corev1.Namespace{}
+	err := r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
@@ -128,14 +131,7 @@ func (r *REST) Get(
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       "TenantNamespace",
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              ns.Name,
-			UID:               ns.UID,
-			ResourceVersion:   ns.ResourceVersion,
-			CreationTimestamp: ns.CreationTimestamp,
-			Labels:            ns.Labels,
-			Annotations:       ns.Annotations,
-		},
+		ObjectMeta: ns.ObjectMeta,
 	}, nil
 }
 
@@ -144,10 +140,11 @@ func (r *REST) Get(
 // -----------------------------------------------------------------------------
 
 func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
-	nsWatch, err := r.core.Namespaces().Watch(ctx, metav1.ListOptions{
+	nsList := &corev1.NamespaceList{}
+	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: &metav1.ListOptions{
 		Watch:           true,
 		ResourceVersion: opts.ResourceVersion,
-	})
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -282,9 +279,10 @@ func (r *REST) filterAccessible(
 	for _, name := range names {
 		nameSet[name] = struct{}{}
 	}
-	rbs, err := r.rbac.RoleBindings("").List(ctx, metav1.ListOptions{})
+	rbs := &rbacv1.RoleBindingList{}
+	err := r.c.List(ctx, rbs)
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to list rolebindings")
+		return []string{}, fmt.Errorf("failed to list rolebindings: %w", err)
 	}
 	allowedNameSet := make(map[string]struct{})
 	for i := range rbs.Items {
