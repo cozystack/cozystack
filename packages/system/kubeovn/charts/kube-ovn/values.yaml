@@ -9,7 +9,7 @@ global:
     kubeovn:
       repository: kube-ovn
       vpcRepository: vpc-nat-gateway
-      tag: v1.14.5
+      tag: v1.14.11
       support_arm: true
       thirdparty: true
 
@@ -123,6 +123,7 @@ log_conf:
   LOG_DIR: "/var/log"
 
 OPENVSWITCH_DIR: "/etc/origin/openvswitch"
+OVN_IPSEC_KEY_DIR: "/etc/origin/ovs_ipsec_keys"
 OVN_DIR: "/etc/origin/ovn"
 DISABLE_MODULES_MANAGEMENT: false
 
