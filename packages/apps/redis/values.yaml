@@ -1,25 +1,41 @@
+##
 ## @section Common parameters
 ##
-## @param replicas {int} Number of Redis replicas
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each Redis replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of Redis replicas.
 replicas: 2
-## @param resources {*resources} Explicit CPU and memory configuration for each Redis replica.  When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each replica
-## @field resources.memory {*quantity} Memory (RAM) available to each replica
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
-  # resources:
-  #   cpu: 4000m
-  #   memory: 4Gi
-## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+
+## @param {ResourcesPreset} resourcesPreset="nano" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "nano"
-## @param size {quantity} Persistent Volume Claim size, available for application data
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 1Gi
-## @param storageClass {string} StorageClass used to store the data
+
+## @param {string} storageClass - StorageClass used to store the data.
 storageClass: ""
-## @param external {bool} Enable external access from outside the cluster
+
+## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
-
+##
 ## @section Application-specific parameters
 ##
-## @param authEnabled {bool} Enable password generation
+
+## @param {bool} authEnabled - Enable password generation.
 authEnabled: true

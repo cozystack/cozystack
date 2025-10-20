@@ -1,30 +1,35 @@
+##
 ## @section Common parameters
+##
 
-## @param whitelistHTTP {bool} Secure HTTP by enabling client networks whitelisting
-## @param whitelist {[]string} List of client networks
+## @param {bool} whitelistHTTP - Secure HTTP by enabling client networks whitelisting.
+whitelistHTTP: true
 ## Example:
 ## whitelistHTTP: true
 ## whitelist:
 ## - "1.2.3.4"
 ## - "10.8.0.0/16"
-##
-whitelistHTTP: true
+
+## @param {[]string} whitelist - List of client networks.
 whitelist: []
 
-## @param machines {[]machine} Configuration of physical machine instances
-## @field machine {machine} Machine configuration
-## @field machine.hostname {string} Hostname
-## @field machine.arch {string} Architecture
-## @field machine.ip.address {machineConfig} IP address
-## @field machineConfig.address {string} IP address
-## @field machineConfig.gateway {string} IP gateway
-## @field machineConfig.netmask {string} Netmask
-## @field machine.leaseTime {int} Lease time
-## @field machine.mac {[]string} MAC addresses
-## @field machine.nameServers {[]string} Name servers
-## @field machine.timeServers {[]string} Time servers
-## @field machine.uefi {bool} UEFI
-##
+## @typedef {struct} MachineConfig - IP address configuration.
+## @field {string} address - IP address.
+## @field {string} gateway - IP gateway.
+## @field {string} netmask - Netmask.
+
+## @typedef {struct} Machine - Machine configuration.
+## @field {string} hostname - Hostname.
+## @field {string} arch - Architecture.
+## @field {MachineConfig} ip - IP address configuration.
+## @field {int} leaseTime - Lease time.
+## @field {[]string} mac - MAC addresses.
+## @field {[]string} nameServers - Name servers.
+## @field {[]string} timeServers - Time servers.
+## @field {bool} uefi - UEFI.
+
+## @param {[]Machine} machines - Configuration of physical machine instances.
+machines: []
 ## Example:
 ## machines:
 ## - hostname: machine1
@@ -38,5 +43,3 @@ whitelist: []
 ##   nameServers: [1.1.1.1,8.8.8.8]
 ##   timeServers: [pool.ntp.org]
 ##   uefi: true
-
-machines: []

@@ -1,96 +1,109 @@
+##
 ## @section Common parameters
+##
 
-## @param host {*string} The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).
+## @param {string} [host] - The hostname used to access SeaweedFS externally (defaults to 's3' subdomain for the tenant host).
 host: ""
 
-## @param topology {string enum:"Simple,MultiZone,Client"} The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone, Client)
+## @enum {string} Topology - The topology of the SeaweedFS cluster.
+## @value Simple
+## @value MultiZone
+## @value Client
+
+## @param {Topology} topology="Simple" - The topology of the SeaweedFS cluster.
 topology: Simple
 
-## @param replicationFactor {int} Replication factor: number of replicas for each volume in the SeaweedFS cluster.
+## @param {int} replicationFactor - Replication factor: number of replicas for each volume in the SeaweedFS cluster.
 replicationFactor: 2
 
+##
 ## @section SeaweedFS Components Configuration
 ##
-## @param db {db} Database Configuration
+
+## @typedef {struct} Resources - Resource configuration.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @typedef {struct} DB - Database configuration.
+## @field {int} [replicas] - Number of database replicas.
+## @field {quantity} [size] - Persistent Volume size.
+## @field {string} [storageClass] - StorageClass used to store the data.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {DB} db - Database configuration.
 db:
-  ## @field db.replicas {*int} Number of database replicas
-  ## @field db.size {*quantity} Persistent Volume size
-  ## @field db.storageClass {*string} StorageClass used to store the data
   replicas: 2
   size: "10Gi"
   storageClass: ""
-  ## @field db.resources {resources} Explicit CPU and memory configuration for the database. When left empty, the preset defined in `resourcesPreset` is applied.
-  ## @field resources {*resources} Resource configuration for etcd
-  ## @field resources.cpu {*quantity} The number of CPU cores allocated
-  ## @field resources.memory {*quantity} The amount of memory allocated
-  ## e.g:
-  ## resources:
-  ##   cpu: 4000m
-  ##   memory: 4Gi
-  ##
-  ## @field db.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
   resources: {}
   resourcesPreset: "small"
 
-## @param master {*master} Master service configuration
+## @typedef {struct} Master - Master service configuration.
+## @field {int} [replicas] - Number of master replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Master} [master] - Master service configuration.
 master:
-  ## @field master.replicas {*int} Number of master replicas
-  ## @field master.resources {resources} Explicit CPU and memory configuration for the master. When left empty, the preset defined in `resourcesPreset` is applied.
-  ## @field master.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
   replicas: 3
   resources: {}
   resourcesPreset: "small"
 
-## @param filer {*filer} Filer service configuration
+## @typedef {struct} Filer - Filer service configuration.
+## @field {int} [replicas] - Number of filer replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {string} [grpcHost] - The hostname used to expose or access the filer service externally.
+## @field {int} [grpcPort] - The port used to access the filer service externally.
+## @field {[]string} [whitelist] - A list of IP addresses or CIDR ranges that are allowed to access the filer service.
+
+## @param {Filer} [filer] - Filer service configuration.
 filer:
-  ## @field filer.replicas {*int} Number of filer replicas
-  ## @field filer.resources {resources} Explicit CPU and memory configuration for the filer. When left empty, the preset defined in `resourcesPreset` is applied.
-  ## @field filer.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
   replicas: 2
   resources: {}
   resourcesPreset: "small"
-
-  ## @field filer.grpcHost {*string} The hostname used to expose or access the filer service externally.
-  ## @field filer.grpcPort {*int} The port used to access the filer service externally.
-  ## @field filer.whitelist {[]*string} A list of IP addresses or CIDR ranges that are allowed to access the filer service.
   grpcHost: ""
   grpcPort: 443
   whitelist: []
 
-## @param volume {*volume} Volume service configuration
+## @typedef {struct} Zone - Zone configuration.
+## @field {int} [replicas] - Number of replicas in the zone.
+## @field {quantity} [size] - Zone storage size.
+
+## @typedef {struct} Volume - Volume service configuration.
+## @field {int} [replicas] - Number of volume replicas.
+## @field {quantity} [size] - Persistent Volume size.
+## @field {string} [storageClass] - StorageClass used to store the data.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {map[string]Zone} [zones] - A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
+
+## @param {Volume} [volume] - Volume service configuration.
 volume:
-  ## @field volume.replicas {*int} Number of volume replicas
-  ## @field volume.size {*quantity} Persistent Volume size
-  ## @field volume.storageClass {*string} StorageClass used to store the data
-  ## @field volume.resources {resources} Explicit CPU and memory configuration for the volume. When left empty, the preset defined in `resourcesPreset` is applied.
-  ## @field volume.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
   replicas: 2
   size: 10Gi
   storageClass: ""
   resources: {}
   resourcesPreset: "small"
-
-  ## @field volume.zones {map[string]zone} A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
-  ## @field zone.replicas {*int} Number of replicas in the zone
-  ## @field zone.size {*quantity} Zone storage size
-  ## Example:
-  ## zones:
-  ##   dc1:
-  ##     replicas: 2
-  ##     size: 10Gi
-  ##   dc2:
-  ##     replicas: 2
-  ##     size: 10Gi
-  ##   dc3:
-  ##     replicas: 2
-  ##     size: 10Gi
   zones: {}
 
-## @param s3 {*s3} S3 service configuration
+## @typedef {struct} S3 - S3 service configuration.
+## @field {int} [replicas] - Number of S3 replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {S3} [s3] - S3 service configuration.
 s3:
-  ## @field s3.replicas {*int} Number of s3 replicas
-  ## @field s3.resources {resources} Explicit CPU and memory configuration for the s3. When left empty, the preset defined in `resourcesPreset` is applied.
-  ## @field s3.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
   replicas: 2
   resources: {}
   resourcesPreset: "small"
