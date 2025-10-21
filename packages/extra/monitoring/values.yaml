@@ -87,9 +87,11 @@ logsStorages:
 ## @field alerta.resources {*resources} Resources configuration
 ## @field alerta.alerts {*alerts} Configuration for alerts
 ## @field alerts.telegram {*telegramAlerts} Configuration for Telegram alerts
+## @field alerts.slack {*slackAlerts} Configuration for Telegram alerts
 ## @field telegramAlerts.token {string} Telegram token for your bot
 ## @field telegramAlerts.chatID {string} Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
 ## @field telegramAlerts.disabledSeverity {string} List of severity without alerts, separated by comma like: "informational,warning"
+## @field slackAlerts.url {string} Slack webhook URL
 alerta:
   storage: 10Gi
   storageClassName: ""

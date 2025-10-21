@@ -72,6 +72,8 @@
 | `alerta.alerts.telegram.token`            | Telegram token for your bot                                                         | `string`    | `""`    |
 | `alerta.alerts.telegram.chatID`           | Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot | `string`    | `""`    |
 | `alerta.alerts.telegram.disabledSeverity` | List of severity without alerts, separated by comma like: "informational,warning"   | `string`    | `""`    |
+| `alerta.alerts.slack`                     | Configuration for Telegram alerts                                                   | `*object`   | `null`  |
+| `alerta.alerts.slack.url`                 | Slack webhook URL                                                                   | `string`    | `""`    |
 
 
 ### Grafana configuration
