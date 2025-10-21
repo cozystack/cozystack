@@ -33,6 +33,15 @@ disks: []
 ## - name: nvidia.com/GA102GL_A10
 gpus: []
 
+## @param subnets {[]subnet} Additional subnets (management subnet will be attached by default)
+## @field subnet.name {string} Additional subnet to attach
+## Example:
+## subnets:
+##   - name: subnet-84dbec17
+##   - name: subnet-aa8896b5
+##   - name: subnet-e9b97196
+subnets: []
+
 ## @param resources {*resources} Resources
 ## @field resources.cpu {*quantity} The number of CPU cores allocated to the virtual machine
 ## @field resources.memory {*quantity} The amount of memory allocated to the virtual machine
