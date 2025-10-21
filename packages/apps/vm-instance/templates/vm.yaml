@@ -77,6 +77,12 @@ spec:
           interfaces:
           - name: default
             bridge: {}
+          {{- if .Values.subnets }}
+          {{- range $i, $subnet := .Values.subnets }}
+          - name: {{ $subnet.name }}
+            bridge: {}
+          {{- end }}
+          {{- end }}
         machine:
           type: ""
       {{- with .Values.sshKeys }}
@@ -105,3 +111,10 @@ spec:
       networks:
       - name: default
         pod: {}
+      {{- if .Values.subnets }}
+      {{- range $i, $subnet := .Values.subnets }}
+      - name: {{ $subnet.name }}
+        multus:
+          networkName: {{ $.Release.Namespace }}/{{ $subnet.name }}
+      {{- end }}
+      {{- end }}

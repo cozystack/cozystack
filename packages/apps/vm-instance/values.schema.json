@@ -185,6 +185,23 @@
       "items": {
         "type": "string"
       }
+    },
+    "subnets": {
+      "description": "Additional subnets (management subnet will be attached by default)",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "description": "Additional subnet to attach",
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }
