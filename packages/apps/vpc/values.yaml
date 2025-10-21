@@ -1,0 +1,13 @@
+## @section Common parameters
+
+## @param subnets {map[string]subnet} Subnets of a VPC
+## @field subnet {subnet} Subnet configuration
+## @field subnet.cidr {cidr} Subnet CIDR, e.g. 192.168.0.0/24
+##
+## Example:
+## subnets:
+##   mysubnet0:
+##     cidr: "172.16.0.0/16"
+##   mysubnet1:
+##     cidr: "172.17.0.0/16"
+subnets: {}
