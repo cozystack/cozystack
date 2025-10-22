@@ -1,16 +1,21 @@
-## @section Common parameters
-
-## @param size {*quantity} Persistent Volume size
-## @param storageClass {*string} StorageClass used to store the data
-## @param replicas {*int} Number of etcd replicas
 ##
+## @section Common parameters
+##
+
+## @param {quantity} [size] - Persistent Volume size.
 size: 4Gi
+
+## @param {string} [storageClass] - StorageClass used to store the data.
 storageClass: ""
+
+## @param {int} [replicas] - Number of etcd replicas.
 replicas: 3
 
-## @param resources {*resources} Resource configuration for etcd
-## @field resources.cpu {*quantity} The number of CPU cores allocated
-## @field resources.memory {*quantity} The amount of memory allocated
+## @typedef {struct} Resources - Resource configuration for etcd.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @param {Resources} [resources] - Resource configuration for etcd.
 resources:
   cpu: 1000m
   memory: 512Mi

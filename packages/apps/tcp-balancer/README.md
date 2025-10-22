@@ -12,28 +12,28 @@ Managed TCP Load Balancer Service efficiently utilizes HAProxy for load balancin
 
 ### Common parameters
 
-| Name               | Description                                                                                                                                | Type        | Value   |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------- | ------- |
-| `replicas`         | Number of HAProxy replicas                                                                                                                 | `int`       | `2`     |
-| `resources`        | Explicit CPU and memory configuration for each TCP Balancer replica.  When left empty, the preset defined in `resourcesPreset` is applied. | `*object`   | `null`  |
-| `resources.cpu`    | CPU available to each replica                                                                                                              | `*quantity` | `null`  |
-| `resources.memory` | Memory (RAM) available to each replica                                                                                                     | `*quantity` | `null`  |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.  | `string`    | `nano`  |
-| `external`         | Enable external access from outside the cluster                                                                                            | `bool`      | `false` |
+| Name               | Description                                                                                                                            | Type       | Value   |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `replicas`         | Number of HAProxy replicas.                                                                                                            | `int`      | `2`     |
+| `resources`        | Explicit CPU and memory configuration for each TCP Balancer replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
+| `resources.cpu`    | CPU available to each replica.                                                                                                         | `quantity` | `""`    |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                                | `quantity` | `""`    |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                | `string`   | `nano`  |
+| `external`         | Enable external access from outside the cluster.                                                                                       | `bool`     | `false` |
 
 
 ### Application-specific parameters
 
-| Name                             | Description                                                      | Type       | Value   |
-| -------------------------------- | ---------------------------------------------------------------- | ---------- | ------- |
-| `httpAndHttps`                   | HTTP and HTTPS configuration                                     | `object`   | `{}`    |
-| `httpAndHttps.mode`              | Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`    | `string`   | `tcp`   |
-| `httpAndHttps.targetPorts`       | Target ports configuration                                       | `object`   | `{}`    |
-| `httpAndHttps.targetPorts.http`  | HTTP port number.                                                | `int`      | `80`    |
-| `httpAndHttps.targetPorts.https` | HTTPS port number.                                               | `int`      | `443`   |
-| `httpAndHttps.endpoints`         | Endpoint addresses list                                          | `[]string` | `[]`    |
-| `whitelistHTTP`                  | Secure HTTP by whitelisting client networks, `false` by default. | `bool`     | `false` |
-| `whitelist`                      | List of allowed client networks                                  | `[]string` | `[]`    |
+| Name                             | Description                                                   | Type       | Value   |
+| -------------------------------- | ------------------------------------------------------------- | ---------- | ------- |
+| `httpAndHttps`                   | HTTP and HTTPS configuration.                                 | `object`   | `{}`    |
+| `httpAndHttps.mode`              | Mode for balancer.                                            | `string`   | `tcp`   |
+| `httpAndHttps.targetPorts`       | Target ports configuration.                                   | `object`   | `{}`    |
+| `httpAndHttps.targetPorts.http`  | HTTP port number.                                             | `int`      | `80`    |
+| `httpAndHttps.targetPorts.https` | HTTPS port number.                                            | `int`      | `443`   |
+| `httpAndHttps.endpoints`         | Endpoint addresses list.                                      | `[]string` | `[]`    |
+| `whitelistHTTP`                  | Secure HTTP by whitelisting client networks (default: false). | `bool`     | `false` |
+| `whitelist`                      | List of allowed client networks.                              | `[]string` | `[]`    |
 
 
 ## Parameter examples and reference

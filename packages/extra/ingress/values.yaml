@@ -1,26 +1,39 @@
-## @section Common parameters
-
-## @param replicas {int} Number of ingress-nginx replicas
 ##
+## @section Common parameters
+##
+
+## @param {int} replicas - Number of ingress-nginx replicas.
 replicas: 2
 
-## @param whitelist {[]*string} List of client networks
+## @param {[]string} whitelist - List of client networks.
+whitelist: []
 ## Example:
 ## whitelist:
 ## - "1.2.3.4"
 ## - "10.100.0.0/16"
-whitelist: []
 
-## @param cloudflareProxy {bool} Restoring original visitor IPs when Cloudflare proxied is enabled
+## @param {bool} cloudflareProxy - Restoring original visitor IPs when Cloudflare proxied is enabled.
 cloudflareProxy: false
 
-## @param resources {*resources} Explicit CPU and memory configuration for each ingress-nginx replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each replica
-## @field resources.memory {*quantity} Memory (RAM) available to each replica
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each ingress-nginx replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each ingress-nginx replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
 ## Example:
 ## resources:
 ##   cpu: 4000m
 ##   memory: 4Gi
-resources: {}
-## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+
+## @param {ResourcesPreset} resourcesPreset="micro" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "micro"

@@ -1,61 +1,80 @@
-# Default values for foundationdb.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
-
+##
 ## @section Common parameters
 ##
-## @param cluster {cluster} Cluster configuration
-## @field cluster.processCounts {clusterProcessCounts} Process counts for different roles
-## @field clusterProcessCounts.stateless {int} Number of stateless processes (-1 for automatic)
-## @field clusterProcessCounts.storage {int} Number of storage processes (determines cluster size)
-## @field clusterProcessCounts.cluster_controller {int} Number of cluster controller processes
-## @field cluster.version {string} Version of FoundationDB to use
-## @field cluster.redundancyMode {string} Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback)
-## @field cluster.storageEngine {string} Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory)
-## @field cluster.faultDomain {clusterFaultDomain} Fault domain configuration
-## @field clusterFaultDomain.key {string} Fault domain key
-## @field clusterFaultDomain.valueFrom {string} Fault domain value source
+
+## @typedef {struct} ClusterProcessCounts - Process counts for different roles.
+## @field {int} stateless - Number of stateless processes (-1 for automatic).
+## @field {int} storage - Number of storage processes (determines cluster size).
+## @field {int} cluster_controller - Number of cluster controller processes.
+
+## @typedef {struct} ClusterFaultDomain - Fault domain configuration.
+## @field {string} key - Fault domain key.
+## @field {string} valueFrom - Fault domain value source.
+
+## @typedef {struct} Cluster - Cluster configuration.
+## @field {ClusterProcessCounts} processCounts - Process counts for different roles.
+## @field {string} version - Version of FoundationDB to use.
+## @field {string} redundancyMode - Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback).
+## @field {string} storageEngine - Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory).
+## @field {ClusterFaultDomain} faultDomain - Fault domain configuration.
+
+## @param {Cluster} cluster - Cluster configuration.
 cluster:
   processCounts:
-    stateless: -1  # Automatically calculated
-    storage: 3     # Number of storage processes (determines cluster size)
+    stateless: -1
+    storage: 3
     cluster_controller: 1
 
   version: "7.3.63"
-  redundancyMode: "double"  # Database redundancy mode
-  storageEngine: "ssd-2"    # Storage engine
+  redundancyMode: "double"
+  storageEngine: "ssd-2"
 
   faultDomain:
     key: "kubernetes.io/hostname"
     valueFrom: "spec.nodeName"
 
-## @param storage {storage} Storage configuration
-## @field storage.size {quantity} Size of persistent volumes for each instance
-## @field storage.storageClass {string} Storage class (if not set, uses cluster default)
+## @typedef {struct} Storage - Storage configuration.
+## @field {quantity} size - Size of persistent volumes for each instance.
+## @field {string} storageClass - Storage class (if not set, uses cluster default).
+
+## @param {Storage} storage - Storage configuration.
 storage:
   size: "16Gi"
   storageClass: ""
 
-## @param resources {*resources} Explicit CPU and memory configuration for each FoundationDB instance. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each instance
-## @field resources.memory {*quantity} Memory (RAM) available to each instance
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each FoundationDB instance.
+## @field {quantity} [cpu] - CPU available to each instance.
+## @field {quantity} [memory] - Memory (RAM) available to each instance.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each FoundationDB instance. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
-  # resources:
-  #   cpu: 2000m
-  #   memory: 4Gi
-## @param resourcesPreset {string enum:"small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+
+## @param {ResourcesPreset} resourcesPreset="medium" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "medium"
 
-## @param backup {backup} Backup configuration
-## @field backup.enabled {bool} Enable backups
-## @field backup.s3 {backupS3} S3 configuration for backups
-## @field backupS3.bucket {string} S3 bucket name
-## @field backupS3.endpoint {string} S3 endpoint URL
-## @field backupS3.region {string} S3 region
-## @field backupS3.credentials {backupS3Credentials} S3 credentials
-## @field backupS3Credentials.accessKeyId {string} S3 access key ID
-## @field backupS3Credentials.secretAccessKey {string} S3 secret access key
-## @field backup.retentionPolicy {string} Retention policy for backups
+## @typedef {struct} BackupS3Credentials - S3 credentials.
+## @field {string} accessKeyId - S3 access key ID.
+## @field {string} secretAccessKey - S3 secret access key.
+
+## @typedef {struct} BackupS3 - S3 configuration for backups.
+## @field {string} bucket - S3 bucket name.
+## @field {string} endpoint - S3 endpoint URL.
+## @field {string} region - S3 region.
+## @field {BackupS3Credentials} credentials - S3 credentials.
+
+## @typedef {struct} Backup - Backup configuration.
+## @field {bool} enabled - Enable backups.
+## @field {BackupS3} s3 - S3 configuration for backups.
+## @field {string} retentionPolicy - Retention policy for backups.
+
+## @param {Backup} backup - Backup configuration.
 backup:
   enabled: false
   s3:
@@ -67,27 +86,35 @@ backup:
       secretAccessKey: ""
   retentionPolicy: "7d"
 
-## @param monitoring {monitoring} Monitoring configuration
-## @field monitoring.enabled {bool} Enable WorkloadMonitor integration
+## @typedef {struct} Monitoring - Monitoring configuration.
+## @field {bool} enabled - Enable WorkloadMonitor integration.
+
+## @param {Monitoring} monitoring - Monitoring configuration.
 monitoring:
   enabled: true
 
+##
 ## @section FoundationDB configuration
 ##
-## @param customParameters {[]string} Custom parameters to pass to FoundationDB
-customParameters: []
-# Example:
-# - knob_disable_posix_kernel_aio=1
 
-## @param imageType {string enum:"unified,split"} Container image deployment type
+## @param {[]string} customParameters - Custom parameters to pass to FoundationDB.
+customParameters: []
+
+## @enum {string} ImageType - Container image deployment type.
+## @value unified
+## @value split
+
+## @param {ImageType} imageType="unified" - Container image deployment type.
 imageType: "unified"
 
-## @param securityContext {securityContext} Security context for containers
-## @field securityContext.runAsUser {int} User ID to run the container
-## @field securityContext.runAsGroup {int} Group ID to run the container
+## @typedef {struct} SecurityContext - Security context for containers.
+## @field {int} runAsUser - User ID to run the container.
+## @field {int} runAsGroup - Group ID to run the container.
+
+## @param {SecurityContext} securityContext - Security context for containers.
 securityContext:
   runAsUser: 4059
   runAsGroup: 4059
 
-## @param automaticReplacements {bool} Enable automatic pod replacements
+## @param {bool} automaticReplacements - Enable automatic pod replacements.
 automaticReplacements: true

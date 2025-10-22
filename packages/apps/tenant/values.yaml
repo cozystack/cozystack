@@ -1,21 +1,24 @@
+##
 ## @section Common parameters
+##
 
-## @param host {*string} The hostname used to access tenant services (defaults to using the tenant name as a subdomain for it's parent tenant host).
-## @param etcd {bool} Deploy own Etcd cluster
-## @param monitoring {bool} Deploy own Monitoring Stack
-## @param ingress {bool} Deploy own Ingress Controller
-## @param seaweedfs {bool} Deploy own SeaweedFS
-## @param isolated {bool} Enforce tenant namespace with network policies, `true` by default
+## @param {string} [host] - The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).
 host: ""
+
+## @param {bool} etcd - Deploy own Etcd cluster.
 etcd: false
+
+## @param {bool} monitoring - Deploy own Monitoring Stack.
 monitoring: false
+
+## @param {bool} ingress - Deploy own Ingress Controller.
 ingress: false
+
+## @param {bool} seaweedfs - Deploy own SeaweedFS.
 seaweedfs: false
+
+## @param {bool} isolated - Enforce tenant namespace with network policies (default: true).
 isolated: true
-## @param resourceQuotas {map[string]quantity} Define resource quotas for the tenant
+
+## @param {map[string]quantity} resourceQuotas - Define resource quotas for the tenant.
 resourceQuotas: {}
-# resourceQuotas:
-#   cpu: "1"
-#   memory: "1Gi"
-#   nvidia.com/gpu: 4
-#   storage: 100Gi
