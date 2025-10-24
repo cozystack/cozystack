@@ -14,6 +14,31 @@ Integration of Proxmox VE with CozyStack platform to enable:
 
 ## 📊 Current Status Summary
 
+### Phase 0: CozyStack Upgrade ⏳
+**Status**: PLANNED (Priority: HIGH)  
+**Timeline**: Before Proxmox integration completion
+
+**Objective**: Upgrade CozyStack to latest stable version (v0.37.2) using incremental approach
+
+**Tasks**:
+- [ ] Determine current cluster version
+- [ ] Review changelogs (v0.35.x → v0.36.x → v0.37.x)
+- [ ] Create comprehensive backups
+- [ ] Upgrade incrementally: current → v0.35.5 → v0.36.2 → v0.37.2
+- [ ] Validate at each step
+- [ ] Document upgrade process
+
+**Rationale**:
+- Latest bug fixes and security patches
+- Better CAPI support
+- Reduced technical debt
+- Supported version for Proxmox integration
+- May include Proxmox-specific improvements
+
+**Timeline**: 15 hours (2-day maintenance window recommended)
+
+**Details**: See `COZYSTACK_UPGRADE_PLAN.md`
+
 ### Phase 1: Management Cluster on Proxmox ✅
 **Status**: COMPLETED (100%)
 
