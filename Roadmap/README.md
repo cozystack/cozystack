@@ -8,19 +8,38 @@ This roadmap contains a complete plan for integrating Proxmox VE with CozyStack 
 
 ## 📁 Documentation Structure
 
-### Main Documents
-- **[COMPLETE_ROADMAP.md](./COMPLETE_ROADMAP.md)** - ⭐ **Complete roadmap based on Issue #69**
-- **[SPRINT_PROXMOX_INTEGRATION.md](./SPRINT_PROXMOX_INTEGRATION.md)** - Detailed sprint plan with tasks and success criteria
-- **[PROXMOX_INTEGRATION_RUNBOOK.md](./PROXMOX_INTEGRATION_RUNBOOK.md)** - Step-by-step runbook for installation and maintenance
-- **[PROXMOX_TESTING_PLAN.md](./PROXMOX_TESTING_PLAN.md)** - Comprehensive testing plan with 8 stages
-- **[SPRINT_TIMELINE.md](./SPRINT_TIMELINE.md)** - Detailed timeline with day-by-day schedule
+### 🚀 Current Plan (Active)
+- **[FRESH_INSTALL_PLAN.md](./FRESH_INSTALL_PLAN.md)** - ⭐ **Fresh v0.37.2 installation plan (Option C)**
+- **[SESSION_2025-10-24_SUMMARY.md](./SESSION_2025-10-24_SUMMARY.md)** - Latest session findings
+- **[UPGRADE_STATUS_FINAL.md](./UPGRADE_STATUS_FINAL.md)** - Why upgrade was abandoned
+
+### 📋 Main Documents
+- **[COMPLETE_ROADMAP.md](./COMPLETE_ROADMAP.md)** - Complete roadmap based on Issue #69
+- **[SPRINT_PROXMOX_INTEGRATION.md](./SPRINT_PROXMOX_INTEGRATION.md)** - Detailed sprint plan
+- **[PROXMOX_INTEGRATION_RUNBOOK.md](./PROXMOX_INTEGRATION_RUNBOOK.md)** - Installation runbook
+- **[PROXMOX_TESTING_PLAN.md](./PROXMOX_TESTING_PLAN.md)** - Testing plan (8 stages)
+- **[SPRINT_TIMELINE.md](./SPRINT_TIMELINE.md)** - Timeline schedule
+
+### 🏗️ Architecture Documents (NEW)
+- **[PROXMOX_ARCHITECTURE.md](./PROXMOX_ARCHITECTURE.md)** - ⭐ **Proxmox vs KubeVirt architecture**
+- **[PROXMOX_VM_CREATION_GUIDE.md](./PROXMOX_VM_CREATION_GUIDE.md)** - VM creation via CAPI
+- **[CRITICAL_FIX_PROXMOX_BUNDLE.md](./CRITICAL_FIX_PROXMOX_BUNDLE.md)** - Architecture correction details
+- **[ARCHITECTURE_FIX_SUMMARY.md](./ARCHITECTURE_FIX_SUMMARY.md)** - Fix summary and statistics
+
+### 📊 Upgrade Documents
+- **[COZYSTACK_UPGRADE_PLAN.md](./COZYSTACK_UPGRADE_PLAN.md)** - General upgrade procedures
+- **[UPGRADE_CRITICAL_FINDINGS.md](./UPGRADE_CRITICAL_FINDINGS.md)** - v0.28→v0.37 assessment
+- **[UPGRADE_EXECUTION_LOG.md](./UPGRADE_EXECUTION_LOG.md)** - Upgrade attempt log
+- **[UPGRADE_HEALTH_CHECK_REPORT.md](./UPGRADE_HEALTH_CHECK_REPORT.md)** - Health check results
 
 ### Assessment and Recovery Documents
 - **[INITIAL_ASSESSMENT.md](./INITIAL_ASSESSMENT.md)** - Initial cluster state analysis
 - **[CRITICAL_CLUSTER_STATE.md](./CRITICAL_CLUSTER_STATE.md)** - Emergency recovery procedures
 - **[RECOVERY_SUCCESS.md](./RECOVERY_SUCCESS.md)** - Successful recovery report (45 minutes)
 
-### Testing and Results
+### 🧪 Testing and Results
+- **[VM_CREATION_FINAL_REPORT.md](./VM_CREATION_FINAL_REPORT.md)** - ⭐ **VM creation test (infrastructure validated)**
+- **[VM_CREATION_TEST_RESULTS.md](./VM_CREATION_TEST_RESULTS.md)** - Detailed test results
 - **[TESTING_RESULTS.md](./TESTING_RESULTS.md)** - Steps 1-3 test results
 - **[FINAL_TESTING_REPORT.md](./FINAL_TESTING_REPORT.md)** - Comprehensive final assessment
 - **[TIME_TRACKING.md](./TIME_TRACKING.md)** - Time tracking and ROI analysis
