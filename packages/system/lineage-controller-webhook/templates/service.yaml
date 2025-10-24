@@ -1,10 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: cozystack-controller
+  name: lineage-controller-webhook
   labels:
-    app: cozystack-controller
+    app: lineage-controller-webhook
 spec:
+  internalTrafficPolicy: Local
   type: ClusterIP
   ports:
     - port: 443
@@ -12,4 +13,4 @@ spec:
       protocol: TCP
       name: webhook
   selector:
-    app: cozystack-controller
+    app: lineage-controller-webhook

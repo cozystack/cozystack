@@ -26,9 +26,16 @@ cozypkg -n cozy-system -C packages/system/cozystack-resource-definition-crd appl
 cozypkg -n cozy-system -C packages/system/cozystack-resource-definitions apply cozystack-resource-definitions --plain
 cozypkg -n cozy-system -C packages/system/cozystack-api apply cozystack-api --plain
 helm upgrade --install -n cozy-system cozystack-controller ./packages/system/cozystack-controller/ --take-ownership
+helm upgrade --install -n cozy-system lineage-controller-webhook ./packages/system/lineage-controller-webhook/ --take-ownership
 
 sleep 5
-timeout 60 sh -c 'until kubectl create service clusterip lineage-webhook-test --clusterip="None" --dry-run=server; do sleep 1; done'
+kubectl delete ns cozy-lineage-webhook-test --ignore-not-found && kubectl create ns cozy-lineage-webhook-test
+cleanup_test_ns() {
+  kubectl delete ns cozy-lineage-webhook-test --ignore-not-found
+}
+trap cleanup_test_ns ERR
+timeout 60 sh -c 'until kubectl -n cozy-lineage-webhook-test create service clusterip lineage-webhook-test --clusterip="None" --dry-run=server; do sleep 1; done'
+cleanup_test_ns
 
 kubectl wait deployment/cozystack-api -n cozy-system --timeout=4m --for=condition=available || exit 1
 kubectl wait deployment/cozystack-controller -n cozy-system --timeout=4m --for=condition=available || exit 1

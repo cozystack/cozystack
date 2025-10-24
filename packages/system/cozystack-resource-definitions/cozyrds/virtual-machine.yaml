@@ -32,3 +32,8 @@ spec:
   secrets:
     exclude: []
     include: []
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - virtual-machine-{{ .name }}

@@ -13,3 +13,6 @@ velero:
     volumeSnapshotLocation: null
     namespace: cozy-velero
     features: EnableCSI
+    # Increase timeout for item operations to 24 hours to prevent timeouts
+    # during backups of very large volumes. The Velero default is 4 hours.
+    defaultItemOperationTimeout: 24h

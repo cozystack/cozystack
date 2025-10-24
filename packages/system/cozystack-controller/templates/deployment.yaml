@@ -28,15 +28,3 @@ spec:
         {{- if .Values.cozystackController.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
-        ports:
-        - name: webhook
-          containerPort: 9443
-        volumeMounts:
-          - name: webhook-certs
-            mountPath: /tmp/k8s-webhook-server/serving-certs
-            readOnly: true
-      volumes:
-        - name: webhook-certs
-          secret:
-            secretName: cozystack-controller-webhook-cert
-            defaultMode: 0400

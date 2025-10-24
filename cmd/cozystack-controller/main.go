@@ -39,7 +39,6 @@ import (
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
 	"github.com/cozystack/cozystack/internal/controller/dashboard"
-	lcw "github.com/cozystack/cozystack/internal/lineagecontrollerwebhook"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -219,20 +218,6 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
-		os.Exit(1)
-	}
-
-	// special one that's both a webhook and a reconciler
-	lineageControllerWebhook := &lcw.LineageControllerWebhook{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}
-	if err := lineageControllerWebhook.SetupWithManagerAsController(mgr); err != nil {
-		setupLog.Error(err, "unable to setup controller", "controller", "LineageController")
-		os.Exit(1)
-	}
-	if err := lineageControllerWebhook.SetupWithManagerAsWebhook(mgr); err != nil {
-		setupLog.Error(err, "unable to setup webhook", "webhook", "LineageWebhook")
 		os.Exit(1)
 	}
 
