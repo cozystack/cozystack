@@ -9,10 +9,21 @@ This roadmap contains a complete plan for integrating Proxmox VE with CozyStack 
 ## 📁 Documentation Structure
 
 ### Main Documents
+- **[COMPLETE_ROADMAP.md](./COMPLETE_ROADMAP.md)** - ⭐ **Complete roadmap based on Issue #69**
 - **[SPRINT_PROXMOX_INTEGRATION.md](./SPRINT_PROXMOX_INTEGRATION.md)** - Detailed sprint plan with tasks and success criteria
 - **[PROXMOX_INTEGRATION_RUNBOOK.md](./PROXMOX_INTEGRATION_RUNBOOK.md)** - Step-by-step runbook for installation and maintenance
 - **[PROXMOX_TESTING_PLAN.md](./PROXMOX_TESTING_PLAN.md)** - Comprehensive testing plan with 8 stages
 - **[SPRINT_TIMELINE.md](./SPRINT_TIMELINE.md)** - Detailed timeline with day-by-day schedule
+
+### Assessment and Recovery Documents
+- **[INITIAL_ASSESSMENT.md](./INITIAL_ASSESSMENT.md)** - Initial cluster state analysis
+- **[CRITICAL_CLUSTER_STATE.md](./CRITICAL_CLUSTER_STATE.md)** - Emergency recovery procedures
+- **[RECOVERY_SUCCESS.md](./RECOVERY_SUCCESS.md)** - Successful recovery report (45 minutes)
+
+### Testing and Results
+- **[TESTING_RESULTS.md](./TESTING_RESULTS.md)** - Steps 1-3 test results
+- **[FINAL_TESTING_REPORT.md](./FINAL_TESTING_REPORT.md)** - Comprehensive final assessment
+- **[TIME_TRACKING.md](./TIME_TRACKING.md)** - Time tracking and ROI analysis
 
 ### Additional Resources
 - **[../tests/proxmox-integration/](../tests/proxmox-integration/)** - Test scripts and configurations

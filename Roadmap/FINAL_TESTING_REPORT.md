@@ -161,7 +161,7 @@ Taints: node.cilium.io/agent-not-ready:NoSchedule
 │  └──────────────┘  └──────────────┘  └──────────────┘ │
 │                                                         │
 │  ┌──────────────────────────────────────────────────┐  │
-│  │            mgr.cp.if.ua                          │  │
+│  │            mgr                                  │  │
 │  │         Worker Node (Proxmox Server)            │  │
 │  │         Debian + Proxmox VE 9.0.10              │  │
 │  │         Kernel: 6.14.11-2-pve                   │  │
