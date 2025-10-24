@@ -1,0 +1,23 @@
+diff --git a/service/k8s/service.go b/service/k8s/service.go
+index 712cc4c0..e84afc92 100644
+--- a/service/k8s/service.go
++++ b/service/k8s/service.go
+@@ -10,6 +10,7 @@ import (
+ 
+ 	"github.com/spotahome/redis-operator/log"
+ 	"github.com/spotahome/redis-operator/metrics"
++	"github.com/spotahome/redis-operator/operator/redisfailover/util"
+ )
+ 
+ // Service the ServiceAccount service that knows how to interact with k8s to manage them
+@@ -95,6 +96,10 @@ func (s *ServiceService) CreateOrUpdateService(namespace string, service *corev1
+ 	// namespace is our spec(https://github.com/kubernetes/community/blob/master/contributors/devel/api-conventions.md#concurrency-control-and-consistency),
+ 	// we will replace the current namespace state.
+ 	service.ResourceVersion = storedService.ResourceVersion
++	newLabels := util.MergeLabels(storedService.GetLabels(), service.GetLabels())
++	newAnnotations := util.MergeAnnotations(storedService.GetAnnotations(), service.GetAnnotations())
++	service.SetLabels(newLabels)
++	service.SetAnnotations(newAnnotations)
+ 	return s.UpdateService(namespace, service)
+ }
+ 
