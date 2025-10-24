@@ -1,0 +1,6 @@
+apiVersion: v2
+name: virtualprivatecloud
+description: Isolated networks
+icon: logos/vpc.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process

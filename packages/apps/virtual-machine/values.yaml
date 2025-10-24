@@ -1,4 +1,3 @@
-
 ## @section Common parameters
 ##
 ## @param external {bool} Enable external access from outside the cluster
@@ -28,13 +27,21 @@ systemDisk:
   storage: 5Gi
   storageClass: replicated
 
+## @param subnets {[]subnet} Additional subnets (management subnet will be attached by default)
+## @field subnet.name {string} Additional subnet to attach
+## Example:
+## subnets:
+##   - name: subnet-84dbec17
+##   - name: subnet-aa8896b5
+##   - name: subnet-e9b97196
+subnets: []
+
 ## @param gpus {[]gpu} List of GPUs to attach
 ## @field gpu.name {string} The name of the GPU to attach. This should match the GPU resource name in the cluster.
 ## Example:
 ## gpus:
 ## - name: nvidia.com/GA102GL_A10
 gpus: []
-
 
 ## @param resources {*resources} Resources
 ## @field resources.cpu {*quantity} The number of CPU cores allocated to the virtual machine
