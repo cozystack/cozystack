@@ -1,6 +1,25 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 
 releases:
+- name: fluxcd-operator
+  releaseName: fluxcd-operator
+  chart: cozy-fluxcd-operator
+  namespace: cozy-fluxcd
+  privileged: true
+  dependsOn: []
+
+- name: fluxcd
+  releaseName: fluxcd
+  chart: cozy-fluxcd
+  namespace: cozy-fluxcd
+  dependsOn: [fluxcd-operator,cilium,kubeovn]
+  values:
+    flux-instance:
+      instance:
+        cluster:
+          domain: {{ $clusterDomain }}
+
 - name: cilium
   releaseName: cilium
   chart: cozy-cilium
@@ -24,11 +43,58 @@ releases:
         SVC_CIDR: "{{ index $cozyConfig.data "ipv4-svc-cidr" }}"
         JOIN_CIDR: "{{ index $cozyConfig.data "ipv4-join-cidr" }}"
 
+- name: cozy-proxy
+  releaseName: cozystack
+  chart: cozy-cozy-proxy
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn]
+
+- name: cert-manager-crds
+  releaseName: cert-manager-crds
+  chart: cozy-cert-manager-crds
+  namespace: cozy-cert-manager
+  dependsOn: [cilium, kubeovn]
+
+- name: cozystack-api
+  releaseName: cozystack-api
+  chart: cozy-cozystack-api
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn,cozystack-controller]
+
+- name: cozystack-controller
+  releaseName: cozystack-controller
+  chart: cozy-cozystack-controller
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn]
+  {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
+  values:
+    cozystackController:
+      disableTelemetry: true
+  {{- end }}
+
+- name: lineage-controller-webhook
+  releaseName: lineage-controller-webhook
+  chart: cozy-lineage-controller-webhook
+  namespace: cozy-system
+  dependsOn: [cozystack-controller,cilium,kubeovn,cert-manager]
+
+- name: cozystack-resource-definition-crd
+  releaseName: cozystack-resource-definition-crd
+  chart: cozystack-resource-definition-crd
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
+
+- name: cozystack-resource-definitions
+  releaseName: cozystack-resource-definitions
+  chart: cozystack-resource-definitions
+  namespace: cozy-system
+  dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
+
 - name: cert-manager
   releaseName: cert-manager
   chart: cozy-cert-manager
   namespace: cozy-cert-manager
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cert-manager-crds]
 
 - name: cert-manager-issuers
   releaseName: cert-manager-issuers
@@ -79,17 +145,45 @@ releases:
   namespace: cozy-redis-operator
   dependsOn: [cilium,kubeovn]
 
-- name: proxmox-csi-operator
-  releaseName: proxmox-csi-operator
-  chart: cozy-proxmox-csi-operator
-  namespace: cozy-proxmox
+- name: proxmox-csi
+  releaseName: proxmox-csi
+  chart: cozy-proxmox-csi
+  namespace: cozy-proxmox-csi
+  privileged: true
   dependsOn: [cilium,kubeovn,cert-manager]
 
-- name: proxmox-csi-operator
-  releaseName: proxmox-csi-operator
-  chart: cozy-proxmox-csi-operator
-  namespace: cozy-proxmox
+- name: proxmox-ccm
+  releaseName: proxmox-ccm
+  chart: cozy-proxmox-ccm
+  namespace: cozy-proxmox-ccm
+  privileged: true
   dependsOn: [cilium,kubeovn,cert-manager]
+
+- name: metallb
+  releaseName: metallb
+  chart: cozy-metallb
+  namespace: cozy-metallb
+  privileged: true
+  dependsOn: [cilium,kubeovn]
+
+- name: snapshot-controller
+  releaseName: snapshot-controller
+  chart: cozy-snapshot-controller
+  namespace: cozy-snapshot-controller
+  dependsOn: [cilium,kubeovn,cert-manager]
+
+- name: piraeus-operator
+  releaseName: piraeus-operator
+  chart: cozy-piraeus-operator
+  namespace: cozy-linstor
+  dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+
+- name: linstor
+  releaseName: linstor
+  chart: cozy-linstor
+  namespace: cozy-linstor
+  privileged: true
+  dependsOn: [piraeus-operator,cilium,kubeovn,cert-manager,snapshot-controller]
 
 - name: telepresence
   releaseName: traffic-manager
