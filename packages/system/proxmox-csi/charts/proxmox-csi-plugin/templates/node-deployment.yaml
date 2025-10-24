@@ -1,0 +1,135 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "proxmox-csi-plugin.fullname" . }}-node
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-csi-plugin.labels" . | nindent 4 }}
+spec:
+  updateStrategy:
+    type: {{ .Values.updateStrategy.type }}
+  selector:
+    matchLabels:
+      {{- include "proxmox-csi-plugin-node.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "proxmox-csi-plugin-node.selectorLabels" . | nindent 8 }}
+    spec:
+      priorityClassName: system-node-critical
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      enableServiceLinks: false
+      serviceAccountName: {{ include "proxmox-csi-plugin.serviceAccountName" . }}-node
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      containers:
+        - name: {{ include "proxmox-csi-plugin.fullname" . }}-node
+          securityContext:
+            privileged: true
+            capabilities:
+              drop:
+              - ALL
+              add:
+              - SYS_ADMIN
+              - CHOWN
+              - DAC_OVERRIDE
+            seccompProfile:
+              type: RuntimeDefault
+          image: "{{ .Values.node.plugin.image.repository }}:{{ .Values.node.plugin.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.node.plugin.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--node-id=$(NODE_NAME)"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources: {{- toYaml .Values.node.plugin.resources | nindent 12 }}
+          volumeMounts:
+            - name: socket
+              mountPath: /csi
+            - name: kubelet
+              mountPath: {{ .Values.node.kubeletDir }}
+              mountPropagation: Bidirectional
+            - name: dev
+              mountPath: /dev
+            - name: sys
+              mountPath: /sys
+        - name: csi-node-driver-registrar
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          image: "{{ .Values.node.driverRegistrar.image.repository }}:{{ .Values.node.driverRegistrar.image.tag }}"
+          imagePullPolicy: {{ .Values.node.driverRegistrar.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--kubelet-registration-path={{ .Values.node.kubeletDir }}/plugins/{{ .Values.provisionerName }}/csi.sock"
+          volumeMounts:
+            - name: socket
+              mountPath: /csi
+            - name: registration
+              mountPath: /registration
+          resources: {{- toYaml .Values.node.driverRegistrar.resources | nindent 12 }}
+        - name: liveness-probe
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+          image: "{{ .Values.livenessprobe.image.repository }}:{{ .Values.livenessprobe.image.tag }}"
+          imagePullPolicy: {{ .Values.livenessprobe.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+          volumeMounts:
+            - name: socket
+              mountPath: /csi
+          resources: {{- toYaml .Values.livenessprobe.resources | nindent 12 }}
+      volumes:
+        - name: socket
+          hostPath:
+            path: {{ .Values.node.kubeletDir }}/plugins/{{ .Values.provisionerName }}/
+            type: DirectoryOrCreate
+        - name: registration
+          hostPath:
+            path: {{ .Values.node.kubeletDir }}/plugins_registry/
+            type: Directory
+        - name: kubelet
+          hostPath:
+            path: {{ .Values.node.kubeletDir }}
+            type: Directory
+        - name: dev
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+      {{- with .Values.node.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.node.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
