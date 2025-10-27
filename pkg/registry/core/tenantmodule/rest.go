@@ -32,12 +32,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -69,17 +70,19 @@ var helmReleaseGVR = schema.GroupVersionResource{
 
 // REST implements the RESTStorage interface for TenantModule resources
 type REST struct {
-	dynamicClient dynamic.Interface
-	gvr           schema.GroupVersionResource
-	gvk           schema.GroupVersionKind
-	kindName      string
-	singularName  string
+	c            client.Client
+	w            client.WithWatch
+	gvr          schema.GroupVersionResource
+	gvk          schema.GroupVersionKind
+	kindName     string
+	singularName string
 }
 
 // NewREST creates a new REST storage for TenantModule
-func NewREST(dynamicClient dynamic.Interface) *REST {
+func NewREST(c client.Client, w client.WithWatch) *REST {
 	return &REST{
-		dynamicClient: dynamicClient,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -115,7 +118,8 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 	klog.V(6).Infof("Attempting to retrieve TenantModule %s in namespace %s", name, namespace)
 
 	// Get the corresponding HelmRelease
-	hr, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Get(ctx, name, *options)
+	hr := &helmv2.HelmRelease{}
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, hr, &client.GetOptions{Raw: options})
 	if err != nil {
 		klog.Errorf("Error retrieving HelmRelease for TenantModule %s: %v", name, err)
 
@@ -231,7 +235,11 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// List HelmReleases with mapped selectors
-	hrList, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).List(ctx, metaOptions)
+	hrList := &helmv2.HelmReleaseList{}
+	err = r.c.List(ctx, hrList, &client.ListOptions{
+		Namespace: namespace,
+		Raw:       &metaOptions,
+	})
 	if err != nil {
 		klog.Errorf("Error listing HelmReleases: %v", err)
 		return nil, err
@@ -241,15 +249,15 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	items := make([]unstructured.Unstructured, 0)
 
 	// Iterate over HelmReleases and convert to TenantModules
-	for _, hr := range hrList.Items {
+	for i := range hrList.Items {
 		// Double-check the label requirement
-		if !r.hasTenantModuleLabel(&hr) {
+		if !r.hasTenantModuleLabel(&hrList.Items[i]) {
 			continue
 		}
 
-		module, err := r.ConvertHelmReleaseToTenantModule(&hr)
+		module, err := r.ConvertHelmReleaseToTenantModule(&hrList.Items[i])
 		if err != nil {
-			klog.Errorf("Error converting HelmRelease %s to TenantModule: %v", hr.GetName(), err)
+			klog.Errorf("Error converting HelmRelease %s to TenantModule: %v", hrList.Items[i].GetName(), err)
 			continue
 		}
 
@@ -376,7 +384,11 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 
 	// Start watch on HelmRelease with mapped selectors
-	helmWatcher, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Watch(ctx, metaOptions)
+	hrList := &helmv2.HelmReleaseList{}
+	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
+		Namespace: namespace,
+		Raw:       &metaOptions,
+	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
 		return nil, err
@@ -386,13 +398,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	customW := &customWatcher{
 		resultChan: make(chan watch.Event),
 		stopChan:   make(chan struct{}),
+		underlying: helmWatcher,
 	}
 
 	go func() {
 		defer close(customW.resultChan)
+		defer customW.underlying.Stop()
 		for {
 			select {
-			case event, ok := <-helmWatcher.ResultChan():
+			case event, ok := <-customW.underlying.ResultChan():
 				if !ok {
 					// The watcher has been closed, attempt to re-establish the watch
 					klog.Warning("HelmRelease watcher closed, attempting to re-establish")
@@ -406,19 +420,19 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue // Skip processing this event
 				}
 
-				// Proceed with processing Unstructured objects
-				matches, err := r.isRelevantHelmRelease(&event)
-				if err != nil {
-					klog.V(4).Infof("Non-critical error filtering HelmRelease event: %v", err)
+				// Proceed with processing HelmRelease objects
+				hr, ok := event.Object.(*helmv2.HelmRelease)
+				if !ok {
+					klog.V(4).Infof("Expected HelmRelease object, got %T", event.Object)
 					continue
 				}
 
-				if !matches {
+				if !r.hasTenantModuleLabel(hr) {
 					continue
 				}
 
 				// Convert HelmRelease to TenantModule
-				module, err := r.ConvertHelmReleaseToTenantModule(event.Object.(*unstructured.Unstructured))
+				module, err := r.ConvertHelmReleaseToTenantModule(hr)
 				if err != nil {
 					klog.Errorf("Error converting HelmRelease to TenantModule: %v", err)
 					continue
@@ -480,12 +494,16 @@ type customWatcher struct {
 	resultChan chan watch.Event
 	stopChan   chan struct{}
 	stopOnce   sync.Once
+	underlying watch.Interface
 }
 
 // Stop terminates the watch
 func (cw *customWatcher) Stop() {
 	cw.stopOnce.Do(func() {
 		close(cw.stopChan)
+		if cw.underlying != nil {
+			cw.underlying.Stop()
+		}
 	})
 }
 
@@ -494,30 +512,8 @@ func (cw *customWatcher) ResultChan() <-chan watch.Event {
 	return cw.resultChan
 }
 
-// isRelevantHelmRelease checks if the HelmRelease has the tenant module label
-func (r *REST) isRelevantHelmRelease(event *watch.Event) (bool, error) {
-	if event.Object == nil {
-		return false, nil
-	}
-
-	// Check if the object is a *v1.Status
-	if status, ok := event.Object.(*metav1.Status); ok {
-		// Log at a less severe level or handle specific status errors if needed
-		klog.V(4).Infof("Received Status object in HelmRelease watch: %v", status.Message)
-		return false, nil // Not relevant for processing as a HelmRelease
-	}
-
-	// Proceed if it's an Unstructured object
-	hr, ok := event.Object.(*unstructured.Unstructured)
-	if !ok {
-		return false, fmt.Errorf("expected Unstructured object, got %T", event.Object)
-	}
-
-	return r.hasTenantModuleLabel(hr), nil
-}
-
 // hasTenantModuleLabel checks if a HelmRelease has the required tenant module label
-func (r *REST) hasTenantModuleLabel(hr *unstructured.Unstructured) bool {
+func (r *REST) hasTenantModuleLabel(hr *helmv2.HelmRelease) bool {
 	labels := hr.GetLabels()
 	if labels == nil {
 		return false
@@ -554,19 +550,11 @@ func (r *REST) getNamespace(ctx context.Context) (string, error) {
 }
 
 // ConvertHelmReleaseToTenantModule converts a HelmRelease to a TenantModule
-func (r *REST) ConvertHelmReleaseToTenantModule(hr *unstructured.Unstructured) (corev1alpha1.TenantModule, error) {
+func (r *REST) ConvertHelmReleaseToTenantModule(hr *helmv2.HelmRelease) (corev1alpha1.TenantModule, error) {
 	klog.V(6).Infof("Converting HelmRelease to TenantModule for resource %s", hr.GetName())
 
-	var helmRelease helmv2.HelmRelease
-	// Convert unstructured to HelmRelease struct
-	err := runtime.DefaultUnstructuredConverter.FromUnstructured(hr.Object, &helmRelease)
-	if err != nil {
-		klog.Errorf("Error converting from unstructured to HelmRelease: %v", err)
-		return corev1alpha1.TenantModule{}, err
-	}
-
 	// Convert HelmRelease struct to TenantModule struct
-	module, err := r.convertHelmReleaseToTenantModule(&helmRelease)
+	module, err := r.convertHelmReleaseToTenantModule(hr)
 	if err != nil {
 		klog.Errorf("Error converting from HelmRelease to TenantModule: %v", err)
 		return corev1alpha1.TenantModule{}, err

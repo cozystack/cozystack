@@ -4,7 +4,7 @@ metadata:
   name: cozystack-api
 rules:
 - apiGroups: [""]
-  resources: ["namespaces", "secrets"]
+  resources: ["namespaces", "secrets", "services"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["rolebindings"]
