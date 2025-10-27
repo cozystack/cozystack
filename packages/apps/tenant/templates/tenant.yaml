@@ -270,6 +270,7 @@ rules:
     - vmdisks
     - vminstances
     - infos
+    - virtualprivateclouds
     verbs:
     - get
     - list
