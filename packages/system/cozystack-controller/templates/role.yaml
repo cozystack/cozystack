@@ -5,7 +5,7 @@ metadata:
   namespace: cozy-system
 rules:
 - apiGroups: ["apps"]
-  resources: ["deployments"]
+  resources: ["deployments", "daemonsets"]
   resourceNames: ["cozystack-api"]
   verbs: ["patch", "update"]
 

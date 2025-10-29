@@ -5,28 +5,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
-	"github.com/cozystack/cozystack/internal/controller/dashboard"
-	"github.com/cozystack/cozystack/internal/shared/crdmem"
-
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 
-	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -40,128 +33,20 @@ type CozystackResourceDefinitionReconciler struct {
 	lastEvent   time.Time
 	lastHandled time.Time
 
-	mem *crdmem.Memory
-
-	// Track static resources initialization
-	staticResourcesInitialized bool
-	staticResourcesMutex       sync.Mutex
+	CozystackAPIKind string
 }
 
 func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	crd := &cozyv1alpha1.CozystackResourceDefinition{}
-	err := r.Get(ctx, types.NamespacedName{Name: req.Name}, crd)
-	if err == nil {
-		if r.mem != nil {
-			r.mem.Upsert(crd)
-		}
-
-		mgr := dashboard.NewManager(
-			r.Client,
-			r.Scheme,
-			dashboard.WithCRDListFunc(func(c context.Context) ([]cozyv1alpha1.CozystackResourceDefinition, error) {
-				if r.mem != nil {
-					return r.mem.ListFromCacheOrAPI(c, r.Client)
-				}
-				var list cozyv1alpha1.CozystackResourceDefinitionList
-				if err := r.Client.List(c, &list); err != nil {
-					return nil, err
-				}
-				return list.Items, nil
-			}),
-		)
-
-		if res, derr := mgr.EnsureForCRD(ctx, crd); derr != nil || res.Requeue || res.RequeueAfter > 0 {
-			return res, derr
-		}
-
-		// After processing CRD, perform cleanup of orphaned resources
-		// This should be done after cache warming to ensure all current resources are known
-		if cleanupErr := mgr.CleanupOrphanedResources(ctx); cleanupErr != nil {
-			logger.Error(cleanupErr, "Failed to cleanup orphaned dashboard resources")
-			// Don't fail the reconciliation, just log the error
-		}
-
-		r.mu.Lock()
-		r.lastEvent = time.Now()
-		r.mu.Unlock()
-		return ctrl.Result{}, nil
-	}
-
-	// Handle error cases (err is guaranteed to be non-nil here)
-	if !apierrors.IsNotFound(err) {
-		return ctrl.Result{}, err
-	}
-	// If resource is not found, clean up from memory
-	if r.mem != nil {
-		r.mem.Delete(req.Name)
-	}
-	if req.Namespace == "cozy-system" && req.Name == "cozystack-api" {
-		return r.debouncedRestart(ctx, logger)
-	}
-	return ctrl.Result{}, nil
-}
-
-// initializeStaticResourcesOnce ensures static resources are created only once
-func (r *CozystackResourceDefinitionReconciler) initializeStaticResourcesOnce(ctx context.Context) error {
-	r.staticResourcesMutex.Lock()
-	defer r.staticResourcesMutex.Unlock()
-
-	if r.staticResourcesInitialized {
-		return nil // Already initialized
-	}
-
-	// Create dashboard manager and initialize static resources
-	mgr := dashboard.NewManager(
-		r.Client,
-		r.Scheme,
-		dashboard.WithCRDListFunc(func(c context.Context) ([]cozyv1alpha1.CozystackResourceDefinition, error) {
-			if r.mem != nil {
-				return r.mem.ListFromCacheOrAPI(c, r.Client)
-			}
-			var list cozyv1alpha1.CozystackResourceDefinitionList
-			if err := r.Client.List(c, &list); err != nil {
-				return nil, err
-			}
-			return list.Items, nil
-		}),
-	)
-
-	if err := mgr.InitializeStaticResources(ctx); err != nil {
-		return err
-	}
-
-	r.staticResourcesInitialized = true
-	log.FromContext(ctx).Info("Static dashboard resources initialized successfully")
-	return nil
+	return r.debouncedRestart(ctx)
 }
 
 func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Debounce == 0 {
 		r.Debounce = 5 * time.Second
 	}
-	if r.mem == nil {
-		r.mem = crdmem.Global()
-	}
-	if err := r.mem.EnsurePrimingWithManager(mgr); err != nil {
-		return err
-	}
-
-	// Initialize static resources once during controller startup using manager.Runnable
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		if err := r.initializeStaticResourcesOnce(ctx); err != nil {
-			log.FromContext(ctx).Error(err, "Failed to initialize static resources")
-			return err
-		}
-		return nil
-	})); err != nil {
-		return err
-	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystackresource-controller").
-		For(&cozyv1alpha1.CozystackResourceDefinition{}, builder.WithPredicates()).
 		Watches(
 			&cozyv1alpha1.CozystackResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -176,9 +61,6 @@ func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manage
 				}}
 			}),
 		).
-		WithOptions(controller.Options{
-			MaxConcurrentReconciles: 5, // Allow more concurrent reconciles with proper rate limiting
-		}).
 		Complete(r)
 }
 
@@ -188,22 +70,18 @@ type crdHashView struct {
 }
 
 func (r *CozystackResourceDefinitionReconciler) computeConfigHash(ctx context.Context) (string, error) {
-	var items []cozyv1alpha1.CozystackResourceDefinition
-	if r.mem != nil {
-		list, err := r.mem.ListFromCacheOrAPI(ctx, r.Client)
-		if err != nil {
-			return "", err
-		}
-		items = list
+	list := &cozyv1alpha1.CozystackResourceDefinitionList{}
+	if err := r.List(ctx, list); err != nil {
+		return "", err
 	}
 
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	slices.SortFunc(list.Items, sortCozyRDs)
 
-	views := make([]crdHashView, 0, len(items))
-	for i := range items {
+	views := make([]crdHashView, 0, len(list.Items))
+	for i := range list.Items {
 		views = append(views, crdHashView{
-			Name: items[i].Name,
-			Spec: items[i].Spec,
+			Name: list.Items[i].Name,
+			Spec: list.Items[i].Spec,
 		})
 	}
 	b, err := json.Marshal(views)
@@ -214,7 +92,9 @@ func (r *CozystackResourceDefinitionReconciler) computeConfigHash(ctx context.Co
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Context, logger logr.Logger) (ctrl.Result, error) {
+func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Context) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
 	r.mu.Lock()
 	le := r.lastEvent
 	lh := r.lastHandled
@@ -239,15 +119,12 @@ func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Con
 		return ctrl.Result{}, err
 	}
 
-	deploy := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: "cozy-system", Name: "cozystack-api"}, deploy); err != nil {
+	tpl, obj, patch, err := r.getWorkload(ctx, types.NamespacedName{Namespace: "cozy-system", Name: "cozystack-api"})
+	if err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if deploy.Spec.Template.Annotations == nil {
-		deploy.Spec.Template.Annotations = map[string]string{}
-	}
-	oldHash := deploy.Spec.Template.Annotations["cozystack.io/config-hash"]
+	oldHash := tpl.Annotations["cozystack.io/config-hash"]
 
 	if oldHash == newHash && oldHash != "" {
 		r.mu.Lock()
@@ -257,10 +134,9 @@ func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Con
 		return ctrl.Result{}, nil
 	}
 
-	patch := client.MergeFrom(deploy.DeepCopy())
-	deploy.Spec.Template.Annotations["cozystack.io/config-hash"] = newHash
+	tpl.Annotations["cozystack.io/config-hash"] = newHash
 
-	if err := r.Patch(ctx, deploy, patch); err != nil {
+	if err := r.Patch(ctx, obj, patch); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -271,4 +147,41 @@ func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Con
 	logger.Info("Updated cozystack-api podTemplate config-hash; rollout triggered",
 		"old", oldHash, "new", newHash)
 	return ctrl.Result{}, nil
+}
+
+func (r *CozystackResourceDefinitionReconciler) getWorkload(
+	ctx context.Context,
+	key types.NamespacedName,
+) (tpl *corev1.PodTemplateSpec, obj client.Object, patch client.Patch, err error) {
+	if r.CozystackAPIKind == "Deployment" {
+		dep := &appsv1.Deployment{}
+		if err := r.Get(ctx, key, dep); err != nil {
+			return nil, nil, nil, err
+		}
+		obj = dep
+		tpl = &dep.Spec.Template
+		patch = client.MergeFrom(dep.DeepCopy())
+	} else {
+		ds := &appsv1.DaemonSet{}
+		if err := r.Get(ctx, key, ds); err != nil {
+			return nil, nil, nil, err
+		}
+		obj = ds
+		tpl = &ds.Spec.Template
+		patch = client.MergeFrom(ds.DeepCopy())
+	}
+	if tpl.Annotations == nil {
+		tpl.Annotations = make(map[string]string)
+	}
+	return tpl, obj, patch, nil
+}
+
+func sortCozyRDs(a, b cozyv1alpha1.CozystackResourceDefinition) int {
+	if a.Name == b.Name {
+		return 0
+	}
+	if a.Name < b.Name {
+		return -1
+	}
+	return 1
 }
