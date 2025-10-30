@@ -1,0 +1,74 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-cleanup
+      restartPolicy: Never
+      containers:
+        - name: cleanup
+          image: docker.io/clastix/kubectl:v1.32
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
+              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} || true
+              echo "PVC cleanup complete."
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    helm.sh/hook-weight: "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    helm.sh/hook-weight: "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-cleanup
