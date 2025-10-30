@@ -14,8 +14,7 @@
         "properties": {
           "cidr": {
             "description": "Subnet CIDR, e.g. 192.168.0.0/24",
-            "type": "string",
-            "format": "cidr"
+            "type": "string"
           }
         }
       }

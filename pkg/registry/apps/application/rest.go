@@ -37,8 +37,8 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
@@ -76,7 +76,8 @@ var helmReleaseGVR = schema.GroupVersionResource{
 
 // REST implements the RESTStorage interface for Application resources
 type REST struct {
-	dynamicClient dynamic.Interface
+	c             client.Client
+	w             client.WithWatch
 	gvr           schema.GroupVersionResource
 	gvk           schema.GroupVersionKind
 	kindName      string
@@ -86,7 +87,7 @@ type REST struct {
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
-func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
+func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST {
 	var specSchema *structuralschema.Structural
 
 	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
@@ -110,7 +111,8 @@ func NewREST(dynamicClient dynamic.Interface, config *config.Resource) *REST {
 	}
 
 	return &REST{
-		dynamicClient: dynamicClient,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -158,30 +160,23 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
-	// Convert HelmRelease to unstructured format
-	unstructuredHR, err := runtime.DefaultUnstructuredConverter.ToUnstructured(helmRelease)
-	if err != nil {
-		klog.Errorf("Failed to convert HelmRelease to unstructured: %v", err)
-		return nil, fmt.Errorf("failed to convert HelmRelease to unstructured: %v", err)
-	}
-
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
 	// Create HelmRelease in Kubernetes
-	createdHR, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(app.Namespace).Create(ctx, &unstructured.Unstructured{Object: unstructuredHR}, *options)
+	err = r.c.Create(ctx, helmRelease, &client.CreateOptions{Raw: options})
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, fmt.Errorf("failed to create HelmRelease: %v", err)
 	}
 
 	// Convert the created HelmRelease back to Application
-	convertedApp, err := r.ConvertHelmReleaseToApplication(createdHR)
+	convertedApp, err := r.ConvertHelmReleaseToApplication(helmRelease)
 	if err != nil {
-		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", createdHR.GetName(), err)
+		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", helmRelease.GetName(), err)
 		return nil, fmt.Errorf("conversion error: %v", err)
 	}
 
-	klog.V(6).Infof("Successfully created and converted HelmRelease %s to Application", createdHR.GetName())
+	klog.V(6).Infof("Successfully created and converted HelmRelease %s to Application", helmRelease.GetName())
 
 	// Convert Application to unstructured format
 	unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&convertedApp)
@@ -206,7 +201,8 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 
 	// Get the corresponding HelmRelease using the new prefix
 	helmReleaseName := r.releaseConfig.Prefix + name
-	hr, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Get(ctx, helmReleaseName, *options)
+	helmRelease := &helmv2.HelmRelease{}
+	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: options})
 	if err != nil {
 		klog.Errorf("Error retrieving HelmRelease for resource %s: %v", name, err)
 
@@ -221,14 +217,14 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 	}
 
 	// Check if HelmRelease meets the required chartName and sourceRef criteria
-	if !r.shouldIncludeHelmRelease(hr) {
+	if !r.shouldIncludeHelmRelease(helmRelease) {
 		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmReleaseName)
 		// Return a NotFound error for the Application resource
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
 	// Convert HelmRelease to Application
-	convertedApp, err := r.ConvertHelmReleaseToApplication(hr)
+	convertedApp, err := r.ConvertHelmReleaseToApplication(helmRelease)
 	if err != nil {
 		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", name, err)
 		return nil, fmt.Errorf("conversion error: %v", err)
@@ -325,7 +321,11 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// List HelmReleases with mapped selectors
-	hrList, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).List(ctx, metaOptions)
+	hrList := &helmv2.HelmReleaseList{}
+	err = r.c.List(ctx, hrList, &client.ListOptions{
+		Namespace: namespace,
+		Raw:       &metaOptions,
+	})
 	if err != nil {
 		klog.Errorf("Error listing HelmReleases: %v", err)
 		return nil, err
@@ -335,14 +335,14 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	items := make([]unstructured.Unstructured, 0)
 
 	// Iterate over HelmReleases and convert to Applications
-	for _, hr := range hrList.Items {
-		if !r.shouldIncludeHelmRelease(&hr) {
+	for i := range hrList.Items {
+		if !r.shouldIncludeHelmRelease(&hrList.Items[i]) {
 			continue
 		}
 
-		app, err := r.ConvertHelmReleaseToApplication(&hr)
+		app, err := r.ConvertHelmReleaseToApplication(&hrList.Items[i])
 		if err != nil {
-			klog.Errorf("Error converting HelmRelease %s to Application: %v", hr.GetName(), err)
+			klog.Errorf("Error converting HelmRelease %s to Application: %v", hrList.Items[i].GetName(), err)
 			continue
 		}
 
@@ -457,7 +457,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	// Ensure ResourceVersion
 	if helmRelease.ResourceVersion == "" {
-		cur, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(helmRelease.Namespace).Get(ctx, helmRelease.Name, metav1.GetOptions{})
+		cur := &helmv2.HelmRelease{}
+		err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}})
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
 		}
@@ -470,53 +471,38 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
-	// Convert HelmRelease to unstructured format
-	unstructuredHR, err := runtime.DefaultUnstructuredConverter.ToUnstructured(helmRelease)
-	if err != nil {
-		klog.Errorf("Failed to convert HelmRelease to unstructured: %v", err)
-		return nil, false, fmt.Errorf("failed to convert HelmRelease to unstructured: %v", err)
-	}
-
-	// Retrieve metadata from unstructured object
-	metadata, found, err := unstructured.NestedMap(unstructuredHR, "metadata")
-	if err != nil || !found {
-		klog.Errorf("Failed to retrieve metadata from HelmRelease: %v, found: %v", err, found)
-		return nil, false, fmt.Errorf("failed to retrieve metadata from HelmRelease: %v", err)
-	}
-	klog.V(6).Infof("HelmRelease Metadata: %+v", metadata)
-
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
 	// Before updating, ensure the HelmRelease meets the inclusion criteria
 	// This prevents updating HelmReleases that should not be managed as Applications
-	if !r.shouldIncludeHelmRelease(&unstructured.Unstructured{Object: unstructuredHR}) {
+	if !r.shouldIncludeHelmRelease(helmRelease) {
 		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.Name)
 		// Return a NotFound error for the Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
 	// Update the HelmRelease in Kubernetes
-	resultHR, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(helmRelease.Namespace).Update(ctx, &unstructured.Unstructured{Object: unstructuredHR}, metav1.UpdateOptions{})
+	err = r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
 	}
 
 	// After updating, ensure the updated HelmRelease still meets the inclusion criteria
-	if !r.shouldIncludeHelmRelease(resultHR) {
-		klog.Errorf("Updated HelmRelease %s does not match the required chartName and sourceRef criteria", resultHR.GetName())
+	if !r.shouldIncludeHelmRelease(helmRelease) {
+		klog.Errorf("Updated HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.GetName())
 		// Return a NotFound error for the Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
 	// Convert the updated HelmRelease back to Application
-	convertedApp, err := r.ConvertHelmReleaseToApplication(resultHR)
+	convertedApp, err := r.ConvertHelmReleaseToApplication(helmRelease)
 	if err != nil {
-		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", resultHR.GetName(), err)
+		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", helmRelease.GetName(), err)
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	klog.V(6).Infof("Successfully updated and converted HelmRelease %s to Application", resultHR.GetName())
+	klog.V(6).Infof("Successfully updated and converted HelmRelease %s to Application", helmRelease.GetName())
 
 	// Explicitly set apiVersion and kind for Application
 	convertedApp.TypeMeta = metav1.TypeMeta{
@@ -554,7 +540,8 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	helmReleaseName := r.releaseConfig.Prefix + name
 
 	// Retrieve the HelmRelease before attempting to delete
-	hr, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Get(ctx, helmReleaseName, metav1.GetOptions{})
+	helmRelease := &helmv2.HelmRelease{}
+	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: &metav1.GetOptions{}})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// If HelmRelease does not exist, return NotFound error for Application
@@ -567,7 +554,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	}
 
 	// Validate that the HelmRelease meets the inclusion criteria
-	if !r.shouldIncludeHelmRelease(hr) {
+	if !r.shouldIncludeHelmRelease(helmRelease) {
 		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
@@ -576,7 +563,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
 
 	// Delete the HelmRelease corresponding to the Application
-	err = r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Delete(ctx, helmReleaseName, *options)
+	err = r.c.Delete(ctx, helmRelease, &client.DeleteOptions{Raw: options})
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
 		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
@@ -659,7 +646,11 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 
 	// Start watch on HelmRelease with mapped selectors
-	helmWatcher, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Watch(ctx, metaOptions)
+	hrList := &helmv2.HelmReleaseList{}
+	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
+		Namespace: namespace,
+		Raw:       &metaOptions,
+	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
 		return nil, err
@@ -669,13 +660,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	customW := &customWatcher{
 		resultChan: make(chan watch.Event),
 		stopChan:   make(chan struct{}),
+		underlying: helmWatcher,
 	}
 
 	go func() {
 		defer close(customW.resultChan)
+		defer customW.underlying.Stop()
 		for {
 			select {
-			case event, ok := <-helmWatcher.ResultChan():
+			case event, ok := <-customW.underlying.ResultChan():
 				if !ok {
 					// The watcher has been closed, attempt to re-establish the watch
 					klog.Warning("HelmRelease watcher closed, attempting to re-establish")
@@ -689,19 +682,19 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue // Skip processing this event
 				}
 
-				// Proceed with processing Unstructured objects
-				matches, err := r.isRelevantHelmRelease(&event)
-				if err != nil {
-					klog.V(4).Infof("Non-critical error filtering HelmRelease event: %v", err)
+				// Proceed with processing HelmRelease objects
+				hr, ok := event.Object.(*helmv2.HelmRelease)
+				if !ok {
+					klog.V(4).Infof("Expected HelmRelease object, got %T", event.Object)
 					continue
 				}
 
-				if !matches {
+				if !r.shouldIncludeHelmRelease(hr) {
 					continue
 				}
 
 				// Convert HelmRelease to Application
-				app, err := r.ConvertHelmReleaseToApplication(event.Object.(*unstructured.Unstructured))
+				app, err := r.ConvertHelmReleaseToApplication(hr)
 				if err != nil {
 					klog.Errorf("Error converting HelmRelease to Application: %v", err)
 					continue
@@ -771,12 +764,16 @@ type customWatcher struct {
 	resultChan chan watch.Event
 	stopChan   chan struct{}
 	stopOnce   sync.Once
+	underlying watch.Interface
 }
 
 // Stop terminates the watch
 func (cw *customWatcher) Stop() {
 	cw.stopOnce.Do(func() {
 		close(cw.stopChan)
+		if cw.underlying != nil {
+			cw.underlying.Stop()
+		}
 	})
 }
 
@@ -785,34 +782,18 @@ func (cw *customWatcher) ResultChan() <-chan watch.Event {
 	return cw.resultChan
 }
 
-// isRelevantHelmRelease checks if the HelmRelease meets the sourceRef and prefix criteria
-func (r *REST) isRelevantHelmRelease(event *watch.Event) (bool, error) {
-	if event.Object == nil {
-		return false, nil
-	}
-
-	// Check if the object is a *v1.Status
-	if status, ok := event.Object.(*metav1.Status); ok {
-		// Log at a less severe level or handle specific status errors if needed
-		klog.V(4).Infof("Received Status object in HelmRelease watch: %v", status.Message)
-		return false, nil // Not relevant for processing as a HelmRelease
-	}
-
-	// Proceed if it's an Unstructured object
-	hr, ok := event.Object.(*unstructured.Unstructured)
-	if !ok {
-		return false, fmt.Errorf("expected Unstructured object, got %T", event.Object)
-	}
-
-	return r.shouldIncludeHelmRelease(hr), nil
-}
-
 // shouldIncludeHelmRelease determines if a HelmRelease should be included based on filtering criteria
-func (r *REST) shouldIncludeHelmRelease(hr *unstructured.Unstructured) bool {
+func (r *REST) shouldIncludeHelmRelease(hr *helmv2.HelmRelease) bool {
+	// Nil check for Chart field
+	if hr.Spec.Chart == nil {
+		klog.V(6).Infof("HelmRelease %s has nil spec.chart field", hr.GetName())
+		return false
+	}
+
 	// Filter by Chart Name
-	chartName, found, err := unstructured.NestedString(hr.Object, "spec", "chart", "spec", "chart")
-	if err != nil || !found {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.chart field: %v", hr.GetName(), err)
+	chartName := hr.Spec.Chart.Spec.Chart
+	if chartName == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.chart field", hr.GetName())
 		return false
 	}
 	if chartName != r.releaseConfig.Chart.Name {
@@ -825,21 +806,29 @@ func (r *REST) shouldIncludeHelmRelease(hr *unstructured.Unstructured) bool {
 }
 
 // matchesSourceRefAndPrefix checks both SourceRefConfig and Prefix criteria
-func (r *REST) matchesSourceRefAndPrefix(hr *unstructured.Unstructured) bool {
+func (r *REST) matchesSourceRefAndPrefix(hr *helmv2.HelmRelease) bool {
+	// Nil check for Chart field (defensive)
+	if hr.Spec.Chart == nil {
+		klog.V(6).Infof("HelmRelease %s has nil spec.chart field", hr.GetName())
+		return false
+	}
+
 	// Extract SourceRef fields
-	sourceRefKind, found, err := unstructured.NestedString(hr.Object, "spec", "chart", "spec", "sourceRef", "kind")
-	if err != nil || !found {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.kind field: %v", hr.GetName(), err)
+	sourceRef := hr.Spec.Chart.Spec.SourceRef
+	sourceRefKind := sourceRef.Kind
+	sourceRefName := sourceRef.Name
+	sourceRefNamespace := sourceRef.Namespace
+
+	if sourceRefKind == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.kind field", hr.GetName())
 		return false
 	}
-	sourceRefName, found, err := unstructured.NestedString(hr.Object, "spec", "chart", "spec", "sourceRef", "name")
-	if err != nil || !found {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.name field: %v", hr.GetName(), err)
+	if sourceRefName == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.name field", hr.GetName())
 		return false
 	}
-	sourceRefNamespace, found, err := unstructured.NestedString(hr.Object, "spec", "chart", "spec", "sourceRef", "namespace")
-	if err != nil || !found {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.namespace field: %v", hr.GetName(), err)
+	if sourceRefNamespace == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.namespace field", hr.GetName())
 		return false
 	}
 
@@ -930,19 +919,11 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
-func (r *REST) ConvertHelmReleaseToApplication(hr *unstructured.Unstructured) (appsv1alpha1.Application, error) {
+func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
 	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
 
-	var helmRelease helmv2.HelmRelease
-	// Convert unstructured to HelmRelease struct
-	err := runtime.DefaultUnstructuredConverter.FromUnstructured(hr.Object, &helmRelease)
-	if err != nil {
-		klog.Errorf("Error converting from unstructured to HelmRelease: %v", err)
-		return appsv1alpha1.Application{}, err
-	}
-
 	// Convert HelmRelease struct to Application struct
-	app, err := r.convertHelmReleaseToApplication(&helmRelease)
+	app, err := r.convertHelmReleaseToApplication(hr)
 	if err != nil {
 		klog.Errorf("Error converting from HelmRelease to Application: %v", err)
 		return appsv1alpha1.Application{}, err

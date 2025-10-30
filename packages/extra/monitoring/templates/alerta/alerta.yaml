@@ -109,9 +109,20 @@ spec:
             - name: AUTH_REQUIRED
               value: "True"
 
+            {{- $plugins := list }}
             {{- if and .Values.alerta.alerts.telegram.chatID .Values.alerta.alerts.telegram.token }}
+              {{- $plugins = append $plugins "telegram" }}
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.url }}
+              {{- $plugins = append $plugins "slack" }}
+            {{- end }}
+
+            {{- if gt (len $plugins) 0 }}
             - name: "PLUGINS"
-              value: "telegram"
+              value: "{{ default "" (join "," $plugins) }}"
+            {{- end }}
+
+            {{- if and .Values.alerta.alerts.telegram.chatID .Values.alerta.alerts.telegram.token }}
             - name: TELEGRAM_CHAT_ID
               value: "{{ .Values.alerta.alerts.telegram.chatID }}"
             - name: TELEGRAM_TOKEN
@@ -120,6 +131,11 @@ spec:
               value: "https://{{ printf "alerta.%s" (.Values.host | default $host) }}/api/webhooks/telegram?api-key={{ $apiKey }}"
             - name: TELEGRAM_DISABLE_NOTIFICATION_SEVERITY
               value: "{{ .Values.alerta.alerts.telegram.disabledSeverity }}"
+            {{- end }}
+
+            {{- if .Values.alerta.alerts.slack.url }}
+            - name: "SLACK_WEBHOOK_URL"
+              value: "{{ .Values.alerta.alerts.slack.url }}"
             {{- end }}
 
           ports:

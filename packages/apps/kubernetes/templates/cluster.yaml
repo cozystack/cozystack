@@ -147,7 +147,7 @@ spec:
     podAdditionalMetadata:
       labels:
         policy.cozystack.io/allow-to-etcd: "true"
-  replicas: 2
+  replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}
 ---
 apiVersion: cozystack.io/v1alpha1

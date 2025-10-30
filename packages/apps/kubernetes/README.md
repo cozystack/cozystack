@@ -84,92 +84,92 @@ See the reference for components utilized in this service:
 
 ### Common Parameters
 
-| Name           | Description                         | Type     | Value        |
-| -------------- | ----------------------------------- | -------- | ------------ |
-| `storageClass` | StorageClass used to store the data | `string` | `replicated` |
+| Name           | Description                          | Type     | Value        |
+| -------------- | ------------------------------------ | -------- | ------------ |
+| `storageClass` | StorageClass used to store the data. | `string` | `replicated` |
 
 
-### Application-specific parameters
+### Application-specific Parameters
 
-| Name                                | Description                                                                                                       | Type                | Value       |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------- | ----------- |
-| `version`                           | Kubernetes version given as vMAJOR.MINOR. Available are versions from 1.28 to 1.33.                               | `string`            | `v1.33`     |
-| `host`                              | Hostname used to access the Kubernetes cluster externally. Defaults to `<cluster-name>.<tenant-host>` when empty. | `string`            | `""`        |
-| `nodeGroups`                        | Worker nodes configuration                                                                                        | `map[string]object` | `{...}`     |
-| `nodeGroups[name].minReplicas`      | Minimum amount of replicas                                                                                        | `int`               | `0`         |
-| `nodeGroups[name].maxReplicas`      | Maximum amount of replicas                                                                                        | `int`               | `10`        |
-| `nodeGroups[name].instanceType`     | Virtual machine instance type                                                                                     | `string`            | `u1.medium` |
-| `nodeGroups[name].ephemeralStorage` | Ephemeral storage size                                                                                            | `quantity`          | `20Gi`      |
-| `nodeGroups[name].roles`            | List of node's roles                                                                                              | `[]string`          | `[]`        |
-| `nodeGroups[name].resources`        | Resources available to each worker node                                                                           | `object`            | `{}`        |
-| `nodeGroups[name].resources.cpu`    | CPU available to each worker node                                                                                 | `*quantity`         | `null`      |
-| `nodeGroups[name].resources.memory` | Memory (RAM) available to each worker node                                                                        | `*quantity`         | `null`      |
-| `nodeGroups[name].gpus`             | List of GPUs to attach (WARN: NVIDIA driver requires at least 4 GiB of RAM)                                       | `[]object`          | `{}`        |
-| `nodeGroups[name].gpus[i].name`     | Name of GPU, such as "nvidia.com/AD102GL_L40S"                                                                    | `string`            | `""`        |
+| Name                                | Description                                                                                    | Type                | Value       |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------- | ----------- |
+| `nodeGroups`                        | Worker nodes configuration map.                                                                | `map[string]object` | `{...}`     |
+| `nodeGroups[name].minReplicas`      | Minimum number of replicas.                                                                    | `int`               | `0`         |
+| `nodeGroups[name].maxReplicas`      | Maximum number of replicas.                                                                    | `int`               | `10`        |
+| `nodeGroups[name].instanceType`     | Virtual machine instance type.                                                                 | `string`            | `u1.medium` |
+| `nodeGroups[name].ephemeralStorage` | Ephemeral storage size.                                                                        | `quantity`          | `20Gi`      |
+| `nodeGroups[name].roles`            | List of node roles.                                                                            | `[]string`          | `[]`        |
+| `nodeGroups[name].resources`        | CPU and memory resources for each worker node.                                                 | `object`            | `{}`        |
+| `nodeGroups[name].resources.cpu`    | CPU available.                                                                                 | `quantity`          | `""`        |
+| `nodeGroups[name].resources.memory` | Memory (RAM) available.                                                                        | `quantity`          | `""`        |
+| `nodeGroups[name].gpus`             | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                            | `[]object`          | `[]`        |
+| `nodeGroups[name].gpus[i].name`     | Name of GPU, such as "nvidia.com/AD102GL_L40S".                                                | `string`            | `""`        |
+| `version`                           | Kubernetes version (vMAJOR.MINOR). Supported: 1.28–1.33.                                     | `string`            | `v1.33`     |
+| `host`                              | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty. | `string`            | `""`        |
 
 
 ### Cluster Addons
 
-| Name                                          | Description                                                                                                                                                                       | Type       | Value     |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
-| `addons`                                      | Cluster addons configuration                                                                                                                                                      | `object`   | `{}`      |
-| `addons.certManager`                          | Cert-manager: automatically creates and manages SSL/TLS certificate                                                                                                               | `object`   | `{}`      |
-| `addons.certManager.enabled`                  | Enable cert-manager, which automatically creates and manages SSL/TLS certificates.                                                                                                | `bool`     | `false`   |
-| `addons.certManager.valuesOverride`           | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.cilium`                               | Cilium CNI plugin                                                                                                                                                                 | `object`   | `{}`      |
-| `addons.cilium.valuesOverride`                | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.gatewayAPI`                           | Gateway API                                                                                                                                                                       | `object`   | `{}`      |
-| `addons.gatewayAPI.enabled`                   | Enable the Gateway API                                                                                                                                                            | `bool`     | `false`   |
-| `addons.ingressNginx`                         | Ingress-NGINX Controller                                                                                                                                                          | `object`   | `{}`      |
-| `addons.ingressNginx.enabled`                 | Enable the Ingress-NGINX controller (requires nodes labeled with the 'ingress-nginx' role).                                                                                       | `bool`     | `false`   |
-| `addons.ingressNginx.exposeMethod`            | Method to expose the Ingress-NGINX controller. Allowed values: `Proxied`, `LoadBalancer`.                                                                                         | `string`   | `Proxied` |
-| `addons.ingressNginx.hosts`                   | List of domain names that the parent cluster should route to this tenant cluster. Taken into account only when `exposeMethod` is set to `Proxied`.                                | `[]string` | `[]`      |
-| `addons.ingressNginx.valuesOverride`          | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.gpuOperator`                          | GPU-operator: NVIDIA GPU Operator                                                                                                                                                 | `object`   | `{}`      |
-| `addons.gpuOperator.enabled`                  | Enable the GPU-operator                                                                                                                                                           | `bool`     | `false`   |
-| `addons.gpuOperator.valuesOverride`           | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.fluxcd`                               | Flux CD                                                                                                                                                                           | `object`   | `{}`      |
-| `addons.fluxcd.enabled`                       | Enable FluxCD                                                                                                                                                                     | `bool`     | `false`   |
-| `addons.fluxcd.valuesOverride`                | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.monitoringAgents`                     | MonitoringAgents                                                                                                                                                                  | `object`   | `{}`      |
-| `addons.monitoringAgents.enabled`             | Enable monitoring agents (Fluent Bit and VMAgents) to send logs and metrics. If tenant monitoring is enabled, data is sent to tenant storage; otherwise, it goes to root storage. | `bool`     | `false`   |
-| `addons.monitoringAgents.valuesOverride`      | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.verticalPodAutoscaler`                | VerticalPodAutoscaler                                                                                                                                                             | `object`   | `{}`      |
-| `addons.verticalPodAutoscaler.valuesOverride` | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.velero`                               | Velero                                                                                                                                                                            | `object`   | `{}`      |
-| `addons.velero.enabled`                       | Enable Velero for backup and recovery of a tenant Kubernetes cluster.                                                                                                             | `bool`     | `false`   |
-| `addons.velero.valuesOverride`                | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
-| `addons.coredns`                              | Coredns                                                                                                                                                                           | `object`   | `{}`      |
-| `addons.coredns.valuesOverride`               | Custom values to override                                                                                                                                                         | `object`   | `{}`      |
+| Name                                          | Description                                                                 | Type       | Value     |
+| --------------------------------------------- | --------------------------------------------------------------------------- | ---------- | --------- |
+| `addons`                                      | Cluster addons configuration.                                               | `object`   | `{}`      |
+| `addons.certManager`                          | Cert-manager addon.                                                         | `object`   | `{}`      |
+| `addons.certManager.enabled`                  | Enable cert-manager.                                                        | `bool`     | `false`   |
+| `addons.certManager.valuesOverride`           | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.cilium`                               | Cilium CNI plugin.                                                          | `object`   | `{}`      |
+| `addons.cilium.valuesOverride`                | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.gatewayAPI`                           | Gateway API addon.                                                          | `object`   | `{}`      |
+| `addons.gatewayAPI.enabled`                   | Enable Gateway API.                                                         | `bool`     | `false`   |
+| `addons.ingressNginx`                         | Ingress-NGINX controller.                                                   | `object`   | `{}`      |
+| `addons.ingressNginx.enabled`                 | Enable the controller (requires nodes labeled `ingress-nginx`).             | `bool`     | `false`   |
+| `addons.ingressNginx.exposeMethod`            | Method to expose the controller. Allowed values: `Proxied`, `LoadBalancer`. | `string`   | `Proxied` |
+| `addons.ingressNginx.hosts`                   | Domains routed to this tenant cluster when `exposeMethod` is `Proxied`.     | `[]string` | `[]`      |
+| `addons.ingressNginx.valuesOverride`          | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.gpuOperator`                          | NVIDIA GPU Operator.                                                        | `object`   | `{}`      |
+| `addons.gpuOperator.enabled`                  | Enable GPU Operator.                                                        | `bool`     | `false`   |
+| `addons.gpuOperator.valuesOverride`           | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.fluxcd`                               | FluxCD GitOps operator.                                                     | `object`   | `{}`      |
+| `addons.fluxcd.enabled`                       | Enable FluxCD.                                                              | `bool`     | `false`   |
+| `addons.fluxcd.valuesOverride`                | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.monitoringAgents`                     | Monitoring agents.                                                          | `object`   | `{}`      |
+| `addons.monitoringAgents.enabled`             | Enable monitoring agents.                                                   | `bool`     | `false`   |
+| `addons.monitoringAgents.valuesOverride`      | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.verticalPodAutoscaler`                | Vertical Pod Autoscaler.                                                    | `object`   | `{}`      |
+| `addons.verticalPodAutoscaler.valuesOverride` | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.velero`                               | Velero backup/restore addon.                                                | `object`   | `{}`      |
+| `addons.velero.enabled`                       | Enable Velero.                                                              | `bool`     | `false`   |
+| `addons.velero.valuesOverride`                | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.coredns`                              | CoreDNS addon.                                                              | `object`   | `{}`      |
+| `addons.coredns.valuesOverride`               | Custom Helm values overrides.                                               | `object`   | `{}`      |
 
 
 ### Kubernetes Control Plane Configuration
 
-| Name                                                | Description                                                                                                                               | Type        | Value    |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------- |
-| `controlPlane`                                      | Control Plane Configuration                                                                                                               | `object`    | `{}`     |
-| `controlPlane.replicas`                             | Number of replicas for Kubernetes control plane components.                                                                               | `int`       | `2`      |
-| `controlPlane.apiServer`                            | Control plane API server configuration.                                                                                                   | `object`    | `{}`     |
-| `controlPlane.apiServer.resources`                  | Explicit CPU and memory configuration for the API Server. When left empty, the preset defined in `resourcesPreset` is applied.            | `object`    | `{}`     |
-| `controlPlane.apiServer.resources.cpu`              | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
-| `controlPlane.apiServer.resources.memory`           | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
-| `controlPlane.apiServer.resourcesPreset`            | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `medium` |
-| `controlPlane.controllerManager`                    | Controller Manager configuration.                                                                                                         | `object`    | `{}`     |
-| `controlPlane.controllerManager.resources`          | Explicit CPU and memory configuration for the Controller Manager. When left empty, the preset defined in `resourcesPreset` is applied.    | `object`    | `{}`     |
-| `controlPlane.controllerManager.resources.cpu`      | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
-| `controlPlane.controllerManager.resources.memory`   | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
-| `controlPlane.controllerManager.resourcesPreset`    | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro`  |
-| `controlPlane.scheduler`                            | Scheduler configuration.                                                                                                                  | `object`    | `{}`     |
-| `controlPlane.scheduler.resources`                  | Explicit CPU and memory configuration for the Scheduler. When left empty, the preset defined in `resourcesPreset` is applied.             | `object`    | `{}`     |
-| `controlPlane.scheduler.resources.cpu`              | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
-| `controlPlane.scheduler.resources.memory`           | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
-| `controlPlane.scheduler.resourcesPreset`            | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro`  |
-| `controlPlane.konnectivity`                         | Konnectivity configuration.                                                                                                               | `object`    | `{}`     |
-| `controlPlane.konnectivity.server`                  | Konnectivity server configuration.                                                                                                        | `object`    | `{}`     |
-| `controlPlane.konnectivity.server.resources`        | Explicit CPU and memory configuration for Konnectivity. When left empty, the preset defined in `resourcesPreset` is applied.              | `object`    | `{}`     |
-| `controlPlane.konnectivity.server.resources.cpu`    | CPU available to each worker node                                                                                                         | `*quantity` | `null`   |
-| `controlPlane.konnectivity.server.resources.memory` | Memory (RAM) available to each worker node                                                                                                | `*quantity` | `null`   |
-| `controlPlane.konnectivity.server.resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `micro`  |
+| Name                                                | Description                                      | Type       | Value    |
+| --------------------------------------------------- | ------------------------------------------------ | ---------- | -------- |
+| `controlPlane`                                      | Kubernetes control-plane configuration.          | `object`   | `{}`     |
+| `controlPlane.replicas`                             | Number of control-plane replicas.                | `int`      | `2`      |
+| `controlPlane.apiServer`                            | API Server configuration.                        | `object`   | `{}`     |
+| `controlPlane.apiServer.resources`                  | CPU and memory resources for API Server.         | `object`   | `{}`     |
+| `controlPlane.apiServer.resources.cpu`              | CPU available.                                   | `quantity` | `""`     |
+| `controlPlane.apiServer.resources.memory`           | Memory (RAM) available.                          | `quantity` | `""`     |
+| `controlPlane.apiServer.resourcesPreset`            | Preset if `resources` omitted.                   | `string`   | `medium` |
+| `controlPlane.controllerManager`                    | Controller Manager configuration.                | `object`   | `{}`     |
+| `controlPlane.controllerManager.resources`          | CPU and memory resources for Controller Manager. | `object`   | `{}`     |
+| `controlPlane.controllerManager.resources.cpu`      | CPU available.                                   | `quantity` | `""`     |
+| `controlPlane.controllerManager.resources.memory`   | Memory (RAM) available.                          | `quantity` | `""`     |
+| `controlPlane.controllerManager.resourcesPreset`    | Preset if `resources` omitted.                   | `string`   | `micro`  |
+| `controlPlane.scheduler`                            | Scheduler configuration.                         | `object`   | `{}`     |
+| `controlPlane.scheduler.resources`                  | CPU and memory resources for Scheduler.          | `object`   | `{}`     |
+| `controlPlane.scheduler.resources.cpu`              | CPU available.                                   | `quantity` | `""`     |
+| `controlPlane.scheduler.resources.memory`           | Memory (RAM) available.                          | `quantity` | `""`     |
+| `controlPlane.scheduler.resourcesPreset`            | Preset if `resources` omitted.                   | `string`   | `micro`  |
+| `controlPlane.konnectivity`                         | Konnectivity configuration.                      | `object`   | `{}`     |
+| `controlPlane.konnectivity.server`                  | Konnectivity Server configuration.               | `object`   | `{}`     |
+| `controlPlane.konnectivity.server.resources`        | CPU and memory resources for Konnectivity.       | `object`   | `{}`     |
+| `controlPlane.konnectivity.server.resources.cpu`    | CPU available.                                   | `quantity` | `""`     |
+| `controlPlane.konnectivity.server.resources.memory` | Memory (RAM) available.                          | `quantity` | `""`     |
+| `controlPlane.konnectivity.server.resourcesPreset`  | Preset if `resources` omitted.                   | `string`   | `micro`  |
 
 
 ## Parameter examples and reference

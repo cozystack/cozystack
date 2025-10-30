@@ -3,26 +3,22 @@
   "type": "object",
   "properties": {
     "db": {
-      "description": "Database Configuration",
+      "description": "Database configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "resources",
-        "resourcesPreset"
-      ],
       "properties": {
         "replicas": {
-          "description": "Number of database replicas",
+          "description": "Number of database replicas.",
           "type": "integer",
           "default": 2
         },
         "resources": {
-          "description": "Explicit CPU and memory configuration for the database. When left empty, the preset defined in `resourcesPreset` is applied.",
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
           "default": {},
           "properties": {
             "cpu": {
-              "description": "The number of CPU cores allocated",
+              "description": "Number of CPU cores allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -35,7 +31,7 @@
               "x-kubernetes-int-or-string": true
             },
             "memory": {
-              "description": "The amount of memory allocated",
+              "description": "Amount of memory allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -50,7 +46,7 @@
           }
         },
         "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+          "description": "Default sizing preset used when `resources` is omitted.",
           "type": "string",
           "default": "small",
           "enum": [
@@ -64,7 +60,7 @@
           ]
         },
         "size": {
-          "description": "Persistent Volume size",
+          "description": "Persistent Volume size.",
           "default": "10Gi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -78,23 +74,21 @@
           "x-kubernetes-int-or-string": true
         },
         "storageClass": {
-          "description": "StorageClass used to store the data",
-          "type": "string"
+          "description": "StorageClass used to store the data.",
+          "type": "string",
+          "default": ""
         }
       }
     },
     "filer": {
-      "description": "Filer service configuration",
+      "description": "Filer service configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "resources",
-        "resourcesPreset"
-      ],
       "properties": {
         "grpcHost": {
           "description": "The hostname used to expose or access the filer service externally.",
-          "type": "string"
+          "type": "string",
+          "default": ""
         },
         "grpcPort": {
           "description": "The port used to access the filer service externally.",
@@ -102,17 +96,17 @@
           "default": 443
         },
         "replicas": {
-          "description": "Number of filer replicas",
+          "description": "Number of filer replicas.",
           "type": "integer",
           "default": 2
         },
         "resources": {
-          "description": "Explicit CPU and memory configuration for the filer. When left empty, the preset defined in `resourcesPreset` is applied.",
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
           "default": {},
           "properties": {
             "cpu": {
-              "description": "The number of CPU cores allocated",
+              "description": "Number of CPU cores allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -125,7 +119,7 @@
               "x-kubernetes-int-or-string": true
             },
             "memory": {
-              "description": "The amount of memory allocated",
+              "description": "Amount of memory allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -140,7 +134,7 @@
           }
         },
         "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+          "description": "Default sizing preset used when `resources` is omitted.",
           "type": "string",
           "default": "small",
           "enum": [
@@ -164,30 +158,27 @@
       }
     },
     "host": {
-      "description": "The hostname used to access the SeaweedFS externally (defaults to 's3' subdomain for the tenant host).",
-      "type": "string"
+      "description": "The hostname used to access SeaweedFS externally (defaults to 's3' subdomain for the tenant host).",
+      "type": "string",
+      "default": ""
     },
     "master": {
-      "description": "Master service configuration",
+      "description": "Master service configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "resources",
-        "resourcesPreset"
-      ],
       "properties": {
         "replicas": {
-          "description": "Number of master replicas",
+          "description": "Number of master replicas.",
           "type": "integer",
           "default": 3
         },
         "resources": {
-          "description": "Explicit CPU and memory configuration for the master. When left empty, the preset defined in `resourcesPreset` is applied.",
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
           "default": {},
           "properties": {
             "cpu": {
-              "description": "The number of CPU cores allocated",
+              "description": "Number of CPU cores allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -200,7 +191,7 @@
               "x-kubernetes-int-or-string": true
             },
             "memory": {
-              "description": "The amount of memory allocated",
+              "description": "Amount of memory allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -215,7 +206,7 @@
           }
         },
         "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+          "description": "Default sizing preset used when `resources` is omitted.",
           "type": "string",
           "default": "small",
           "enum": [
@@ -236,26 +227,22 @@
       "default": 2
     },
     "s3": {
-      "description": "S3 service configuration",
+      "description": "S3 service configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "resources",
-        "resourcesPreset"
-      ],
       "properties": {
         "replicas": {
-          "description": "Number of s3 replicas",
+          "description": "Number of S3 replicas.",
           "type": "integer",
           "default": 2
         },
         "resources": {
-          "description": "Explicit CPU and memory configuration for the s3. When left empty, the preset defined in `resourcesPreset` is applied.",
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
           "default": {},
           "properties": {
             "cpu": {
-              "description": "The number of CPU cores allocated",
+              "description": "Number of CPU cores allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -268,7 +255,7 @@
               "x-kubernetes-int-or-string": true
             },
             "memory": {
-              "description": "The amount of memory allocated",
+              "description": "Amount of memory allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -283,7 +270,7 @@
           }
         },
         "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+          "description": "Default sizing preset used when `resources` is omitted.",
           "type": "string",
           "default": "small",
           "enum": [
@@ -299,7 +286,7 @@
       }
     },
     "topology": {
-      "description": "The topology of the SeaweedFS cluster. (allowed values: Simple, MultiZone, Client)",
+      "description": "The topology of the SeaweedFS cluster.",
       "type": "string",
       "default": "Simple",
       "enum": [
@@ -309,26 +296,22 @@
       ]
     },
     "volume": {
-      "description": "Volume service configuration",
+      "description": "Volume service configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "resources",
-        "resourcesPreset"
-      ],
       "properties": {
         "replicas": {
-          "description": "Number of volume replicas",
+          "description": "Number of volume replicas.",
           "type": "integer",
           "default": 2
         },
         "resources": {
-          "description": "Explicit CPU and memory configuration for the volume. When left empty, the preset defined in `resourcesPreset` is applied.",
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
           "type": "object",
           "default": {},
           "properties": {
             "cpu": {
-              "description": "The number of CPU cores allocated",
+              "description": "Number of CPU cores allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -341,7 +324,7 @@
               "x-kubernetes-int-or-string": true
             },
             "memory": {
-              "description": "The amount of memory allocated",
+              "description": "Amount of memory allocated.",
               "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
               "anyOf": [
                 {
@@ -356,7 +339,7 @@
           }
         },
         "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+          "description": "Default sizing preset used when `resources` is omitted.",
           "type": "string",
           "default": "small",
           "enum": [
@@ -370,7 +353,7 @@
           ]
         },
         "size": {
-          "description": "Persistent Volume size",
+          "description": "Persistent Volume size.",
           "default": "10Gi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -384,8 +367,9 @@
           "x-kubernetes-int-or-string": true
         },
         "storageClass": {
-          "description": "StorageClass used to store the data",
-          "type": "string"
+          "description": "StorageClass used to store the data.",
+          "type": "string",
+          "default": ""
         },
         "zones": {
           "description": "A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.",
@@ -395,11 +379,11 @@
             "type": "object",
             "properties": {
               "replicas": {
-                "description": "Number of replicas in the zone",
+                "description": "Number of replicas in the zone.",
                 "type": "integer"
               },
               "size": {
-                "description": "Zone storage size",
+                "description": "Zone storage size.",
                 "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
                 "anyOf": [
                   {

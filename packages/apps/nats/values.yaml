@@ -1,75 +1,64 @@
+##
 ## @section Common parameters
 ##
-## @param replicas {int} Number of replicas
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each NATS replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of replicas.
 replicas: 2
-## @param resources {*resources} Explicit CPU and memory configuration for each NATS replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each replica
-## @field resources.memory {*quantity} Memory (RAM) available to each replica
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each NATS replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
-  # resources:
-  #   cpu: 4000m
-  #   memory: 4Gi
-## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+
+## @param {ResourcesPreset} resourcesPreset="nano" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "nano"
-## @param storageClass {string} StorageClass used to store the data
+
+## @param {string} storageClass - StorageClass used to store the data.
 storageClass: ""
-## @param external {bool} Enable external access from outside the cluster
+
+## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+##
 ## @section Application-specific parameters
 ##
-## @param users {map[string]user} Users configuration
-## @field user.password {*string} Password for the user
+
+## @typedef {struct} User - User configuration.
+## @field {string} [password] - Password for the user.
+
+## @param {map[string]User} users - Users configuration map.
+users: {}
 ## Example:
 ## users:
 ##   user1:
 ##     password: strongpassword
 ##   user2: {}
-users: {}
 
-## @param jetstream {jetstream} Jetstream configuration
+## @typedef {struct} Jetstream - Jetstream configuration.
+## @field {bool} enabled=true - Enable or disable Jetstream for persistent messaging in NATS.
+## @field {quantity} size - Jetstream persistent storage size.
+
+## @param {Jetstream} jetstream - Jetstream configuration.
 jetstream:
-  ## @field jetstream.enabled {bool} Enable or disable Jetstream. Set to `true` (default) to enable Jetstream for persistent messaging in NATS.
-  ##
-  ## Default: true
   enabled: true
-  ## @field jetstream.size {quantity} Jetstream persistent storage size. Specifies the size of the persistent storage for Jetstream (message store).
-  ##
   size: 10Gi
 
-## @param config {config} NATS configuration
-config:
-  ## @field config.merge {*object} Additional configuration to merge into NATS config (see example)
-  ## Allows you to customize NATS server settings by merging additional configurations.
-  ## For example, you can add extra parameters, configure authentication, or set custom settings.
-  ## Default: {}
-  ## example:
-  ##
-  ##   merge:
-  ##     $include: ./my-config.conf
-  ##     zzz$include: ./my-config-last.conf
-  ##     server_name: nats
-  ##     authorization:
-  ##       token: << $TOKEN >>
-  ##     jetstream:
-  ##       max_memory_store: << 1GB >>
-  ##
-  ## will yield the config:
-  ## {
-  ##   include ./my-config.conf;
-  ##   "authorization": {
-  ##     "token": $TOKEN
-  ##   },
-  ##   "jetstream": {
-  ##     "max_memory_store": 1GB
-  ##   },
-  ##   "server_name": "nats",
-  ##   include ./my-config-last.conf;
-  ## }
-  merge: {}
-  ## @field config.resolver {*object} Additional resolver configuration to merge into NATS config (see example)
-  ## Allows you to customize NATS server settings by merging resolver configurations.
-  ## Default: {}
-  ## Example: https://github.com/nats-io/k8s/blob/94414664c254b0bbac3a07fc9693f6c4f8f88709/helm/charts/nats/values.yaml#L248-L270
-  resolver: {}
+## @typedef {struct} Config - NATS configuration.
+## @field {*object} [merge] - Additional configuration to merge into NATS config.
+## @field {*object} [resolver] - Additional resolver configuration to merge into NATS config.
 
+## @param {Config} config - NATS configuration.
+config:
+  merge: {}
+  resolver: {}

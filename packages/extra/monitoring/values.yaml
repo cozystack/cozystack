@@ -1,29 +1,41 @@
 ## @section Common parameters
+##
 
-## @param host {string} The hostname used to access the grafana externally (defaults to 'grafana' subdomain for the tenant host).
+## @param {string} host - The hostname used to access Grafana externally (defaults to 'grafana' subdomain for the tenant host).
 host: ""
 
+##
 ## @section Metrics storage configuration
+##
 
-## @param metricsStorages {[]metricsStorage} Configuration of metrics storage instances
-## @field metricsStorage.name {string} Name of the storage instance
-## @field metricsStorage.retentionPeriod {string} Retention period for the metrics in the storage instance
-## @field metricsStorage.deduplicationInterval {string} Deduplication interval for the metrics in the storage instance
-## @field metricsStorage.storage {string default="10Gi"} Persistent Volume size for the storage instance
-## @field metricsStorage.storageClassName {*string} StorageClass used to store the data
-## @field metricsStorage.vminsert {*vmcomponent} Configuration for vminsert component of the storage instance
-## @field metricsStorage.vmselect {*vmcomponent} Configuration for vmselect component of the storage instance
-## @field metricsStorage.vmstorage {*vmcomponent} Configuration for vmstorage component of the storage instance
+## @typedef {struct} Request - Minimum guaranteed resources.
+## @field {quantity} [cpu] - CPU request.
+## @field {quantity} [memory] - Memory request.
 
-## @field request.cpu {*quantity} CPU request (minimum available CPU)
-## @field request.memory {*quantity} Memory request (minimum available memory)
-## @field limit.cpu {*quantity} CPU limit (maximum available CPU)
-## @field limit.memory {*quantity} Memory limit (maximum available memory)
-## @field vmcomponent.minAllowed {*request} Requests (minimum allowed/available resources)
-## @field vmcomponent.maxAllowed {*limit} Limits (maximum allowed/available resources )
-## @field resources.requests {*request}
-## @field resources.limits {*limit}
+## @typedef {struct} Limit - Maximum allowed resources.
+## @field {quantity} [cpu] - CPU limit.
+## @field {quantity} [memory] - Memory limit.
 
+## @typedef {struct} VMComponent - VictoriaMetrics component configuration.
+## @field {Request} [minAllowed] - Minimum guaranteed resources.
+## @field {Limit} [maxAllowed] - Maximum allowed resources.
+
+## @typedef {struct} Resources - Combined resource configuration.
+## @field {Request} [requests] - Resource requests.
+## @field {Limit} [limits] - Resource limits.
+
+## @typedef {struct} MetricsStorage - Configuration of metrics storage instance.
+## @field {string} name - Name of the storage instance.
+## @field {string} retentionPeriod - Retention period for metrics.
+## @field {string} deduplicationInterval - Deduplication interval for metrics.
+## @field {string} storage="10Gi" - Persistent volume size.
+## @field {string} [storageClassName] - StorageClass used for the data.
+## @field {VMComponent} [vminsert] - Configuration for vminsert.
+## @field {VMComponent} [vmselect] - Configuration for vmselect.
+## @field {VMComponent} [vmstorage] - Configuration for vmstorage.
+
+## @param {[]MetricsStorage} metricsStorages - Configuration of metrics storage instances.
+metricsStorages:
 ## Example:
 ## metricsStorages:
 ## - name: shortterm
@@ -52,8 +64,6 @@ host: ""
 ##     maxAllowed:
 ##       cpu: 4000m
 ##       memory: 8Gi
-##
-metricsStorages:
 - name: shortterm
   retentionPeriod: "3d"
   deduplicationInterval: "15s"
@@ -65,31 +75,46 @@ metricsStorages:
   storage: 10Gi
   storageClassName: ""
 
-## @section Logs storage configuration
-
-## @param logsStorages {[]logsStorage} Configuration of logs storage instances
-## @field logsStorage.name {string} Name of the storage instance
-## @field logsStorage.retentionPeriod {string default=1} Retention period for the logs in the storage instance
-## @field logsStorage.storage {string default="10Gi"} Persistent Volume size for the storage instance
-## @field logsStorage.storageClassName {*string default="replicated"} StorageClass used to store the data
 ##
+## @section Logs storage configuration
+##
+
+## @typedef {struct} LogsStorage - Configuration of logs storage instance.
+## @field {string} name - Name of the storage instance.
+## @field {string} retentionPeriod="1" - Retention period for logs.
+## @field {string} storage="10Gi" - Persistent volume size.
+## @field {string} storageClassName="replicated" - StorageClass used to store the data.
+
+## @param {[]LogsStorage} logsStorages - Configuration of logs storage instances.
 logsStorages:
 - name: generic
   retentionPeriod: "1"
   storage: 10Gi
   storageClassName: replicated
 
+##
 ## @section Alerta configuration
+##
 
-## @param alerta {alerta} Configuration for Alerta service
-## @field alerta.storage {*string} Persistent Volume size for the database
-## @field alerta.storageClassName {*string} StorageClass used to store the data
-## @field alerta.resources {*resources} Resources configuration
-## @field alerta.alerts {*alerts} Configuration for alerts
-## @field alerts.telegram {*telegramAlerts} Configuration for Telegram alerts
-## @field telegramAlerts.token {string} Telegram token for your bot
-## @field telegramAlerts.chatID {string} Specify multiple ID's separated by comma. Get yours in https://t.me/chatid_echo_bot
-## @field telegramAlerts.disabledSeverity {string} List of severity without alerts, separated by comma like: "informational,warning"
+## @typedef {struct} TelegramAlerts - Telegram alert configuration.
+## @field {string} token - Telegram bot token.
+## @field {string} chatID - Telegram chat ID(s), separated by commas.
+## @field {string} [disabledSeverity] - List of severities without alerts (e.g. "informational,warning").
+
+## @typedef {struct} SlackAlerts - Slack alert configuration.
+## @field {string} url - Configuration uri for Slack alerts.
+
+## @typedef {struct} Alerts - Alert routing configuration.
+## @field {TelegramAlerts} [telegram] - Configuration for Telegram alerts.
+## @field {SlackAlerts} [slack] - Configuration for Slack alerts.
+
+## @typedef {struct} Alerta - Configuration for the Alerta service.
+## @field {string} [storage] - Persistent volume size for the database.
+## @field {string} [storageClassName] - StorageClass used for the database.
+## @field {Resources} [resources] - Resource configuration.
+## @field {Alerts} [alerts] - Alert routing configuration.
+
+## @param {Alerta} alerta - Configuration for the Alerta service.
 alerta:
   storage: 10Gi
   storageClassName: ""
@@ -101,25 +126,24 @@ alerta:
       cpu: 100m
       memory: 256Mi
   alerts:
-    ## example:
-    ##   telegram:
-    ##     token: "7262461387:AAGtwq16iwuVtWtzoN6TUEMpF00fpC9Xz34"
-    ##     chatID: "-4520856007"
-    ##     disabledSeverity: "informational,warning"
-    ##
     telegram:
       token: ""
       chatID: ""
       disabledSeverity: ""
-
+    slack:
+      url: ""
+##
 ## @section Grafana configuration
+##
 
-## @param grafana {grafana} Configuration for Grafana
-## @field grafana.db {*grafanaDB} Database configuration
-## @field grafanaDB.size {*string} Persistent Volume size for the database
-## @field grafana.resources {*resources} Resources configuration
+## @typedef {struct} GrafanaDB - Grafana database configuration.
+## @field {string} [size] - Persistent volume size for the database.
 
+## @typedef {struct} Grafana - Grafana service configuration.
+## @field {GrafanaDB} [db] - Database configuration.
+## @field {Resources} [resources] - Resource configuration.
 
+## @param {Grafana} grafana - Configuration for Grafana.
 grafana:
   db:
     size: 10Gi

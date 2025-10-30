@@ -69,6 +69,7 @@ func main() {
 	var telemetryEndpoint string
 	var telemetryInterval string
 	var cozystackVersion string
+	var reconcileDeployment bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -88,6 +89,8 @@ func main() {
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
 	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
 		"Version of Cozystack")
+	flag.BoolVar(&reconcileDeployment, "reconcile-deployment", false,
+		"If set, the Cozystack API server is assumed to run as a Deployment, else as a DaemonSet.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -213,9 +216,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	cozyAPIKind := "DaemonSet"
+	if reconcileDeployment {
+		cozyAPIKind = "Deployment"
+	}
 	if err = (&controller.CozystackResourceDefinitionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		CozystackAPIKind: cozyAPIKind,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
 		os.Exit(1)

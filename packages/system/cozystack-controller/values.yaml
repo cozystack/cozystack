@@ -3,3 +3,4 @@ cozystackController:
   debug: false
   disableTelemetry: false
   cozystackVersion: "v0.37.0"
+  cozystackAPIKind: "DaemonSet"

@@ -38,6 +38,9 @@ func (l *LineageControllerWebhook) Map(hr *helmv2.HelmRelease) (string, string, 
 	if !ok {
 		return "", "", "", fmt.Errorf("failed to load chart-app mapping from config")
 	}
+	if hr.Spec.Chart == nil {
+		return "", "", "", fmt.Errorf("cannot map helm release %s/%s to dynamic app", hr.Namespace, hr.Name)
+	}
 	s := hr.Spec.Chart.Spec
 	val, ok := cfg.chartAppMap[chartRef{s.SourceRef.Name, s.Chart}]
 	if !ok {

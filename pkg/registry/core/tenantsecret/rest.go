@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -157,13 +157,15 @@ var (
 )
 
 type REST struct {
-	core corev1client.CoreV1Interface
-	gvr  schema.GroupVersionResource
+	c   client.Client
+	w   client.WithWatch
+	gvr schema.GroupVersionResource
 }
 
-func NewREST(coreCli corev1client.CoreV1Interface) *REST {
+func NewREST(c client.Client, w client.WithWatch) *REST {
 	return &REST{
-		core: coreCli,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -203,11 +205,11 @@ func (r *REST) Create(
 	}
 
 	sec := tenantToSecret(in, nil)
-	out, err := r.core.Secrets(sec.Namespace).Create(ctx, sec, *opts)
+	err := r.c.Create(ctx, sec, &client.CreateOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
-	return secretToTenant(out), nil
+	return secretToTenant(sec), nil
 }
 
 func (r *REST) Get(
@@ -219,7 +221,8 @@ func (r *REST) Get(
 	if err != nil {
 		return nil, err
 	}
-	sec, err := r.core.Secrets(ns).Get(ctx, name, *opts)
+	sec := &corev1.Secret{}
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec, &client.GetOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
@@ -247,10 +250,14 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		fieldSel = opts.FieldSelector.String()
 	}
 
-	list, err := r.core.Secrets(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: ls.String(),
-		FieldSelector: fieldSel,
-	})
+	list := &corev1.SecretList{}
+	err = r.c.List(ctx, list,
+		&client.ListOptions{
+			Namespace: ns,
+			Raw: &metav1.ListOptions{
+				LabelSelector: ls.String(),
+				FieldSelector: fieldSel,
+			}})
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +291,8 @@ func (r *REST) Update(
 		return nil, false, err
 	}
 
-	cur, err := r.core.Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+	cur := &corev1.Secret{}
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, false, err
 	}
@@ -296,17 +304,18 @@ func (r *REST) Update(
 	in := newObj.(*corev1alpha1.TenantSecret)
 
 	newSec := tenantToSecret(in, cur)
+	newSec.Namespace = ns
 	if cur == nil {
 		if !forceCreate && err == nil {
 			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
-		out, err := r.core.Secrets(ns).Create(ctx, newSec, metav1.CreateOptions{})
-		return secretToTenant(out), true, err
+		err := r.c.Create(ctx, newSec, &client.CreateOptions{Raw: &metav1.CreateOptions{}})
+		return secretToTenant(newSec), true, err
 	}
 
 	newSec.ResourceVersion = cur.ResourceVersion
-	out, err := r.core.Secrets(ns).Update(ctx, newSec, *opts)
-	return secretToTenant(out), false, err
+	err = r.c.Update(ctx, newSec, &client.UpdateOptions{Raw: opts})
+	return secretToTenant(newSec), false, err
 }
 
 func (r *REST) Delete(
@@ -319,7 +328,7 @@ func (r *REST) Delete(
 	if err != nil {
 		return nil, false, err
 	}
-	err = r.core.Secrets(ns).Delete(ctx, name, *opts)
+	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
 	return nil, err == nil, err
 }
 
@@ -331,21 +340,33 @@ func (r *REST) Patch(
 	opts *metav1.PatchOptions,
 	subresources ...string,
 ) (runtime.Object, error) {
+	if len(subresources) > 0 {
+		return nil, fmt.Errorf("TenantSecret does not have subresources")
+	}
 	ns, err := nsFrom(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	out, err := r.core.Secrets(ns).
-		Patch(ctx, name, pt, data, *opts, subresources...)
+	out := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      name,
+		},
+	}
+	patch := client.RawPatch(pt, data)
+	err = r.c.Patch(ctx, out, patch, &client.PatchOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
 
 	// Ensure tenant secret label is preserved
+	if out.Labels == nil {
+		out.Labels = make(map[string]string)
+	}
+
 	if out.Labels[tsLabelKey] != tsLabelValue {
 		out.Labels[tsLabelKey] = tsLabelValue
-		out, _ = r.core.Secrets(ns).Update(ctx, out, metav1.UpdateOptions{})
+		_ = r.c.Update(ctx, out, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
 	}
 
 	return secretToTenant(out), nil
@@ -361,12 +382,13 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
+	secList := &corev1.SecretList{}
 	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector().String()
-	base, err := r.core.Secrets(ns).Watch(ctx, metav1.ListOptions{
+	base, err := r.w.Watch(ctx, secList, &client.ListOptions{Namespace: ns, Raw: &metav1.ListOptions{
 		Watch:           true,
 		LabelSelector:   ls,
 		ResourceVersion: opts.ResourceVersion,
-	})
+	}})
 	if err != nil {
 		return nil, err
 	}

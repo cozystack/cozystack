@@ -12,7 +12,7 @@ instance:
     artifactPullSecret: ""
     imagePullSecret: ""
   # -- Components https://fluxcd.control-plane.io/operator/fluxinstance/#components-configuration
-  components: # @schema item: string; uniqueItems: true; itemEnum: [source-controller,kustomize-controller,helm-controller,notification-controller,image-reflector-controller,image-automation-controller]
+  components: # @schema item: string; uniqueItems: true; itemEnum: [source-controller,kustomize-controller,helm-controller,notification-controller,image-reflector-controller,image-automation-controller,source-watcher]
     - source-controller
     - kustomize-controller
     - helm-controller

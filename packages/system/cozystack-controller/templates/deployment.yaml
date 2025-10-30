@@ -28,3 +28,6 @@ spec:
         {{- if .Values.cozystackController.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
+        {{- if eq .Values.cozystackController.cozystackAPIKind "Deployment" }}
+        - --reconcile-deployment
+        {{- end }}

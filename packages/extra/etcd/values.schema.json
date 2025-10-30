@@ -3,17 +3,17 @@
   "type": "object",
   "properties": {
     "replicas": {
-      "description": "Number of etcd replicas",
+      "description": "Number of etcd replicas.",
       "type": "integer",
       "default": 3
     },
     "resources": {
-      "description": "Resource configuration for etcd",
+      "description": "Resource configuration for etcd.",
       "type": "object",
       "default": {},
       "properties": {
         "cpu": {
-          "description": "The number of CPU cores allocated",
+          "description": "Number of CPU cores allocated.",
           "default": "1000m",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -27,7 +27,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "The amount of memory allocated",
+          "description": "Amount of memory allocated.",
           "default": "512Mi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -43,7 +43,7 @@
       }
     },
     "size": {
-      "description": "Persistent Volume size",
+      "description": "Persistent Volume size.",
       "default": "4Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
       "anyOf": [
@@ -57,8 +57,9 @@
       "x-kubernetes-int-or-string": true
     },
     "storageClass": {
-      "description": "StorageClass used to store the data",
-      "type": "string"
+      "description": "StorageClass used to store the data.",
+      "type": "string",
+      "default": ""
     }
   }
 }

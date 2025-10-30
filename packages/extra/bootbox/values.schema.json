@@ -3,7 +3,7 @@
   "type": "object",
   "properties": {
     "machines": {
-      "description": "Configuration of physical machine instances",
+      "description": "Configuration of physical machine instances.",
       "type": "array",
       "default": [],
       "items": {
@@ -17,78 +17,70 @@
         ],
         "properties": {
           "arch": {
-            "description": "Architecture",
+            "description": "Architecture.",
             "type": "string"
           },
           "hostname": {
-            "description": "Hostname",
+            "description": "Hostname.",
             "type": "string"
           },
           "ip": {
+            "description": "IP address configuration.",
             "type": "object",
             "required": [
-              "address"
+              "address",
+              "gateway",
+              "netmask"
             ],
             "properties": {
               "address": {
-                "description": "IP address",
-                "type": "object",
-                "required": [
-                  "address",
-                  "gateway",
-                  "netmask"
-                ],
-                "properties": {
-                  "address": {
-                    "description": "IP address",
-                    "type": "string"
-                  },
-                  "gateway": {
-                    "description": "IP gateway",
-                    "type": "string"
-                  },
-                  "netmask": {
-                    "description": "Netmask",
-                    "type": "string"
-                  }
-                }
+                "description": "IP address.",
+                "type": "string"
+              },
+              "gateway": {
+                "description": "IP gateway.",
+                "type": "string"
+              },
+              "netmask": {
+                "description": "Netmask.",
+                "type": "string"
               }
             }
           },
           "leaseTime": {
-            "description": "Lease time",
+            "description": "Lease time.",
             "type": "integer"
           },
           "mac": {
-            "description": "MAC addresses",
+            "description": "MAC addresses.",
             "type": "array",
             "items": {
               "type": "string"
             }
           },
           "nameServers": {
-            "description": "Name servers",
+            "description": "Name servers.",
             "type": "array",
             "items": {
               "type": "string"
             }
           },
           "timeServers": {
-            "description": "Time servers",
+            "description": "Time servers.",
             "type": "array",
             "items": {
               "type": "string"
             }
           },
           "uefi": {
-            "description": "UEFI",
+            "description": "UEFI.",
             "type": "boolean"
           }
         }
       }
     },
     "whitelist": {
-      "description": "List of client networks",
+      "description": "List of client networks.",
       "type": "array",
       "default": [],
       "items": {
@@ -96,7 +88,7 @@
       }
     },
     "whitelistHTTP": {
-      "description": "Secure HTTP by enabling client networks whitelisting",
+      "description": "Secure HTTP by enabling client networks whitelisting.",
       "type": "boolean",
       "default": true
     }

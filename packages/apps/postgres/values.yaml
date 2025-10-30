@@ -1,44 +1,76 @@
+##
 ## @section Common parameters
 ##
-## @param replicas {int} Number of Postgres replicas
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each PostgreSQL replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of Postgres replicas.
 replicas: 2
-## @param resources {*resources} Explicit CPU and memory configuration for each PostgreSQL replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each replica
-## @field resources.memory {*quantity} Memory (RAM) available to each replica
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
-  # resources:
-  #   cpu: 4000m
-  #   memory: 4Gi
-## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+
+## @param {ResourcesPreset} resourcesPreset="micro" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "micro"
-## @param size {quantity} Persistent Volume Claim size, available for application data
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
-## @param storageClass {string} StorageClass used to store the data
+
+## @param {string} storageClass - StorageClass used to store the data.
 storageClass: ""
-## @param external {bool} Enable external access from outside the cluster
+
+## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
-## @section Application-specific parameters
-## @param postgresql {postgresql} PostgreSQL server configuration
-## @field postgresql.parameters {postgresqlParameters} PostgreSQL server parameters
-## @field postgresqlParameters.max_connections {int} Determines the maximum number of concurrent connections to the database server. The default is typically 100 connections
 ##
+## @section Application-specific parameters
+##
+
+## @typedef {struct} PostgreSQLParameters - PostgreSQL server parameters.
+## @field {int} [max_connections] - Maximum number of concurrent connections to the database server.
+
+## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
+## @field {PostgreSQLParameters} [parameters] - PostgreSQL server parameters.
+
+## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
 postgresql:
   parameters:
     max_connections: 100
 
-## Configuration for the quorum-based synchronous replication
-## @param quorum {quorum} Quorum configuration for synchronous replication
-## @field quorum.minSyncReplicas {int} Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed.
-## @field quorum.maxSyncReplicas {int} Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the number of instances).
+##
+## @section Quorum-based synchronous replication
+##
+
+## @typedef {struct} Quorum - Quorum configuration for synchronous replication.
+## @field {int} minSyncReplicas - Minimum number of synchronous replicas required for commit.
+## @field {int} maxSyncReplicas - Maximum number of synchronous replicas allowed (must be less than total replicas).
+
+## @param {Quorum} quorum - Quorum configuration for synchronous replication.
 quorum:
   minSyncReplicas: 0
   maxSyncReplicas: 0
 
-## @param users {map[string]user} Users configuration
-## @field user.password {*string} Password for the user
-## @field user.replication {*bool} Whether the user has replication privileges
 ##
+## @section Users configuration
+##
+
+## @typedef {struct} User - User configuration.
+## @field {string} [password] - Password for the user.
+## @field {bool} [replication] - Whether the user has replication privileges.
+
+## @param {map[string]User} users - Users configuration map.
+users: {}
 ## Example:
 ## users:
 ##   user1:
@@ -49,15 +81,21 @@ quorum:
 ##     password: qwerty123
 ##   debezium:
 ##     replication: true
-##
-users: {}
 
-## @param databases {map[string]database} Databases configuration
-## @field database.roles {*databaseRoles} Roles for the database
-## @field databaseRoles.admin {[]string} List of users with admin privileges
-## @field databaseRoles.readonly {[]string} List of users with read-only privileges
-## @field database.extensions {[]string} Extensions enabled for the database
 ##
+## @section Databases configuration
+##
+
+## @typedef {struct} DatabaseRoles - Role assignments for a database.
+## @field {[]string} [admin] - List of users with admin privileges.
+## @field {[]string} [readonly] - List of users with read-only privileges.
+
+## @typedef {struct} Database - Database configuration.
+## @field {DatabaseRoles} [roles] - Roles assigned to users.
+## @field {[]string} [extensions] - List of enabled PostgreSQL extensions.
+
+## @param {map[string]Database} databases - Databases configuration map.
+databases: {}
 ## Example:
 ## databases:
 ##   myapp:
@@ -73,18 +111,21 @@ users: {}
 ##       - airflow
 ##     extensions:
 ##     - hstore
-databases: {}
 
+##
 ## @section Backup parameters
+##
 
-## @param backup {backup} Backup configuration
-## @field backup.enabled {*bool} Enable regular backups
-## @field backup.schedule {*string} Cron schedule for automated backups
-## @field backup.retentionPolicy {*string} Retention policy
-## @field backup.destinationPath {*string} Path to store the backup (i.e. s3://bucket/path/to/folder)
-## @field backup.endpointURL {*string} S3 Endpoint used to upload data to the cloud
-## @field backup.s3AccessKey {*string} Access key for S3, used for authentication
-## @field backup.s3SecretKey {*string} Secret key for S3, used for authentication
+## @typedef {struct} Backup - Backup configuration.
+## @field {bool} enabled - Enable regular backups.
+## @field {string} [schedule] - Cron schedule for automated backups.
+## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
+## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
+## @field {string} [endpointURL] - S3 endpoint URL for uploads.
+## @field {string} [s3AccessKey] - Access key for S3 authentication.
+## @field {string} [s3SecretKey] - Secret key for S3 authentication.
+
+## @param {Backup} backup - Backup configuration.
 backup:
   enabled: false
   retentionPolicy: 30d
@@ -94,16 +135,18 @@ backup:
   s3AccessKey: "<your-access-key>"
   s3SecretKey: "<your-secret-key>"
 
-## @section Bootstrap (recovery) parameters
-
-## @param bootstrap {bootstrap} Bootstrap configuration
-## @field bootstrap.enabled {bool} Restore database cluster from a backup
-## @field bootstrap.recoveryTime {*string} Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest
-## @field bootstrap.oldName {string} Name of database cluster before deleting
 ##
+## @section Bootstrap (recovery) parameters
+##
+
+## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
+## @field {bool} enabled - Whether to restore from a backup.
+## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
+## @field {string} oldName - Previous cluster name before deletion.
+
+## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
   enabled: false
   # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
   oldName: ""
-

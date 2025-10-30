@@ -1,9 +1,10 @@
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/cozystack-api"
   name: v1alpha1.apps.cozystack.io
 spec:
-  insecureSkipTLSVerify: true
   group: apps.cozystack.io
   groupPriorityMinimum: 1000
   versionPriority: 15
@@ -15,9 +16,10 @@ spec:
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/cozystack-api"
   name: v1alpha1.core.cozystack.io
 spec:
-  insecureSkipTLSVerify: true
   group: core.cozystack.io
   groupPriorityMinimum: 1000
   versionPriority: 15

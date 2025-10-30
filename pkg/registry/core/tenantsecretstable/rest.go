@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
@@ -38,13 +38,15 @@ const (
 )
 
 type REST struct {
-	core corev1client.CoreV1Interface
-	gvr  schema.GroupVersionResource
+	c   client.Client
+	w   client.WithWatch
+	gvr schema.GroupVersionResource
 }
 
-func NewREST(coreCli corev1client.CoreV1Interface) *REST {
+func NewREST(c client.Client, w client.WithWatch) *REST {
 	return &REST{
-		core: coreCli,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -95,7 +97,14 @@ func (r *REST) Get(ctx context.Context, name string, opts *metav1.GetOptions) (r
 
 	// We need to identify secret name and key. Iterate secrets in namespace with tenant secret label
 	// and return the matching composed object.
-	list, err := r.core.Secrets(ns).List(ctx, metav1.ListOptions{LabelSelector: labels.Set{tsLabelKey: tsLabelValue}.AsSelector().String()})
+	list := &corev1.SecretList{}
+	err = r.c.List(ctx, list,
+		&client.ListOptions{
+			Namespace: ns,
+			Raw: &metav1.ListOptions{
+				LabelSelector: labels.Set{tsLabelKey: tsLabelValue}.AsSelector().String(),
+			},
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +139,15 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		fieldSel = opts.FieldSelector.String()
 	}
 
-	list, err := r.core.Secrets(ns).List(ctx, metav1.ListOptions{LabelSelector: sel.String(), FieldSelector: fieldSel})
+	list := &corev1.SecretList{}
+	err = r.c.List(ctx, list,
+		&client.ListOptions{
+			Namespace: ns,
+			Raw: &metav1.ListOptions{
+				LabelSelector: labels.Set{tsLabelKey: tsLabelValue}.AsSelector().String(),
+				FieldSelector: fieldSel,
+			},
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -169,12 +186,13 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
+	secList := &corev1.SecretList{}
 	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector().String()
-	base, err := r.core.Secrets(ns).Watch(ctx, metav1.ListOptions{
+	base, err := r.w.Watch(ctx, secList, &client.ListOptions{Namespace: ns, Raw: &metav1.ListOptions{
 		Watch:           true,
 		LabelSelector:   ls,
 		ResourceVersion: opts.ResourceVersion,
-	})
+	}})
 	if err != nil {
 		return nil, err
 	}

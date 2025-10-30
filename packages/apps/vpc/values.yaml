@@ -1,8 +1,9 @@
 ## @section Common parameters
 
-## @param subnets {map[string]subnet} Subnets of a VPC
-## @field subnet {subnet} Subnet configuration
-## @field subnet.cidr {cidr} Subnet CIDR, e.g. 192.168.0.0/24
+## @typedef {struct} Subnet - Subnet of a VPC
+## @field {string} cidr - Subnet CIDR, e.g. 192.168.0.0/24
+
+## @param {map[string]Subnet} subnets - Subnets of a VPC
 ##
 ## Example:
 ## subnets:

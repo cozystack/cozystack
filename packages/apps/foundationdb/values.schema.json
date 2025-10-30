@@ -3,12 +3,12 @@
   "type": "object",
   "properties": {
     "automaticReplacements": {
-      "description": "Enable automatic pod replacements",
+      "description": "Enable automatic pod replacements.",
       "type": "boolean",
       "default": true
     },
     "backup": {
-      "description": "Backup configuration",
+      "description": "Backup configuration.",
       "type": "object",
       "default": {},
       "required": [
@@ -18,17 +18,17 @@
       ],
       "properties": {
         "enabled": {
-          "description": "Enable backups",
+          "description": "Enable backups.",
           "type": "boolean",
           "default": false
         },
         "retentionPolicy": {
-          "description": "Retention policy for backups",
+          "description": "Retention policy for backups.",
           "type": "string",
           "default": "7d"
         },
         "s3": {
-          "description": "S3 configuration for backups",
+          "description": "S3 configuration for backups.",
           "type": "object",
           "default": {},
           "required": [
@@ -39,11 +39,12 @@
           ],
           "properties": {
             "bucket": {
-              "description": "S3 bucket name",
-              "type": "string"
+              "description": "S3 bucket name.",
+              "type": "string",
+              "default": ""
             },
             "credentials": {
-              "description": "S3 credentials",
+              "description": "S3 credentials.",
               "type": "object",
               "default": {},
               "required": [
@@ -52,21 +53,24 @@
               ],
               "properties": {
                 "accessKeyId": {
-                  "description": "S3 access key ID",
-                  "type": "string"
+                  "description": "S3 access key ID.",
+                  "type": "string",
+                  "default": ""
                 },
                 "secretAccessKey": {
-                  "description": "S3 secret access key",
-                  "type": "string"
+                  "description": "S3 secret access key.",
+                  "type": "string",
+                  "default": ""
                 }
               }
             },
             "endpoint": {
-              "description": "S3 endpoint URL",
-              "type": "string"
+              "description": "S3 endpoint URL.",
+              "type": "string",
+              "default": ""
             },
             "region": {
-              "description": "S3 region",
+              "description": "S3 region.",
               "type": "string",
               "default": "us-east-1"
             }
@@ -75,7 +79,7 @@
       }
     },
     "cluster": {
-      "description": "Cluster configuration",
+      "description": "Cluster configuration.",
       "type": "object",
       "default": {},
       "required": [
@@ -87,7 +91,7 @@
       ],
       "properties": {
         "faultDomain": {
-          "description": "Fault domain configuration",
+          "description": "Fault domain configuration.",
           "type": "object",
           "default": {},
           "required": [
@@ -96,19 +100,19 @@
           ],
           "properties": {
             "key": {
-              "description": "Fault domain key",
+              "description": "Fault domain key.",
               "type": "string",
               "default": "kubernetes.io/hostname"
             },
             "valueFrom": {
-              "description": "Fault domain value source",
+              "description": "Fault domain value source.",
               "type": "string",
               "default": "spec.nodeName"
             }
           }
         },
         "processCounts": {
-          "description": "Process counts for different roles",
+          "description": "Process counts for different roles.",
           "type": "object",
           "default": {},
           "required": [
@@ -118,41 +122,41 @@
           ],
           "properties": {
             "cluster_controller": {
-              "description": "Number of cluster controller processes",
+              "description": "Number of cluster controller processes.",
               "type": "integer",
               "default": 1
             },
             "stateless": {
-              "description": "Number of stateless processes (-1 for automatic)",
+              "description": "Number of stateless processes (-1 for automatic).",
               "type": "integer",
               "default": -1
             },
             "storage": {
-              "description": "Number of storage processes (determines cluster size)",
+              "description": "Number of storage processes (determines cluster size).",
               "type": "integer",
               "default": 3
             }
           }
         },
         "redundancyMode": {
-          "description": "Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback)",
+          "description": "Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback).",
           "type": "string",
           "default": "double"
         },
         "storageEngine": {
-          "description": "Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory)",
+          "description": "Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory).",
           "type": "string",
           "default": "ssd-2"
         },
         "version": {
-          "description": "Version of FoundationDB to use",
+          "description": "Version of FoundationDB to use.",
           "type": "string",
           "default": "7.3.63"
         }
       }
     },
     "customParameters": {
-      "description": "Custom parameters to pass to FoundationDB",
+      "description": "Custom parameters to pass to FoundationDB.",
       "type": "array",
       "default": [],
       "items": {
@@ -160,7 +164,7 @@
       }
     },
     "imageType": {
-      "description": "Container image deployment type",
+      "description": "Container image deployment type.",
       "type": "string",
       "default": "unified",
       "enum": [
@@ -169,7 +173,7 @@
       ]
     },
     "monitoring": {
-      "description": "Monitoring configuration",
+      "description": "Monitoring configuration.",
       "type": "object",
       "default": {},
       "required": [
@@ -177,19 +181,19 @@
       ],
       "properties": {
         "enabled": {
-          "description": "Enable WorkloadMonitor integration",
+          "description": "Enable WorkloadMonitor integration.",
           "type": "boolean",
           "default": true
         }
       }
     },
     "resources": {
-      "description": "Explicit CPU and memory configuration for each FoundationDB instance. When left empty, the preset defined in `resourcesPreset` is applied.",
+      "description": "Explicit CPU and memory configuration for each FoundationDB instance. When omitted, the preset defined in `resourcesPreset` is applied.",
       "type": "object",
       "default": {},
       "properties": {
         "cpu": {
-          "description": "CPU available to each instance",
+          "description": "CPU available to each instance.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -202,7 +206,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "Memory (RAM) available to each instance",
+          "description": "Memory (RAM) available to each instance.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -217,7 +221,7 @@
       }
     },
     "resourcesPreset": {
-      "description": "Default sizing preset used when `resources` is omitted. Allowed values: `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+      "description": "Default sizing preset used when `resources` is omitted.",
       "type": "string",
       "default": "medium",
       "enum": [
@@ -229,7 +233,7 @@
       ]
     },
     "securityContext": {
-      "description": "Security context for containers",
+      "description": "Security context for containers.",
       "type": "object",
       "default": {},
       "required": [
@@ -238,19 +242,19 @@
       ],
       "properties": {
         "runAsGroup": {
-          "description": "Group ID to run the container",
+          "description": "Group ID to run the container.",
           "type": "integer",
           "default": 4059
         },
         "runAsUser": {
-          "description": "User ID to run the container",
+          "description": "User ID to run the container.",
           "type": "integer",
           "default": 4059
         }
       }
     },
     "storage": {
-      "description": "Storage configuration",
+      "description": "Storage configuration.",
       "type": "object",
       "default": {},
       "required": [
@@ -259,7 +263,7 @@
       ],
       "properties": {
         "size": {
-          "description": "Size of persistent volumes for each instance",
+          "description": "Size of persistent volumes for each instance.",
           "default": "16Gi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -273,8 +277,9 @@
           "x-kubernetes-int-or-string": true
         },
         "storageClass": {
-          "description": "Storage class (if not set, uses cluster default)",
-          "type": "string"
+          "description": "Storage class (if not set, uses cluster default).",
+          "type": "string",
+          "default": ""
         }
       }
     }

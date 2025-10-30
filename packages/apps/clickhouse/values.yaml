@@ -1,36 +1,54 @@
+##
 ## @section Common parameters
 ##
-## @param replicas {int} Number of Clickhouse replicas
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each ClickHouse replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of ClickHouse replicas.
 replicas: 2
-## @param shards {int} Number of Clickhouse shards
+
+## @param {int} shards - Number of ClickHouse shards.
 shards: 1
-## @param resources {*resources} Explicit CPU and memory configuration for each Clickhouse replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each replica
-## @field resources.memory {*quantity} Memory (RAM) available to each replica
-#  resources:
-#    cpu: 4000m
-#    memory: 4Gi
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each ClickHouse replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-
-
-## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+## @param {ResourcesPreset} resourcesPreset="small" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "small"
-## @param size {quantity} Persistent Volume Claim size, available for application data
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
-## @param storageClass {string} StorageClass used to store the data
+
+## @param {string} storageClass - StorageClass used to store the data.
 storageClass: ""
 
-
+##
 ## @section Application-specific parameters
 ##
-## @param logStorageSize {quantity} Size of Persistent Volume for logs
+
+## @param {quantity} logStorageSize - Size of Persistent Volume for logs.
 logStorageSize: 2Gi
-## @param logTTL {int} TTL (expiration time) for `query_log` and `query_thread_log`
+
+## @param {int} logTTL - TTL (expiration time) for `query_log` and `query_thread_log`.
 logTTL: 15
-## @param users {map[string]user} Users configuration
-## @field user.password {*string} Password for the user
-## @field user.readonly {*bool} User is `readonly`, default is `false`.
+
+## @typedef {struct} User - User configuration.
+## @field {string} [password] - Password for the user.
+## @field {bool} [readonly] - User is readonly (default: false).
+
+## @param {map[string]User} users - Users configuration map.
+users: {}
 ## Example:
 ## users:
 ##   user1:
@@ -39,20 +57,22 @@ logTTL: 15
 ##     readonly: true
 ##     password: hackme
 ##
-users: {}
 
-
+##
 ## @section Backup parameters
+##
 
-## @param backup {backup} Backup configuration
-## @field backup.enabled {bool} Enable regular backups, default is `false`
-## @field backup.s3Region {string} AWS S3 region where backups are stored
-## @field backup.s3Bucket {string} S3 bucket used for storing backups
-## @field backup.schedule {string} Cron schedule for automated backups
-## @field backup.cleanupStrategy {string} Retention strategy for cleaning up old backups
-## @field backup.s3AccessKey {string} Access key for S3, used for authentication
-## @field backup.s3SecretKey {string} Secret key for S3, used for authentication
-## @field backup.resticPassword {string} Password for Restic backup encryption
+## @typedef {struct} Backup - Backup configuration.
+## @field {bool} enabled - Enable regular backups (default: false).
+## @field {string} s3Region - AWS S3 region where backups are stored.
+## @field {string} s3Bucket - S3 bucket used for storing backups.
+## @field {string} schedule - Cron schedule for automated backups.
+## @field {string} cleanupStrategy - Retention strategy for cleaning up old backups.
+## @field {string} s3AccessKey - Access key for S3 authentication.
+## @field {string} s3SecretKey - Secret key for S3 authentication.
+## @field {string} resticPassword - Password for Restic backup encryption.
+
+## @param {Backup} backup - Backup configuration.
 backup:
   enabled: false
   s3Region: us-east-1
@@ -63,13 +83,17 @@ backup:
   s3SecretKey: "<your-secret-key>"
   resticPassword: "<password>"
 
+##
+## @section ClickHouse Keeper parameters
+##
 
-## @section Clickhouse Keeper parameters
-## @param clickhouseKeeper {*clickhouseKeeper} Clickhouse Keeper configuration
-## @field clickhouseKeeper.enabled {*bool} Deploy ClickHouse Keeper for cluster coordination
-## @field clickhouseKeeper.size {*quantity} Persistent Volume Claim size, available for application data
-## @field clickhouseKeeper.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
-## @field clickhouseKeeper.replicas {*int} Number of Keeper replicas
+## @typedef {struct} ClickHouseKeeper - ClickHouse Keeper configuration.
+## @field {bool} [enabled] - Deploy ClickHouse Keeper for cluster coordination.
+## @field {quantity} [size] - Persistent Volume Claim size available for application data.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset.
+## @field {int} [replicas] - Number of Keeper replicas.
+
+## @param {ClickHouseKeeper} clickhouseKeeper - ClickHouse Keeper configuration.
 clickhouseKeeper:
   enabled: true
   size: 1Gi

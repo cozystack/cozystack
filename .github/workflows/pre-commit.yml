@@ -28,7 +28,7 @@ jobs:
 
       - name: Install generate
         run: |
-          curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v0.9.0/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
+          curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v1.0.5/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
 
       - name: Run pre-commit hooks
         run: |

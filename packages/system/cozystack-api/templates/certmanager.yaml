@@ -1,0 +1,45 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozystack-api-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozystack-api-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: cozystack-api-ca
+  duration: 43800h  # 5 years
+  commonName: cozystack-api-ca
+  issuerRef:
+    name: cozystack-api-selfsigned
+  isCA: true
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozystack-api-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: cozystack-api-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozystack-api
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: cozystack-api-cert
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: cozystack-api-ca
+  commonName: cozystack-api
+  dnsNames:
+    - cozystack-api
+    - cozystack-api.{{ .Release.Namespace }}.svc

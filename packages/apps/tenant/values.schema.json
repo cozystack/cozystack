@@ -3,31 +3,32 @@
   "type": "object",
   "properties": {
     "etcd": {
-      "description": "Deploy own Etcd cluster",
+      "description": "Deploy own Etcd cluster.",
       "type": "boolean",
       "default": false
     },
     "host": {
-      "description": "The hostname used to access tenant services (defaults to using the tenant name as a subdomain for it's parent tenant host).",
-      "type": "string"
+      "description": "The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).",
+      "type": "string",
+      "default": ""
     },
     "ingress": {
-      "description": "Deploy own Ingress Controller",
+      "description": "Deploy own Ingress Controller.",
       "type": "boolean",
       "default": false
     },
     "isolated": {
-      "description": "Enforce tenant namespace with network policies, `true` by default",
+      "description": "Enforce tenant namespace with network policies (default: true).",
       "type": "boolean",
       "default": true
     },
     "monitoring": {
-      "description": "Deploy own Monitoring Stack",
+      "description": "Deploy own Monitoring Stack.",
       "type": "boolean",
       "default": false
     },
     "resourceQuotas": {
-      "description": "Define resource quotas for the tenant",
+      "description": "Define resource quotas for the tenant.",
       "type": "object",
       "default": {},
       "additionalProperties": {
@@ -44,7 +45,7 @@
       }
     },
     "seaweedfs": {
-      "description": "Deploy own SeaweedFS",
+      "description": "Deploy own SeaweedFS.",
       "type": "boolean",
       "default": false
     }

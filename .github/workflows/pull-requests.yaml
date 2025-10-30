@@ -1,7 +1,8 @@
 name: Pull Request
 
 env:
-  REGISTRY: ${{ vars.OCIR_REPO }}
+  # TODO: unhardcode this
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
 on:
   pull_request:
     types: [opened, synchronize, reopened]
