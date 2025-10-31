@@ -1,12 +1,15 @@
 global:
   enableSecurity: true
   serviceAccountName: "tenant-foo-seaweedfs"
+  imageName: "ghcr.io/cozystack/cozystack/seaweedfs"
   extraEnvironmentVars:
     WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
     WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
   monitoring:
     enabled: true
 seaweedfs:
+  image:
+    tag: "latest@sha256:5ab64da9a0bc33c555f18d86a9664fe63617d48e5ea5192ef34822c24dcc5771"
   master:
     volumeSizeLimitMB: 30000
     replicas: 3
