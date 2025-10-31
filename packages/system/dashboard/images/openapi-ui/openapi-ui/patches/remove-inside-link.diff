@@ -1,0 +1,15 @@
+diff --git a/src/components/organisms/Header/organisms/User/User.tsx b/src/components/organisms/Header/organisms/User/User.tsx
+index efe7ac3..80b715c 100644
+--- a/src/components/organisms/Header/organisms/User/User.tsx
++++ b/src/components/organisms/Header/organisms/User/User.tsx
+@@ -23,10 +23,6 @@ export const User: FC = () => {
+           //   key: '1',
+           //   label: <ThemeSelector />,
+           // },
+-          {
+-            key: '2',
+-            label: <div onClick={() => navigate(`${baseprefix}/inside/clusters`)}>Inside</div>,
+-          },
+           {
+             key: '3',
+             label: (

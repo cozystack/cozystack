@@ -1,5 +1,5 @@
 diff --git a/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx b/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx
-index 577ba0f..018df9c 100644
+index b6fb99f..965bac0 100644
 --- a/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx
 +++ b/src/components/organisms/ListInsideClusterAndNs/ListInsideClusterAndNs.tsx
 @@ -1,11 +1,16 @@
@@ -26,16 +26,16 @@ index 577ba0f..018df9c 100644
  
 -  const namespacesData = useBuiltinResources({
 +  const namespacesData = useApiResources({
-     clusterName: cluster,
+     clusterName: selectedCluster || '',
 -    typeName: 'namespaces',
 +    apiGroup: BASE_PROJECTS_API_GROUP,
 +    apiVersion: BASE_PROJECTS_VERSION,
 +    typeName: BASE_PROJECTS_RESOURCE_NAME,
      limit: null,
+     isEnabled: selectedCluster !== undefined,
    })
- 
 diff --git a/src/hooks/useNavSelectorInside.ts b/src/hooks/useNavSelectorInside.ts
-index d69405e..5adbd5d 100644
+index 5736e2b..1ec0f71 100644
 --- a/src/hooks/useNavSelectorInside.ts
 +++ b/src/hooks/useNavSelectorInside.ts
 @@ -1,6 +1,11 @@
@@ -63,8 +63,8 @@ index d69405e..5adbd5d 100644
 +    apiVersion: BASE_PROJECTS_VERSION,
 +    typeName: BASE_PROJECTS_RESOURCE_NAME,
      limit: null,
+     isEnabled: Boolean(clusterName),
    })
- 
 diff --git a/src/utils/getBacklink.ts b/src/utils/getBacklink.ts
 index a862354..f24e2bc 100644
 --- a/src/utils/getBacklink.ts

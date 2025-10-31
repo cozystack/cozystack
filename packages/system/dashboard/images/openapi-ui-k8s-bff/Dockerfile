@@ -4,7 +4,7 @@ FROM node:${NODE_VERSION}-alpine AS builder
 RUN apk add git
 WORKDIR /src
 
-ARG COMMIT_REF=22f9143f5109fb90332651c857d70b51bffccd9b
+ARG COMMIT_REF=88531ed6881b4ce4808e56c00905951d7ba8031c
 RUN wget -O- https://github.com/PRO-Robotech/openapi-ui-k8s-bff/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=1
 
 COPY patches /patches

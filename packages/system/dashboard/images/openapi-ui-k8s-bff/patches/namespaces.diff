@@ -1,7 +1,7 @@
-diff --git a/src/endpoints/forms/formPrepare/formPrepare.ts b/src/endpoints/forms/formPrepare/formPrepare.ts
+diff --git a/src/endpoints/forms/prepareFormProps/prepareFormProps.ts b/src/endpoints/forms/prepareFormProps/prepareFormProps.ts
 index 7e437db..90c40f6 100644
---- a/src/endpoints/forms/formPrepare/formPrepare.ts
-+++ b/src/endpoints/forms/formPrepare/formPrepare.ts
+--- a/src/endpoints/forms/prepareFormProps/prepareFormProps.ts
++++ b/src/endpoints/forms/prepareFormProps/prepareFormProps.ts
 @@ -15,6 +15,7 @@ export const prepareFormProps: RequestHandler = async (req: TPrepareFormReq, res
  
      const filteredHeaders = { ...req.headers }

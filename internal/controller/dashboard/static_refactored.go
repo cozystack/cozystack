@@ -796,6 +796,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"substractHeight":           float64(400),
 						"type":                      "builtin",
 						"typeName":                  "secrets",
+						"readOnly":                  true,
 					},
 				},
 			},

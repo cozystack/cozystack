@@ -324,6 +324,7 @@ func yamlTab(plural string) map[string]any {
 					"type":                      "builtin",
 					"typeName":                  plural,
 					"prefillValuesRequestIndex": float64(0),
+					"readOnly":                  true,
 					"substractHeight":           float64(400),
 				},
 			},
