@@ -6,6 +6,7 @@ build-deps:
 	@tar --version | grep -q GNU || (echo "GNU tar is required" && exit 1)
 	@sed --version | grep -q GNU || (echo "GNU sed is required" && exit 1)
 	@awk --version | grep -q GNU || (echo "GNU awk is required" && exit 1)
+	@./hack/user_setup_env.sh
 
 build: build-deps
 	make -C packages/apps/http-cache image
