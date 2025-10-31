@@ -60,8 +60,8 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	obj := &dashv1alpha1.Factory{}
 	obj.SetName(factoryName)
 
-	_, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
-		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
+	_, err := controllerutil.CreateOrUpdate(ctx, m.Client, obj, func() error {
+		if err := controllerutil.SetOwnerReference(crd, obj, m.Scheme); err != nil {
 			return err
 		}
 		// Add dashboard labels to dynamic resources

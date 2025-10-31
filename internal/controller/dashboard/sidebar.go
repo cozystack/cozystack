@@ -33,19 +33,11 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 
 	// 1) Fetch all CRDs
 	var all []cozyv1alpha1.CozystackResourceDefinition
-	if m.crdListFn != nil {
-		s, err := m.crdListFn(ctx)
-		if err != nil {
-			return err
-		}
-		all = s
-	} else {
-		var crdList cozyv1alpha1.CozystackResourceDefinitionList
-		if err := m.client.List(ctx, &crdList, &client.ListOptions{}); err != nil {
-			return err
-		}
-		all = crdList.Items
+	var crdList cozyv1alpha1.CozystackResourceDefinitionList
+	if err := m.List(ctx, &crdList, &client.ListOptions{}); err != nil {
+		return err
 	}
+	all = crdList.Items
 
 	// 2) Build category -> []item map (only for CRDs with spec.dashboard != nil)
 	type item struct {
@@ -251,7 +243,7 @@ func (m *Manager) upsertMultipleSidebars(
 		obj := &dashv1alpha1.Sidebar{}
 		obj.SetName(id)
 
-		if _, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
+		if _, err := controllerutil.CreateOrUpdate(ctx, m.Client, obj, func() error {
 			// Only set owner reference for dynamic sidebars (stock-project-factory-{kind}-details)
 			// Static sidebars (stock-instance-*, stock-project-*) should not have owner references
 			if strings.HasPrefix(id, "stock-project-factory-") && strings.HasSuffix(id, "-details") {
@@ -260,7 +252,7 @@ func (m *Manager) upsertMultipleSidebars(
 				lowerKind := strings.ToLower(kind)
 				expectedID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
 				if id == expectedID {
-					if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
+					if err := controllerutil.SetOwnerReference(crd, obj, m.Scheme); err != nil {
 						return err
 					}
 					// Add dashboard labels to dynamic resources

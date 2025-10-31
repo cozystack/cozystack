@@ -53,8 +53,8 @@ func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alph
 		"strategy":        "merge",
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
-		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
+	_, err := controllerutil.CreateOrUpdate(ctx, m.Client, obj, func() error {
+		if err := controllerutil.SetOwnerReference(crd, obj, m.Scheme); err != nil {
 			return err
 		}
 		// Add dashboard labels to dynamic resources

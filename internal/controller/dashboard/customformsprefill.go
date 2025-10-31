@@ -56,8 +56,8 @@ func (m *Manager) ensureCustomFormsPrefill(ctx context.Context, crd *cozyv1alpha
 		return reconcile.Result{}, err
 	}
 
-	_, err = controllerutil.CreateOrUpdate(ctx, m.client, cfp, func() error {
-		if err := controllerutil.SetOwnerReference(crd, cfp, m.scheme); err != nil {
+	_, err = controllerutil.CreateOrUpdate(ctx, m.Client, cfp, func() error {
+		if err := controllerutil.SetOwnerReference(crd, cfp, m.Scheme); err != nil {
 			return err
 		}
 		// Add dashboard labels to dynamic resources

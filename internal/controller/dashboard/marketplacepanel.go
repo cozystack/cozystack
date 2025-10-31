@@ -24,14 +24,14 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 
 	// If dashboard is not set, delete the panel if it exists.
 	if crd.Spec.Dashboard == nil {
-		err := m.client.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
+		err := m.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
 		}
 		if err != nil {
 			return reconcile.Result{}, err
 		}
-		if err := m.client.Delete(ctx, mp); err != nil && !apierrors.IsNotFound(err) {
+		if err := m.Delete(ctx, mp); err != nil && !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, err
 		}
 		logger.Info("Deleted MarketplacePanel because dashboard is not set", "name", mp.Name)
@@ -40,14 +40,14 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 
 	// Skip module and tenant resources (they don't need MarketplacePanel)
 	if crd.Spec.Dashboard.Module || crd.Spec.Application.Kind == "Tenant" {
-		err := m.client.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
+		err := m.Get(ctx, client.ObjectKey{Name: mp.Name}, mp)
 		if apierrors.IsNotFound(err) {
 			return reconcile.Result{}, nil
 		}
 		if err != nil {
 			return reconcile.Result{}, err
 		}
-		if err := m.client.Delete(ctx, mp); err != nil && !apierrors.IsNotFound(err) {
+		if err := m.Delete(ctx, mp); err != nil && !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, err
 		}
 		logger.Info("Deleted MarketplacePanel because resource is a module", "name", mp.Name)
@@ -86,8 +86,8 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 		return reconcile.Result{}, err
 	}
 
-	_, err = controllerutil.CreateOrUpdate(ctx, m.client, mp, func() error {
-		if err := controllerutil.SetOwnerReference(crd, mp, m.scheme); err != nil {
+	_, err = controllerutil.CreateOrUpdate(ctx, m.Client, mp, func() error {
+		if err := controllerutil.SetOwnerReference(crd, mp, m.Scheme); err != nil {
 			return err
 		}
 		// Add dashboard labels to dynamic resources

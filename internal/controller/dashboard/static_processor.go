@@ -32,7 +32,7 @@ func (m *Manager) ensureStaticResource(ctx context.Context, obj client.Object) e
 	// Add dashboard labels to static resources
 	m.addDashboardLabels(resource, nil, ResourceTypeStatic)
 
-	_, err := controllerutil.CreateOrUpdate(ctx, m.client, resource, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, m.Client, resource, func() error {
 		// For static resources, we don't need to set owner references
 		// as they are meant to be persistent across CRD changes
 		// Copy Spec from the original object to the live object

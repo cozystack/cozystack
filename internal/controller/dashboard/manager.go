@@ -10,7 +10,9 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -40,26 +42,40 @@ func AddToScheme(s *runtime.Scheme) error {
 // Manager owns logic for creating/updating dashboard resources derived from CRDs.
 // It’s easy to extend: add new ensure* methods and wire them into EnsureForCRD.
 type Manager struct {
-	client    client.Client
-	scheme    *runtime.Scheme
-	crdListFn func(context.Context) ([]cozyv1alpha1.CozystackResourceDefinition, error)
-}
-
-// Option pattern so callers can inject a custom lister.
-type Option func(*Manager)
-
-// WithCRDListFunc overrides how Manager lists all CozystackResourceDefinitions.
-func WithCRDListFunc(fn func(context.Context) ([]cozyv1alpha1.CozystackResourceDefinition, error)) Option {
-	return func(m *Manager) { m.crdListFn = fn }
+	client.Client
+	Scheme *runtime.Scheme
 }
 
 // NewManager constructs a dashboard Manager.
-func NewManager(c client.Client, scheme *runtime.Scheme, opts ...Option) *Manager {
-	m := &Manager{client: c, scheme: scheme}
-	for _, o := range opts {
-		o(m)
-	}
+func NewManager(c client.Client, scheme *runtime.Scheme) *Manager {
+	m := &Manager{Client: c, Scheme: scheme}
 	return m
+}
+
+func (m *Manager) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("dashboard-reconciler").
+		For(&cozyv1alpha1.CozystackResourceDefinition{}).
+		Complete(m)
+}
+
+func (m *Manager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	l := log.FromContext(ctx)
+
+	crd := &cozyv1alpha1.CozystackResourceDefinition{}
+
+	err := m.Get(ctx, types.NamespacedName{Name: req.Name}, crd)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if err := m.CleanupOrphanedResources(ctx); err != nil {
+				l.Error(err, "Failed to cleanup orphaned dashboard resources")
+			}
+			return ctrl.Result{}, nil // no point in requeuing here
+		}
+		return ctrl.Result{}, err
+	}
+
+	return m.EnsureForCRD(ctx, crd)
 }
 
 // EnsureForCRD is the single entry-point used by the controller.
@@ -171,21 +187,11 @@ func (m *Manager) getStaticResourceSelector() client.MatchingLabels {
 // CleanupOrphanedResources removes dashboard resources that are no longer needed
 // This should be called after cache warming to ensure all current resources are known
 func (m *Manager) CleanupOrphanedResources(ctx context.Context) error {
-	// Get all current CRDs to determine which resources should exist
-	var allCRDs []cozyv1alpha1.CozystackResourceDefinition
-	if m.crdListFn != nil {
-		s, err := m.crdListFn(ctx)
-		if err != nil {
-			return err
-		}
-		allCRDs = s
-	} else {
-		var crdList cozyv1alpha1.CozystackResourceDefinitionList
-		if err := m.client.List(ctx, &crdList, &client.ListOptions{}); err != nil {
-			return err
-		}
-		allCRDs = crdList.Items
+	var crdList cozyv1alpha1.CozystackResourceDefinitionList
+	if err := m.List(ctx, &crdList, &client.ListOptions{}); err != nil {
+		return err
 	}
+	allCRDs := crdList.Items
 
 	// Build a set of expected resource names for each type
 	expectedResources := m.buildExpectedResourceSet(allCRDs)
@@ -349,7 +355,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	}
 
 	// List with dashboard labels
-	if err := m.client.List(ctx, list, m.getDashboardResourceSelector()); err != nil {
+	if err := m.List(ctx, list, m.getDashboardResourceSelector()); err != nil {
 		return err
 	}
 
@@ -358,7 +364,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	case *dashv1alpha1.CustomColumnsOverrideList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
@@ -369,7 +375,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	case *dashv1alpha1.CustomFormsOverrideList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
@@ -380,7 +386,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	case *dashv1alpha1.CustomFormsPrefillList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
@@ -391,7 +397,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	case *dashv1alpha1.MarketplacePanelList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
@@ -402,7 +408,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	case *dashv1alpha1.SidebarList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
@@ -413,7 +419,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 	case *dashv1alpha1.TableUriMappingList:
 		for _, item := range l.Items {
 			if !expected[item.Name] {
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
@@ -426,7 +432,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 			if !expected[item.Name] {
 				logger := log.FromContext(ctx)
 				logger.Info("Deleting orphaned Breadcrumb resource", "name", item.Name)
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
@@ -438,7 +444,7 @@ func (m *Manager) cleanupResourceType(ctx context.Context, resourceType client.O
 			if !expected[item.Name] {
 				logger := log.FromContext(ctx)
 				logger.Info("Deleting orphaned Factory resource", "name", item.Name)
-				if err := m.client.Delete(ctx, &item); err != nil {
+				if err := m.Delete(ctx, &item); err != nil {
 					if !apierrors.IsNotFound(err) {
 						return err
 					}
