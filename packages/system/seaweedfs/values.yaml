@@ -1,7 +1,7 @@
 global:
   enableSecurity: true
   serviceAccountName: "tenant-foo-seaweedfs"
-  imageName: "ghcr.io/cozystack/cozystack/seaweedfs"
+  imageName: "seaweedfs"
   extraEnvironmentVars:
     WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
     WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
@@ -9,7 +9,8 @@ global:
     enabled: true
 seaweedfs:
   image:
-    tag: "latest@sha256:5ab64da9a0bc33c555f18d86a9664fe63617d48e5ea5192ef34822c24dcc5771"
+    tag: "latest@sha256:944e9bff98b088773847270238b63ce57dc5291054814d08e0226a139b3affb2"
+    registry: ghcr.io/cozystack/cozystack
   master:
     volumeSizeLimitMB: 30000
     replicas: 3
@@ -86,7 +87,7 @@ seaweedfs:
       existingConfigSecret: null
       auditLogConfig: {}
   s3:
-    enabled: true
+    enabled: false
     extraArgs:
       - -idleTimeout=60
     enableAuth: false

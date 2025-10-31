@@ -3,6 +3,7 @@
 global:
   createClusterRole: true
   registry: ""
+  # if repository is set, it overrides the namespace part of imageName
   repository: ""
   imageName: chrislusf/seaweedfs
   imagePullPolicy: IfNotPresent
@@ -201,8 +202,7 @@ master:
   # nodeSelector labels for master pod assignment, formatted as a muli-line string.
   # ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#nodeselector
   # Example:
-  nodeSelector: |
-    kubernetes.io/arch: amd64
+  nodeSelector: ""
   # nodeSelector: |
   #   sw-backend: "true"
 
@@ -238,6 +238,8 @@ master:
     className: "nginx"
     # host: false for "*" hostname
     host: "master.seaweedfs.local"
+    path: "/sw-master/?(.*)"
+    pathType: ImplementationSpecific
     annotations:
       nginx.ingress.kubernetes.io/auth-type: "basic"
       nginx.ingress.kubernetes.io/auth-secret: "default/ingress-basic-auth-secret"
@@ -478,8 +480,7 @@ volume:
   # nodeSelector labels for server pod assignment, formatted as a muli-line string.
   # ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#nodeselector
   # Example:
-  nodeSelector: |
-   kubernetes.io/arch: amd64
+  nodeSelector: ""
   # nodeSelector: |
   #   sw-volume: "true"
 
@@ -735,8 +736,7 @@ filer:
   # nodeSelector labels for server pod assignment, formatted as a muli-line string.
   # ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#nodeselector
   # Example:
-  nodeSelector: |
-    kubernetes.io/arch: amd64
+  nodeSelector: ""
   # nodeSelector: |
   #   sw-backend: "true"
 
@@ -772,6 +772,8 @@ filer:
     className: "nginx"
     # host: false for "*" hostname
     host: "seaweedfs.cluster.local"
+    path: "/sw-filer/?(.*)"
+    pathType: ImplementationSpecific
     annotations:
       nginx.ingress.kubernetes.io/backend-protocol: GRPC
       nginx.ingress.kubernetes.io/auth-type: "basic"
@@ -871,7 +873,7 @@ filer:
     #     anonymousRead: false
 
 s3:
-  enabled: false
+  enabled: true
   imageOverride: null
   restartPolicy: null
   replicas: 1
@@ -932,8 +934,7 @@ s3:
   # nodeSelector labels for server pod assignment, formatted as a muli-line string.
   # ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#nodeselector
   # Example:
-  nodeSelector: |
-    kubernetes.io/arch: amd64
+  nodeSelector: ""
   # nodeSelector: |
   #   sw-backend: "true"
 
@@ -975,6 +976,11 @@ s3:
 
   extraEnvironmentVars:
 
+  # Custom command line arguments to add to the s3 command
+  # Example to fix connection idle seconds:
+  extraArgs: ["-idleTimeout=30"]
+  # extraArgs: []
+
   # used to configure livenessProbe on s3 containers
   #
   livenessProbe:
@@ -1006,6 +1012,8 @@ s3:
     className: "nginx"
     # host: false for "*" hostname
     host: "seaweedfs.cluster.local"
+    path: "/"
+    pathType: Prefix
     # additional ingress annotations for the s3 endpoint
     annotations: {}
     tls: []
@@ -1051,8 +1059,7 @@ sftp:
   annotations: {}
   resources: {}
   tolerations: ""
-  nodeSelector: |
-    kubernetes.io/arch: amd64
+  nodeSelector: ""
   priorityClassName: ""
   serviceAccountName: ""
   podSecurityContext: {}
@@ -1179,8 +1186,7 @@ allInOne:
 
   # nodeSelector labels for master pod assignment, formatted as a muli-line string.
   # ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#nodeselector
-  nodeSelector: |
-    kubernetes.io/arch: amd64
+  nodeSelector: ""
 
   # Used to assign priority to master pods
   # ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
