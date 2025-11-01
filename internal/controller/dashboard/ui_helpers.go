@@ -1,7 +1,5 @@
 package dashboard
 
-import "strings"
-
 // ---------------- UI helpers (use float64 for numeric fields) ----------------
 
 func contentCard(id string, style map[string]any, children []any) map[string]any {
@@ -200,10 +198,10 @@ func createBadge(id, text, color, title string) map[string]any {
 
 // createBadgeFromKind creates a badge using the existing badge generation functions
 func createBadgeFromKind(id, kind, title string) map[string]any {
-	return createUnifiedBadgeFromKind(id, kind, title, BadgeSizeMedium)
+	return createUnifiedBadgeFromKind(id, kind)
 }
 
 // createHeaderBadge creates a badge specifically for headers with consistent styling
 func createHeaderBadge(id, kind, plural string) map[string]any {
-	return createUnifiedBadgeFromKind(id, kind, strings.ToLower(plural), BadgeSizeLarge)
+	return createUnifiedBadgeFromKind(id, kind)
 }

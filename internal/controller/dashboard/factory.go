@@ -53,7 +53,6 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		Kind:         kind,
 		Plural:       plural,
 		Title:        strings.ToLower(plural),
-		Size:         BadgeSizeLarge,
 	}
 
 	spec := createUnifiedFactory(config, tabs, []any{resourceFetch})
@@ -115,7 +114,7 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 					"gap":   float64(6),
 				},
 				"children": []any{
-					createUnifiedBadgeFromKind("ns-badge", "Namespace", "namespace", BadgeSizeMedium),
+					createUnifiedBadgeFromKind("ns-badge", "Namespace"),
 					antdLink("namespace-link",
 						"{reqsJsonPath[0]['.metadata.namespace']['-']}",
 						"/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
