@@ -200,10 +200,10 @@ func createBadge(id, text, color, title string) map[string]any {
 
 // createBadgeFromKind creates a badge using the existing badge generation functions
 func createBadgeFromKind(id, kind, title string) map[string]any {
-	return createUnifiedBadgeFromKind(id, kind, title, BadgeSizeMedium)
+	return createUnifiedBadgeFromKind(id, kind, title)
 }
 
 // createHeaderBadge creates a badge specifically for headers with consistent styling
 func createHeaderBadge(id, kind, plural string) map[string]any {
-	return createUnifiedBadgeFromKind(id, kind, strings.ToLower(plural), BadgeSizeLarge)
+	return createUnifiedBadgeFromKind(id, kind, strings.ToLower(plural))
 }
