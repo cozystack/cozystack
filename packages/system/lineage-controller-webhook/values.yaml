@@ -1,3 +1,3 @@
 lineageControllerWebhook:
-  image: ghcr.io/cozystack/cozystack/lineage-controller-webhook:v0.37.3@sha256:794ec4cf3d5ea86e5cbc7d22d94acbba7560f4434f7b3c808a81a4352ec80fcc
+  image: ghcr.io/cozystack/cozystack/lineage-controller-webhook:v0.37.4@sha256:fb739bf575a93bb76c65b46f415e0f8343df824155c53207690420f00a98a598
   debug: false
