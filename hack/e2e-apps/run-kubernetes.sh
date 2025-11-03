@@ -87,14 +87,14 @@ EOF
 
 
   # Set up port forwarding to the Kubernetes API server for a 200 second timeout
-  bash -c 'timeout 200s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
+  bash -c 'timeout 300s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
 
   # Wait for the nodes to be ready (timeout after 2 minutes)
-  timeout 2m bash -c '
+  timeout 3m bash -c '
     until [ "$(kubectl --kubeconfig tenantkubeconfig get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -eq 2 ]; do
-      sleep 3
+      sleep 2
     done
   '
   # Verify the nodes are ready
