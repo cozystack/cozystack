@@ -28,6 +28,7 @@ rules:
   - cozystack.io
   resources:
   - workloadmonitors
+  - workloads
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - core.cozystack.io
@@ -113,6 +114,7 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
@@ -184,6 +186,7 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
   - apiGroups:
     - core.cozystack.io
@@ -282,6 +285,7 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
   - apiGroups:
     - core.cozystack.io
@@ -356,6 +360,7 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
   - apiGroups:
     - core.cozystack.io
