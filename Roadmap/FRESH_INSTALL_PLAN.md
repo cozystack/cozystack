@@ -53,16 +53,133 @@ Template: Talos Linux or Ubuntu 22.04
 
 ### Software Requirements
 
-- Talos Linux image or Ubuntu 22.04 cloud image
+**On Development Machine**:
 - kubectl 1.28+
 - helm 3.12+
 - talosctl (if using Talos)
+
+**On Proxmox Host**:
+- Talos Linux image or Ubuntu 22.04 cloud image
+- NexCage v0.7.3+ (OCI runtime for LXC integration)
+- Dependencies: libcap-dev, libseccomp-dev, libyajl-dev
 
 ## Installation Steps
 
 ### Week 1: Installation
 
-#### Day 1: VM Preparation (4 hours)
+#### Day 1: Proxmox Host Preparation (5 hours)
+
+**Step 1.0: Install NexCage on Proxmox Host**
+
+NexCage is a next-generation OCI runtime for Proxmox VE that enables LXC containers to run as Kubernetes pods.
+
+On Proxmox host:
+```bash
+# Install dependencies
+apt-get update
+apt-get install -y libcap-dev libseccomp-dev libyajl-dev git build-essential
+
+# Install Zig 0.15.1 (required for NexCage)
+cd /tmp
+wget https://ziglang.org/download/0.15.1/zig-linux-x86_64-0.15.1.tar.xz
+tar -xf zig-linux-x86_64-0.15.1.tar.xz
+mv zig-linux-x86_64-0.15.1 /opt/zig-0.15.1
+ln -s /opt/zig-0.15.1/zig /usr/local/bin/zig
+
+# Verify Zig installation
+zig version  # Should output: 0.15.1
+
+# Clone and build NexCage
+cd /opt
+git clone https://github.com/CageForge/nexcage.git
+cd nexcage
+git checkout v0.7.3  # Latest stable version
+
+# Build NexCage
+zig build -Doptimize=ReleaseSafe
+
+# Install binary
+cp zig-out/bin/nexcage /usr/local/bin/nexcage
+chmod +x /usr/local/bin/nexcage
+
+# Verify installation
+nexcage version
+nexcage --help
+
+# Create NexCage config directory
+mkdir -p /etc/nexcage
+cp config.json.example /etc/nexcage/config.json
+
+# Configure NexCage for Kubernetes integration
+cat > /etc/nexcage/config.json <<EOF
+{
+  "runtime": "lxc",
+  "lxc_path": "/var/lib/lxc",
+  "default_backend": "lxc",
+  "oci_fallback": true,
+  "logging": {
+    "level": "info",
+    "file": "/var/log/nexcage.log"
+  },
+  "kubernetes": {
+    "enabled": true,
+    "cri_socket": "/run/nexcage/nexcage.sock"
+  }
+}
+EOF
+
+# Create systemd service for NexCage
+cat > /etc/systemd/system/nexcage.service <<EOF
+[Unit]
+Description=NexCage OCI Runtime for LXC
+Documentation=https://github.com/CageForge/nexcage
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/nexcage daemon --config /etc/nexcage/config.json
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start NexCage service
+systemctl daemon-reload
+systemctl enable nexcage
+systemctl start nexcage
+
+# Verify NexCage is running
+systemctl status nexcage
+nexcage list --runtime lxc
+
+# Test NexCage basic functionality
+nexcage create --help
+```
+
+**Expected Result**:
+```
+NexCage v0.7.3 installed and running
+Service: active (running)
+Socket: /run/nexcage/nexcage.sock created
+```
+
+**Troubleshooting**:
+```bash
+# Check logs
+journalctl -u nexcage -f
+
+# Check socket
+ls -la /run/nexcage/nexcage.sock
+
+# Test LXC list
+nexcage list --runtime lxc
+```
 
 **Step 1.1: Create VM Templates**
 
@@ -614,12 +731,109 @@ kubectl wait --for=condition=ready postgres/test-db -n db-test --timeout=300s
 kubectl get pods -n db-test
 ```
 
-**Test 6: Integration Tests**
+**Test 6: NexCage LXC Integration**
+
+```bash
+# Verify NexCage is running on Proxmox host
+ssh root@proxmox-host "systemctl status nexcage"
+
+# Test LXC list via NexCage
+ssh root@proxmox-host "nexcage list --runtime lxc"
+
+# Create test LXC container via NexCage
+ssh root@proxmox-host "nexcage create --runtime lxc --name test-lxc-db --rootfs /var/lib/lxc/test-lxc-db"
+
+# Test NexCage OCI compatibility
+kubectl create namespace lxc-test
+
+# Create pod with LXC runtime annotation (if supported)
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-lxc-pod
+  namespace: lxc-test
+  annotations:
+    io.kubernetes.cri.runtime: nexcage
+spec:
+  containers:
+  - name: postgres
+    image: postgres:15
+    env:
+    - name: POSTGRES_PASSWORD
+      value: test123
+EOF
+
+# Verify pod runs via NexCage
+kubectl wait --for=condition=ready pod/test-lxc-pod -n lxc-test --timeout=120s
+
+# Check container runtime
+kubectl get pod test-lxc-pod -n lxc-test -o jsonpath='{.status.containerStatuses[0].containerID}'
+
+# VERIFY in Proxmox that LXC container was created
+ssh root@proxmox-host "pct list | grep test-lxc"
+
+# Cleanup
+kubectl delete namespace lxc-test
+```
+
+**Expected Result**:
+- ✅ NexCage creates LXC container for database pod
+- ✅ Pod runs successfully with LXC isolation
+- ✅ Container visible in Proxmox `pct list`
+- ✅ Database accessible from within cluster
+
+**Test 7: Database on LXC via NexCage**
+
+```bash
+# Test PostgreSQL operator with LXC runtime
+kubectl create namespace db-lxc-test
+
+kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: test-db-lxc
+  namespace: db-lxc-test
+  annotations:
+    runtime.cozystack.io/type: lxc
+    runtime.cozystack.io/backend: nexcage
+spec:
+  replicas: 1
+  storage: 5Gi
+  resources:
+    cpu: 2
+    memory: 4Gi
+EOF
+
+# Monitor creation
+watch kubectl get postgres test-db-lxc -n db-lxc-test
+
+# Verify pod uses LXC
+kubectl get pods -n db-lxc-test -o wide
+
+# Check in Proxmox
+ssh root@proxmox-host "pct list | grep test-db-lxc"
+
+# Test database connection
+kubectl run -it --rm psql-client --image=postgres:15 --restart=Never -n db-lxc-test -- \
+  psql -h test-db-lxc-postgres -U postgres
+
+# Cleanup
+kubectl delete namespace db-lxc-test
+```
+
+**Test 8: Integration Tests**
 
 ```bash
 # Run comprehensive integration checks
 cd /root/cozystack-v0.37.2
 ./tests/proxmox-integration/extended-integrity-check.sh
+
+# Test NexCage health
+ssh root@proxmox-host "nexcage --version"
+ssh root@proxmox-host "nexcage list --runtime lxc"
+ssh root@proxmox-host "systemctl is-active nexcage"
 ```
 
 #### Day 10: Documentation and Handoff (4 hours)
@@ -651,13 +865,16 @@ cat > /root/NEW_CLUSTER_INFO.md <<EOF
 - CSI Driver: Configured
 - CCM: Running
 - Templates: ID 9100 (Talos)
+- NexCage: v0.7.3 (LXC runtime)
 
 ## Tests Passed
 - ✅ VM creation via CAPI
 - ✅ Storage provisioning
 - ✅ Network configuration
 - ✅ Tenant cluster creation
-- ✅ Database operators
+- ✅ Database operators (pods)
+- ✅ NexCage LXC integration
+- ✅ Database on LXC via NexCage
 EOF
 ```
 
@@ -681,6 +898,12 @@ kubectl get deployments,statefulsets,daemonsets -A
 ### For Fresh Install
 
 ```bash
+# 0. Install NexCage on Proxmox host
+ssh root@proxmox-host "apt-get install -y libcap-dev libseccomp-dev libyajl-dev"
+ssh root@proxmox-host "cd /opt && git clone https://github.com/CageForge/nexcage.git"
+ssh root@proxmox-host "cd /opt/nexcage && zig build && cp zig-out/bin/nexcage /usr/local/bin/"
+ssh root@proxmox-host "systemctl enable --now nexcage"
+
 # 1. Prepare VMs in Proxmox
 qm clone 9100 1001 --name cozy-new-cp1 --full 1
 qm clone 9100 1002 --name cozy-new-cp2 --full 1
@@ -705,6 +928,7 @@ bash scripts/installer.sh --bundle paas-proxmox
 # 5. Verify
 kubectl get hr -A
 kubectl get pods -A
+nexcage version
 ```
 
 ## Success Criteria
@@ -719,6 +943,7 @@ kubectl get pods -A
 - ✅ Storage classes created
 - ✅ Test VM created in Proxmox
 - ✅ Basic functionality verified
+- ✅ NexCage installed and running
 
 ### Integration Complete When:
 
@@ -727,6 +952,8 @@ kubectl get pods -A
 - ✅ Database operators functional
 - ✅ Network connectivity verified
 - ✅ All integrity checks pass
+- ✅ NexCage LXC runtime tested
+- ✅ Database on LXC verified
 
 ## Comparison: Old vs New
 
@@ -737,6 +964,9 @@ kubectl get pods -A
 | **Bundle** | paas-full | paas-proxmox |
 | **Health** | Critical failures | Healthy |
 | **VM Management** | KubeVirt (broken) | Proxmox CAPI |
+| **Container Runtime** | containerd only | containerd + NexCage |
+| **LXC Support** | No | Yes (via NexCage) |
+| **Database Isolation** | Pods only | Pods + LXC |
 | **Networking** | Broken (52+ days) | Clean |
 | **Pods Failing** | 19+ | 0 |
 | **Ready for Proxmox** | No | Yes |
@@ -755,20 +985,20 @@ kubectl get pods -A
 
 ```
 Week 1:
-  Day 1: VM prep (4h)
+  Day 1: Proxmox prep + NexCage install (5h)
   Day 2: K8s bootstrap (6h)
   Day 3: CozyStack install (6h)
   Day 4: Proxmox config (4h)
   Day 5: Validation (4h)
-  Total: 24 hours
+  Total: 25 hours
 
 Week 2:
   Day 6-7: VM testing (8h)
-  Day 8-9: Advanced testing (8h)
+  Day 8-9: Advanced testing + NexCage (8h)
   Day 10: Documentation (4h)
   Total: 20 hours
 
-Overall: 44 hours across 2 weeks
+Overall: 45 hours across 2 weeks
 ```
 
 **Compared to Option A**: Would have been 30-44 hours with 30-40% success rate
@@ -776,15 +1006,24 @@ Overall: 44 hours across 2 weeks
 ## Next Immediate Steps
 
 1. ✅ Document plan (this file)
-2. ⏳ Create VMs in Proxmox
-3. ⏳ Bootstrap Kubernetes
-4. ⏳ Install CozyStack v0.37.2
-5. ⏳ Test Proxmox integration
+2. ⏳ Install NexCage on Proxmox host
+3. ⏳ Create VMs in Proxmox
+4. ⏳ Bootstrap Kubernetes
+5. ⏳ Install CozyStack v0.37.2
+6. ⏳ Test Proxmox integration
+7. ⏳ Test NexCage LXC integration
 
 ---
 
 **Status**: READY TO EXECUTE  
-**Next Action**: Create VMs in Proxmox  
+**Next Action**: Install NexCage on Proxmox host  
 **Estimated Start**: Today  
 **Estimated Completion**: 2 weeks
+
+## References
+
+- **NexCage GitHub**: https://github.com/CageForge/nexcage
+- **CozyStack**: https://github.com/cozystack/cozystack
+- **Proxmox CAPI Provider**: https://github.com/ionos-cloud/cluster-api-provider-proxmox
+- **Talos Linux**: https://www.talos.dev
 
