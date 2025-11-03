@@ -3,4 +3,4 @@ kind: ConfigMap
 metadata:
   name: seaweedfs-deployed-version
 data:
-  version: "2"
+  version: "3"

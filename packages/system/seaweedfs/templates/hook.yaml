@@ -2,7 +2,7 @@
 {{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace "seaweedfs-deployed-version" }}
 {{- if $configMap }}
   {{- $deployedVersion := dig "data" "version" "0" $configMap }}
-  {{- if ge $deployedVersion "2" }}
+  {{- if ge $deployedVersion "3" }}
     {{- $shouldRunUpdateHook = false }}
   {{- end }}
 {{- end }}
