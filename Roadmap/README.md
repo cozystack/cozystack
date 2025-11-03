@@ -22,6 +22,7 @@ This roadmap contains a complete plan for integrating Proxmox VE with CozyStack 
 
 ### 🏗️ Architecture Documents (NEW)
 - **[PROXMOX_ARCHITECTURE.md](./PROXMOX_ARCHITECTURE.md)** - ⭐ **Proxmox vs KubeVirt architecture**
+- **[NEXCAGE_INTEGRATION.md](./NEXCAGE_INTEGRATION.md)** - ⭐ **NexCage LXC runtime integration**
 - **[PROXMOX_VM_CREATION_GUIDE.md](./PROXMOX_VM_CREATION_GUIDE.md)** - VM creation via CAPI
 - **[CRITICAL_FIX_PROXMOX_BUNDLE.md](./CRITICAL_FIX_PROXMOX_BUNDLE.md)** - Architecture correction details
 - **[ARCHITECTURE_FIX_SUMMARY.md](./ARCHITECTURE_FIX_SUMMARY.md)** - Fix summary and statistics
