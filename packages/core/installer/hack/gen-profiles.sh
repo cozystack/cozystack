@@ -5,7 +5,7 @@ set -u
 TMPDIR=$(mktemp -d)
 PROFILES="initramfs kernel iso installer nocloud metal"
 FIRMWARES="amd-ucode amdgpu bnx2-bnx2x i915 intel-ice-firmware intel-ucode qlogic-firmware"
-EXTENSIONS="drbd zfs lldpd"
+EXTENSIONS="drbd zfs"
 
 mkdir -p images/talos/profiles
 
@@ -90,7 +90,6 @@ input:
     - imageRef: ${QLOGIC_FIRMWARE_IMAGE}
     - imageRef: ${DRBD_IMAGE}
     - imageRef: ${ZFS_IMAGE}
-    - imageRef: ${LLDPD_IMAGE}
 output:
   kind: ${kind}
   imageOptions: ${image_options}

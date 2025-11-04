@@ -21,7 +21,6 @@ input:
     - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250708@sha256:97124ee3594ab1529c8153b633f85f2d2de1252ee8222a77f81904dcabd76815
     - imageRef: ghcr.io/siderolabs/drbd:9.2.14-v1.10.6@sha256:ca7fba878c5acb8fdfe130a39472a6c0a5c9dd74d65ba7507c09780a873b29c7
     - imageRef: ghcr.io/siderolabs/zfs:2.3.3-v1.10.6@sha256:4952ef7306cf014823b6a66cf6d29840f4c6b7b362e36f9d6e853846c7dd0025
-    - imageRef: ghcr.io/siderolabs/lldpd:1.0.19@sha256:73caa3c3a6c325970d0f527963f982698154d5f39c8c045b0fc2eb51d7da7b85
 output:
   kind: initramfs
   imageOptions: {}
