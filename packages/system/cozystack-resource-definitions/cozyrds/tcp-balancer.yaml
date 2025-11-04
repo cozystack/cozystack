@@ -31,3 +31,11 @@ spec:
   secrets:
     exclude: []
     include: []
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: tcp-balancer
+      type: haproxy
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"
