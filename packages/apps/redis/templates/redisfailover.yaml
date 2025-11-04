@@ -27,6 +27,7 @@ spec:
     replicas: 3
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
   redis:
+    image: "redis:8.2.0"
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
     replicas: {{ .Values.replicas }}
     {{- with .Values.size }}
