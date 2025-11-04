@@ -1,12 +1,9 @@
 package dashboard
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -55,97 +52,6 @@ func pickPlural(kind string, crd *cozyv1alpha1.CozystackResourceDefinition) stri
 		return k
 	}
 	return k + "s"
-}
-
-// initialsFromKind splits CamelCase and returns the first letters in upper case.
-// "VirtualMachine" -> "VM"; "Bucket" -> "B".
-func initialsFromKind(kind string) string {
-	parts := splitCamel(kind)
-	if len(parts) == 0 {
-		return strings.ToUpper(kind)
-	}
-	var b strings.Builder
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		b.WriteString(strings.ToUpper(string(p[0])))
-		// Limit to 3 chars to keep the badge compact (VM, PVC, etc.)
-		if b.Len() >= 3 {
-			break
-		}
-	}
-	return b.String()
-}
-
-// hexColorForKind returns a dark, saturated color (hex) derived from a stable hash of the kind.
-// We map the hash to an HSL hue; fix S/L for consistent readability with white text.
-func hexColorForKind(kind string) string {
-	// Stable short hash (sha1 → bytes → hue)
-	sum := sha1.Sum([]byte(kind))
-	// Use first two bytes for hue [0..359]
-	hue := int(sum[0])<<8 | int(sum[1])
-	hue = hue % 360
-
-	// Fixed S/L chosen to contrast with white text:
-	// S = 80%, L = 35% (dark enough so #fff is readable)
-	r, g, b := hslToRGB(float64(hue), 0.80, 0.35)
-
-	return fmt.Sprintf("#%02x%02x%02x", r, g, b)
-}
-
-// hslToRGB converts HSL (0..360, 0..1, 0..1) to sRGB (0..255).
-func hslToRGB(h float64, s float64, l float64) (uint8, uint8, uint8) {
-	c := (1 - absFloat(2*l-1)) * s
-	hp := h / 60.0
-	x := c * (1 - absFloat(modFloat(hp, 2)-1))
-	var r1, g1, b1 float64
-	switch {
-	case 0 <= hp && hp < 1:
-		r1, g1, b1 = c, x, 0
-	case 1 <= hp && hp < 2:
-		r1, g1, b1 = x, c, 0
-	case 2 <= hp && hp < 3:
-		r1, g1, b1 = 0, c, x
-	case 3 <= hp && hp < 4:
-		r1, g1, b1 = 0, x, c
-	case 4 <= hp && hp < 5:
-		r1, g1, b1 = x, 0, c
-	default:
-		r1, g1, b1 = c, 0, x
-	}
-	m := l - c/2
-	r := uint8(clamp01(r1+m) * 255.0)
-	g := uint8(clamp01(g1+m) * 255.0)
-	b := uint8(clamp01(b1+m) * 255.0)
-	return r, g, b
-}
-
-func absFloat(v float64) float64 {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
-func modFloat(a, b float64) float64 {
-	return a - b*float64(int(a/b))
-}
-
-func clamp01(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 1 {
-		return 1
-	}
-	return v
-}
-
-// optional: tiny helper to expose the compact color hash (useful for debugging)
-func shortHashHex(s string) string {
-	sum := sha1.Sum([]byte(s))
-	return hex.EncodeToString(sum[:4])
 }
 
 // ----------------------- Helpers (OpenAPI → values) -----------------------
@@ -293,12 +199,6 @@ func normalizeJSON(v any) any {
 	default:
 		return v
 	}
-}
-
-var camelSplitter = regexp.MustCompile(`(?m)([A-Z]+[a-z0-9]*|[a-z0-9]+)`)
-
-func splitCamel(s string) []string {
-	return camelSplitter.FindAllString(s, -1)
 }
 
 // --- helpers for schema inspection ---
