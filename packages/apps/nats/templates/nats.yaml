@@ -52,7 +52,7 @@ spec:
           resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 12 }}
       fullnameOverride: {{ .Release.Name }}
       config:
-        {{- if or (gt (len $passwords) 0) (gt (len .Values.config.merge) 0) }}
+        {{- if or (gt (len $passwords) 0) (and .Values.config (hasKey .Values.config "merge") (gt (len .Values.config.merge) 0)) }}
         merge:
           {{- if gt (len $passwords) 0 }}
           accounts:
@@ -63,8 +63,8 @@ spec:
                   password: "{{ $password }}"
                 {{- end }}
           {{- end }}
-          {{- if and .Values.config (hasKey .Values.config "merge") }}
-          {{ toYaml .Values.config.merge | nindent 12 }}
+          {{- if and .Values.config (hasKey .Values.config "merge") (gt (len .Values.config.merge) 0) }}
+          {{ toYaml .Values.config.merge | nindent 10 }}
           {{- end }}
         {{- end }}
         {{- if and .Values.config (hasKey .Values.config "resolver") }}
