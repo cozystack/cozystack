@@ -9,12 +9,57 @@
 
 Install clean CozyStack v0.37.2 cluster with paas-proxmox bundle for Proxmox VE integration.
 
-**Timeline**: 2 weeks total
-- Week 1: Installation and configuration (Days 1-5)
+**Timeline**: 3 weeks total
+- Week 0: Proxmox infrastructure setup on Hetzner (Days 0.1-0.3)
+- Week 1: CozyStack installation and configuration (Days 1-5)
 - Week 2: Proxmox integration testing (Days 6-10)
 - Week 3+: Migration planning and execution
 
 ## Prerequisites
+
+### Hetzner Server Requirements
+
+**Dedicated Server** (for Proxmox VE):
+```
+Recommended: AX-Line or EX-Line
+CPU: AMD EPYC or Intel Xeon (8+ cores, 16+ threads)
+RAM: 64GB+ ECC
+Disk: 2x NVMe (software RAID) or hardware RAID
+Network: 1 Gbps uplink
+Location: Europe (Nuremberg, Falkenstein, Helsinki)
+```
+
+**Example Configurations**:
+```
+Budget Option (AX41-NVMe):
+- CPU: AMD Ryzen 5 3600 (6 cores, 12 threads)
+- RAM: 64 GB DDR4 ECC
+- Disk: 2 x 512 GB NVMe SSD (software RAID)
+- Network: 1 Gbit/s
+- Price: ~€40-50/month
+
+Recommended (AX102):
+- CPU: AMD EPYC 7502P (32 cores, 64 threads)
+- RAM: 128 GB DDR4 ECC
+- Disk: 2 x 3.84 TB NVMe SSD
+- Network: 1 Gbit/s
+- Price: ~€200/month
+
+High-End (EX130):
+- CPU: AMD EPYC 9454P (48 cores, 96 threads)
+- RAM: 256 GB DDR5 ECC
+- Disk: 2 x 7.68 TB NVMe SSD
+- Network: 10 Gbit/s
+- Price: ~€400-500/month
+```
+
+### Hetzner Account Requirements
+
+- Active Hetzner account
+- Server ordered and delivered
+- Rescue system access credentials
+- Public IP address assigned
+- Optional: Additional IPs (/29 subnet for VMs)
 
 ### Proxmox Resources Needed
 
@@ -65,7 +110,397 @@ Template: Talos Linux or Ubuntu 22.04
 
 ## Installation Steps
 
-### Week 1: Installation
+### Week 0: Proxmox Infrastructure on Hetzner
+
+#### Day 0.1: Hetzner Server Preparation (1 hour)
+
+**Step 0.1.1: Order and Access Server**
+
+1. **Order Server** (if not done):
+```
+- Login to robot.hetzner.com
+- Select server model (AX102 recommended)
+- Choose location (Nuremberg/Falkenstein)
+- Order and wait for delivery email (~5-30 minutes)
+```
+
+2. **Activate Rescue System**:
+```bash
+# Via Hetzner Robot web interface:
+# 1. Navigate to your server
+# 2. Click "Rescue" tab
+# 3. Select "Linux" and "64 bit"
+# 4. Click "Activate rescue system"
+# 5. Note down root password
+# 6. Click "Reset" tab → Execute hardware reset
+
+# Or via API (if you prefer automation):
+curl -u "YOUR_USERNAME:YOUR_PASSWORD" \
+  -X POST \
+  https://robot-ws.your-server.de/boot/YOUR_SERVER_IP/rescue \
+  -d "os=linux" \
+  -d "arch=64"
+
+curl -u "YOUR_USERNAME:YOUR_PASSWORD" \
+  -X POST \
+  https://robot-ws.your-server.de/reset/YOUR_SERVER_IP \
+  -d "type=hw"
+```
+
+3. **SSH to Rescue System**:
+```bash
+# Wait 2-3 minutes for boot
+ssh root@YOUR_SERVER_IP
+# Enter rescue password from step 2
+```
+
+**Step 0.1.2: Verify Hardware**
+
+```bash
+# In rescue system, verify hardware
+
+# Check available disks
+lsblk
+# Expected: 2x NVMe drives (/dev/nvme0n1, /dev/nvme1n1)
+# or 2x SATA/SAS drives (/dev/sda, /dev/sdb)
+
+# Check network interfaces
+ip addr show
+# Note the interface name (e.g., eno1, enp0s31f6)
+
+# Check RAM
+free -h
+
+# Check CPU
+lscpu
+
+# Save hardware info for reference
+lsblk > /root/hardware-info.txt
+ip addr >> /root/hardware-info.txt
+free -h >> /root/hardware-info.txt
+lscpu >> /root/hardware-info.txt
+```
+
+**Note**: The automation script (pve-install.sh) will handle:
+- ✅ Disk partitioning (ZFS RAID1 automatic)
+- ✅ Network configuration (auto-detection)
+- ✅ Storage setup
+- ✅ Bridge creation (vmbr0 for VMs)
+
+No manual Debian installation needed - script does everything!
+
+#### Day 0.2: Automated Proxmox Installation (4 hours)
+
+**Step 0.2.1: Use Existing Automation Script**
+
+Use the pre-built automation script from your repository:
+
+```bash
+# SSH to Hetzner rescue system
+ssh root@YOUR_SERVER_IP
+
+# Download the automated installation script
+cd /root
+wget https://raw.githubusercontent.com/themoriarti/proxmox-hetzner/refs/heads/main/scripts/pve-install.sh
+chmod +x pve-install.sh
+
+# Review the script (optional)
+less pve-install.sh
+```
+
+**Script Features** (from themoriarti/proxmox-hetzner):
+
+The script provides a fully automated Proxmox VE installation with:
+
+1. **Interactive Configuration**:
+   - Network interface selection (auto-detects available interfaces)
+   - Hostname and FQDN configuration
+   - Timezone selection
+   - Email address setup
+   - Private subnet configuration
+   - Root password setup
+
+2. **Automatic Network Detection**:
+   - IPv4 CIDR and gateway
+   - IPv6 configuration
+   - MAC address
+   - Interface altnames support
+
+3. **Installation Process**:
+   - Downloads latest Proxmox VE ISO automatically
+   - Creates answer.toml for unattended installation
+   - Generates autoinstall ISO with proxmox-auto-install-assistant
+   - Installs via QEMU/KVM with VNC access
+   - UEFI and BIOS support
+
+4. **Post-Installation Configuration**:
+   - Network interfaces (public + private bridge)
+   - Hosts file configuration
+   - DNS resolvers (Hetzner + fallback)
+   - Sysctl tweaks (99-proxmox.conf)
+   - APT sources (Debian + Proxmox no-subscription)
+   - Disables rpcbind
+   - Cleans up enterprise repo
+
+5. **Storage Configuration**:
+   - ZFS RAID1 (default)
+   - Automatic disk detection and partitioning
+
+6. **Template Files** (downloaded from repository):
+   - `99-proxmox.conf` - Sysctl optimizations
+   - `hosts` - Hostname resolution
+   - `interfaces` - Network configuration
+   - `debian.sources` - Debian repositories
+   - `proxmox.sources` - Proxmox repositories
+
+**Step 0.2.2: Run Automated Installation**
+
+```bash
+# Execute installation script (interactive)
+./pve-install.sh
+
+# You will be prompted for:
+# 1. Interface name (e.g., eno1) - auto-detected
+# 2. Hostname (e.g., proxmox-hetzner)
+# 3. FQDN (e.g., proxmox.example.com)
+# 4. Timezone (e.g., Europe/Kiev)
+# 5. Email address (e.g., admin@example.com)
+# 6. Private subnet (e.g., 10.0.0.0/24)
+# 7. New root password
+
+# Example inputs:
+# Interface name: eno1
+# Hostname: proxmox-cozy
+# FQDN: proxmox-cozy.cp.if.ua
+# Timezone: Europe/Kiev
+# Email: admin@cp.if.ua
+# Private subnet: 10.0.0.0/24
+# Root password: <your-secure-password>
+
+# Script will:
+# 1. Download latest Proxmox VE ISO
+# 2. Create autoinstall configuration
+# 3. Install Proxmox via QEMU/KVM
+# 4. Configure network (public + private bridge)
+# 5. Setup repositories
+# 6. Configure SSH access
+# 7. Automatic reboot to installed system
+
+# Installation takes approximately 15-30 minutes
+# You can monitor via VNC if needed (port 5901)
+```
+
+**During Installation** (optional monitoring):
+
+```bash
+# From another terminal, you can monitor the installation:
+
+# Check QEMU process
+ps aux | grep qemu
+
+# Monitor installation log
+tail -f /root/qemu-install.log
+
+# Connect via VNC (optional)
+# Use VNC client to connect to localhost:5901
+# This shows the Proxmox installation progress
+```
+
+**Step 0.2.3: Post-Installation Verification**
+
+```bash
+# SSH back after reboot
+ssh root@YOUR_SERVER_IP
+
+# Verify Proxmox version
+pveversion
+# Expected: pve-manager/8.x.x/...
+
+# Check cluster status
+pvecm status
+# Expected: Cluster information not available (standalone node)
+
+# Check storage
+pvesm status
+# Expected: local, local-lvm
+
+# Verify bridge
+ip addr show vmbr0
+# Expected: vmbr0 with 10.0.0.1/24
+
+# Check web interface
+curl -k https://localhost:8006
+# Expected: HTML response
+
+# Test from browser
+echo "Access web UI at: https://YOUR_SERVER_IP:8006"
+echo "Login: root / your_root_password"
+```
+
+#### Day 0.3: Post-Installation Configuration (2 hours)
+
+**Step 0.3.1: Configure Storage**
+
+```bash
+# Create additional storage pools if needed
+
+# Check disk space
+pvesm status
+
+# Configure LVM-thin for VMs (recommended)
+# Usually auto-configured as 'local-lvm'
+
+# Optional: Create NFS/CIFS storage
+# pvesm add nfs backup --server NFS_SERVER --export /backup --content backup
+
+# Optional: Create directory storage
+mkdir -p /var/lib/vz/templates
+mkdir -p /var/lib/vz/iso
+```
+
+**Step 0.3.2: Upload ISO/Templates**
+
+```bash
+# Download common ISO images
+cd /var/lib/vz/template/iso/
+
+# Debian cloud image (for VMs)
+wget https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2
+
+# Ubuntu cloud image
+wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+
+# Talos Linux (for Kubernetes)
+wget https://github.com/siderolabs/talos/releases/download/v1.8.0/metal-amd64.raw.xz
+xz -d metal-amd64.raw.xz
+mv metal-amd64.raw talos-v1.8.0-amd64.raw
+
+# Set permissions
+chmod 644 *.qcow2 *.img *.raw
+```
+
+**Step 0.3.3: Configure Backup**
+
+```bash
+# Install backup tools
+apt-get install -y proxmox-backup-client
+
+# Configure vzdump (Proxmox backup)
+cat > /etc/vzdump.conf <<EOF
+# Backup settings
+tmpdir: /var/tmp
+dumpdir: /var/lib/vz/dump
+storage: local
+mode: snapshot
+compress: zstd
+pigz: 1
+ionice: 7
+EOF
+
+# Create backup script (optional)
+cat > /usr/local/bin/backup-all-vms.sh <<'SCRIPT'
+#!/bin/bash
+vzdump --all --mode snapshot --compress zstd --storage local
+SCRIPT
+
+chmod +x /usr/local/bin/backup-all-vms.sh
+
+# Optional: Schedule daily backups
+cat > /etc/cron.d/proxmox-backup <<EOF
+# Daily backup at 2 AM
+0 2 * * * root /usr/local/bin/backup-all-vms.sh
+EOF
+```
+
+**Step 0.3.4: Install Automation Tools**
+
+```bash
+# Install Ansible (for future automation)
+apt-get install -y ansible
+
+# Install Terraform (for IaC)
+wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+apt-get update
+apt-get install -y terraform
+
+# Verify installations
+ansible --version
+terraform --version
+```
+
+**Step 0.3.5: Security Hardening**
+
+```bash
+# 1. Configure SSH
+sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart sshd
+
+# 2. Install fail2ban
+apt-get install -y fail2ban
+systemctl enable fail2ban
+systemctl start fail2ban
+
+# 3. Configure firewall (if not using Hetzner firewall)
+apt-get install -y ufw
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp    # SSH
+ufw allow 8006/tcp  # Proxmox web UI
+ufw allow 5900:5999/tcp  # VNC for VMs
+# Don't enable yet if accessing via SSH initially
+# ufw enable
+
+# 4. Update root password (if using default)
+echo "Consider changing root password:"
+echo "passwd"
+
+# 5. Set up automatic security updates
+apt-get install -y unattended-upgrades
+dpkg-reconfigure -plow unattended-upgrades
+```
+
+**Step 0.3.6: Documentation**
+
+```bash
+# Save installation details
+cat > /root/PROXMOX_INSTALL_INFO.txt <<EOF
+Proxmox VE Installation Information
+====================================
+Date: $(date)
+Hostname: $(hostname -f)
+Version: $(pveversion)
+
+Server Details:
+- Provider: Hetzner
+- Model: $(dmidecode -s system-product-name)
+- CPU: $(lscpu | grep "Model name" | sed 's/Model name:\s*//')
+- RAM: $(free -h | awk '/^Mem:/ {print $2}')
+- Disks: $(lsblk -d -n -o NAME,SIZE,TYPE | grep disk)
+
+Network:
+- Public IP: $(hostname -I | awk '{print $1}')
+- Bridge: vmbr0 (10.0.0.1/24)
+
+Storage:
+$(pvesm status)
+
+Access:
+- Web UI: https://$(hostname -I | awk '{print $1}'):8006
+- SSH: root@$(hostname -I | awk '{print $1}')
+
+Next Steps:
+1. ✅ Proxmox installed
+2. ⏳ Install NexCage
+3. ⏳ Create VM templates
+4. ⏳ Install CozyStack
+EOF
+
+cat /root/PROXMOX_INSTALL_INFO.txt
+```
+
+### Week 1: CozyStack Installation
 
 #### Day 1: Proxmox Host Preparation (5 hours)
 
@@ -895,7 +1330,48 @@ kubectl get deployments,statefulsets,daemonsets -A
 
 ## Quick Start Commands
 
-### For Fresh Install
+### For Proxmox on Hetzner (Automated - themoriarti/proxmox-hetzner)
+
+```bash
+# Week 0: Automated Proxmox Installation on Hetzner
+# Using: https://github.com/themoriarti/proxmox-hetzner
+
+# 1. Boot into Hetzner rescue system
+# - Via robot.hetzner.com → Rescue → Activate
+# - Reset server
+
+# 2. Download and run automation script
+ssh root@YOUR_SERVER_IP
+cd /root
+wget https://raw.githubusercontent.com/themoriarti/proxmox-hetzner/refs/heads/main/scripts/pve-install.sh
+chmod +x pve-install.sh
+./pve-install.sh
+
+# 3. Follow interactive prompts:
+# - Interface name: eno1 (auto-detected)
+# - Hostname: proxmox-cozy
+# - FQDN: proxmox-cozy.cp.if.ua
+# - Timezone: Europe/Kiev
+# - Email: admin@cp.if.ua
+# - Private subnet: 10.0.0.0/24
+# - Root password: <your-password>
+
+# Script automatically:
+# - Downloads latest Proxmox VE ISO
+# - Creates autoinstall ISO
+# - Installs Proxmox via QEMU/KVM
+# - Configures ZFS RAID1
+# - Sets up networking (public + vmbr0)
+# - Configures repositories
+# - Reboots to installed system
+
+# 4. After automatic reboot, verify Proxmox
+ssh root@YOUR_SERVER_IP
+pveversion
+# Access web UI: https://YOUR_SERVER_IP:8006
+```
+
+### For Fresh Install (on existing Proxmox)
 
 ```bash
 # 0. Install NexCage on Proxmox host
@@ -984,7 +1460,27 @@ nexcage version
 ## Timeline Summary
 
 ```
-Week 1:
+Week 0: Hetzner + Proxmox Setup (7 hours)
+  Day 0.1: Hetzner preparation (1h)
+    - Order server
+    - Rescue system activation
+    - Hardware verification
+  Day 0.2: Automated Proxmox install (4h)
+    - Run pve-install.sh script (themoriarti/proxmox-hetzner)
+    - Interactive configuration
+    - Automatic installation via QEMU/KVM
+    - ZFS RAID1 setup
+    - Network configuration
+    - Repository setup
+    - Automatic reboot
+  Day 0.3: Post-install config (2h)
+    - Upload ISO/templates
+    - Security hardening
+    - Automation tools (Ansible, Terraform)
+    - Backup configuration
+  Total: 7 hours
+
+Week 1: CozyStack Installation (25 hours)
   Day 1: Proxmox prep + NexCage install (5h)
   Day 2: K8s bootstrap (6h)
   Day 3: CozyStack install (6h)
@@ -992,38 +1488,47 @@ Week 1:
   Day 5: Validation (4h)
   Total: 25 hours
 
-Week 2:
+Week 2: Integration Testing (20 hours)
   Day 6-7: VM testing (8h)
   Day 8-9: Advanced testing + NexCage (8h)
   Day 10: Documentation (4h)
   Total: 20 hours
 
-Overall: 45 hours across 2 weeks
+Overall: 52 hours across 3 weeks (7h + 25h + 20h)
 ```
 
+**Time Savings**: Using themoriarti/proxmox-hetzner script saves 1 hour
 **Compared to Option A**: Would have been 30-44 hours with 30-40% success rate
 
 ## Next Immediate Steps
 
 1. ✅ Document plan (this file)
-2. ⏳ Install NexCage on Proxmox host
-3. ⏳ Create VMs in Proxmox
-4. ⏳ Bootstrap Kubernetes
-5. ⏳ Install CozyStack v0.37.2
-6. ⏳ Test Proxmox integration
-7. ⏳ Test NexCage LXC integration
+2. ⏳ Order Hetzner server (if needed)
+3. ⏳ Automated Proxmox installation on Hetzner
+4. ⏳ Install NexCage on Proxmox host
+5. ⏳ Create VMs in Proxmox
+6. ⏳ Bootstrap Kubernetes
+7. ⏳ Install CozyStack v0.37.2
+8. ⏳ Test Proxmox integration
+9. ⏳ Test NexCage LXC integration
 
 ---
 
 **Status**: READY TO EXECUTE  
-**Next Action**: Install NexCage on Proxmox host  
+**Next Action**: Automated Proxmox installation on Hetzner  
 **Estimated Start**: Today  
-**Estimated Completion**: 2 weeks
+**Estimated Completion**: 3 weeks
 
 ## References
 
+- **Hetzner**: https://www.hetzner.com/dedicated-rootserver
+- **Hetzner Robot**: https://robot.hetzner.com
+- **Proxmox VE**: https://www.proxmox.com/proxmox-ve
+- **Proxmox-Hetzner Automation** ⭐: https://github.com/themoriarti/proxmox-hetzner
+- **pve-install.sh script**: https://raw.githubusercontent.com/themoriarti/proxmox-hetzner/refs/heads/main/scripts/pve-install.sh
 - **NexCage GitHub**: https://github.com/CageForge/nexcage
 - **CozyStack**: https://github.com/cozystack/cozystack
 - **Proxmox CAPI Provider**: https://github.com/ionos-cloud/cluster-api-provider-proxmox
 - **Talos Linux**: https://www.talos.dev
+- **Hetzner installimage**: https://docs.hetzner.com/robot/dedicated-server/operating-systems/installimage/
 
