@@ -35,7 +35,6 @@ rules:
   resources:
   - tenantmodules
   - tenantsecrets
-  - tenantsecretstables
   verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -193,7 +192,6 @@ rules:
     resources:
     - tenantmodules
     - tenantsecrets
-    - tenantsecretstables
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
@@ -292,7 +290,6 @@ rules:
     resources:
     - tenantmodules
     - tenantsecrets
-    - tenantsecretstables
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
@@ -367,7 +364,6 @@ rules:
     resources:
     - tenantmodules
     - tenantsecrets
-    - tenantsecretstables
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding

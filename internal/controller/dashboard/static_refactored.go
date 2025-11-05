@@ -173,11 +173,12 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createStringColumn("OBSERVED", ".status.observedReplicas"),
 		}),
 
-		// Factory details v1alpha1 core cozystack io tenantsecretstables
-		createCustomColumnsOverride("factory-details-v1alpha1.core.cozystack.io.tenantsecretstables", []any{
+		// Factory details v1alpha1 core cozystack io tenantsecrets
+		createCustomColumnsOverride("factory-details-v1alpha1.core.cozystack.io.tenantsecrets", []any{
 			createCustomColumnWithJsonPath("Name", ".metadata.name", "Secret", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createStringColumn("Key", ".data.key"),
-			createSecretBase64Column("Value", ".data.value"),
+			createFlatMapColumn("Data", ".data"),
+			createStringColumn("Key", "_flatMapData_Key"),
+			createSecretBase64Column("Value", "_flatMapData_Value"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 

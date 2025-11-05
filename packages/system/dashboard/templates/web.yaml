@@ -43,9 +43,9 @@ spec:
             - name: BASE_API_VERSION
               value: v1alpha1
             - name: LOGGER
-              value: "TRUE"
+              value: "true"
             - name: LOGGER_WITH_HEADERS
-              value: "TRUE"
+              value: "false"
             - name: PORT
               value: "64231"
           image: {{ .Values.openapiUIK8sBff.image | quote }}
@@ -92,6 +92,8 @@ spec:
         - env:
             - name: BASEPREFIX
               value: /openapi-ui
+            - name: HIDE_INSIDE
+              value: "true"
             - name: CUSTOMIZATION_API_GROUP
               value: dashboard.cozystack.io
             - name: CUSTOMIZATION_API_VERSION

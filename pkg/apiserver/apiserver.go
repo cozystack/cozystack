@@ -40,7 +40,6 @@ import (
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
-	tenantsecretstablestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecretstable"
 )
 
 var (
@@ -143,11 +142,6 @@ func (c completedConfig) New() (*CozyServer, error) {
 	)
 	coreV1alpha1Storage["tenantsecrets"] = cozyregistry.RESTInPeace(
 		tenantsecretstorage.NewREST(
-			clientset.CoreV1(),
-		),
-	)
-	coreV1alpha1Storage["tenantsecretstables"] = cozyregistry.RESTInPeace(
-		tenantsecretstablestorage.NewREST(
 			clientset.CoreV1(),
 		),
 	)
