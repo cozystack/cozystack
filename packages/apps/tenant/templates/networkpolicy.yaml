@@ -34,6 +34,21 @@ spec:
       - world
 ---
 apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-world-egress
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector:
+    matchExpressions:
+    - key: policy.cozystack.io/allow-world-egress
+      operator: In
+      values: ["true"]
+  egress:
+  - toEntities:
+      - world
+---
+apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
 metadata:
   name: {{ include "tenant.name" . }}-egress

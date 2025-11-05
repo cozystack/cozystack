@@ -49,6 +49,3 @@ spec:
         - port: {{ quote . }}
         {{- end }}
     {{- end }}
-  egress:
-  - toEntities:
-      - world
