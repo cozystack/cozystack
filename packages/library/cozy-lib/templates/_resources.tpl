@@ -154,7 +154,7 @@
 {{-   $resources := index . 1 }}
 {{-   $global := index . 2 }}
 {{-   $presetMap := include "cozy-lib.resources.unsanitizedPreset" $preset | fromYaml }}
-{{-   $mergedMap := deepCopy $resources | mergeOverwrite $presetMap }}
+{{-   $mergedMap := deepCopy (default (dict) $resources) | mergeOverwrite $presetMap }}
 {{-   include "cozy-lib.resources.sanitize" (list $mergedMap $global) }}
 {{- end }}
 
