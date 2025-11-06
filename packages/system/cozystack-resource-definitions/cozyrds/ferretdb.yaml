@@ -38,3 +38,11 @@ spec:
     include:
       - resourceNames:
           - ferretdb-{{ .name }}
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: ferretdb
+      type: ferretdb
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"

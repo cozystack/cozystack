@@ -38,3 +38,11 @@ spec:
     include:
       - resourceNames:
           - nats-{{ .name }}
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: nats
+      type: nats
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}-system"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"

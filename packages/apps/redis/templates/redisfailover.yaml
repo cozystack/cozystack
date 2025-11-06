@@ -68,34 +68,3 @@ spec:
   auth:
     secretPath: {{ .Release.Name }}-auth
   {{- end }}
-
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: {{ $.Release.Name }}-redis
-  namespace: {{ $.Release.Namespace }}
-spec:
-  minReplicas: 1
-  replicas: {{ .Values.replicas }}
-  kind: redis
-  type: redis
-  selector:
-    app.kubernetes.io/component: redis
-    app.kubernetes.io/instance: {{ $.Release.Name }}
-  version: {{ $.Chart.Version }}
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: {{ $.Release.Name }}-sentinel
-  namespace: {{ $.Release.Namespace }}
-spec:
-  minReplicas: 2
-  replicas: 3
-  kind: redis
-  type: sentinel
-  selector:
-    app.kubernetes.io/component: sentinel
-    app.kubernetes.io/instance: {{ $.Release.Name }}
-  version: {{ $.Chart.Version }}

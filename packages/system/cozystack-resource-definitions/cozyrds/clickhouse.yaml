@@ -37,3 +37,19 @@ spec:
     include:
       - resourceNames:
           - chendpoint-clickhouse-{{ .name }}
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: clickhouse
+      type: clickhouse
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"
+    - name: "{{ .Release.Name }}-keeper"
+      kind: clickhouse
+      type: clickhouse
+      selector:
+        app: "{{ .Release.Name }}-keeper"
+      replicas: "{{ .Values.clickhouseKeeper.replicas }}"
+      minReplicas: "1"
+      condition: "{{ .Values.clickhouseKeeper.enabled }}"

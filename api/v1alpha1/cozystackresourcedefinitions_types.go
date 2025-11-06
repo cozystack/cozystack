@@ -59,6 +59,10 @@ type CozystackResourceDefinitionSpec struct {
 
 	// Dashboard configuration for this resource
 	Dashboard *CozystackResourceDefinitionDashboard `json:"dashboard,omitempty"`
+
+	// WorkloadMonitors configuration for this resource
+	// List of WorkloadMonitor templates to be created for each application instance
+	WorkloadMonitors []WorkloadMonitorTemplate `json:"workloadMonitors,omitempty"`
 }
 
 type CozystackResourceDefinitionChart struct {
@@ -110,17 +114,18 @@ type CozystackResourceDefinitionRelease struct {
 // - {{ .namespace }}: The namespace of the resource being processed
 //
 // Example YAML:
-//   secrets:
-//     include:
-//     - matchExpressions:
-//       - key: badlabel
-//         operator: DoesNotExist
-//       matchLabels:
-//         goodlabel: goodvalue
-//       resourceNames:
-//       - "{{ .name }}-secret"
-//       - "{{ .kind }}-{{ .name }}-tls"
-//       - "specificname"
+//
+//	secrets:
+//	  include:
+//	  - matchExpressions:
+//	    - key: badlabel
+//	      operator: DoesNotExist
+//	    matchLabels:
+//	      goodlabel: goodvalue
+//	    resourceNames:
+//	    - "{{ .name }}-secret"
+//	    - "{{ .kind }}-{{ .name }}-tls"
+//	    - "specificname"
 type CozystackResourceDefinitionResourceSelector struct {
 	metav1.LabelSelector `json:",inline"`
 	// ResourceNames is a list of resource names to match
@@ -190,4 +195,48 @@ type CozystackResourceDefinitionDashboard struct {
 	// Whether this resource is a module (tenant module)
 	// +optional
 	Module bool `json:"module,omitempty"`
+}
+
+// ---- WorkloadMonitor types ----
+
+// WorkloadMonitorTemplate defines a template for creating WorkloadMonitor resources
+// for application instances. Fields support Go template syntax with the following variables:
+// - {{ .Release.Name }}: The name of the Helm release
+// - {{ .Release.Namespace }}: The namespace of the Helm release
+// - {{ .Chart.Version }}: The version of the Helm chart
+// - {{ .Values.<path> }}: Any value from the Helm values
+type WorkloadMonitorTemplate struct {
+	// Name is the name of the WorkloadMonitor.
+	// Supports Go template syntax (e.g., "{{ .Release.Name }}-keeper")
+	// +required
+	Name string `json:"name"`
+
+	// Kind specifies the kind of the workload (e.g., "postgres", "kafka")
+	// +required
+	Kind string `json:"kind"`
+
+	// Type specifies the type of the workload (e.g., "postgres", "zookeeper")
+	// +required
+	Type string `json:"type"`
+
+	// Selector is a map of label key-value pairs for matching workloads.
+	// Supports Go template syntax in values (e.g., "app.kubernetes.io/instance: {{ .Release.Name }}")
+	// +required
+	Selector map[string]string `json:"selector"`
+
+	// Replicas is a Go template expression that evaluates to the desired number of replicas.
+	// Example: "{{ .Values.replicas }}" or "{{ .Values.clickhouseKeeper.replicas }}"
+	// +optional
+	Replicas string `json:"replicas,omitempty"`
+
+	// MinReplicas is a Go template expression that evaluates to the minimum number of replicas.
+	// Example: "1" or "{{ div .Values.replicas 2 | add1 }}"
+	// +optional
+	MinReplicas string `json:"minReplicas,omitempty"`
+
+	// Condition is a Go template expression that must evaluate to "true" for the monitor to be created.
+	// Example: "{{ .Values.clickhouseKeeper.enabled }}"
+	// If empty, the monitor is always created.
+	// +optional
+	Condition string `json:"condition,omitempty"`
 }

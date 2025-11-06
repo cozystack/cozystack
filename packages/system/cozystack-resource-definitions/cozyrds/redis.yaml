@@ -41,3 +41,20 @@ spec:
           - rfrm-redis-{{ .name }}
           - rfrs-redis-{{ .name }}
           - redis-{{ .name }}-external-lb
+  workloadMonitors:
+    - name: "{{ .Release.Name }}-redis"
+      kind: redis
+      type: redis
+      selector:
+        app.kubernetes.io/component: redis
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"
+    - name: "{{ .Release.Name }}-sentinel"
+      kind: redis
+      type: sentinel
+      selector:
+        app.kubernetes.io/component: sentinel
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "3"
+      minReplicas: "2"

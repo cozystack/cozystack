@@ -38,3 +38,11 @@ spec:
     include:
       - resourceNames:
           - vpn-{{ .name }}-vpn
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: vpn
+      type: vpn
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"

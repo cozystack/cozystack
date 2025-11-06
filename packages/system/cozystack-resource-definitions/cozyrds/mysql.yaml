@@ -39,3 +39,11 @@ spec:
       - resourceNames:
           - mysql-{{ .name }}-primary
           - mysql-{{ .name }}-secondary
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: mysql
+      type: mysql
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"
