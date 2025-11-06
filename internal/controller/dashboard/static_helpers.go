@@ -122,7 +122,7 @@ func createCustomColumnsOverride(id string, additionalPrinterColumns []any) *das
 		}
 	}
 
-	if name == "factory-details-v1alpha1.core.cozystack.io.tenantsecretstables" {
+	if name == "factory-details-v1alpha1.core.cozystack.io.tenantsecrets" {
 		data["additionalPrinterColumnsTrimLengths"] = []any{
 			map[string]any{
 				"key":   "Name",
@@ -1043,6 +1043,15 @@ func createConverterBytesColumn(name, jsonPath string) map[string]any {
 				},
 			},
 		},
+	}
+}
+
+// createFlatMapColumn creates a flatMap column that expands a map into separate rows
+func createFlatMapColumn(name, jsonPath string) map[string]any {
+	return map[string]any{
+		"name":     name,
+		"type":     "flatMap",
+		"jsonPath": jsonPath,
 	}
 }
 

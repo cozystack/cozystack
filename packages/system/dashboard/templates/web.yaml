@@ -42,10 +42,12 @@ spec:
               value: dashboard.cozystack.io
             - name: BASE_API_VERSION
               value: v1alpha1
+            - name: BASE_NAMESPACE_FULL_PATH
+              value: "/apis/core.cozystack.io/v1alpha1/tenantnamespaces"
             - name: LOGGER
-              value: "TRUE"
+              value: "true"
             - name: LOGGER_WITH_HEADERS
-              value: "TRUE"
+              value: "false"
             - name: PORT
               value: "64231"
           image: {{ .Values.openapiUIK8sBff.image | quote }}
@@ -92,6 +94,8 @@ spec:
         - env:
             - name: BASEPREFIX
               value: /openapi-ui
+            - name: HIDE_INSIDE
+              value: "true"
             - name: CUSTOMIZATION_API_GROUP
               value: dashboard.cozystack.io
             - name: CUSTOMIZATION_API_VERSION
@@ -122,6 +126,12 @@ spec:
               value: tenantnamespaces
             - name: PROJECTS_VERSION
               value: v1alpha1
+            - name: CUSTOM_NAMESPACE_API_RESOURCE_API_GROUP
+              value: core.cozystack.io
+            - name: CUSTOM_NAMESPACE_API_RESOURCE_API_VERSION
+              value: v1alpha1
+            - name: CUSTOM_NAMESPACE_API_RESOURCE_RESOURCE_NAME
+              value: tenantnamespaces
             - name: USE_NAMESPACE_NAV
               value: "true"
             - name: LOGIN_URL
@@ -140,21 +150,21 @@ spec:
                 configMapKeyRef:
                   name: incloud-web-dashboard-config
                   key: TITLE_TEXT
-            - name: TENANT_TEXT
+            - name: CUSTOM_TENANT_TEXT
               valueFrom:
                 configMapKeyRef:
                   name: incloud-web-dashboard-config
-                  key: TENANT_TEXT
+                  key: CUSTOM_TENANT_TEXT
             - name: LOGO_TEXT
               valueFrom:
                 configMapKeyRef:
                   name: incloud-web-dashboard-config
                   key: LOGO_TEXT
-            - name: LOGO_SVG
+            - name: CUSTOM_LOGO_SVG
               valueFrom:
                 configMapKeyRef:
                   name: incloud-web-dashboard-config
-                  key: LOGO_SVG
+                  key: CUSTOM_LOGO_SVG
             - name: ICON_SVG
               valueFrom:
                 configMapKeyRef:

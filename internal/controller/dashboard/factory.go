@@ -293,10 +293,10 @@ func secretsTab(kind string) map[string]any {
 				"type": "EnrichedTable",
 				"data": map[string]any{
 					"id":                   "secrets-table",
-					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecretstables",
+					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecrets",
 					"clusterNamePartOfUrl": "{2}",
 					"baseprefix":           "/openapi-ui",
-					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecretstables",
+					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecrets",
 					"pathToItems":          []any{"items"},
 					"labelsSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
