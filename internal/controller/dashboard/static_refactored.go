@@ -1056,7 +1056,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 													"clusterNamePartOfUrl": "{2}",
 													"customizationId":      "factory-kube-service-details-endpointslice",
 													"fetchUrl":             "/api/clusters/{2}/k8s/apis/discovery.k8s.io/v1/namespaces/{3}/endpointslices",
-													"labelsSelector": map[string]any{
+													"labelSelector": map[string]any{
 														"kubernetes.io/service-name": "{reqsJsonPath[0]['.metadata.name']['-']}",
 													},
 													"pathToItems":     ".items[*].endpoints",
@@ -1397,7 +1397,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"clusterNamePartOfUrl": "{2}",
 						"customizationId":      "factory-details-v1alpha1.cozystack.io.workloads",
 						"fetchUrl":             "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloads",
-						"labelsSelector": map[string]any{
+						"labelSelector": map[string]any{
 							"workloads.cozystack.io/monitor": "{reqs[0]['metadata','name']}",
 						},
 						"pathToItems": []any{"items"},
