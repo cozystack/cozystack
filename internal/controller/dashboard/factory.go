@@ -221,7 +221,7 @@ func workloadsTab(kind string) map[string]any {
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1alpha1.cozystack.io.workloadmonitors",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":  kind,
 						"apps.cozystack.io/application.name":  "{reqs[0]['metadata','name']}",
@@ -246,7 +246,7 @@ func servicesTab(kind string) map[string]any {
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1.services",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group":  "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":   kind,
 						"apps.cozystack.io/application.name":   "{reqs[0]['metadata','name']}",
@@ -272,7 +272,7 @@ func ingressesTab(kind string) map[string]any {
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-networking.k8s.io.v1.ingresses",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group":  "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":   kind,
 						"apps.cozystack.io/application.name":   "{reqs[0]['metadata','name']}",
@@ -298,7 +298,7 @@ func secretsTab(kind string) map[string]any {
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecrets",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":  kind,
 						"apps.cozystack.io/application.name":  "{reqs[0]['metadata','name']}",

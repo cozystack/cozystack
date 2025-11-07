@@ -9,7 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -223,6 +223,9 @@ func (r *REST) Get(
 	if err != nil {
 		return nil, err
 	}
+	if sec.Labels == nil || sec.Labels[tsLabelKey] != tsLabelValue {
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
 	return secretToTenant(sec), nil
 }
 
@@ -247,10 +250,16 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		fieldSel = opts.FieldSelector.String()
 	}
 
-	list, err := r.core.Secrets(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: ls.String(),
-		FieldSelector: fieldSel,
-	})
+	list := &corev1.SecretList{}
+	err = r.c.List(ctx, list,
+		&client.ListOptions{
+			Namespace:     ns,
+			LabelSelector: ls,
+			Raw: &metav1.ListOptions{
+				LabelSelector: ls.String(),
+				FieldSelector: fieldSel,
+			},
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +275,17 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	for i := range list.Items {
 		out.Items = append(out.Items, *secretToTenant(&list.Items[i]))
 	}
-	sort.Slice(out.Items, func(i, j int) bool { return out.Items[i].Name < out.Items[j].Name })
+	slices.SortFunc(out.Items, func(a, b corev1alpha1.TenantSecret) int {
+		aKey := fmt.Sprintf("%s/%s", a.Namespace, a.Name)
+		bKey := fmt.Sprintf("%s/%s", b.Namespace, b.Name)
+		switch {
+		case aKey < bKey:
+			return -1
+		case aKey > bKey:
+			return 1
+		}
+		return 0
+	})
 	return out, nil
 }
 
@@ -284,9 +303,17 @@ func (r *REST) Update(
 		return nil, false, err
 	}
 
-	cur, err := r.core.Secrets(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, false, err
+	var cur *corev1.Secret
+	previous := &corev1.Secret{}
+	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, previous, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, false, err
+		}
+	} else {
+		if previous.Labels == nil || previous.Labels[tsLabelKey] != tsLabelValue {
+			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
+		cur = previous
 	}
 
 	newObj, err := objInfo.UpdatedObject(ctx, nil)
@@ -297,7 +324,7 @@ func (r *REST) Update(
 
 	newSec := tenantToSecret(in, cur)
 	if cur == nil {
-		if !forceCreate && err == nil {
+		if !forceCreate {
 			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
 		out, err := r.core.Secrets(ns).Create(ctx, newSec, metav1.CreateOptions{})
@@ -319,7 +346,14 @@ func (r *REST) Delete(
 	if err != nil {
 		return nil, false, err
 	}
-	err = r.core.Secrets(ns).Delete(ctx, name, *opts)
+	current := &corev1.Secret{}
+	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, false, err
+	}
+	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
+		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
 	return nil, err == nil, err
 }
 
@@ -335,9 +369,21 @@ func (r *REST) Patch(
 	if err != nil {
 		return nil, err
 	}
-
-	out, err := r.core.Secrets(ns).
-		Patch(ctx, name, pt, data, *opts, subresources...)
+	current := &corev1.Secret{}
+	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, err
+	}
+	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+	out := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      name,
+		},
+	}
+	patch := client.RawPatch(pt, data)
+	err = r.c.Patch(ctx, out, patch, &client.PatchOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
@@ -361,11 +407,16 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
-	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector().String()
-	base, err := r.core.Secrets(ns).Watch(ctx, metav1.ListOptions{
-		Watch:           true,
-		LabelSelector:   ls,
-		ResourceVersion: opts.ResourceVersion,
+	secList := &corev1.SecretList{}
+	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector()
+	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
+		Namespace:     ns,
+		LabelSelector: ls,
+		Raw: &metav1.ListOptions{
+			Watch:           true,
+			LabelSelector:   ls.String(),
+			ResourceVersion: opts.ResourceVersion,
+		},
 	})
 	if err != nil {
 		return nil, err
