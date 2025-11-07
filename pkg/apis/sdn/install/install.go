@@ -14,27 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package validation
+package install
 
 import (
-	"github.com/cozystack/cozystack/pkg/apis/apps"
-	"k8s.io/apimachinery/pkg/util/validation/field"
+	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 )
 
-// ValidateApplication validates a Application.
-func ValidateApplication(f *apps.Application) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	allErrs = append(allErrs, ValidateApplicationSpec(&f.Spec, field.NewPath("spec"))...)
-
-	return allErrs
-}
-
-// ValidateApplicationSpec validates a ApplicationSpec.
-func ValidateApplicationSpec(s *apps.ApplicationSpec, fldPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	// TODO validation
-
-	return allErrs
+// Install registers the API group and adds types to a scheme
+func Install(scheme *runtime.Scheme) {
+	utilruntime.Must(sdnv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(scheme.SetVersionPriority(sdnv1alpha1.SchemeGroupVersion))
 }
