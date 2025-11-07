@@ -178,7 +178,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createCustomColumnWithJsonPath("Name", ".metadata.name", "Secret", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createFlatMapColumn("Data", ".data"),
 			createStringColumn("Key", "_flatMapData_Key"),
-			createSecretBase64Column("Value", "_flatMapData_Value"),
+			createSecretBase64Column("Value", "._flatMapData_Value"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
