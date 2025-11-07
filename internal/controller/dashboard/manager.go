@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	managerpkg "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -53,10 +54,19 @@ func NewManager(c client.Client, scheme *runtime.Scheme) *Manager {
 }
 
 func (m *Manager) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("dashboard-reconciler").
 		For(&cozyv1alpha1.CozystackResourceDefinition{}).
-		Complete(m)
+		Complete(m); err != nil {
+		return err
+	}
+
+	return mgr.Add(managerpkg.RunnableFunc(func(ctx context.Context) error {
+		if !mgr.GetCache().WaitForCacheSync(ctx) {
+			return fmt.Errorf("dashboard static resources cache sync failed")
+		}
+		return m.ensureStaticResources(ctx)
+	}))
 }
 
 func (m *Manager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
