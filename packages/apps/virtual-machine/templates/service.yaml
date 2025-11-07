@@ -28,27 +28,3 @@ spec:
     {{- end }}
     {{- end }}
 {{- end }}
----
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: {{ include "virtual-machine.fullname" . }}
-spec:
-  endpointSelector:
-    matchLabels:
-      {{- include "virtual-machine.selectorLabels" . | nindent 6 }}
-  ingress:
-  - fromEntities:
-      - cluster
-  - fromEntities:
-      - world
-    {{- if eq .Values.externalMethod "PortList" }}
-    toPorts:
-      - ports:
-          {{- range .Values.externalPorts }}
-          - port: {{ quote . }}
-          {{- end }}
-    {{- end }}
-  egress:
-  - toEntities:
-      - world
