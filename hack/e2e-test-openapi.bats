@@ -9,6 +9,7 @@
 
 @test "Test OpenAPI v3 endpoint" {
   kubectl get -v7 --raw '/openapi/v3/apis/apps.cozystack.io/v1alpha1' > /dev/null
+  kubectl get -v7 --raw '/openapi/v3/apis/core.cozystack.io/v1alpha1' > /dev/null
 }
 
 @test "Test OpenAPI v2 endpoint (protobuf)" {

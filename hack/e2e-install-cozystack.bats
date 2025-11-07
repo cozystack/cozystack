@@ -118,7 +118,7 @@ EOF
 }
 
 @test "Check Cozystack API service" {
-  kubectl wait --for=condition=Available apiservices/v1alpha1.apps.cozystack.io --timeout=2m
+  kubectl wait --for=condition=Available apiservices/v1alpha1.apps.cozystack.io apiservices/v1alpha1.core.cozystack.io --timeout=2m
 }
 
 @test "Configure Tenant and wait for applications" {
