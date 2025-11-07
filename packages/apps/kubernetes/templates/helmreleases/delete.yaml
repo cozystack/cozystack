@@ -24,26 +24,26 @@ spec:
           command:
             - /bin/sh
             - -c
-            - |
-                kubectl
-                --namespace={{ .Release.Namespace }}
-                patch
-                helmrelease
-                {{ .Release.Name }}-cilium
-                {{ .Release.Name }}-gateway-api-crds
-                {{ .Release.Name }}-csi
-                {{ .Release.Name }}-cert-manager
-                {{ .Release.Name }}-cert-manager-crds
-                {{ .Release.Name }}-vertical-pod-autoscaler
-                {{ .Release.Name }}-vertical-pod-autoscaler-crds
-                {{ .Release.Name }}-ingress-nginx
-                {{ .Release.Name }}-fluxcd-operator
-                {{ .Release.Name }}-fluxcd
-                {{ .Release.Name }}-gpu-operator
-                {{ .Release.Name }}-velero
-                {{ .Release.Name }}-coredns
-                -p '{"spec": {"suspend": true}}'
-                --type=merge --field-manager=flux-client-side-apply || true
+            - >-
+              kubectl
+              --namespace={{ .Release.Namespace }}
+              patch
+              helmrelease
+              {{ .Release.Name }}-cilium
+              {{ .Release.Name }}-gateway-api-crds
+              {{ .Release.Name }}-csi
+              {{ .Release.Name }}-cert-manager
+              {{ .Release.Name }}-cert-manager-crds
+              {{ .Release.Name }}-vertical-pod-autoscaler
+              {{ .Release.Name }}-vertical-pod-autoscaler-crds
+              {{ .Release.Name }}-ingress-nginx
+              {{ .Release.Name }}-fluxcd-operator
+              {{ .Release.Name }}-fluxcd
+              {{ .Release.Name }}-gpu-operator
+              {{ .Release.Name }}-velero
+              {{ .Release.Name }}-coredns
+              -p '{"spec": {"suspend": true}}'
+              --type=merge --field-manager=flux-client-side-apply || true
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -51,7 +51,7 @@ metadata:
   name: {{ .Release.Name }}-flux-teardown
   annotations:
     helm.sh/hook: pre-delete
-    helm.sh/hook-delete-policy: before-hook-creation,hook-failed
+    helm.sh/hook-delete-policy: before-hook-creation,hook-failed,hook-succeeded
     helm.sh/hook-weight: "0"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75,6 +75,7 @@ rules:
       - {{ .Release.Name }}-csi
       - {{ .Release.Name }}-cert-manager
       - {{ .Release.Name }}-cert-manager-crds
+      - {{ .Release.Name }}-gateway-api-crds
       - {{ .Release.Name }}-vertical-pod-autoscaler
       - {{ .Release.Name }}-vertical-pod-autoscaler-crds
       - {{ .Release.Name }}-ingress-nginx
