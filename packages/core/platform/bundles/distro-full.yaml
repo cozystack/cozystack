@@ -78,7 +78,7 @@ releases:
   releaseName: cozystack-resource-definition-crd
   chart: cozystack-resource-definition-crd
   namespace: cozy-system
-  dependsOn: [cilium,cozystack-controller]
+  dependsOn: [cilium]
 
 - name: cozystack-resource-definitions
   releaseName: cozystack-resource-definitions
