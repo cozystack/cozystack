@@ -1196,12 +1196,18 @@ func (r *REST) Destroy() {
 
 // New creates a new instance of Application
 func (r *REST) New() runtime.Object {
-	return &appsv1alpha1.Application{}
+	app := &unstructured.UnstructuredList{}
+	app.SetAPIVersion("apps.cozystack.io/v1alpha1")
+	app.SetKind(r.kindName)
+	return app
 }
 
 // NewList returns an empty list of Application objects
 func (r *REST) NewList() runtime.Object {
-	return &appsv1alpha1.ApplicationList{}
+	appList := &unstructured.UnstructuredList{}
+	appList.SetAPIVersion("apps.cozystack.io/v1alpha1")
+	appList.SetKind(r.kindName + "List")
+	return appList
 }
 
 // Kind returns the resource kind used for API discovery
