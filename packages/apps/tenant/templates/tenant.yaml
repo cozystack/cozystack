@@ -122,7 +122,7 @@ metadata:
   name: {{ include "tenant.name" . }}-view
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "view" (include "tenant.name" .)) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-view
@@ -200,7 +200,7 @@ metadata:
   name: {{ include "tenant.name" . }}-use
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "use" (include "tenant.name" .)) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "use" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-use
@@ -298,7 +298,7 @@ metadata:
   name: {{ include "tenant.name" . }}-admin
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "admin" (include "tenant.name" .)) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "admin" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-admin
@@ -372,7 +372,7 @@ metadata:
   name: {{ include "tenant.name" . }}-super-admin
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "super-admin" (include "tenant.name" .) ) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "super-admin" (include "tenant.name" .) ) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-super-admin
