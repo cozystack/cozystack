@@ -42,11 +42,11 @@ import (
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utilversionpkg "k8s.io/apiserver/pkg/util/version"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/component-base/featuregate"
 	baseversion "k8s.io/component-base/version"
 	netutils "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	k8sconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 // CozyServerOptions holds the state for the Cozy API server
@@ -150,7 +150,7 @@ func (o *CozyServerOptions) Complete() error {
 		return fmt.Errorf("failed to register types: %w", err)
 	}
 
-	cfg, err := clientcmd.BuildConfigFromFlags("", "")
+	cfg, err := k8sconfig.GetConfig()
 	if err != nil {
 		return fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
