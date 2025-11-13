@@ -44,7 +44,7 @@ kube-ovn:
       memory: "50Mi"
     limits:
       cpu: "1000m"
-      memory: "1Gi"
+      memory: "2Gi"
   kube-ovn-pinger:
     requests:
       cpu: "10m"
