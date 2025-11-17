@@ -60,13 +60,33 @@ kind: ConfigMap
 metadata:
   name: {{ $.Release.Name }}-subnets
   labels:
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.kind: VirtualPrivateCloud
+    apps.cozystack.io/application.name: {{ trimPrefix "virtualprivatecloud-" .Release.Name }}
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
 data:
   {{- range $subnetName, $subnetConfig := .Values.subnets }}
-  {{ $subnetName }}: |-
-    subnetName: {{ $subnetName }}
-    subnetId: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
-    subnetCIDR: {{ $subnetConfig.cidr }}
+  {{ $subnetName }}.ID: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
+  {{ $subnetName }}.CIDR: {{ $subnetConfig.cidr }}
   {{- end }}
-
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ .Release.Name }}-subnets"
+subjects: {{- include "cozy-lib.rbac.subjectsForTenant" (list "view" .Release.Namespace ) | nindent 2 }}
+roleRef:
+  kind: Role
+  name: "{{ .Release.Name }}-subnets"
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "{{ .Release.Name }}-subnets"
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get","list","watch"]
+  resourceNames: ["{{ .Release.Name }}-subnets"]

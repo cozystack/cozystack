@@ -6,11 +6,11 @@ metadata:
     "helm.sh/hook": post-delete
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
-  name: {{ .Release.Name }}-datavolume-cleanup
+  name: {{ .Release.Name }}-cleanup
 spec:
   template:
     spec:
-      serviceAccountName: {{ .Release.Name }}-datavolume-cleanup
+      serviceAccountName: {{ .Release.Name }}-cleanup
       restartPolicy: Never
       tolerations:
         - key: CriticalAddonsOnly
@@ -28,12 +28,17 @@ spec:
               -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}"
               --ignore-not-found=true
 
+              kubectl -n {{ .Release.Namespace }} delete services
+              -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}"
+              --field-selector spec.type=LoadBalancer
+              --ignore-not-found=true
+
 
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ .Release.Name }}-datavolume-cleanup
+  name: {{ .Release.Name }}-cleanup
   annotations:
     helm.sh/hook: post-delete
     helm.sh/hook-delete-policy: before-hook-creation,hook-failed,hook-succeeded
@@ -46,12 +51,20 @@ metadata:
     "helm.sh/hook": post-delete
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
     "helm.sh/hook-weight": "5"
-  name: {{ .Release.Name }}-datavolume-cleanup
+  name: {{ .Release.Name }}-cleanup
 rules:
   - apiGroups:
       - "cdi.kubevirt.io"
     resources:
       - datavolumes
+    verbs:
+      - get
+      - list
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - services
     verbs:
       - get
       - list
@@ -64,13 +77,13 @@ metadata:
     "helm.sh/hook": post-delete
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
     "helm.sh/hook-weight": "5"
-  name: {{ .Release.Name }}-datavolume-cleanup
+  name: {{ .Release.Name }}-cleanup
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ .Release.Name }}-datavolume-cleanup
+  name: {{ .Release.Name }}-cleanup
 subjects:
   - kind: ServiceAccount
-    name: {{ .Release.Name }}-datavolume-cleanup
+    name: {{ .Release.Name }}-cleanup
     namespace: {{ .Release.Namespace }}
 

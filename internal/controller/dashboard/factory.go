@@ -150,6 +150,27 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 		}),
 		paramsList,
 	}
+	if kind == "VirtualPrivateCloud" {
+		rightColStack = append(rightColStack,
+			antdFlexVertical("vpc-subnets-block", 4, []any{
+				antdText("vpc-subnets-label", true, "Subnets", nil),
+				map[string]any{
+					"type": "EnrichedTable",
+					"data": map[string]any{
+						"id":                   "vpc-subnets-table",
+						"baseprefix":           "/openapi-ui",
+						"clusterNamePartOfUrl": "{2}",
+						"customizationId":      "virtualprivatecloud-subnets",
+						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/configmaps",
+						"fieldSelector": map[string]any{
+							"metadata.name": "virtualprivatecloud-{6}-subnets",
+						},
+						"pathToItems": []any{"items"},
+					},
+				},
+			}),
+		)
+	}
 
 	return map[string]any{
 		"key":   "details",

@@ -182,6 +182,13 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
+		// Virtual private cloud subnets
+		createCustomColumnsOverride("virtualprivatecloud-subnets", []any{
+			createFlatMapColumn("Data", ".data"),
+			createStringColumn("Subnet Parameters", "_flatMapData_Key"),
+			createStringColumn("Values", "_flatMapData_Value"),
+		}),
+
 		// Factory ingress details rules
 		createCustomColumnsOverride("factory-kube-ingress-details-rules", []any{
 			createStringColumn("Host", ".host"),

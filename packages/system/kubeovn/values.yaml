@@ -44,7 +44,7 @@ kube-ovn:
       memory: "50Mi"
     limits:
       cpu: "1000m"
-      memory: "1Gi"
+      memory: "2Gi"
   kube-ovn-pinger:
     requests:
       cpu: "10m"
@@ -65,4 +65,4 @@ global:
   images:
     kubeovn:
       repository: kubeovn
-      tag: v1.14.5@sha256:af10da442a0c6dc7df47a0ef752e2eb5c247bb0b43069fdfcb2aa51511185ea2
+      tag: v1.14.11@sha256:6b26ba0947732e8b33ff921057ae768bea36c230843ea34ce93b317157597831
