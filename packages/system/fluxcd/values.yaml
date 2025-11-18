@@ -5,10 +5,11 @@ flux-instance:
       domain: cozy.local # -- default value is overriden in patches
     distribution:
       artifact: ""
-      version: 2.6.x
+      version: 2.7.x
       registry: ghcr.io/fluxcd
     components:
       - source-controller
+      - source-watcher
       - kustomize-controller
       - helm-controller
       - notification-controller
@@ -33,7 +34,7 @@ flux-instance:
                 memory: 2048Mi
         - target:
             kind: Deployment
-            name: source-controller
+            name: (source-controller|source-watcher)
           patch: |
             - op: add
               path: /spec/template/spec/containers/0/args/-
