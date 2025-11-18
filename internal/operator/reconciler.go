@@ -25,6 +25,7 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,8 +56,9 @@ type PlatformReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=configmaps/status,verbs=get
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=gitrepositories,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=source.extensions.fluxcd.io,resources=artifactgenerators,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -100,9 +102,19 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	logger.Info("Reconciling platform", "bundle", cfg.BundleName)
 
-	// Reconcile HelmRepository resources
-	if err := r.reconcileHelmRepositories(ctx, cfg); err != nil {
+	// Reconcile HelmRepositories (delete old ones, we no longer create them)
+	if err := r.reconcileHelmRepositories(ctx); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile HelmRepositories: %w", err)
+	}
+
+	// Reconcile GitRepository
+	if err := r.reconcileGitRepository(ctx); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile GitRepository: %w", err)
+	}
+
+	// Reconcile ArtifactGenerators
+	if err := r.reconcileArtifactGenerators(ctx); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile ArtifactGenerators: %w", err)
 	}
 
 	// Reconcile namespaces
@@ -131,60 +143,332 @@ func (r *PlatformReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *PlatformReconciler) reconcileHelmRepositories(ctx context.Context, cfg *config.CozystackConfig) error {
+func (r *PlatformReconciler) reconcileHelmRepositories(ctx context.Context) error {
 	logger := log.FromContext(ctx)
 
-	repos := []struct {
-		name      string
-		namespace string
-		url       string
-		labels    map[string]string
-	}{
-		{
-			name:      "cozystack-system",
-			namespace: "cozy-system",
-			url:       "http://cozystack.cozy-system.svc/repos/system",
-			labels: map[string]string{
-				"cozystack.io/repository": "system",
+	// We no longer create HelmRepositories, we use ArtifactGenerators instead
+	// Delete all old HelmRepositories that were managed by this operator
+
+	desiredRepos := map[string]string{} // empty - we don't want any HelmRepositories
+
+	// List all HelmRepositories that were managed by this operator
+	hrList := &sourcev1.HelmRepositoryList{}
+	if err := r.List(ctx, hrList, client.MatchingLabels{
+		platformOperatorLabel: "true",
+	}); err != nil {
+		return fmt.Errorf("failed to list HelmRepositories: %w", err)
+	}
+
+	// Also list by old labels for backward compatibility
+	oldLabels := []map[string]string{
+		{"cozystack.io/repository": "system"},
+		{"cozystack.io/repository": "apps"},
+		{"cozystack.io/repository": "extra"},
+	}
+
+	reposToCheck := make(map[types.NamespacedName]bool)
+	for _, hr := range hrList.Items {
+		key := types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}
+		reposToCheck[key] = true
+	}
+
+	for _, labels := range oldLabels {
+		oldList := &sourcev1.HelmRepositoryList{}
+		if err := r.List(ctx, oldList, client.MatchingLabels(labels)); err != nil {
+			logger.Error(err, "failed to list HelmRepositories by old labels")
+			continue
+		}
+		for _, hr := range oldList.Items {
+			key := types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}
+			reposToCheck[key] = true
+		}
+	}
+
+	// Delete all HelmRepositories that are no longer desired
+	for key := range reposToCheck {
+		hr := &sourcev1.HelmRepository{}
+		if err := r.Get(ctx, key, hr); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("failed to get HelmRepository %s/%s: %w", key.Namespace, key.Name, err)
+		}
+
+		// Check if this HelmRepository is still desired (none are desired now)
+		desiredKey := fmt.Sprintf("%s/%s", hr.Namespace, hr.Name)
+		if _, ok := desiredRepos[desiredKey]; !ok {
+			// Not desired anymore, delete it
+			if err := r.Delete(ctx, hr); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				logger.Error(err, "failed to delete HelmRepository", "name", hr.Name, "namespace", hr.Namespace)
+				// Continue with other deletions
+			} else {
+				logger.Info("deleted HelmRepository (no longer needed)", "name", hr.Name, "namespace", hr.Namespace)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (r *PlatformReconciler) reconcileGitRepository(ctx context.Context) error {
+	logger := log.FromContext(ctx)
+
+	// Define desired GitRepository
+	desiredGR := &sourcev1.GitRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack",
+			Namespace: "cozy-system",
+			Labels: map[string]string{
+				platformOperatorLabel: "true",
 			},
 		},
-		{
-			name:      "cozystack-apps",
-			namespace: "cozy-public",
-			url:       "http://cozystack.cozy-system.svc/repos/apps",
-			labels: map[string]string{
-				"cozystack.io/ui":         "true",
-				"cozystack.io/repository": "apps",
+		Spec: sourcev1.GitRepositorySpec{
+			URL:      "https://github.com/cozystack/cozystack.git",
+			Interval: metav1.Duration{Duration: 1 * 60 * 1000000000}, // 1m
+			Timeout:  &metav1.Duration{Duration: 60 * 1000000000},    // 60s
+			Reference: &sourcev1.GitRepositoryRef{
+				Tag: "v0.38.0-alpha.2",
 			},
-		},
-		{
-			name:      "cozystack-extra",
-			namespace: "cozy-public",
-			url:       "http://cozystack.cozy-system.svc/repos/extra",
-			labels: map[string]string{
-				"cozystack.io/repository": "extra",
-			},
+			Ignore: func() *string {
+				ignore := `# exclude all
+/*
+# include packages dir
+!/packages`
+				return &ignore
+			}(),
 		},
 	}
 
-	for _, repo := range repos {
-		hr := &sourcev1.HelmRepository{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      repo.name,
-				Namespace: repo.namespace,
-				Labels:    repo.labels,
-			},
-			Spec: sourcev1.HelmRepositorySpec{
-				URL:      repo.url,
-				Interval: metav1.Duration{Duration: 5 * 60 * 1000000000}, // 5m
+	// Create or update desired GitRepository
+	if err := r.CreateOrUpdate(ctx, desiredGR); err != nil {
+		logger.Error(err, "failed to reconcile GitRepository")
+		return err
+	}
+	logger.Info("reconciled GitRepository", "name", "cozystack")
+
+	// List all GitRepositories managed by this operator and delete unwanted ones
+	grList := &sourcev1.GitRepositoryList{}
+	if err := r.List(ctx, grList, client.MatchingLabels{
+		platformOperatorLabel: "true",
+	}); err != nil {
+		return fmt.Errorf("failed to list GitRepositories: %w", err)
+	}
+
+	for _, gr := range grList.Items {
+		key := types.NamespacedName{Name: gr.Name, Namespace: gr.Namespace}
+		desiredKey := types.NamespacedName{Name: desiredGR.Name, Namespace: desiredGR.Namespace}
+		if key != desiredKey {
+			// Not desired, delete it
+			if err := r.Delete(ctx, &gr); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				logger.Error(err, "failed to delete GitRepository", "name", gr.Name, "namespace", gr.Namespace)
+				// Continue with other deletions
+			} else {
+				logger.Info("deleted GitRepository (not in desired state)", "name", gr.Name, "namespace", gr.Namespace)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (r *PlatformReconciler) reconcileArtifactGenerators(ctx context.Context) error {
+	logger := log.FromContext(ctx)
+
+	// Packages that use cozy-lib
+	packagesWithCozyLib := map[string]bool{
+		"bootbox": true, "bucket": true, "clickhouse": true, "etcd": true,
+		"ferretdb": true, "foundationdb": true, "http-cache": true, "info": true,
+		"ingress": true, "kafka": true, "kubernetes": true, "monitoring": true,
+		"mysql": true, "nats": true, "postgres": true, "rabbitmq": true,
+		"redis": true, "seaweedfs": true, "tcp-balancer": true, "tenant": true,
+		"virtual-machine": true, "vm-disk": true, "vm-instance": true,
+		"vpc": true, "vpn": true,
+	}
+
+	// System packages
+	systemPackages := []string{
+		"bootbox", "bucket", "capi-operator", "capi-providers-bootstrap",
+		"capi-providers-core", "capi-providers-cpprovider", "capi-providers-infraprovider",
+		"cert-manager", "cert-manager-crds", "cert-manager-issuers", "cilium",
+		"cilium-networkpolicy", "clickhouse-operator", "coredns", "cozy-proxy",
+		"cozystack-api", "cozystack-controller", "cozystack-resource-definition-crd",
+		"cozystack-resource-definitions", "dashboard", "etcd-operator", "external-dns",
+		"external-secrets-operator", "fluxcd", "fluxcd-operator", "foundationdb-operator",
+		"gateway-api-crds", "goldpinger", "gpu-operator", "grafana-operator",
+		"hetzner-robotlb", "ingress-nginx", "kafka-operator", "kamaji",
+		"keycloak", "keycloak-configure", "keycloak-operator", "kubeovn",
+		"kubeovn-plunger", "kubeovn-webhook", "kubevirt", "kubevirt-cdi",
+		"kubevirt-cdi-operator", "kubevirt-csi-node", "kubevirt-instancetypes",
+		"kubevirt-operator", "lineage-controller-webhook", "linstor", "mariadb-operator",
+		"metallb", "monitoring-agents", "multus", "nats", "nfs-driver",
+		"objectstorage-controller", "opencost", "piraeus-operator", "postgres-operator",
+		"rabbitmq-operator", "redis-operator", "reloader", "seaweedfs",
+		"snapshot-controller", "telepresence", "velero", "vertical-pod-autoscaler",
+		"vertical-pod-autoscaler-crds", "victoria-metrics-operator", "vsnap-crd",
+	}
+
+	// Apps packages
+	appsPackages := []string{
+		"bucket", "clickhouse", "ferretdb", "foundationdb", "http-cache",
+		"kafka", "kubernetes", "mysql", "nats", "postgres", "rabbitmq",
+		"redis", "tcp-balancer", "tenant", "virtual-machine", "vm-disk",
+		"vm-instance", "vpc", "vpn",
+	}
+
+	// Extra packages
+	extraPackages := []string{
+		"bootbox", "etcd", "info", "ingress", "monitoring", "seaweedfs",
+	}
+
+	// Define desired ArtifactGenerators
+	desiredAGs := []struct {
+		name      string
+		namespace string
+		packages  []string
+	}{
+		{"system", "cozy-system", systemPackages},
+		{"apps", "cozy-public", appsPackages},
+		{"extra", "cozy-public", extraPackages},
+	}
+
+	// Create or update desired ArtifactGenerators
+	for _, ag := range desiredAGs {
+		if err := r.reconcileArtifactGenerator(ctx, ag.name, ag.namespace, ag.packages, packagesWithCozyLib); err != nil {
+			logger.Error(err, "failed to reconcile ArtifactGenerator", "name", ag.name)
+			return err
+		}
+	}
+
+	// List all ArtifactGenerators managed by this operator and delete unwanted ones
+	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
+	if err := r.List(ctx, agList, client.MatchingLabels{
+		platformOperatorLabel: "true",
+	}); err != nil {
+		// If CRD doesn't exist, just log and continue
+		logger.Info("ArtifactGenerator CRD may not exist, skipping cleanup", "error", err)
+	} else {
+		// Build desired map
+		desiredMap := make(map[types.NamespacedName]bool)
+		for _, ag := range desiredAGs {
+			key := types.NamespacedName{Name: ag.name, Namespace: ag.namespace}
+			desiredMap[key] = true
+		}
+
+		// Delete unwanted ArtifactGenerators
+		for _, item := range agList.Items {
+			key := types.NamespacedName{Name: item.Name, Namespace: item.Namespace}
+			if !desiredMap[key] {
+				// Not desired, delete it
+				if err := r.Delete(ctx, &item); err != nil {
+					if apierrors.IsNotFound(err) {
+						continue
+					}
+					logger.Error(err, "failed to delete ArtifactGenerator", "name", item.Name, "namespace", item.Namespace)
+					// Continue with other deletions
+				} else {
+					logger.Info("deleted ArtifactGenerator (not in desired state)", "name", item.Name, "namespace", item.Namespace)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, name, namespace string, packages []string, packagesWithCozyLib map[string]bool) error {
+	logger := log.FromContext(ctx)
+
+	// Build output artifacts
+	outputArtifacts := []sourcewatcherv1beta1.OutputArtifact{}
+	for _, pkg := range packages {
+		copyOps := []sourcewatcherv1beta1.CopyOperation{
+			{
+				From: fmt.Sprintf("@cozystack/packages/%s/%s/**", name, pkg),
+				To:   fmt.Sprintf("@artifact/%s/", pkg),
 			},
 		}
 
-		if err := r.CreateOrUpdate(ctx, hr); err != nil {
-			logger.Error(err, "failed to reconcile HelmRepository", "name", repo.name, "namespace", repo.namespace)
-			return err
+		// Add cozy-lib if package uses it
+		if packagesWithCozyLib[pkg] {
+			copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
+				From: "@cozystack/packages/library/cozy-lib/**",
+				To:   fmt.Sprintf("@artifact/%s/charts/cozy-lib/", pkg),
+			})
 		}
-		logger.Info("reconciled HelmRepository", "name", repo.name, "namespace", repo.namespace)
+
+		outputArtifacts = append(outputArtifacts, sourcewatcherv1beta1.OutputArtifact{
+			Name: fmt.Sprintf("%s-%s", name, pkg),
+			Copy: copyOps,
+		})
+	}
+
+	// Define desired ArtifactGenerator
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				platformOperatorLabel: "true",
+			},
+		},
+		Spec: sourcewatcherv1beta1.ArtifactGeneratorSpec{
+			Sources: []sourcewatcherv1beta1.SourceReference{
+				{
+					Alias:     "cozystack",
+					Kind:      "GitRepository",
+					Name:      "cozystack",
+					Namespace: "cozy-system",
+				},
+			},
+			OutputArtifacts: outputArtifacts,
+		},
+	}
+
+	// Get existing resource to preserve resourceVersion
+	existing := &sourcewatcherv1beta1.ArtifactGenerator{}
+	key := client.ObjectKey{Name: name, Namespace: namespace}
+	if err := r.Get(ctx, key, existing); err == nil {
+		ag.SetResourceVersion(existing.GetResourceVersion())
+		// Merge labels and annotations
+		labels := ag.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		for k, v := range existing.GetLabels() {
+			if _, ok := labels[k]; !ok {
+				labels[k] = v
+			}
+		}
+		ag.SetLabels(labels)
+
+		annotations := ag.GetAnnotations()
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		for k, v := range existing.GetAnnotations() {
+			if _, ok := annotations[k]; !ok {
+				annotations[k] = v
+			}
+		}
+		ag.SetAnnotations(annotations)
+
+		if err := r.Update(ctx, ag); err != nil {
+			return fmt.Errorf("failed to update ArtifactGenerator: %w", err)
+		}
+		logger.Info("updated ArtifactGenerator", "name", name, "namespace", namespace)
+	} else if apierrors.IsNotFound(err) {
+		if err := r.Create(ctx, ag); err != nil {
+			return fmt.Errorf("failed to create ArtifactGenerator: %w", err)
+		}
+		logger.Info("created ArtifactGenerator", "name", name, "namespace", namespace)
+	} else {
+		return fmt.Errorf("failed to get ArtifactGenerator: %w", err)
 	}
 
 	return nil
@@ -231,7 +515,7 @@ func (r *PlatformReconciler) reconcileNamespaces(ctx context.Context, cfg *confi
 	namespacesMap["cozy-system"] = true
 	namespacesMap["cozy-public"] = false
 
-	// Create/update all namespaces
+	// Create/update all desired namespaces
 	for nsName, privileged := range namespacesMap {
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
@@ -256,6 +540,34 @@ func (r *PlatformReconciler) reconcileNamespaces(ctx context.Context, cfg *confi
 		logger.Info("reconciled Namespace", "name", nsName, "privileged", privileged)
 	}
 
+	// List all namespaces managed by this operator and delete unwanted ones
+	nsList := &corev1.NamespaceList{}
+	if err := r.List(ctx, nsList, client.MatchingLabels{
+		"cozystack.io/system": "true",
+	}); err != nil {
+		return fmt.Errorf("failed to list namespaces: %w", err)
+	}
+
+	for _, ns := range nsList.Items {
+		// Skip tenant-root as it's managed separately
+		if ns.Name == "tenant-root" {
+			continue
+		}
+
+		if _, ok := namespacesMap[ns.Name]; !ok {
+			// Not desired, delete it
+			if err := r.Delete(ctx, &ns); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				logger.Error(err, "failed to delete Namespace", "name", ns.Name)
+				// Continue with other deletions
+			} else {
+				logger.Info("deleted Namespace (not in desired state)", "name", ns.Name)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -267,8 +579,8 @@ func (r *PlatformReconciler) reconcileTenantRoot(ctx context.Context, cfg *confi
 		host = "example.org"
 	}
 
-	// Reconcile tenant-root namespace
-	namespace := &corev1.Namespace{
+	// Define desired tenant-root namespace
+	desiredNamespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tenant-root",
 			Annotations: map[string]string{
@@ -282,13 +594,14 @@ func (r *PlatformReconciler) reconcileTenantRoot(ctx context.Context, cfg *confi
 		},
 	}
 
-	if err := r.CreateOrUpdate(ctx, namespace); err != nil {
+	if err := r.CreateOrUpdate(ctx, desiredNamespace); err != nil {
 		logger.Error(err, "failed to reconcile tenant-root Namespace")
 		return err
 	}
+	logger.Info("reconciled tenant-root Namespace")
 
-	// Reconcile tenant-root HelmRelease
-	hr := &helmv2.HelmRelease{
+	// Define desired tenant-root HelmRelease
+	desiredHR := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tenant-root",
 			Namespace: "tenant-root",
@@ -326,12 +639,37 @@ func (r *PlatformReconciler) reconcileTenantRoot(ctx context.Context, cfg *confi
 		},
 	}
 
-	if err := r.CreateOrUpdate(ctx, hr); err != nil {
+	if err := r.CreateOrUpdate(ctx, desiredHR); err != nil {
 		logger.Error(err, "failed to reconcile tenant-root HelmRelease")
 		return err
 	}
+	logger.Info("reconciled tenant-root HelmRelease")
 
-	logger.Info("reconciled tenant-root")
+	// List all tenant-root HelmReleases and delete unwanted ones
+	hrList := &helmv2.HelmReleaseList{}
+	if err := r.List(ctx, hrList, client.InNamespace("tenant-root"), client.MatchingLabels{
+		"cozystack.io/ui": "true",
+	}); err != nil {
+		return fmt.Errorf("failed to list tenant-root HelmReleases: %w", err)
+	}
+
+	desiredHRKey := types.NamespacedName{Name: desiredHR.Name, Namespace: desiredHR.Namespace}
+	for _, hr := range hrList.Items {
+		key := types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}
+		if key != desiredHRKey {
+			// Not desired, delete it
+			if err := r.Delete(ctx, &hr); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				logger.Error(err, "failed to delete tenant-root HelmRelease", "name", hr.Name)
+				// Continue with other deletions
+			} else {
+				logger.Info("deleted tenant-root HelmRelease (not in desired state)", "name", hr.Name)
+			}
+		}
+	}
+
 	return nil
 }
 
