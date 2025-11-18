@@ -110,17 +110,18 @@ type CozystackResourceDefinitionRelease struct {
 // - {{ .namespace }}: The namespace of the resource being processed
 //
 // Example YAML:
-//   secrets:
-//     include:
-//     - matchExpressions:
-//       - key: badlabel
-//         operator: DoesNotExist
-//       matchLabels:
-//         goodlabel: goodvalue
-//       resourceNames:
-//       - "{{ .name }}-secret"
-//       - "{{ .kind }}-{{ .name }}-tls"
-//       - "specificname"
+//
+//	secrets:
+//	  include:
+//	  - matchExpressions:
+//	    - key: badlabel
+//	      operator: DoesNotExist
+//	    matchLabels:
+//	      goodlabel: goodvalue
+//	    resourceNames:
+//	    - "{{ .name }}-secret"
+//	    - "{{ .kind }}-{{ .name }}-tls"
+//	    - "specificname"
 type CozystackResourceDefinitionResourceSelector struct {
 	metav1.LabelSelector `json:",inline"`
 	// ResourceNames is a list of resource names to match
