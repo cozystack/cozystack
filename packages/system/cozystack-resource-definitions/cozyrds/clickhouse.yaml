@@ -13,11 +13,10 @@ spec:
     prefix: clickhouse-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: clickhouse
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-clickhouse
         namespace: cozy-public
   dashboard:
     category: PaaS

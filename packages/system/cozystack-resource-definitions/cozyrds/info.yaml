@@ -14,11 +14,10 @@ spec:
     labels:
       cozystack.io/ui: "true"
       internal.cozystack.io/tenantmodule: "true"
-    chart:
-      name: info
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
+        kind: ExternalArtifact
+        name: extra-info
         namespace: cozy-public
   dashboard:
     name: info

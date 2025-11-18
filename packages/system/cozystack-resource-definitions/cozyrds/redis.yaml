@@ -13,11 +13,10 @@ spec:
     prefix: redis-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: redis
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-redis
         namespace: cozy-public
   dashboard:
     category: PaaS

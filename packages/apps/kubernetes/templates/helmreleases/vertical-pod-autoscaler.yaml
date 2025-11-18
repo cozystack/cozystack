@@ -36,15 +36,10 @@ metadata:
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
   releaseName: vertical-pod-autoscaler
-  chart:
-    spec:
-      chart: cozy-vertical-pod-autoscaler
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: system-cozy-vertical-pod-autoscaler
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

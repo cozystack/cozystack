@@ -42,15 +42,10 @@ kind: HelmRelease
 metadata:
   name: {{ .Release.Name }}-system
 spec:
-  chart:
-    spec:
-      chart: cozy-seaweedfs
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: system-cozy-seaweedfs
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:

@@ -718,17 +718,6 @@ func (r *PlatformReconciler) reconcileHelmReleases(ctx context.Context, cfg *con
 			Spec: helmv2.HelmReleaseSpec{
 				Interval:    metav1.Duration{Duration: 5 * 60 * 1000000000}, // 5m
 				ReleaseName: release.ReleaseName,
-				Chart: &helmv2.HelmChartTemplate{
-					Spec: helmv2.HelmChartTemplateSpec{
-						Chart:   release.Chart,
-						Version: ">= 0.0.0-0",
-						SourceRef: helmv2.CrossNamespaceObjectReference{
-							Kind:      "HelmRepository",
-							Name:      "cozystack-system",
-							Namespace: "cozy-system",
-						},
-					},
-				},
 				Install: &helmv2.Install{
 					Remediation: &helmv2.InstallRemediation{
 						Retries: -1,
@@ -740,6 +729,32 @@ func (r *PlatformReconciler) reconcileHelmReleases(ctx context.Context, cfg *con
 					},
 				},
 			},
+		}
+
+		// Determine if this is a system resource (installed in cozy-system namespace)
+		// System resources use chartRef (ExternalArtifact), others use Chart (HelmRepository)
+		if release.Namespace == "cozy-system" {
+			// System resource: use chartRef with ExternalArtifact
+			// Artifact name format: system-{chart-name}
+			artifactName := fmt.Sprintf("system-%s", release.Chart)
+			hr.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+				Kind:      "ExternalArtifact",
+				Name:      artifactName,
+				Namespace: "cozy-system",
+			}
+		} else {
+			// Non-system resource: use Chart with HelmRepository
+			hr.Spec.Chart = &helmv2.HelmChartTemplate{
+				Spec: helmv2.HelmChartTemplateSpec{
+					Chart:   release.Chart,
+					Version: ">= 0.0.0-0",
+					SourceRef: helmv2.CrossNamespaceObjectReference{
+						Kind:      "HelmRepository",
+						Name:      "cozystack-system",
+						Namespace: "cozy-system",
+					},
+				},
+			}
 		}
 
 		// Set values if provided

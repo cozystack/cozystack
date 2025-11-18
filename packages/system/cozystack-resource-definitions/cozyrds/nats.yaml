@@ -13,11 +13,10 @@ spec:
     prefix: nats-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: nats
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-nats
         namespace: cozy-public
   dashboard:
     category: PaaS

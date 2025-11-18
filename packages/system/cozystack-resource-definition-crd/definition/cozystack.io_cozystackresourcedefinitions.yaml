@@ -297,7 +297,7 @@ spec:
                 description: Release configuration
                 properties:
                   chart:
-                    description: Helm chart configuration
+                    description: Helm chart configuration (for HelmRepository source)
                     properties:
                       name:
                         description: Name of the Helm chart
@@ -325,6 +325,32 @@ spec:
                     - name
                     - sourceRef
                     type: object
+                  chartRef:
+                    description: Chart reference configuration (for ExternalArtifact
+                      source)
+                    properties:
+                      sourceRef:
+                        description: Source reference for the chart (ExternalArtifact)
+                        properties:
+                          kind:
+                            default: HelmRepository
+                            description: Kind of the source reference
+                            type: string
+                          name:
+                            description: Name of the source reference
+                            type: string
+                          namespace:
+                            default: cozy-public
+                            description: Namespace of the source reference
+                            type: string
+                        required:
+                        - kind
+                        - name
+                        - namespace
+                        type: object
+                    required:
+                    - sourceRef
+                    type: object
                   labels:
                     additionalProperties:
                       type: string
@@ -334,9 +360,12 @@ spec:
                     description: Prefix for the release name
                     type: string
                 required:
-                - chart
                 - prefix
                 type: object
+                x-kubernetes-validations:
+                - message: either chart or chartRef must be set, but not both
+                  rule: (has(self.chart) && !has(self.chartRef)) || (!has(self.chart)
+                    && has(self.chartRef))
               secrets:
                 description: Secret selectors
                 properties:

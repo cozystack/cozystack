@@ -28,10 +28,27 @@ func (c *LineageControllerWebhook) Reconcile(ctx context.Context, req ctrl.Reque
 		appCRDMap:   make(map[appRef]*cozyv1alpha1.CozystackResourceDefinition),
 	}
 	for _, crd := range crds.Items {
-		chRef := chartRef{
-			crd.Spec.Release.Chart.SourceRef.Name,
-			crd.Spec.Release.Chart.Name,
+		var chRef chartRef
+		if crd.Spec.Release.Chart != nil {
+			// Using chart (HelmRepository)
+			chRef = chartRef{
+				repo:       crd.Spec.Release.Chart.SourceRef.Name,
+				chart:      crd.Spec.Release.Chart.Name,
+				isChartRef: false,
+			}
+		} else if crd.Spec.Release.ChartRef != nil {
+			// Using chartRef (ExternalArtifact)
+			chRef = chartRef{
+				repo:       "",
+				chart:      crd.Spec.Release.ChartRef.SourceRef.Name,
+				isChartRef: true,
+				namespace:  crd.Spec.Release.ChartRef.SourceRef.Namespace,
+			}
+		} else {
+			l.Info("CozystackResourceDefinition has neither chart nor chartRef, skipping", "name", crd.Name)
+			continue
 		}
+		
 		appRef := appRef{
 			"apps.cozystack.io",
 			crd.Spec.Application.Kind,

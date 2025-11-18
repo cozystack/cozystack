@@ -90,13 +90,23 @@ type CozystackResourceDefinitionApplication struct {
 	Singular string `json:"singular"`
 }
 
+// +kubebuilder:validation:XValidation:rule="(has(self.chart) && !has(self.chartRef)) || (!has(self.chart) && has(self.chartRef))",message="either chart or chartRef must be set, but not both"
 type CozystackResourceDefinitionRelease struct {
-	// Helm chart configuration
-	Chart CozystackResourceDefinitionChart `json:"chart"`
+	// Helm chart configuration (for HelmRepository source)
+	// +optional
+	Chart *CozystackResourceDefinitionChart `json:"chart,omitempty"`
+	// Chart reference configuration (for ExternalArtifact source)
+	// +optional
+	ChartRef *CozystackResourceDefinitionChartRef `json:"chartRef,omitempty"`
 	// Labels for the release
 	Labels map[string]string `json:"labels,omitempty"`
 	// Prefix for the release name
 	Prefix string `json:"prefix"`
+}
+
+type CozystackResourceDefinitionChartRef struct {
+	// Source reference for the chart (ExternalArtifact)
+	SourceRef SourceRef `json:"sourceRef"`
 }
 
 // CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.

@@ -13,11 +13,10 @@ spec:
     prefix: vpn-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: vpn
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-vpn
         namespace: cozy-public
   dashboard:
     category: NaaS

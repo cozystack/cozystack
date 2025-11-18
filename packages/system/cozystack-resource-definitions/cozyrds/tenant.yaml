@@ -13,11 +13,10 @@ spec:
     prefix: tenant-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: tenant
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-tenant
         namespace: cozy-public
   dashboard:
     category: Administration

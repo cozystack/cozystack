@@ -13,11 +13,10 @@ spec:
     prefix: "virtualprivatecloud-"
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: virtualprivatecloud
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-virtualprivatecloud
         namespace: cozy-public
   dashboard:
     category: IaaS

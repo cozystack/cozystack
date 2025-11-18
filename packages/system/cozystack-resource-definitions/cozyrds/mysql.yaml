@@ -13,11 +13,10 @@ spec:
     prefix: mysql-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: mysql
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-mysql
         namespace: cozy-public
   dashboard:
     category: PaaS

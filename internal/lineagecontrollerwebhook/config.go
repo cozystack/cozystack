@@ -8,8 +8,14 @@ import (
 )
 
 type chartRef struct {
+	// For chart (HelmRepository): repo is SourceRef.Name, chart is Chart.Name
+	// For chartRef (ExternalArtifact): repo is empty, chart is SourceRef.Name
 	repo  string
 	chart string
+	// isChartRef indicates if this is a chartRef (ExternalArtifact) reference
+	isChartRef bool
+	// namespace is used for chartRef (ExternalArtifact)
+	namespace string
 }
 
 type appRef struct {
@@ -38,11 +44,29 @@ func (l *LineageControllerWebhook) Map(hr *helmv2.HelmRelease) (string, string, 
 	if !ok {
 		return "", "", "", fmt.Errorf("failed to load chart-app mapping from config")
 	}
-	if hr.Spec.Chart == nil {
-		return "", "", "", fmt.Errorf("cannot map helm release %s/%s to dynamic app", hr.Namespace, hr.Name)
+	
+	var chRef chartRef
+	if hr.Spec.Chart != nil {
+		// Using chart (HelmRepository)
+		s := hr.Spec.Chart.Spec
+		chRef = chartRef{
+			repo:       s.SourceRef.Name,
+			chart:      s.Chart,
+			isChartRef: false,
+		}
+	} else if hr.Spec.ChartRef != nil {
+		// Using chartRef (ExternalArtifact)
+		chRef = chartRef{
+			repo:       "",
+			chart:      hr.Spec.ChartRef.Name,
+			isChartRef: true,
+			namespace:  hr.Spec.ChartRef.Namespace,
+		}
+	} else {
+		return "", "", "", fmt.Errorf("cannot map helm release %s/%s to dynamic app: neither chart nor chartRef is set", hr.Namespace, hr.Name)
 	}
-	s := hr.Spec.Chart.Spec
-	val, ok := cfg.chartAppMap[chartRef{s.SourceRef.Name, s.Chart}]
+	
+	val, ok := cfg.chartAppMap[chRef]
 	if !ok {
 		return "", "", "", fmt.Errorf("cannot map helm release %s/%s to dynamic app", hr.Namespace, hr.Name)
 	}

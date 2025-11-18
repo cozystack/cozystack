@@ -38,14 +38,20 @@ type ApplicationConfig struct {
 
 // ReleaseConfig contains the release settings.
 type ReleaseConfig struct {
-	Prefix string            `yaml:"prefix"`
-	Labels map[string]string `yaml:"labels"`
-	Chart  ChartConfig       `yaml:"chart"`
+	Prefix   string            `yaml:"prefix"`
+	Labels   map[string]string `yaml:"labels"`
+	Chart    *ChartConfig      `yaml:"chart,omitempty"`
+	ChartRef *ChartRefConfig   `yaml:"chartRef,omitempty"`
 }
 
-// ChartConfig contains the chart settings.
+// ChartConfig contains the chart settings (for HelmRepository source).
 type ChartConfig struct {
 	Name      string          `yaml:"name"`
+	SourceRef SourceRefConfig `yaml:"sourceRef"`
+}
+
+// ChartRefConfig contains the chart reference settings (for ExternalArtifact source).
+type ChartRefConfig struct {
 	SourceRef SourceRefConfig `yaml:"sourceRef"`
 }
 

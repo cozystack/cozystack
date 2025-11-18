@@ -797,28 +797,38 @@ func (cw *customWatcher) ResultChan() <-chan watch.Event {
 
 // shouldIncludeHelmRelease determines if a HelmRelease should be included based on filtering criteria
 func (r *REST) shouldIncludeHelmRelease(hr *helmv2.HelmRelease) bool {
-	// Nil check for Chart field
-	if hr.Spec.Chart == nil {
-		klog.V(6).Infof("HelmRelease %s has nil spec.chart field", hr.GetName())
+	// Check if using chart (HelmRepository) or chartRef (ExternalArtifact)
+	if hr.Spec.Chart != nil {
+		// Using chart (HelmRepository)
+		if r.releaseConfig.Chart == nil {
+			return false
+		}
+		// Filter by Chart Name
+		chartName := hr.Spec.Chart.Spec.Chart
+		if chartName == "" {
+			klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.chart field", hr.GetName())
+			return false
+		}
+		if chartName != r.releaseConfig.Chart.Name {
+			klog.V(6).Infof("HelmRelease %s chart name %s does not match expected %s", hr.GetName(), chartName, r.releaseConfig.Chart.Name)
+			return false
+		}
+		// Filter by SourceRefConfig and Prefix
+		return r.matchesSourceRefAndPrefix(hr)
+	} else if hr.Spec.ChartRef != nil {
+		// Using chartRef (ExternalArtifact)
+		if r.releaseConfig.ChartRef == nil {
+			return false
+		}
+		// Filter by ChartRef SourceRef and Prefix
+		return r.matchesChartRefAndPrefix(hr)
+	} else {
+		klog.V(6).Infof("HelmRelease %s has neither spec.chart nor spec.chartRef field", hr.GetName())
 		return false
 	}
-
-	// Filter by Chart Name
-	chartName := hr.Spec.Chart.Spec.Chart
-	if chartName == "" {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.chart field", hr.GetName())
-		return false
-	}
-	if chartName != r.releaseConfig.Chart.Name {
-		klog.V(6).Infof("HelmRelease %s chart name %s does not match expected %s", hr.GetName(), chartName, r.releaseConfig.Chart.Name)
-		return false
-	}
-
-	// Filter by SourceRefConfig and Prefix
-	return r.matchesSourceRefAndPrefix(hr)
 }
 
-// matchesSourceRefAndPrefix checks both SourceRefConfig and Prefix criteria
+// matchesSourceRefAndPrefix checks both SourceRefConfig and Prefix criteria for chart (HelmRepository)
 func (r *REST) matchesSourceRefAndPrefix(hr *helmv2.HelmRelease) bool {
 	// Nil check for Chart field (defensive)
 	if hr.Spec.Chart == nil {
@@ -850,6 +860,51 @@ func (r *REST) matchesSourceRefAndPrefix(hr *helmv2.HelmRelease) bool {
 		sourceRefName != r.releaseConfig.Chart.SourceRef.Name ||
 		sourceRefNamespace != r.releaseConfig.Chart.SourceRef.Namespace {
 		klog.V(6).Infof("HelmRelease %s sourceRef does not match expected values", hr.GetName())
+		return false
+	}
+
+	// Additional filtering by Prefix
+	name := hr.GetName()
+	if !strings.HasPrefix(name, r.releaseConfig.Prefix) {
+		klog.V(6).Infof("HelmRelease %s does not have the expected prefix %s", name, r.releaseConfig.Prefix)
+		return false
+	}
+
+	return true
+}
+
+// matchesChartRefAndPrefix checks both ChartRef SourceRef and Prefix criteria for chartRef (ExternalArtifact)
+func (r *REST) matchesChartRefAndPrefix(hr *helmv2.HelmRelease) bool {
+	// Nil check for ChartRef field (defensive)
+	if hr.Spec.ChartRef == nil {
+		klog.V(6).Infof("HelmRelease %s has nil spec.chartRef field", hr.GetName())
+		return false
+	}
+
+	// Extract SourceRef fields
+	sourceRef := hr.Spec.ChartRef
+	sourceRefKind := sourceRef.Kind
+	sourceRefName := sourceRef.Name
+	sourceRefNamespace := sourceRef.Namespace
+
+	if sourceRefKind == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chartRef.kind field", hr.GetName())
+		return false
+	}
+	if sourceRefName == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chartRef.name field", hr.GetName())
+		return false
+	}
+	if sourceRefNamespace == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chartRef.namespace field", hr.GetName())
+		return false
+	}
+
+	// Check if SourceRef matches the configuration
+	if sourceRefKind != r.releaseConfig.ChartRef.SourceRef.Kind ||
+		sourceRefName != r.releaseConfig.ChartRef.SourceRef.Name ||
+		sourceRefNamespace != r.releaseConfig.ChartRef.SourceRef.Namespace {
+		klog.V(6).Infof("HelmRelease %s chartRef sourceRef does not match expected values", hr.GetName())
 		return false
 	}
 
@@ -1016,18 +1071,6 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			UID:             app.ObjectMeta.UID,
 		},
 		Spec: helmv2.HelmReleaseSpec{
-			Chart: &helmv2.HelmChartTemplate{
-				Spec: helmv2.HelmChartTemplateSpec{
-					Chart:             r.releaseConfig.Chart.Name,
-					Version:           ">= 0.0.0-0",
-					ReconcileStrategy: "Revision",
-					SourceRef: helmv2.CrossNamespaceObjectReference{
-						Kind:      r.releaseConfig.Chart.SourceRef.Kind,
-						Name:      r.releaseConfig.Chart.SourceRef.Name,
-						Namespace: r.releaseConfig.Chart.SourceRef.Namespace,
-					},
-				},
-			},
 			Interval: metav1.Duration{Duration: 5 * time.Minute},
 			Install: &helmv2.Install{
 				Remediation: &helmv2.InstallRemediation{
@@ -1041,6 +1084,32 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Values: app.Spec,
 		},
+	}
+
+	// Set Chart or ChartRef based on configuration
+	if r.releaseConfig.Chart != nil {
+		// Using chart (HelmRepository)
+		helmRelease.Spec.Chart = &helmv2.HelmChartTemplate{
+			Spec: helmv2.HelmChartTemplateSpec{
+				Chart:             r.releaseConfig.Chart.Name,
+				Version:           ">= 0.0.0-0",
+				ReconcileStrategy: "Revision",
+				SourceRef: helmv2.CrossNamespaceObjectReference{
+					Kind:      r.releaseConfig.Chart.SourceRef.Kind,
+					Name:      r.releaseConfig.Chart.SourceRef.Name,
+					Namespace: r.releaseConfig.Chart.SourceRef.Namespace,
+				},
+			},
+		}
+	} else if r.releaseConfig.ChartRef != nil {
+		// Using chartRef (ExternalArtifact)
+		helmRelease.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+			Kind:      r.releaseConfig.ChartRef.SourceRef.Kind,
+			Name:      r.releaseConfig.ChartRef.SourceRef.Name,
+			Namespace: r.releaseConfig.ChartRef.SourceRef.Namespace,
+		}
+	} else {
+		return nil, fmt.Errorf("either chart or chartRef must be specified in release config")
 	}
 
 	return helmRelease, nil

@@ -13,11 +13,10 @@ spec:
     prefix: bucket-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: bucket
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-bucket
         namespace: cozy-public
   dashboard:
     singular: Bucket

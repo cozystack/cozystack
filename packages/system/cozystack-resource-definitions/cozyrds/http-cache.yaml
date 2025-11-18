@@ -13,11 +13,10 @@ spec:
     prefix: http-cache-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: http-cache
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
+        kind: ExternalArtifact
+        name: apps-http-cache
         namespace: cozy-public
   dashboard:
     category: NaaS

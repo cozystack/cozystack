@@ -54,15 +54,16 @@ fi
 # Base64 (portable: no -w / -b options)
 ICON_B64="$(base64 < "$ICON_PATH" | tr -d '\n' | tr -d '\r')"
 
-# Decide which HelmRepository name to use based on path
-#   .../apps/...  -> cozystack-apps
-#   .../extra/... -> cozystack-extra
-# default: cozystack-apps
-SOURCE_NAME="cozystack-apps"
+# Decide which ExternalArtifact name to use based on path
+#   .../apps/...  -> apps-<name>
+#   .../extra/... -> extra-<name>
+# default: apps-<name>
+ARTIFACT_PREFIX="apps"
 case "$PWD" in
-  *"/apps/"*)  SOURCE_NAME="cozystack-apps" ;;
-  *"/extra/"*) SOURCE_NAME="cozystack-extra" ;;
+  *"/apps/"*)  ARTIFACT_PREFIX="apps" ;;
+  *"/extra/"*) ARTIFACT_PREFIX="extra" ;;
 esac
+ARTIFACT_NAME="${ARTIFACT_PREFIX}-${NAME}"
 
 # If file doesn't exist, create a minimal skeleton
 OUT="${OUT:-$CRD_DIR/$NAME.yaml}"
@@ -79,12 +80,12 @@ fi
 # Export vars for yq env()
 export RES_NAME="$NAME"
 export PREFIX="$NAME-"
-if [ "$SOURCE_NAME" == "cozystack-extra" ]; then
+if [ "$ARTIFACT_PREFIX" == "extra" ]; then
   export PREFIX=""
 fi
 export DESCRIPTION="$DESC"
 export ICON_B64="$ICON_B64"
-export SOURCE_NAME="$SOURCE_NAME"
+export ARTIFACT_NAME="$ARTIFACT_NAME"
 export SCHEMA_JSON_MIN="$(jq -c . "$SCHEMA_JSON")"
 
 # Generate keysOrder from values.yaml
@@ -127,10 +128,10 @@ yq -i '
   (.spec.application.openAPISchema style="literal") |
   .spec.release.prefix = (strenv(PREFIX)) |
   .spec.release.labels."cozystack.io/ui" = "true" |
-  .spec.release.chart.name = strenv(RES_NAME) |
-  .spec.release.chart.sourceRef.kind = "HelmRepository" |
-  .spec.release.chart.sourceRef.name = strenv(SOURCE_NAME) |
-  .spec.release.chart.sourceRef.namespace = "cozy-public" |
+  del(.spec.release.chart) |
+  .spec.release.chartRef.sourceRef.kind = "ExternalArtifact" |
+  .spec.release.chartRef.sourceRef.name = strenv(ARTIFACT_NAME) |
+  .spec.release.chartRef.sourceRef.namespace = "cozy-public" |
   .spec.dashboard.description = strenv(DESCRIPTION) |
   .spec.dashboard.icon = strenv(ICON_B64) |
   .spec.dashboard.keysOrder = env(KEYS_ORDER)

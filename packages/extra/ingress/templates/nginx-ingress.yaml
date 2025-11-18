@@ -6,15 +6,10 @@ kind: HelmRelease
 metadata:
   name: ingress-nginx-system
 spec:
-  chart:
-    spec:
-      chart: cozy-ingress-nginx
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: system-cozy-ingress-nginx
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:

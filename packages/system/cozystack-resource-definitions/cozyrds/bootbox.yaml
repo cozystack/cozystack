@@ -13,11 +13,10 @@ spec:
     prefix: ""
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: bootbox
+    chartRef:
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
+        kind: ExternalArtifact
+        name: extra-bootbox
         namespace: cozy-public
   dashboard:
     category: Administration
