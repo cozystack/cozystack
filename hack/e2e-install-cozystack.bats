@@ -24,7 +24,7 @@
   kubectl apply -f _out/assets/cozystack-installer.yaml
 
   # Wait for the installer deployment to become available
-  kubectl wait deployment/cozystack -n cozy-system --timeout=1m --for=condition=Available
+  kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
 
   # Wait until HelmReleases appear & reconcile them
   timeout 60 sh -ec 'until kubectl get hr -A -l cozystack.io/system-app=true | grep -q cozys; do sleep 1; done'

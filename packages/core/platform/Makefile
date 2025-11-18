@@ -6,7 +6,6 @@ show:
 
 apply:
 	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f-
-	kubectl delete helmreleases.helm.toolkit.fluxcd.io -l cozystack.io/marked-for-deletion=true -A
 
 reconcile: apply
 

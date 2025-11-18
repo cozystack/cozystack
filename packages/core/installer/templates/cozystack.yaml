@@ -29,13 +29,13 @@ roleRef:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cozystack
+  name: cozystack-operator
   namespace: cozy-system
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: cozystack
+      app: cozystack-operator
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -44,30 +44,22 @@ spec:
   template:
     metadata:
       labels:
-        app: cozystack
+        app: cozystack-operator
     spec:
       hostNetwork: true
       serviceAccountName: cozystack
       containers:
-      - name: cozystack
+      - name: cozystack-operator
         image: "{{ .Values.cozystack.image }}"
         env:
         - name: KUBERNETES_SERVICE_HOST
           value: localhost
         - name: KUBERNETES_SERVICE_PORT
           value: "7445"
-        - name: K8S_AWAIT_ELECTION_ENABLED
-          value: "1"
-        - name: K8S_AWAIT_ELECTION_NAME
-          value: cozystack
-        - name: K8S_AWAIT_ELECTION_LOCK_NAME
-          value: cozystack
-        - name: K8S_AWAIT_ELECTION_LOCK_NAMESPACE
-          value: cozy-system
-        - name: K8S_AWAIT_ELECTION_IDENTITY
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
+        args:
+        - --leader-elect=true
+        - --metrics-bind-address=0
+        - --health-probe-bind-address=:8082
       tolerations:
       - key: "node.kubernetes.io/not-ready"
         operator: "Exists"

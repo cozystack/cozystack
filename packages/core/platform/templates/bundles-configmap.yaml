@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: system-bundle
+  namespace: cozy-system
+  labels:
+    cozystack.io/system: "true"
+data:
+  paas-full.yaml: |
+{{- trim (tpl (.Files.Get "bundles/paas-full.yaml") .) | indent 4 }}
+  paas-hosted.yaml: |
+{{- trim (tpl (.Files.Get "bundles/paas-hosted.yaml") .) | indent 4 }}
+  distro-full.yaml: |
+{{- trim (tpl (.Files.Get "bundles/distro-full.yaml") .) | indent 4 }}
+  distro-hosted.yaml: |
+{{- trim (tpl (.Files.Get "bundles/distro-hosted.yaml") .) | indent 4 }}
+

@@ -1,8 +1,8 @@
 {{- define "cozy.kubernetes_envs" }}
-{{- $cozyDeployment := lookup "apps/v1" "Deployment" "cozy-system" "cozystack" }}
+{{- $cozyDeployment := lookup "apps/v1" "Deployment" "cozy-system" "cozystack-operator" }}
 {{- $cozyContainers := dig "spec" "template" "spec" "containers" dict $cozyDeployment }}
 {{- range $cozyContainers }}
-{{- if eq .name "cozystack" }}
+{{- if eq .name "cozystack-operator" }}
 {{- range .env }}
 {{- if has .name (list "KUBERNETES_SERVICE_HOST" "KUBERNETES_SERVICE_PORT") }}
 - {{ toJson . }}
