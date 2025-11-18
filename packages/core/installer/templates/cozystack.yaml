@@ -68,15 +68,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
-      - name: assets
-        image: "{{ .Values.cozystack.image }}"
-        command:
-        - /usr/bin/cozystack-assets-server
-        - "-dir=/cozystack/assets"
-        - "-address=:8123"
-        ports:
-        - name: http
-          containerPort: 8123
       tolerations:
       - key: "node.kubernetes.io/not-ready"
         operator: "Exists"
@@ -84,17 +75,3 @@ spec:
       - key: "node.cilium.io/agent-not-ready"
         operator: "Exists"
         effect: "NoSchedule"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: cozystack
-  namespace: cozy-system
-spec:
-  ports:
-  - name: http
-    port: 80
-    targetPort: 8123
-  selector:
-    app: cozystack
-  type: ClusterIP

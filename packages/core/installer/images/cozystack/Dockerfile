@@ -21,14 +21,12 @@ ARG TARGETARCH
 RUN apk add --no-cache make git
 RUN apk add helm --repository=https://dl-cdn.alpinelinux.org/alpine/edge/community
 
+# Check Dockerfile.dockerignore!
 COPY . /src/
+
 WORKDIR /src
 
 RUN go mod download
-
-RUN go build -o /cozystack-assets-server -ldflags '-extldflags "-static" -w -s' ./cmd/cozystack-assets-server
-
-RUN make repos
 
 FROM alpine:3.22
 
@@ -39,10 +37,7 @@ RUN apk add --no-cache make kubectl helm coreutils git jq
 COPY --from=builder /src/scripts /cozystack/scripts
 COPY --from=builder /src/packages/core /cozystack/packages/core
 COPY --from=builder /src/packages/system /cozystack/packages/system
-COPY --from=builder /src/_out/repos /cozystack/assets/repos
-COPY --from=builder /cozystack-assets-server /usr/bin/cozystack-assets-server
 COPY --from=k8s-await-election-builder /k8s-await-election /usr/bin/k8s-await-election
-COPY --from=builder /src/dashboards /cozystack/assets/dashboards
 
 WORKDIR /cozystack
 ENTRYPOINT ["/usr/bin/k8s-await-election", "/cozystack/scripts/installer.sh" ]

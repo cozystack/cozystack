@@ -1,41 +1,5 @@
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
-kind: HelmRepository
-metadata:
-  name: cozystack-system
-  namespace: cozy-system
-  labels:
-    cozystack.io/repository: system
-spec:
-  interval: 5m0s
-  url: http://cozystack.cozy-system.svc/repos/system
----
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: HelmRepository
-metadata:
-  name: cozystack-apps
-  namespace: cozy-public
-  labels:
-    cozystack.io/ui: "true"
-    cozystack.io/repository: apps
-spec:
-  interval: 5m0s
-  url: http://cozystack.cozy-system.svc/repos/apps
----
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: HelmRepository
-metadata:
-  name: cozystack-extra
-  namespace: cozy-public
-  labels:
-    cozystack.io/repository: extra
-spec:
-  interval: 5m0s
-  url: http://cozystack.cozy-system.svc/repos/extra
-
-
----
-apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
   name: cozystack
@@ -53,7 +17,6 @@ spec:
     !/packages
 
 ---
-# ArtifactGenerator with explicit copy operations (no symlinks needed)
 apiVersion: source.extensions.fluxcd.io/v1beta1
 kind: ArtifactGenerator
 metadata:
@@ -76,7 +39,6 @@ spec:
           to: "@artifact/kubeovn/"
 
 ---
-# ArtifactGenerator with explicit copy operations (no symlinks needed)
 apiVersion: source.extensions.fluxcd.io/v1beta1
 kind: ArtifactGenerator
 metadata:
@@ -103,7 +65,6 @@ spec:
           to: "@artifact/vm-instance/charts/cozy-lib/"
 
 ---
-# ArtifactGenerator with explicit copy operations (no symlinks needed)
 apiVersion: source.extensions.fluxcd.io/v1beta1
 kind: ArtifactGenerator
 metadata:
@@ -114,7 +75,7 @@ spec:
     - alias: cozystack
       kind: GitRepository
       name: cozystack
-      namespace: cozy-public
+      namespace: cozy-system
   artifacts:
     - name: extra-etcd
       copy:

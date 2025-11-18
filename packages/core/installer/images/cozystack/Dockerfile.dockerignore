@@ -1,1 +1,12 @@
-_out
+# Exclude everything except src directory
+*
+!src/**
+!api/**
+!cmd/**
+!hack/**
+!internal/**
+!packages/**
+!pkg/**
+!scripts/**
+!go.mod
+!go.sum

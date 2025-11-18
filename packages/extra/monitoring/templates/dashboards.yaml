@@ -11,6 +11,6 @@ spec:
   instanceSelector:
     matchLabels:
       dashboards: grafana
-  url: http://cozystack.cozy-system.svc/dashboards/{{ . }}.json
+  url: http://grafana-dashboards.cozy-grafana-operator.svc/{{ . }}.json
 {{- end }}
 {{- end }}
