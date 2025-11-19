@@ -1,7 +1,7 @@
 flux-instance:
   instance:
     cluster:
-      networkPolicy: true
+      networkPolicy: false # -- disable due to liveness/readiness probes issues with network policies
       domain: cozy.local # -- default value is overriden in patches
     distribution:
       artifact: ""
