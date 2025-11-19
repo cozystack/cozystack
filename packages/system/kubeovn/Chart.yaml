@@ -1,3 +1,3 @@
 apiVersion: v2
 name: cozy-kubeovn
-version: 0.37.3 # Placeholder, the actual version will be automatically set during the build process
+version: 0.38.0
