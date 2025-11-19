@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: tenant
 spec:
+  source:
+    bundleName: cozystack-system
+    path: packages/apps/tenant
+    libraries: [cozy-lib]
+
   application:
     kind: Tenant
     singular: tenant

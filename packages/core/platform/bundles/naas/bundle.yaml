@@ -1,0 +1,17 @@
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackBundle
+metadata:
+  name: cozystack-naas
+spec:
+  dependsOn: [cozystack-system/network]
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: packages/library/cozy-lib
+
+  packages: []

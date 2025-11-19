@@ -1,0 +1,174 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: cozystackbundles.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: CozystackBundle
+    listKind: CozystackBundleList
+    plural: cozystackbundles
+    singular: cozystackbundle
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CozystackBundle is the Schema for the cozystackbundles API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CozystackBundleSpec defines the desired state of CozystackBundle
+            properties:
+              dependencyTargets:
+                description: |-
+                  DependencyTargets defines named groups of packages that can be referenced
+                  by other bundles via dependsOn. Each target has a name and a list of packages.
+                items:
+                  description: |-
+                    BundleDependencyTarget defines a named group of packages that can be referenced
+                    by other bundles via dependsOn
+                  properties:
+                    name:
+                      description: Name is the unique identifier for this dependency
+                        target
+                      type: string
+                    packages:
+                      description: |-
+                        Packages is a list of package names that belong to this target
+                        These packages will be added as dependencies when this target is referenced
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - name
+                  - packages
+                  type: object
+                type: array
+              dependsOn:
+                description: |-
+                  DependsOn is a list of bundle dependencies in the format "bundleName/target"
+                  For example: "cozystack-system/network"
+                  If specified, the dependencies listed in the target's packages will be taken
+                  from the specified bundle and added to all packages in this bundle
+                items:
+                  type: string
+                type: array
+              libraries:
+                description: Libraries is a list of Helm library charts used by packages
+                items:
+                  description: BundleLibrary defines a Helm library chart
+                  properties:
+                    name:
+                      description: Name is the unique identifier for this library
+                      type: string
+                    path:
+                      description: Path is the path to the library chart directory
+                      type: string
+                  required:
+                  - name
+                  - path
+                  type: object
+                type: array
+              packages:
+                description: Packages is a list of Helm releases to be installed as
+                  part of this bundle
+                items:
+                  description: BundleRelease defines a single Helm release within
+                    a bundle
+                  properties:
+                    dependsOn:
+                      description: DependsOn is a list of release names that must
+                        be installed before this release
+                      items:
+                        type: string
+                      type: array
+                    disabled:
+                      description: Disabled indicates whether this release is disabled
+                        (should not be installed)
+                      type: boolean
+                    libraries:
+                      description: Libraries is a list of library names that this
+                        package depends on
+                      items:
+                        type: string
+                      type: array
+                    name:
+                      description: Name is the unique identifier for this release
+                        within the bundle
+                      type: string
+                    namespace:
+                      description: Namespace is the Kubernetes namespace where the
+                        release will be installed
+                      type: string
+                    path:
+                      description: Path is the path to the Helm chart directory
+                      type: string
+                    privileged:
+                      description: Privileged indicates whether this release requires
+                        privileged access
+                      type: boolean
+                    releaseName:
+                      description: ReleaseName is the name of the HelmRelease resource
+                        that will be created
+                      type: string
+                    values:
+                      description: Values contains Helm chart values as a JSON object
+                      x-kubernetes-preserve-unknown-fields: true
+                    valuesFiles:
+                      description: ValuesFiles is a list of values file names to use
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - name
+                  - namespace
+                  - path
+                  - releaseName
+                  type: object
+                type: array
+              sourceRef:
+                description: SourceRef is the source reference for the bundle charts
+                properties:
+                  kind:
+                    description: Kind of the source reference
+                    enum:
+                    - GitRepository
+                    type: string
+                  name:
+                    description: Name of the source reference
+                    type: string
+                  namespace:
+                    description: Namespace of the source reference
+                    type: string
+                required:
+                - kind
+                - name
+                - namespace
+                type: object
+            required:
+            - packages
+            - sourceRef
+            type: object
+        type: object
+    served: true
+    storage: true

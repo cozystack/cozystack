@@ -1,0 +1,71 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- if not $host }}
+{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- end }}
+{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- if not $apiServerEndpoint }}
+{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- end }}
+
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackBundle
+metadata:
+  name: cozystack-paas
+spec:
+
+  dependsOn: [cozystack-system/network]
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: packages/library/cozy-lib
+
+  packages:
+  - name: mariadb-operator
+    releaseName: mariadb-operator
+    path: packages/system/mariadb-operator
+    namespace: cozy-mariadb-operator
+    dependsOn: [cert-manager,victoria-metrics-operator]
+    values:
+      mariadb-operator:
+        clusterName: {{ $clusterDomain }}
+  
+  - name: kafka-operator
+    releaseName: kafka-operator
+    path: packages/system/kafka-operator
+    namespace: cozy-kafka-operator
+    dependsOn: [victoria-metrics-operator]
+    values:
+      strimzi-kafka-operator:
+        kubernetesServiceDnsDomain: {{ $clusterDomain }}
+  
+  - name: clickhouse-operator
+    releaseName: clickhouse-operator
+    path: packages/system/clickhouse-operator
+    namespace: cozy-clickhouse-operator
+    dependsOn: [victoria-metrics-operator]
+  
+  - name: foundationdb-operator
+    releaseName: foundationdb-operator
+    path: packages/system/foundationdb-operator
+    namespace: cozy-foundationdb-operator
+    dependsOn: [cert-manager]
+  
+  - name: rabbitmq-operator
+    releaseName: rabbitmq-operator
+    path: packages/system/rabbitmq-operator
+    namespace: cozy-rabbitmq-operator
+    dependsOn: []
+  
+  - name: redis-operator
+    releaseName: redis-operator
+    path: packages/system/redis-operator
+    namespace: cozy-redis-operator
+    dependsOn: []

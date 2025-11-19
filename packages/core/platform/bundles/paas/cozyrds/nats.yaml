@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: nats
 spec:
+  source:
+    bundleName: cozystack-paas
+    path: packages/apps/nats
+    libraries: [cozy-lib]
+
   application:
     kind: NATS
     plural: natses

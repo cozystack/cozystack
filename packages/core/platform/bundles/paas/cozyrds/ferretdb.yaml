@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: ferretdb
 spec:
+  source:
+    bundleName: cozystack-paas
+    path: packages/apps/ferretdb
+    libraries: [cozy-lib]
+
   application:
     kind: FerretDB
     plural: ferretdbs

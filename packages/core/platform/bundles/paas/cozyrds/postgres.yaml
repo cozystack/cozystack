@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: postgres
 spec:
+  source:
+    bundleName: cozystack-paas
+    path: packages/apps/postgres
+    libraries: [cozy-lib]
+
   application:
     kind: Postgres
     singular: postgres

@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: bootbox
 spec:
+  source:
+    bundleName: cozystack-system
+    path: packages/extra/bootbox
+    libraries: [cozy-lib]
+
   application:
     kind: BootBox
     plural: bootboxes

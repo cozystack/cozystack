@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: mysql
 spec:
+  source:
+    bundleName: cozystack-paas
+    path: packages/apps/mysql
+    libraries: [cozy-lib]
+
   application:
     kind: MySQL
     plural: mysqls

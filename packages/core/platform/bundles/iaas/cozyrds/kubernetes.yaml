@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: kubernetes
 spec:
+  source:
+    bundleName: cozystack-iaas
+    path: packages/apps/kubernetes
+    libraries: [cozy-lib]
+
   application:
     kind: Kubernetes
     singular: kubernetes

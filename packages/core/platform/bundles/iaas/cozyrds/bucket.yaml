@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: bucket
 spec:
+  source:
+    bundleName: cozystack-iaas
+    path: packages/apps/bucket
+    libraries: [cozy-lib]
+
   application:
     kind: Bucket
     plural: buckets

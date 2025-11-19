@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: vm-instance
 spec:
+  source:
+    bundleName: cozystack-iaas
+    path: packages/apps/vm-instance
+    libraries: [cozy-lib]
+
   application:
     kind: VMInstance
     singular: vminstance

@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: virtual-machine
 spec:
+  source:
+    bundleName: cozystack-iaas
+    path: packages/apps/virtual-machine
+    libraries: [cozy-lib]
+
   application:
     kind: VirtualMachine
     plural: virtualmachines

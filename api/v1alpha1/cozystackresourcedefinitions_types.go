@@ -44,7 +44,26 @@ func init() {
 	SchemeBuilder.Register(&CozystackResourceDefinition{}, &CozystackResourceDefinitionList{})
 }
 
+// CozystackResourceDefinitionSource defines the source configuration for bundle charts
+type CozystackResourceDefinitionSource struct {
+	// BundleName is the name of the bundle that contains this chart
+	// +required
+	BundleName string `json:"bundleName"`
+
+	// Path is the path to the directory containing the Helm chart
+	// +required
+	Path string `json:"path"`
+
+	// Libraries is a list of library chart names used by this chart
+	// +optional
+	Libraries []string `json:"libraries,omitempty"`
+}
+
 type CozystackResourceDefinitionSpec struct {
+	// Source configuration for the bundle chart
+	// +optional
+	Source *CozystackResourceDefinitionSource `json:"source,omitempty"`
+
 	// Application configuration
 	Application CozystackResourceDefinitionApplication `json:"application"`
 	// Release configuration

@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: info
 spec:
+  source:
+    bundleName: cozystack-system
+    path: packages/extra/info
+    libraries: [cozy-lib]
+
   application:
     kind: Info
     plural: infos

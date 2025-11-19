@@ -1,0 +1,349 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- if not $host }}
+{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- end }}
+{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- if not $apiServerEndpoint }}
+{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- end }}
+
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackBundle
+metadata:
+  name: cozystack-system
+  finalizers:
+    - cozystack.io/system-bundle-protection
+spec:
+
+  dependencyTargets:
+  - name: network
+    packages: [cilium,kubeovn]
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: packages/library/cozy-lib
+
+  packages:
+    - name: fluxcd-operator
+      releaseName: fluxcd-operator
+      path: packages/system/fluxcd-operator
+      namespace: cozy-fluxcd
+      privileged: true
+      dependsOn: []
+    
+    - name: fluxcd
+      releaseName: fluxcd
+      path: packages/system/fluxcd
+      namespace: cozy-fluxcd
+      dependsOn: [fluxcd-operator,cilium,kubeovn]
+      values:
+        flux-instance:
+          instance:
+            cluster:
+              domain: {{ $clusterDomain }}
+    
+    - name: cilium
+      releaseName: cilium
+      path: packages/system/cilium
+      namespace: cozy-cilium
+      privileged: true
+      dependsOn: []
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-kubeovn.yaml
+    
+    - name: cilium-networkpolicy
+      releaseName: cilium-networkpolicy
+      path: packages/system/cilium-networkpolicy
+      namespace: cozy-cilium
+      privileged: true
+      dependsOn: [cilium]
+    
+    - name: kubeovn
+      releaseName: kubeovn
+      path: packages/system/kubeovn
+      namespace: cozy-kubeovn
+      privileged: true
+      dependsOn: [cilium]
+      values:
+        cozystack:
+          nodesHash: {{ include "cozystack.master-node-ips" . | sha256sum }}
+        kube-ovn:
+          ipv4:
+            POD_CIDR: "{{ index $cozyConfig.data "ipv4-pod-cidr" }}"
+            POD_GATEWAY: "{{ index $cozyConfig.data "ipv4-pod-gateway" }}"
+            SVC_CIDR: "{{ index $cozyConfig.data "ipv4-svc-cidr" }}"
+            JOIN_CIDR: "{{ index $cozyConfig.data "ipv4-join-cidr" }}"
+    
+    - name: kubeovn-webhook
+      releaseName: kubeovn-webhook
+      path: packages/system/kubeovn-webhook
+      namespace: cozy-kubeovn
+      privileged: true
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: kubeovn-plunger
+      releaseName: kubeovn-plunger
+      path: packages/system/kubeovn-plunger
+      namespace: cozy-kubeovn
+      dependsOn: [cilium,kubeovn]
+    
+    - name: multus
+      releaseName: multus
+      path: packages/system/multus
+      namespace: cozy-multus
+      privileged: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: cozy-proxy
+      releaseName: cozystack
+      path: packages/system/cozy-proxy
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn]
+    
+    - name: cert-manager-crds
+      releaseName: cert-manager-crds
+      path: packages/system/cert-manager-crds
+      namespace: cozy-cert-manager
+      dependsOn: [cilium, kubeovn]
+    
+    - name: cozystack-api
+      releaseName: cozystack-api
+      path: packages/system/cozystack-api
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn,cozystack-controller]
+    
+    - name: cozystack-controller
+      releaseName: cozystack-controller
+      path: packages/system/cozystack-controller
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn]
+      {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
+      values:
+        cozystackController:
+          disableTelemetry: true
+      {{- end }}
+    
+    - name: lineage-controller-webhook
+      releaseName: lineage-controller-webhook
+      path: packages/system/lineage-controller-webhook
+      namespace: cozy-system
+      dependsOn: [cozystack-controller,cilium,kubeovn,cert-manager]
+    
+    - name: cozystack-resource-definition-crd
+      releaseName: cozystack-resource-definition-crd
+      path: packages/system/cozystack-resource-definition-crd
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
+    
+    - name: cozystack-resource-definitions
+      releaseName: cozystack-resource-definitions
+      path: packages/system/cozystack-resource-definitions
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
+    
+    - name: cert-manager
+      releaseName: cert-manager
+      path: packages/system/cert-manager
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager-crds]
+    
+    - name: cert-manager-issuers
+      releaseName: cert-manager-issuers
+      path: packages/system/cert-manager-issuers
+      namespace: cozy-cert-manager
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: victoria-metrics-operator
+      releaseName: victoria-metrics-operator
+      path: packages/system/victoria-metrics-operator
+      namespace: cozy-victoria-metrics-operator
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: monitoring-agents
+      releaseName: monitoring-agents
+      path: packages/system/monitoring-agents
+      namespace: cozy-monitoring
+      privileged: true
+      dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds]
+      values:
+        scrapeRules:
+          etcd:
+            enabled: true
+    
+    - name: metallb
+      releaseName: metallb
+      path: packages/system/metallb
+      namespace: cozy-metallb
+      privileged: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: etcd-operator
+      releaseName: etcd-operator
+      path: packages/system/etcd-operator
+      namespace: cozy-etcd-operator
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: grafana-operator
+      releaseName: grafana-operator
+      path: packages/system/grafana-operator
+      namespace: cozy-grafana-operator
+      dependsOn: [cilium,kubeovn]
+    
+    - name: postgres-operator
+      releaseName: postgres-operator
+      path: packages/system/postgres-operator
+      namespace: cozy-postgres-operator
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: piraeus-operator
+      releaseName: piraeus-operator
+      path: packages/system/piraeus-operator
+      namespace: cozy-linstor
+      dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+    
+    - name: linstor
+      releaseName: linstor
+      path: packages/system/linstor
+      namespace: cozy-linstor
+      privileged: true
+      dependsOn: [piraeus-operator,cilium,kubeovn,cert-manager,snapshot-controller]
+    
+    - name: nfs-driver
+      releaseName: nfs-driver
+      path: packages/system/nfs-driver
+      namespace: cozy-nfs-driver
+      privileged: true
+      dependsOn: [cilium,kubeovn]
+      disabled: true
+    
+    - name: snapshot-controller
+      releaseName: snapshot-controller
+      path: packages/system/snapshot-controller
+      namespace: cozy-snapshot-controller
+      dependsOn: [cilium,kubeovn,cert-manager-issuers]
+    
+    - name: objectstorage-controller
+      releaseName: objectstorage-controller
+      path: packages/system/objectstorage-controller
+      namespace: cozy-objectstorage-controller
+      dependsOn: [cilium,kubeovn]
+    
+    - name: telepresence
+      releaseName: traffic-manager
+      path: packages/system/telepresence
+      namespace: cozy-telepresence
+      disabled: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: dashboard
+      releaseName: dashboard
+      path: packages/system/dashboard
+      namespace: cozy-dashboard
+      dependsOn:
+      - cilium
+      - kubeovn
+      {{- if eq $oidcEnabled "true" }}
+      - keycloak-configure
+      {{- end }}
+    
+    - name: external-dns
+      releaseName: external-dns
+      path: packages/system/external-dns
+      namespace: cozy-external-dns
+      disabled: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: external-secrets-operator
+      releaseName: external-secrets-operator
+      path: packages/system/external-secrets-operator
+      namespace: cozy-external-secrets-operator
+      disabled: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: bootbox
+      releaseName: bootbox
+      path: packages/system/bootbox
+      namespace: cozy-bootbox
+      privileged: true
+      disabled: true
+      dependsOn: [cilium,kubeovn]
+    
+    {{- if $oidcEnabled }}
+    - name: keycloak
+      releaseName: keycloak
+      path: packages/system/keycloak
+      namespace: cozy-keycloak
+      dependsOn: [postgres-operator]
+      libraries: [cozy-lib]
+    
+    - name: keycloak-operator
+      releaseName: keycloak-operator
+      path: packages/system/keycloak-operator
+      namespace: cozy-keycloak
+      dependsOn: [keycloak]
+    
+    - name: keycloak-configure
+      releaseName: keycloak-configure
+      path: packages/system/keycloak-configure
+      namespace: cozy-keycloak
+      dependsOn: [keycloak-operator]
+      values:
+        cozystack:
+          configHash: {{ $cozyConfig | toJson | sha256sum }}
+    {{- end }}
+    
+    - name: goldpinger
+      releaseName: goldpinger
+      path: packages/system/goldpinger
+      namespace: cozy-goldpinger
+      privileged: true
+      dependsOn: [monitoring-agents]
+    
+    - name: vertical-pod-autoscaler
+      releaseName: vertical-pod-autoscaler
+      path: packages/system/vertical-pod-autoscaler
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: [monitoring-agents]
+      values:
+        vertical-pod-autoscaler:
+          recommender:
+            extraArgs:
+              prometheus-address: http://vmselect-shortterm.tenant-root.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
+    
+    - name: vertical-pod-autoscaler-crds
+      releaseName: vertical-pod-autoscaler-crds
+      path: packages/system/vertical-pod-autoscaler-crds
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: [cilium, kubeovn]
+    
+    - name: reloader
+      releaseName: reloader
+      path: packages/system/reloader
+      namespace: cozy-reloader
+    
+    - name: velero
+      releaseName: velero
+      path: packages/system/velero
+      namespace: cozy-velero
+      privileged: true
+      disabled: true
+      dependsOn: [monitoring-agents]
+    
+    - name: hetzner-robotlb
+      releaseName: robotlb
+      disabled: true
+      path: packages/system/hetzner-robotlb
+      namespace: cozy-hetzner-robotlb
+      dependsOn: [cilium, kubeovn]

@@ -700,6 +700,27 @@ spec:
                       x-kubernetes-map-type: atomic
                     type: array
                 type: object
+              source:
+                description: Source configuration for the bundle chart
+                properties:
+                  bundleName:
+                    description: BundleName is the name of the bundle that contains
+                      this chart
+                    type: string
+                  libraries:
+                    description: Libraries is a list of library chart names used by
+                      this chart
+                    items:
+                      type: string
+                    type: array
+                  path:
+                    description: Path is the path to the directory containing the
+                      Helm chart
+                    type: string
+                required:
+                - bundleName
+                - path
+                type: object
             required:
             - application
             - release

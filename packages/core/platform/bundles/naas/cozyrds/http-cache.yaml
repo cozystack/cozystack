@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: http-cache
 spec:
+  source:
+    bundleName: cozystack-naas
+    path: packages/apps/http-cache
+    libraries: [cozy-lib]
+
   application:
     kind: HTTPCache
     plural: httpcaches

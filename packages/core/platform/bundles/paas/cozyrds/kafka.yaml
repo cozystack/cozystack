@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: kafka
 spec:
+  source:
+    bundleName: cozystack-paas
+    path: packages/apps/kafka
+    libraries: [cozy-lib]
+
   application:
     kind: Kafka
     plural: kafkas

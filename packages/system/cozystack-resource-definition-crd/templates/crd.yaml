@@ -1,2 +1,4 @@
 ---
 {{ .Files.Get "definition/cozystack.io_cozystackresourcedefinitions.yaml" }}
+---
+{{ .Files.Get "definition/cozystack.io_cozystackbundles.yaml" }}

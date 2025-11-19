@@ -720,11 +720,9 @@ func (r *PlatformReconciler) reconcileTenantRoot(ctx context.Context, cfg *confi
 			ReleaseName: "tenant-root",
 			Chart: &helmv2.HelmChartTemplate{
 				Spec: helmv2.HelmChartTemplateSpec{
-					Chart:   "tenant",
-					Version: ">= 0.0.0-0",
 					SourceRef: helmv2.CrossNamespaceObjectReference{
-						Kind:      "HelmRepository",
-						Name:      "cozystack-apps",
+						Kind:      "ExternalArtifact",
+						Name:      "apps-tenant",
 						Namespace: "cozy-public",
 					},
 				},

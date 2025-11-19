@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: clickhouse
 spec:
+  source:
+    bundleName: cozystack-paas
+    path: packages/apps/clickhouse
+    libraries: [cozy-lib]
+
   application:
     kind: ClickHouse
     singular: clickhouse

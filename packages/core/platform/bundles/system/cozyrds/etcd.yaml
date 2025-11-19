@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: etcd
 spec:
+  source:
+    bundleName: cozystack-system
+    path: packages/extra/etcd
+    libraries: [cozy-lib]
+
   application:
     kind: Etcd
     plural: etcds

@@ -1,0 +1,116 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- if not $host }}
+{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- end }}
+{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- if not $apiServerEndpoint }}
+{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- end }}
+
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackBundle
+metadata:
+  name: cozystack-iaas
+spec:
+  dependsOn: [cozystack-system/network]
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: packages/library/cozy-lib
+
+  packages:
+  - name: kubevirt-operator
+    releaseName: kubevirt-operator
+    path: packages/system/kubevirt-operator
+    namespace: cozy-kubevirt
+    dependsOn: [victoria-metrics-operator]
+  
+  - name: kubevirt
+    releaseName: kubevirt
+    path: packages/system/kubevirt
+    namespace: cozy-kubevirt
+    privileged: true
+    dependsOn: [kubevirt-operator]
+    {{- $cpuAllocationRatio := index $cozyConfig.data "cpu-allocation-ratio" }}
+    {{- if $cpuAllocationRatio }}
+    values:
+      cpuAllocationRatio: {{ $cpuAllocationRatio }}
+    {{- end }}
+  
+  - name: kubevirt-instancetypes
+    releaseName: kubevirt-instancetypes
+    path: packages/system/kubevirt-instancetypes
+    namespace: cozy-kubevirt
+    dependsOn: [kubevirt-operator,kubevirt]
+  
+  - name: kubevirt-cdi-operator
+    releaseName: kubevirt-cdi-operator
+    path: packages/system/kubevirt-cdi-operator
+    namespace: cozy-kubevirt-cdi
+    dependsOn: []
+  
+  - name: kubevirt-cdi
+    releaseName: kubevirt-cdi
+    path: packages/system/kubevirt-cdi
+    namespace: cozy-kubevirt-cdi
+    dependsOn: [kubevirt-cdi-operator]
+  
+  - name: gpu-operator
+    releaseName: gpu-operator
+    path: packages/system/gpu-operator
+    namespace: cozy-gpu-operator
+    privileged: true
+    disabled: true
+    dependsOn: []
+    valuesFiles:
+    - values.yaml
+    - values-talos.yaml
+  
+  - name: kamaji
+    releaseName: kamaji
+    path: packages/system/kamaji
+    namespace: cozy-kamaji
+    dependsOn: []
+  
+  - name: capi-operator
+    releaseName: capi-operator
+    path: packages/system/capi-operator
+    namespace: cozy-cluster-api
+    privileged: true
+    dependsOn: []
+  
+  - name: capi-providers-bootstrap
+    releaseName: capi-providers-bootstrap
+    path: packages/system/capi-providers-bootstrap
+    namespace: cozy-cluster-api
+    privileged: true
+    dependsOn: [capi-operator]
+  
+  - name: capi-providers-core
+    releaseName: capi-providers-core
+    path: packages/system/capi-providers-core
+    namespace: cozy-cluster-api
+    privileged: true
+    dependsOn: [capi-operator]
+  
+  - name: capi-providers-cpprovider
+    releaseName: capi-providers-cpprovider
+    path: packages/system/capi-providers-cpprovider
+    namespace: cozy-cluster-api
+    privileged: true
+    dependsOn: [capi-operator]
+  
+  - name: capi-providers-infraprovider
+    releaseName: capi-providers-infraprovider
+    path: packages/system/capi-providers-infraprovider
+    namespace: cozy-cluster-api
+    privileged: true
+    dependsOn: [capi-operator]

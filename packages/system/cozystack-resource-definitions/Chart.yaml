@@ -1,3 +1,0 @@
-apiVersion: v2
-name: cozystack-resource-definitions
-version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process

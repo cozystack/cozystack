@@ -242,7 +242,7 @@ func main() {
 	<-mgrCtx.Done()
 }
 
-// runBootstrapPhase1 installs fluxcd-operator and fluxcd, waits for CRDs
+// runBootstrapPhase1 installs cozystack-resource-definition-crd, fluxcd-operator and fluxcd, waits for CRDs
 // This must complete before controller manager can start (manager needs CRDs registered)
 // Basic charts (cilium, kubeovn) are NOT installed here - they are installed in phase 2 after manager starts
 func runBootstrapPhase1(ctx context.Context, c client.Client) error {
@@ -275,6 +275,12 @@ func runBootstrapPhase1(ctx context.Context, c client.Client) error {
 	// Create cozy-fluxcd namespace (needed for fluxcd-operator and fluxcd)
 	if err := ensureBootstrapNamespace(ctx, c, "cozy-fluxcd", true); err != nil {
 		return fmt.Errorf("failed to create cozy-fluxcd namespace: %w", err)
+	}
+
+	// Ensure cozystack-resource-definition-crd is installed
+	// This CRD is needed for the controller manager to start
+	if err := ensureCozystackResourceDefinitionCRD(ctx, c); err != nil {
+		return err
 	}
 
 	// Ensure fluxcd-operator and fluxcd are installed
@@ -512,6 +518,36 @@ func runMigrations(ctx context.Context, c client.Client, targetVersion int) erro
 		}
 
 		currentVersion = nextVersion
+	}
+
+	return nil
+}
+
+// ensureCozystackResourceDefinitionCRD installs cozystack-resource-definition-crd and waits for CRD
+// This CRD is needed for the controller manager to start
+func ensureCozystackResourceDefinitionCRD(ctx context.Context, c client.Client) error {
+	// Check if CRD already exists
+	crd := &apiextensionsv1.CustomResourceDefinition{}
+	key := types.NamespacedName{Name: "cozystackresourcedefinitions.cozystack.io"}
+	if err := c.Get(ctx, key, crd); err == nil {
+		setupLog.Info("cozystack-resource-definition-crd CRD already exists, skipping installation")
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to check cozystack-resource-definition-crd CRD: %w", err)
+	}
+
+	// CRD doesn't exist, install it
+	setupLog.Info("Installing cozystack-resource-definition-crd")
+	cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/cozystack-resource-definition-crd", "apply-locally")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to install cozystack-resource-definition-crd: %w", err)
+	}
+
+	// Wait for CRD
+	if err := waitForCRDs(ctx, c, "cozystackresourcedefinitions.cozystack.io"); err != nil {
+		return err
 	}
 
 	return nil

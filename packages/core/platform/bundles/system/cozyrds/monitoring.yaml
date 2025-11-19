@@ -3,6 +3,11 @@ kind: CozystackResourceDefinition
 metadata:
   name: monitoring
 spec:
+  source:
+    bundleName: cozystack-system
+    path: packages/extra/monitoring
+    libraries: [cozy-lib]
+
   application:
     kind: Monitoring
     singular: monitoring
