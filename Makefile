@@ -1,4 +1,4 @@
-.PHONY: manifests repos assets
+.PHONY: manifests assets
 
 build-deps:
 	@command -V find docker skopeo jq gh helm > /dev/null
@@ -28,12 +28,6 @@ build: build-deps
 	make -C packages/core/testing image
 	make -C packages/core/installer image
 	make manifests
-
-repos:
-	rm -rf _out
-	make -C packages/system repo
-	make -C packages/apps repo
-	make -C packages/extra repo
 
 manifests:
 	mkdir -p _out/assets

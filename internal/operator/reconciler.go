@@ -102,7 +102,7 @@ func getArtifactPrefixAndNamespace(chartName string) (string, string, bool) {
 // PlatformReconciler reconciles the platform configuration.
 type PlatformReconciler struct {
 	client.Client
-	Scheme           *runtime.Scheme
+	Scheme             *runtime.Scheme
 	FirstReconcileDone chan struct{}
 }
 
@@ -295,7 +295,8 @@ func (r *PlatformReconciler) reconcileGitRepository(ctx context.Context) error {
 			Interval: metav1.Duration{Duration: 1 * 60 * 1000000000}, // 1m
 			Timeout:  &metav1.Duration{Duration: 60 * 1000000000},    // 60s
 			Reference: &sourcev1.GitRepositoryRef{
-				Tag: "v0.38.0-alpha.2",
+				Branch: "refactor-engine",
+				//Tag:    "v0.38.0-alpha.2",
 			},
 			Ignore: func() *string {
 				ignore := `# exclude all
@@ -496,8 +497,8 @@ func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, nam
 					strategy = "Overwrite"
 				}
 				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
-					From:    fmt.Sprintf("@cozystack/packages/%s/%s/%s", name, pkg, valuesFile),
-					To:      fmt.Sprintf("@artifact/%s/%s", pkg, valuesFile),
+					From:     fmt.Sprintf("@cozystack/packages/%s/%s/%s", name, pkg, valuesFile),
+					To:       fmt.Sprintf("@artifact/%s/%s", pkg, valuesFile),
 					Strategy: strategy,
 				})
 				logger.Info("Adding valuesFile copy operation", "package", pkg, "valuesFile", valuesFile, "strategy", strategy)

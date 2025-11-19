@@ -320,7 +320,7 @@ releases:
   values:
     {{- $dashboardKCconfig := lookup "v1" "ConfigMap" "cozy-dashboard" "kubeapps-auth-config" }}
     {{- $dashboardKCValues := dig "data" "values.yaml" "" $dashboardKCconfig | fromYaml }}
-    {{- toYaml (deepCopy $dashboardKCValues | mergeOverwrite (fromYaml (include "cozystack.defaultDashboardValues" .))) | nindent 4 }}
+    {{- toYaml $dashboardKCValues | nindent 4 }}
   dependsOn:
   - cilium
   - kubeovn

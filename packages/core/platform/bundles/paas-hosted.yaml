@@ -202,8 +202,8 @@ releases:
   namespace: cozy-dashboard
   values:
     {{- $dashboardKCconfig := lookup "v1" "ConfigMap" "cozy-dashboard" "kubeapps-auth-config" }}
-    {{- $dashboardKCValues := dig "data" "values.yaml" (dict) $dashboardKCconfig }}
-    {{- toYaml (deepCopy $dashboardKCValues | mergeOverwrite (fromYaml (include "cozystack.defaultDashboardValues" .))) | nindent 4 }}
+    {{- $dashboardKCValues := dig "data" "values.yaml" "" $dashboardKCconfig | fromYaml }}
+    {{- toYaml $dashboardKCValues | nindent 4 }}
   {{- if eq $oidcEnabled "true" }}
   dependsOn: [keycloak-configure,cozystack-api]
   {{- else }}
