@@ -17,7 +17,6 @@ build: build-deps
 	make -C packages/system/cozystack-controller image
 	make -C packages/system/lineage-controller-webhook image
 	make -C packages/system/cilium image
-	make -C packages/system/kubeovn image
 	make -C packages/system/kubeovn-webhook image
 	make -C packages/system/kubeovn-plunger image
 	make -C packages/system/dashboard image
