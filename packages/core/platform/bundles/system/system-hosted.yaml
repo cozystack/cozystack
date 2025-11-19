@@ -1,5 +1,14 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
 {{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- if not $host }}
+{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- end }}
+{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- if not $apiServerEndpoint }}
+{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- end }}
 
 releases:
 - name: fluxcd-operator
@@ -26,10 +35,21 @@ releases:
   namespace: cozy-cert-manager
   dependsOn: []
 
+- name: cozystack-api
+  releaseName: cozystack-api
+  chart: cozystack-api
+  namespace: cozy-system
+  dependsOn: [cozystack-controller]
+  values:
+    cozystackAPI:
+      localK8sAPIEndpoint:
+        enabled: false
+
 - name: cozystack-controller
   releaseName: cozystack-controller
   chart: cozystack-controller
   namespace: cozy-system
+  dependsOn: []
   {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
   values:
     cozystackController:
@@ -42,6 +62,18 @@ releases:
   namespace: cozy-system
   dependsOn: [cozystack-controller,cert-manager]
 
+- name: cozystack-resource-definition-crd
+  releaseName: cozystack-resource-definition-crd
+  chart: cozystack-resource-definition-crd
+  namespace: cozy-system
+  dependsOn: [cozystack-api,cozystack-controller]
+
+- name: cozystack-resource-definitions
+  releaseName: cozystack-resource-definitions
+  chart: cozystack-resource-definitions
+  namespace: cozy-system
+  dependsOn: [cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
+
 - name: cert-manager
   releaseName: cert-manager
   chart: cert-manager
@@ -52,14 +84,12 @@ releases:
   releaseName: cert-manager-issuers
   chart: cert-manager-issuers
   namespace: cozy-cert-manager
-  optional: true
   dependsOn: [cert-manager]
 
 - name: victoria-metrics-operator
   releaseName: victoria-metrics-operator
   chart: victoria-metrics-operator
   namespace: cozy-victoria-metrics-operator
-  optional: true
   dependsOn: [cert-manager]
 
 - name: monitoring-agents
@@ -67,8 +97,7 @@ releases:
   chart: monitoring-agents
   namespace: cozy-monitoring
   privileged: true
-  optional: true
-  dependsOn: [victoria-metrics-operator]
+  dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds]
   values:
     scrapeRules:
       etcd:
@@ -78,22 +107,19 @@ releases:
   releaseName: etcd-operator
   chart: etcd-operator
   namespace: cozy-etcd-operator
-  optional: true
   dependsOn: [cert-manager]
 
 - name: grafana-operator
   releaseName: grafana-operator
   chart: grafana-operator
   namespace: cozy-grafana-operator
-  optional: true
   dependsOn: []
 
 - name: mariadb-operator
   releaseName: mariadb-operator
   chart: mariadb-operator
   namespace: cozy-mariadb-operator
-  optional: true
-  dependsOn: [victoria-metrics-operator]
+  dependsOn: [cert-manager,victoria-metrics-operator]
   values:
     mariadb-operator:
       clusterName: {{ $clusterDomain }}
@@ -102,45 +128,12 @@ releases:
   releaseName: postgres-operator
   chart: postgres-operator
   namespace: cozy-postgres-operator
-  optional: true
-  dependsOn: [victoria-metrics-operator]
+  dependsOn: [cert-manager,victoria-metrics-operator]
 
-- name: kafka-operator
-  releaseName: kafka-operator
-  chart: kafka-operator
-  namespace: cozy-kafka-operator
-  optional: true
-  dependsOn: [victoria-metrics-operator]
-  values:
-    strimzi-kafka-operator:
-      kubernetesServiceDnsDomain: {{ $clusterDomain }}
-
-- name: clickhouse-operator
-  releaseName: clickhouse-operator
-  chart: clickhouse-operator
-  namespace: cozy-clickhouse-operator
-  optional: true
-  dependsOn: [victoria-metrics-operator]
-
-- name: foundationdb-operator
-  releaseName: foundationdb-operator
-  chart: foundationdb-operator
-  namespace: cozy-foundationdb-operator
-  optional: true
-  dependsOn: [cert-manager]
-
-- name: rabbitmq-operator
-  releaseName: rabbitmq-operator
-  chart: rabbitmq-operator
-  namespace: cozy-rabbitmq-operator
-  optional: true
-  dependsOn: []
-
-- name: redis-operator
-  releaseName: redis-operator
-  chart: redis-operator
-  namespace: cozy-redis-operator
-  optional: true
+- name: objectstorage-controller
+  releaseName: objectstorage-controller
+  chart: objectstorage-controller
+  namespace: cozy-objectstorage-controller
   dependsOn: []
 
 - name: telepresence
@@ -164,19 +157,68 @@ releases:
   optional: true
   dependsOn: []
 
+- name: dashboard
+  releaseName: dashboard
+  chart: dashboard
+  namespace: cozy-dashboard
+  values:
+    {{- $dashboardKCconfig := lookup "v1" "ConfigMap" "cozy-dashboard" "kubeapps-auth-config" }}
+    {{- $dashboardKCValues := dig "data" "values.yaml" "" $dashboardKCconfig | fromYaml }}
+    {{- toYaml $dashboardKCValues | nindent 4 }}
+  {{- if eq $oidcEnabled "true" }}
+  dependsOn: [keycloak-configure,cozystack-api]
+  {{- else }}
+  dependsOn: []
+  {{- end }}
+
+{{- if $oidcEnabled }}
 - name: keycloak
   releaseName: keycloak
   chart: keycloak
   namespace: cozy-keycloak
-  optional: true
   dependsOn: [postgres-operator]
 
 - name: keycloak-operator
   releaseName: keycloak-operator
   chart: keycloak-operator
   namespace: cozy-keycloak
-  optional: true
   dependsOn: [keycloak]
+
+- name: keycloak-configure
+  releaseName: keycloak-configure
+  chart: keycloak-configure
+  namespace: cozy-keycloak
+  dependsOn: [keycloak-operator]
+  values:
+    cozystack:
+      configHash: {{ $cozyConfig | toJson | sha256sum }}
+{{- end }}
+
+- name: goldpinger
+  releaseName: goldpinger
+  chart: goldpinger
+  namespace: cozy-goldpinger
+  privileged: true
+  dependsOn: [monitoring-agents]
+
+- name: vertical-pod-autoscaler
+  releaseName: vertical-pod-autoscaler
+  chart: vertical-pod-autoscaler
+  namespace: cozy-vertical-pod-autoscaler
+  privileged: true
+  dependsOn: [monitoring-agents]
+  values:
+    vertical-pod-autoscaler:
+      recommender:
+        extraArgs:
+          prometheus-address: http://vmselect-shortterm.tenant-root.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
+
+- name: vertical-pod-autoscaler-crds
+  releaseName: vertical-pod-autoscaler-crds
+  chart: vertical-pod-autoscaler-crds
+  namespace: cozy-vertical-pod-autoscaler
+  privileged: true
+  dependsOn: []
 
 - name: velero
   releaseName: velero
@@ -184,6 +226,7 @@ releases:
   namespace: cozy-velero
   privileged: true
   optional: true
+  dependsOn: [monitoring-agents]
 
 - name: hetzner-robotlb
   releaseName: robotlb

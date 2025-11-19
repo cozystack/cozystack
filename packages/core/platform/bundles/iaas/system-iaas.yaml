@@ -1,0 +1,100 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- if not $host }}
+{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- end }}
+{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- if not $apiServerEndpoint }}
+{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- end }}
+
+releases:
+- name: kubevirt-operator
+  releaseName: kubevirt-operator
+  chart: kubevirt-operator
+  namespace: cozy-kubevirt
+  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+
+- name: kubevirt
+  releaseName: kubevirt
+  chart: kubevirt
+  namespace: cozy-kubevirt
+  privileged: true
+  dependsOn: [cilium,kubeovn,kubevirt-operator]
+  {{- $cpuAllocationRatio := index $cozyConfig.data "cpu-allocation-ratio" }}
+  {{- if $cpuAllocationRatio }}
+  values:
+    cpuAllocationRatio: {{ $cpuAllocationRatio }}
+  {{- end }}
+
+- name: kubevirt-instancetypes
+  releaseName: kubevirt-instancetypes
+  chart: kubevirt-instancetypes
+  namespace: cozy-kubevirt
+  dependsOn: [cilium,kubeovn,kubevirt-operator,kubevirt]
+
+- name: kubevirt-cdi-operator
+  releaseName: kubevirt-cdi-operator
+  chart: kubevirt-cdi-operator
+  namespace: cozy-kubevirt-cdi
+  dependsOn: [cilium,kubeovn]
+
+- name: kubevirt-cdi
+  releaseName: kubevirt-cdi
+  chart: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+  dependsOn: [cilium,kubeovn,kubevirt-cdi-operator]
+
+- name: gpu-operator
+  releaseName: gpu-operator
+  chart: gpu-operator
+  namespace: cozy-gpu-operator
+  privileged: true
+  optional: true
+  dependsOn: [cilium,kubeovn]
+  valuesFiles:
+  - values.yaml
+  - values-talos.yaml
+
+- name: kamaji
+  releaseName: kamaji
+  chart: kamaji
+  namespace: cozy-kamaji
+  dependsOn: [cilium,kubeovn,cert-manager]
+
+- name: capi-operator
+  releaseName: capi-operator
+  chart: capi-operator
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,cert-manager]
+
+- name: capi-providers-bootstrap
+  releaseName: capi-providers-bootstrap
+  chart: capi-providers-bootstrap
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-core
+  releaseName: capi-providers-core
+  chart: capi-providers-core
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-cpprovider
+  releaseName: capi-providers-cpprovider
+  chart: capi-providers-cpprovider
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]
+
+- name: capi-providers-infraprovider
+  releaseName: capi-providers-infraprovider
+  chart: capi-providers-infraprovider
+  namespace: cozy-cluster-api
+  privileged: true
+  dependsOn: [cilium,kubeovn,capi-operator]

@@ -1,0 +1,53 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- if not $host }}
+{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- end }}
+{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- if not $apiServerEndpoint }}
+{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- end }}
+
+- name: mariadb-operator
+  releaseName: mariadb-operator
+  chart: mariadb-operator
+  namespace: cozy-mariadb-operator
+  dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+  values:
+    mariadb-operator:
+      clusterName: {{ $clusterDomain }}
+
+- name: kafka-operator
+  releaseName: kafka-operator
+  chart: kafka-operator
+  namespace: cozy-kafka-operator
+  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+  values:
+    strimzi-kafka-operator:
+      kubernetesServiceDnsDomain: {{ $clusterDomain }}
+
+- name: clickhouse-operator
+  releaseName: clickhouse-operator
+  chart: clickhouse-operator
+  namespace: cozy-clickhouse-operator
+  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+
+- name: foundationdb-operator
+  releaseName: foundationdb-operator
+  chart: foundationdb-operator
+  namespace: cozy-foundationdb-operator
+  dependsOn: [cilium,kubeovn,cert-manager]
+
+- name: rabbitmq-operator
+  releaseName: rabbitmq-operator
+  chart: rabbitmq-operator
+  namespace: cozy-rabbitmq-operator
+  dependsOn: [cilium,kubeovn]
+
+- name: redis-operator
+  releaseName: redis-operator
+  chart: redis-operator
+  namespace: cozy-redis-operator
+  dependsOn: [cilium,kubeovn]
