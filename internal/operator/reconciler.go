@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -46,10 +47,63 @@ const (
 	platformOperatorLabel       = "cozystack.io/platform-operator"
 )
 
+var (
+	// System packages list - packages that are in packages/system/ directory
+	systemPackagesList = map[string]bool{
+		"bootbox": true, "bucket": true, "capi-operator": true, "capi-providers-bootstrap": true,
+		"capi-providers-core": true, "capi-providers-cpprovider": true, "capi-providers-infraprovider": true,
+		"cert-manager": true, "cert-manager-crds": true, "cert-manager-issuers": true, "cilium": true,
+		"cilium-networkpolicy": true, "clickhouse-operator": true, "coredns": true, "cozy-proxy": true,
+		"cozystack-api": true, "cozystack-controller": true, "cozystack-resource-definition-crd": true,
+		"cozystack-resource-definitions": true, "dashboard": true, "etcd-operator": true, "external-dns": true,
+		"external-secrets-operator": true, "fluxcd": true, "fluxcd-operator": true, "foundationdb-operator": true,
+		"gateway-api-crds": true, "goldpinger": true, "gpu-operator": true, "grafana-operator": true,
+		"hetzner-robotlb": true, "ingress-nginx": true, "kafka-operator": true, "kamaji": true,
+		"keycloak": true, "keycloak-configure": true, "keycloak-operator": true, "kubeovn": true,
+		"kubeovn-plunger": true, "kubeovn-webhook": true, "kubevirt": true, "kubevirt-cdi": true,
+		"kubevirt-cdi-operator": true, "kubevirt-csi-node": true, "kubevirt-instancetypes": true,
+		"kubevirt-operator": true, "lineage-controller-webhook": true, "linstor": true, "mariadb-operator": true,
+		"metallb": true, "monitoring-agents": true, "multus": true, "nats": true, "nfs-driver": true,
+		"objectstorage-controller": true, "opencost": true, "piraeus-operator": true, "postgres-operator": true,
+		"rabbitmq-operator": true, "redis-operator": true, "reloader": true, "seaweedfs": true,
+		"snapshot-controller": true, "telepresence": true, "velero": true, "vertical-pod-autoscaler": true,
+		"vertical-pod-autoscaler-crds": true, "victoria-metrics-operator": true, "vsnap-crd": true,
+	}
+
+	// Apps packages list - packages that are in packages/apps/ directory
+	appsPackagesList = map[string]bool{
+		"bucket": true, "clickhouse": true, "ferretdb": true, "foundationdb": true, "http-cache": true,
+		"kafka": true, "kubernetes": true, "mysql": true, "nats": true, "postgres": true, "rabbitmq": true,
+		"redis": true, "tcp-balancer": true, "tenant": true, "virtual-machine": true, "vm-disk": true,
+		"vm-instance": true, "vpc": true, "vpn": true,
+	}
+
+	// Extra packages list - packages that are in packages/extra/ directory
+	extraPackagesList = map[string]bool{
+		"bootbox": true, "etcd": true, "info": true, "ingress": true, "monitoring": true, "seaweedfs": true,
+	}
+)
+
+// getArtifactPrefixAndNamespace determines the artifact prefix and namespace based on package category
+// Returns: prefix, namespace, found
+func getArtifactPrefixAndNamespace(chartName string) (string, string, bool) {
+	if systemPackagesList[chartName] {
+		return "system", "cozy-system", true
+	}
+	if appsPackagesList[chartName] {
+		return "apps", "cozy-public", true
+	}
+	if extraPackagesList[chartName] {
+		return "extra", "cozy-public", true
+	}
+	return "", "", false
+}
+
 // PlatformReconciler reconciles the platform configuration.
 type PlatformReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme           *runtime.Scheme
+	FirstReconcileDone chan struct{}
 }
 
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch
@@ -130,6 +184,17 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Reconcile tenant-root
 	if err := r.reconcileTenantRoot(ctx, cfg); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile tenant-root: %w", err)
+	}
+
+	// Signal that first reconcile is done (non-blocking)
+	if r.FirstReconcileDone != nil {
+		select {
+		case <-r.FirstReconcileDone:
+			// Already closed, do nothing
+		default:
+			// Close channel to signal first reconcile is done
+			close(r.FirstReconcileDone)
+		}
 	}
 
 	return ctrl.Result{}, nil
@@ -284,46 +349,27 @@ func (r *PlatformReconciler) reconcileArtifactGenerators(ctx context.Context) er
 	packagesWithCozyLib := map[string]bool{
 		"bootbox": true, "bucket": true, "clickhouse": true, "etcd": true,
 		"ferretdb": true, "foundationdb": true, "http-cache": true, "info": true,
-		"ingress": true, "kafka": true, "kubernetes": true, "monitoring": true,
+		"ingress": true, "kafka": true, "keycloak": true, "kubernetes": true, "monitoring": true,
 		"mysql": true, "nats": true, "postgres": true, "rabbitmq": true,
 		"redis": true, "seaweedfs": true, "tcp-balancer": true, "tenant": true,
 		"virtual-machine": true, "vm-disk": true, "vm-instance": true,
 		"vpc": true, "vpn": true,
 	}
 
-	// System packages
-	systemPackages := []string{
-		"bootbox", "bucket", "capi-operator", "capi-providers-bootstrap",
-		"capi-providers-core", "capi-providers-cpprovider", "capi-providers-infraprovider",
-		"cert-manager", "cert-manager-crds", "cert-manager-issuers", "cilium",
-		"cilium-networkpolicy", "clickhouse-operator", "coredns", "cozy-proxy",
-		"cozystack-api", "cozystack-controller", "cozystack-resource-definition-crd",
-		"cozystack-resource-definitions", "dashboard", "etcd-operator", "external-dns",
-		"external-secrets-operator", "fluxcd", "fluxcd-operator", "foundationdb-operator",
-		"gateway-api-crds", "goldpinger", "gpu-operator", "grafana-operator",
-		"hetzner-robotlb", "ingress-nginx", "kafka-operator", "kamaji",
-		"keycloak", "keycloak-configure", "keycloak-operator", "kubeovn",
-		"kubeovn-plunger", "kubeovn-webhook", "kubevirt", "kubevirt-cdi",
-		"kubevirt-cdi-operator", "kubevirt-csi-node", "kubevirt-instancetypes",
-		"kubevirt-operator", "lineage-controller-webhook", "linstor", "mariadb-operator",
-		"metallb", "monitoring-agents", "multus", "nats", "nfs-driver",
-		"objectstorage-controller", "opencost", "piraeus-operator", "postgres-operator",
-		"rabbitmq-operator", "redis-operator", "reloader", "seaweedfs",
-		"snapshot-controller", "telepresence", "velero", "vertical-pod-autoscaler",
-		"vertical-pod-autoscaler-crds", "victoria-metrics-operator", "vsnap-crd",
+	// Convert maps to slices for ArtifactGenerator
+	systemPackages := make([]string, 0, len(systemPackagesList))
+	for pkg := range systemPackagesList {
+		systemPackages = append(systemPackages, pkg)
 	}
 
-	// Apps packages
-	appsPackages := []string{
-		"bucket", "clickhouse", "ferretdb", "foundationdb", "http-cache",
-		"kafka", "kubernetes", "mysql", "nats", "postgres", "rabbitmq",
-		"redis", "tcp-balancer", "tenant", "virtual-machine", "vm-disk",
-		"vm-instance", "vpc", "vpn",
+	appsPackages := make([]string, 0, len(appsPackagesList))
+	for pkg := range appsPackagesList {
+		appsPackages = append(appsPackages, pkg)
 	}
 
-	// Extra packages
-	extraPackages := []string{
-		"bootbox", "etcd", "info", "ingress", "monitoring", "seaweedfs",
+	extraPackages := make([]string, 0, len(extraPackagesList))
+	for pkg := range extraPackagesList {
+		extraPackages = append(extraPackages, pkg)
 	}
 
 	// Define desired ArtifactGenerators
@@ -384,6 +430,42 @@ func (r *PlatformReconciler) reconcileArtifactGenerators(ctx context.Context) er
 func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, name, namespace string, packages []string, packagesWithCozyLib map[string]bool) error {
 	logger := log.FromContext(ctx)
 
+	// Load bundle to get valuesFiles for packages
+	cfg := &config.CozystackConfig{}
+	configMap := &corev1.ConfigMap{}
+	configMapKey := types.NamespacedName{Namespace: "cozy-system", Name: "cozystack"}
+	if err := r.Get(ctx, configMapKey, configMap); err == nil {
+		cfg = config.ParseConfigMapData(configMap.Data)
+	}
+
+	var bundle *Bundle
+	var err error
+	if cfg.BundleName != "" {
+		bundle, err = loadBundle(ctx, r.Client, cfg.BundleName)
+		if err != nil {
+			logger.Info("failed to load bundle for valuesFiles, continuing without them", "error", err)
+			bundle = nil
+		}
+	}
+
+	// Build map of chart -> valuesFiles from bundle
+	chartValuesFiles := make(map[string][]string)
+	if bundle != nil {
+		for _, release := range bundle.Releases {
+			// Check if release is disabled or optional
+			if cfg.IsComponentDisabled(release.Name) {
+				continue
+			}
+			if release.Optional && !cfg.IsComponentEnabled(release.Name) {
+				continue
+			}
+			// Store valuesFiles for this chart
+			if len(release.ValuesFiles) > 0 {
+				chartValuesFiles[release.Chart] = release.ValuesFiles
+			}
+		}
+	}
+
 	// Build output artifacts
 	outputArtifacts := []sourcewatcherv1beta1.OutputArtifact{}
 	for _, pkg := range packages {
@@ -402,8 +484,30 @@ func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, nam
 			})
 		}
 
+		// Add valuesFiles if specified in bundle
+		if valuesFiles, ok := chartValuesFiles[pkg]; ok {
+			for i, valuesFile := range valuesFiles {
+				// Copy values file from GitRepository to artifact
+				// Path in GitRepository: packages/{name}/{pkg}/{valuesFile}
+				// Path in artifact: {pkg}/{valuesFile}
+				// First file should use Overwrite (to replace original values.yaml), others use Merge
+				strategy := "Merge"
+				if i == 0 {
+					strategy = "Overwrite"
+				}
+				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
+					From:    fmt.Sprintf("@cozystack/packages/%s/%s/%s", name, pkg, valuesFile),
+					To:      fmt.Sprintf("@artifact/%s/%s", pkg, valuesFile),
+					Strategy: strategy,
+				})
+				logger.Info("Adding valuesFile copy operation", "package", pkg, "valuesFile", valuesFile, "strategy", strategy)
+			}
+		}
+
+		artifactName := fmt.Sprintf("%s-%s", name, pkg)
+		logger.Info("Adding output artifact to ArtifactGenerator", "artifactName", artifactName, "generator", name, "package", pkg)
 		outputArtifacts = append(outputArtifacts, sourcewatcherv1beta1.OutputArtifact{
-			Name: fmt.Sprintf("%s-%s", name, pkg),
+			Name: artifactName,
 			Copy: copyOps,
 		})
 	}
@@ -433,7 +537,8 @@ func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, nam
 	// Get existing resource to preserve resourceVersion
 	existing := &sourcewatcherv1beta1.ArtifactGenerator{}
 	key := client.ObjectKey{Name: name, Namespace: namespace}
-	if err := r.Get(ctx, key, existing); err == nil {
+	err = r.Get(ctx, key, existing)
+	if err == nil {
 		ag.SetResourceVersion(existing.GetResourceVersion())
 		// Merge labels and annotations
 		labels := ag.GetLabels()
@@ -645,31 +750,6 @@ func (r *PlatformReconciler) reconcileTenantRoot(ctx context.Context, cfg *confi
 	}
 	logger.Info("reconciled tenant-root HelmRelease")
 
-	// List all tenant-root HelmReleases and delete unwanted ones
-	hrList := &helmv2.HelmReleaseList{}
-	if err := r.List(ctx, hrList, client.InNamespace("tenant-root"), client.MatchingLabels{
-		"cozystack.io/ui": "true",
-	}); err != nil {
-		return fmt.Errorf("failed to list tenant-root HelmReleases: %w", err)
-	}
-
-	desiredHRKey := types.NamespacedName{Name: desiredHR.Name, Namespace: desiredHR.Namespace}
-	for _, hr := range hrList.Items {
-		key := types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}
-		if key != desiredHRKey {
-			// Not desired, delete it
-			if err := r.Delete(ctx, &hr); err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				logger.Error(err, "failed to delete tenant-root HelmRelease", "name", hr.Name)
-				// Continue with other deletions
-			} else {
-				logger.Info("deleted tenant-root HelmRelease (not in desired state)", "name", hr.Name)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -731,30 +811,20 @@ func (r *PlatformReconciler) reconcileHelmReleases(ctx context.Context, cfg *con
 			},
 		}
 
-		// Determine if this is a system resource (installed in cozy-system namespace)
-		// System resources use chartRef (ExternalArtifact), others use Chart (HelmRepository)
-		if release.Namespace == "cozy-system" {
-			// System resource: use chartRef with ExternalArtifact
-			// Artifact name format: system-{chart-name}
-			artifactName := fmt.Sprintf("system-%s", release.Chart)
-			hr.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
-				Kind:      "ExternalArtifact",
-				Name:      artifactName,
-				Namespace: "cozy-system",
-			}
-		} else {
-			// Non-system resource: use Chart with HelmRepository
-			hr.Spec.Chart = &helmv2.HelmChartTemplate{
-				Spec: helmv2.HelmChartTemplateSpec{
-					Chart:   release.Chart,
-					Version: ">= 0.0.0-0",
-					SourceRef: helmv2.CrossNamespaceObjectReference{
-						Kind:      "HelmRepository",
-						Name:      "cozystack-system",
-						Namespace: "cozy-system",
-					},
-				},
-			}
+		// All packages now use chartRef (ExternalArtifact)
+		// Determine artifact prefix and namespace based on package category
+		artifactPrefix, artifactNamespace, found := getArtifactPrefixAndNamespace(release.Chart)
+		if !found {
+			logger.Error(fmt.Errorf("unknown package category"), "skipping HelmRelease with unknown package", "name", release.Name, "namespace", release.Namespace, "chart", release.Chart)
+			continue
+		}
+
+		artifactName := fmt.Sprintf("%s-%s", artifactPrefix, release.Chart)
+		logger.Info("Creating HelmRelease with chartRef", "name", release.Name, "namespace", release.Namespace, "chart", release.Chart, "artifactName", artifactName, "artifactNamespace", artifactNamespace)
+		hr.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+			Kind:      "ExternalArtifact",
+			Name:      artifactName,
+			Namespace: artifactNamespace,
 		}
 
 		// Set values if provided
@@ -795,6 +865,47 @@ func (r *PlatformReconciler) reconcileHelmReleases(ctx context.Context, cfg *con
 			hr.Spec.Values = &apiextensionsv1.JSON{
 				Raw: valuesJSON,
 			}
+		}
+
+		// Set DependsOn if provided
+		// DependsOn is a list of release names, we need to convert them to HelmRelease references
+		if len(release.DependsOn) > 0 {
+			dependsOn := make([]helmv2.DependencyReference, 0, len(release.DependsOn))
+			for _, depName := range release.DependsOn {
+				// Find the dependent release in the bundle to get its namespace
+				var depNamespace string
+				for _, depRelease := range bundle.Releases {
+					if depRelease.Name == depName {
+						depNamespace = depRelease.Namespace
+						break
+					}
+				}
+				// If namespace not found, use the same namespace as current release
+				if depNamespace == "" {
+					depNamespace = release.Namespace
+					logger.Info("dependent release not found in bundle, using same namespace", "name", release.Name, "dependsOn", depName)
+				}
+				dependsOn = append(dependsOn, helmv2.DependencyReference{
+					Name:      depName,
+					Namespace: depNamespace,
+				})
+			}
+			hr.Spec.DependsOn = dependsOn
+			logger.Info("set DependsOn for HelmRelease", "name", release.Name, "dependsOn", release.DependsOn)
+		}
+
+		// Set valuesFiles annotation for cozypkg
+		// Initialize annotations if needed
+		if hr.Annotations == nil {
+			hr.Annotations = make(map[string]string)
+		}
+		if len(release.ValuesFiles) > 0 {
+			// Format: comma-separated string, e.g., "values.yaml,values-cilium.yaml"
+			hr.Annotations["cozypkg.cozystack.io/values-files"] = strings.Join(release.ValuesFiles, ",")
+			logger.Info("set valuesFiles annotation for HelmRelease", "name", release.Name, "valuesFiles", release.ValuesFiles)
+		} else {
+			// Remove annotation if valuesFiles is empty
+			delete(hr.Annotations, "cozypkg.cozystack.io/values-files")
 		}
 
 		if err := r.CreateOrUpdate(ctx, hr); err != nil {

@@ -146,10 +146,13 @@ func main() {
 	}
 
 	// Setup PlatformReconciler
-	if err = (&operator.PlatformReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	firstReconcileDone := make(chan struct{})
+	platformReconciler := &operator.PlatformReconciler{
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		FirstReconcileDone: firstReconcileDone,
+	}
+	if err = platformReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Platform")
 		os.Exit(1)
 	}
@@ -180,8 +183,50 @@ func main() {
 		}
 	}()
 
-	// Wait for manager to initialize before starting phase 2
+	// Wait for manager to initialize
 	<-mgrStarted
+
+	// Trigger a reconcile by creating/updating the ConfigMap to ensure first reconcile happens
+	// This ensures the controller processes the ConfigMap and completes its first reconcile cycle
+	setupLog.Info("Triggering first reconcile cycle")
+	reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer reconcileCancel()
+
+	// Get the ConfigMap to trigger reconcile
+	cm := &corev1.ConfigMap{}
+	cmKey := types.NamespacedName{Namespace: "cozy-system", Name: "cozystack"}
+	if err := bootstrapClient.Get(reconcileCtx, cmKey, cm); err == nil {
+		// ConfigMap exists, update it to trigger reconcile
+		cm.Labels = map[string]string{}
+		cm.Labels["cozystack.io/reconcile-trigger"] = strconv.FormatInt(time.Now().Unix(), 10)
+		if err := bootstrapClient.Update(reconcileCtx, cm); err != nil {
+			setupLog.Info("Failed to trigger reconcile via ConfigMap update, continuing anyway", "error", err)
+		}
+	} else if apierrors.IsNotFound(err) {
+		// ConfigMap doesn't exist yet, create it to trigger reconcile
+		cm.ObjectMeta = metav1.ObjectMeta{
+			Name:      "cozystack",
+			Namespace: "cozy-system",
+			Labels: map[string]string{
+				"cozystack.io/reconcile-trigger": strconv.FormatInt(time.Now().Unix(), 10),
+			},
+		}
+		cm.Data = map[string]string{
+			"bundleName": "distro-full",
+		}
+		if err := bootstrapClient.Create(reconcileCtx, cm); err != nil {
+			setupLog.Info("Failed to trigger reconcile via ConfigMap creation, continuing anyway", "error", err)
+		}
+	}
+
+	// Wait for first reconcile cycle to complete
+	setupLog.Info("Waiting for first reconcile cycle to complete")
+	select {
+	case <-firstReconcileDone:
+		setupLog.Info("First reconcile cycle completed")
+	case <-reconcileCtx.Done():
+		setupLog.Info("Timeout waiting for first reconcile, proceeding with phase 2 anyway")
+	}
 
 	setupLog.Info("Starting bootstrap phase 2: basic charts installation")
 	phase2Ctx, phase2Cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -255,12 +300,19 @@ func runBootstrapPhase2(ctx context.Context, c client.Client) error {
 	}
 	setupLog.Info("Bundle detected", "bundle", bundle)
 
-	// Install basic charts (cilium, kubeovn)
-	// These are installed after controller manager has started
-	// The controller manager can now handle HelmReleases from these charts
-	setupLog.Info("Installing basic charts (controller manager is running)")
-	if err := installBasicCharts(ctx, c, bundle); err != nil {
+	// Install basic charts (cilium, kubeovn) only if fluxcd is not ready
+	// Basic charts are only needed during bootstrap when fluxcd is not ready yet
+	fluxOK, err := fluxIsOK(ctx, c)
+	if err != nil {
 		return err
+	}
+	if !fluxOK {
+		setupLog.Info("fluxcd is not ready, installing basic charts (controller manager is running)")
+		if err := installBasicCharts(ctx, c, bundle); err != nil {
+			return err
+		}
+	} else {
+		setupLog.Info("fluxcd is ready, skipping basic charts installation")
 	}
 
 	// Unsuspend and update charts
@@ -487,7 +539,6 @@ func ensureFluxCD(ctx context.Context, c client.Client) error {
 	err = c.Get(ctx, key, hr)
 	if err == nil {
 		// HelmRelease exists, apply and resume it
-		// This matches installer.sh: make -C packages/system/fluxcd-operator apply resume
 		setupLog.Info("Applying and resuming fluxcd-operator helmrelease")
 		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd-operator", "apply", "resume")
 		cmd.Stdout = os.Stdout
@@ -497,7 +548,6 @@ func ensureFluxCD(ctx context.Context, c client.Client) error {
 		}
 	} else if apierrors.IsNotFound(err) {
 		// HelmRelease doesn't exist, need to create it
-		// This matches installer.sh: make -C packages/system/fluxcd-operator apply-locally
 		setupLog.Info("Creating fluxcd-operator using make (TODO: use helm-controller API)")
 		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd-operator", "apply-locally")
 		cmd.Stdout = os.Stdout
@@ -520,7 +570,6 @@ func ensureFluxCD(ctx context.Context, c client.Client) error {
 	err = c.Get(ctx, key, hr)
 	if err == nil {
 		// HelmRelease exists, apply and resume it
-		// This matches installer.sh: make -C packages/system/fluxcd apply resume
 		setupLog.Info("Applying and resuming fluxcd helmrelease")
 		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd", "apply", "resume")
 		cmd.Stdout = os.Stdout
@@ -530,7 +579,6 @@ func ensureFluxCD(ctx context.Context, c client.Client) error {
 		}
 	} else if apierrors.IsNotFound(err) {
 		// HelmRelease doesn't exist, need to create it
-		// This matches installer.sh: make -C packages/system/fluxcd apply-locally
 		setupLog.Info("Creating fluxcd using make (TODO: use helm-controller API)")
 		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd", "apply-locally")
 		cmd.Stdout = os.Stdout
@@ -582,7 +630,6 @@ func fluxIsOK(ctx context.Context, c client.Client) (bool, error) {
 	}
 
 	// Check fluxcd helmrelease is ready
-	// This matches installer.sh: kubectl wait --for=condition=ready -n cozy-fluxcd helmrelease/fluxcd --timeout=1s
 	hr := &helmv2.HelmRelease{}
 	key = types.NamespacedName{Namespace: "cozy-fluxcd", Name: "fluxcd"}
 	if err := c.Get(ctx, key, hr); err != nil {

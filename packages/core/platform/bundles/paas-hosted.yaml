@@ -13,14 +13,14 @@
 releases:
 - name: fluxcd-operator
   releaseName: fluxcd-operator
-  chart: cozy-fluxcd-operator
+  chart: fluxcd-operator
   namespace: cozy-fluxcd
   privileged: true
   dependsOn: []
 
 - name: fluxcd
   releaseName: fluxcd
-  chart: cozy-fluxcd
+  chart: fluxcd
   namespace: cozy-fluxcd
   dependsOn: [fluxcd-operator]
   values:
@@ -31,13 +31,13 @@ releases:
 
 - name: cert-manager-crds
   releaseName: cert-manager-crds
-  chart: cozy-cert-manager-crds
+  chart: cert-manager-crds
   namespace: cozy-cert-manager
   dependsOn: []
 
 - name: cozystack-api
   releaseName: cozystack-api
-  chart: cozy-cozystack-api
+  chart: cozystack-api
   namespace: cozy-system
   dependsOn: [cozystack-controller]
   values:
@@ -47,7 +47,7 @@ releases:
 
 - name: cozystack-controller
   releaseName: cozystack-controller
-  chart: cozy-cozystack-controller
+  chart: cozystack-controller
   namespace: cozy-system
   dependsOn: []
   {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
@@ -58,7 +58,7 @@ releases:
 
 - name: lineage-controller-webhook
   releaseName: lineage-controller-webhook
-  chart: cozy-lineage-controller-webhook
+  chart: lineage-controller-webhook
   namespace: cozy-system
   dependsOn: [cozystack-controller,cert-manager]
 
@@ -76,25 +76,25 @@ releases:
 
 - name: cert-manager
   releaseName: cert-manager
-  chart: cozy-cert-manager
+  chart: cert-manager
   namespace: cozy-cert-manager
   dependsOn: [cert-manager-crds]
 
 - name: cert-manager-issuers
   releaseName: cert-manager-issuers
-  chart: cozy-cert-manager-issuers
+  chart: cert-manager-issuers
   namespace: cozy-cert-manager
   dependsOn: [cert-manager]
 
 - name: victoria-metrics-operator
   releaseName: victoria-metrics-operator
-  chart: cozy-victoria-metrics-operator
+  chart: victoria-metrics-operator
   namespace: cozy-victoria-metrics-operator
   dependsOn: [cert-manager]
 
 - name: monitoring-agents
   releaseName: monitoring-agents
-  chart: cozy-monitoring-agents
+  chart: monitoring-agents
   namespace: cozy-monitoring
   privileged: true
   dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds]
@@ -105,19 +105,19 @@ releases:
 
 - name: etcd-operator
   releaseName: etcd-operator
-  chart: cozy-etcd-operator
+  chart: etcd-operator
   namespace: cozy-etcd-operator
   dependsOn: [cert-manager]
 
 - name: grafana-operator
   releaseName: grafana-operator
-  chart: cozy-grafana-operator
+  chart: grafana-operator
   namespace: cozy-grafana-operator
   dependsOn: []
 
 - name: mariadb-operator
   releaseName: mariadb-operator
-  chart: cozy-mariadb-operator
+  chart: mariadb-operator
   namespace: cozy-mariadb-operator
   dependsOn: [cert-manager,victoria-metrics-operator]
   values:
@@ -126,13 +126,13 @@ releases:
 
 - name: postgres-operator
   releaseName: postgres-operator
-  chart: cozy-postgres-operator
+  chart: postgres-operator
   namespace: cozy-postgres-operator
   dependsOn: [cert-manager,victoria-metrics-operator]
 
 - name: kafka-operator
   releaseName: kafka-operator
-  chart: cozy-kafka-operator
+  chart: kafka-operator
   namespace: cozy-kafka-operator
   dependsOn: [victoria-metrics-operator]
   values:
@@ -141,64 +141,64 @@ releases:
 
 - name: clickhouse-operator
   releaseName: clickhouse-operator
-  chart: cozy-clickhouse-operator
+  chart: clickhouse-operator
   namespace: cozy-clickhouse-operator
   dependsOn: [victoria-metrics-operator]
 
 - name: foundationdb-operator
   releaseName: foundationdb-operator
-  chart: cozy-foundationdb-operator
+  chart: foundationdb-operator
   namespace: cozy-foundationdb-operator
   dependsOn: [cert-manager]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
-  chart: cozy-rabbitmq-operator
+  chart: rabbitmq-operator
   namespace: cozy-rabbitmq-operator
   dependsOn: []
 
 - name: redis-operator
   releaseName: redis-operator
-  chart: cozy-redis-operator
+  chart: redis-operator
   namespace: cozy-redis-operator
   dependsOn: []
 
 - name: piraeus-operator
   releaseName: piraeus-operator
-  chart: cozy-piraeus-operator
+  chart: piraeus-operator
   namespace: cozy-linstor
   dependsOn: [cert-manager]
 
 - name: objectstorage-controller
   releaseName: objectstorage-controller
-  chart: cozy-objectstorage-controller
+  chart: objectstorage-controller
   namespace: cozy-objectstorage-controller
   dependsOn: []
 
 - name: telepresence
   releaseName: traffic-manager
-  chart: cozy-telepresence
+  chart: telepresence
   namespace: cozy-telepresence
   optional: true
   dependsOn: []
 
 - name: external-dns
   releaseName: external-dns
-  chart: cozy-external-dns
+  chart: external-dns
   namespace: cozy-external-dns
   optional: true
   dependsOn: []
 
 - name: external-secrets-operator
   releaseName: external-secrets-operator
-  chart: cozy-external-secrets-operator
+  chart: external-secrets-operator
   namespace: cozy-external-secrets-operator
   optional: true
   dependsOn: []
 
 - name: dashboard
   releaseName: dashboard
-  chart: cozy-dashboard
+  chart: dashboard
   namespace: cozy-dashboard
   values:
     {{- $dashboardKCconfig := lookup "v1" "ConfigMap" "cozy-dashboard" "kubeapps-auth-config" }}
@@ -213,19 +213,19 @@ releases:
 {{- if $oidcEnabled }}
 - name: keycloak
   releaseName: keycloak
-  chart: cozy-keycloak
+  chart: keycloak
   namespace: cozy-keycloak
   dependsOn: [postgres-operator]
 
 - name: keycloak-operator
   releaseName: keycloak-operator
-  chart: cozy-keycloak-operator
+  chart: keycloak-operator
   namespace: cozy-keycloak
   dependsOn: [keycloak]
 
 - name: keycloak-configure
   releaseName: keycloak-configure
-  chart: cozy-keycloak-configure
+  chart: keycloak-configure
   namespace: cozy-keycloak
   dependsOn: [keycloak-operator]
   values:
@@ -235,14 +235,14 @@ releases:
 
 - name: goldpinger
   releaseName: goldpinger
-  chart: cozy-goldpinger
+  chart: goldpinger
   namespace: cozy-goldpinger
   privileged: true
   dependsOn: [monitoring-agents]
 
 - name: vertical-pod-autoscaler
   releaseName: vertical-pod-autoscaler
-  chart: cozy-vertical-pod-autoscaler
+  chart: vertical-pod-autoscaler
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
   dependsOn: [monitoring-agents]
@@ -254,14 +254,14 @@ releases:
 
 - name: vertical-pod-autoscaler-crds
   releaseName: vertical-pod-autoscaler-crds
-  chart: cozy-vertical-pod-autoscaler-crds
+  chart: vertical-pod-autoscaler-crds
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
   dependsOn: []
 
 - name: velero
   releaseName: velero
-  chart: cozy-velero
+  chart: velero
   namespace: cozy-velero
   privileged: true
   optional: true
@@ -270,5 +270,5 @@ releases:
 - name: hetzner-robotlb
   releaseName: robotlb
   optional: true
-  chart: cozy-hetzner-robotlb
+  chart: hetzner-robotlb
   namespace: cozy-hetzner-robotlb

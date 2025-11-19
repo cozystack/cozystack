@@ -10,7 +10,7 @@ spec:
   releaseName: gpu-operator
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-gpu-operator
+    name: system-gpu-operator
     namespace: cozy-system
   kubeConfig:
     secretRef:

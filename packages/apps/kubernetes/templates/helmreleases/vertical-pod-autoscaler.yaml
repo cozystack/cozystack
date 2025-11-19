@@ -38,7 +38,7 @@ spec:
   releaseName: vertical-pod-autoscaler
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-vertical-pod-autoscaler
+    name: system-vertical-pod-autoscaler
     namespace: cozy-system
   kubeConfig:
     secretRef:

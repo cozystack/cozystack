@@ -24,7 +24,7 @@ spec:
   releaseName: cilium
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-cilium
+    name: system-cilium
     namespace: cozy-system
   kubeConfig:
     secretRef:

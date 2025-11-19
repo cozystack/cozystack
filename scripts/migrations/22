@@ -1,0 +1,103 @@
+#!/bin/sh
+# Migration 22 --> 23
+
+set -euo pipefail
+
+echo "Migrating HelmReleases from spec.chart to spec.chartRef"
+
+# Process all HelmReleases that still use spec.chart (old format)
+kubectl get helmreleases --all-namespaces -o json -l cozystack.io/ui=true | \
+  jq -r '.items[] | select(.spec.chart != null) | "\(.metadata.namespace)|\(.metadata.name)"' | \
+  while IFS='|' read -r namespace name; do
+    echo "Processing HelmRelease $namespace/$name"
+    
+    # Get the HelmRelease again to extract fields safely
+    hr_json=$(kubectl get helmrelease -n "$namespace" "$name" -o json 2>/dev/null)
+    if [ -z "$hr_json" ]; then
+      echo "Skipping $namespace/$name: failed to get HelmRelease"
+      continue
+    fi
+    
+    # Extract chart name and sourceRef
+    chart_name=$(printf '%s' "$hr_json" | jq -r '.spec.chart.spec.chart // empty')
+    source_kind=$(printf '%s' "$hr_json" | jq -r '.spec.chart.spec.sourceRef.kind // empty')
+    source_name=$(printf '%s' "$hr_json" | jq -r '.spec.chart.spec.sourceRef.name // empty')
+    source_namespace=$(printf '%s' "$hr_json" | jq -r '.spec.chart.spec.sourceRef.namespace // empty')
+    
+    # Skip if already migrated or missing required fields
+    if [ -z "$chart_name" ] || [ -z "$source_name" ] || [ "$source_kind" != "HelmRepository" ]; then
+      echo "Skipping $namespace/$name: missing required fields or not using HelmRepository"
+      continue
+    fi
+    
+    # Skip cozystack-system repository
+    if [ "$source_name" = "cozystack-system" ]; then
+      echo "Skipping $namespace/$name: cozystack-system repository not supported for migration"
+      continue
+    fi
+    
+    # Determine artifact prefix and namespace based on repository name or namespace
+    artifact_prefix=""
+    artifact_namespace="cozy-public"
+    
+    if [ "$namespace" = "cozy-system" ]; then
+      # System resources always use system- prefix in cozy-system namespace
+      artifact_prefix="system"
+      artifact_namespace="cozy-system"
+    elif [ "$source_name" = "cozystack-apps" ]; then
+      # Apps repository -> apps- prefix in cozy-public namespace
+      artifact_prefix="apps"
+      artifact_namespace="cozy-public"
+    elif [ "$source_name" = "cozystack-extra" ]; then
+      # Extra repository -> extra- prefix in cozy-public namespace
+      artifact_prefix="extra"
+      artifact_namespace="cozy-public"
+    else
+      echo "Skipping $namespace/$name: unknown repository $source_name"
+      continue
+    fi
+    
+    # Build artifact name
+    artifact_name="${artifact_prefix}-${chart_name}"
+    
+    echo "Migrating $namespace/$name: $chart_name -> $artifact_name (from $source_name)"
+    
+    # Check if already migrated (has chartRef with correct artifact name)
+    current_chart_ref=$(printf '%s' "$hr_json" | jq -r '.spec.chartRef.name // empty')
+    if [ "$current_chart_ref" = "$artifact_name" ]; then
+      echo "Already migrated $namespace/$name, skipping"
+      continue
+    fi
+    
+    # Build JSON patch operations
+    # Remove spec.chart if it exists
+    # Add/replace spec.chartRef
+    patch_ops="[]"
+    has_chart=$(printf '%s' "$hr_json" | jq -e '.spec.chart != null' > /dev/null 2>&1 && echo "true" || echo "false")
+    has_chart_ref=$(printf '%s' "$hr_json" | jq -e '.spec.chartRef != null' > /dev/null 2>&1 && echo "true" || echo "false")
+    
+    if [ "$has_chart" = "true" ]; then
+      patch_ops=$(printf '%s' "$patch_ops" | jq ". + [{\"op\": \"remove\", \"path\": \"/spec/chart\"}]")
+    fi
+    
+    if [ "$has_chart_ref" = "true" ]; then
+      patch_ops=$(printf '%s' "$patch_ops" | jq ". + [{\"op\": \"replace\", \"path\": \"/spec/chartRef\", \"value\": {\"kind\": \"ExternalArtifact\", \"name\": \"$artifact_name\", \"namespace\": \"$artifact_namespace\"}}]")
+    else
+      patch_ops=$(printf '%s' "$patch_ops" | jq ". + [{\"op\": \"add\", \"path\": \"/spec/chartRef\", \"value\": {\"kind\": \"ExternalArtifact\", \"name\": \"$artifact_name\", \"namespace\": \"$artifact_namespace\"}}]")
+    fi
+    
+    # Apply patch if there are operations to perform
+    if printf '%s' "$patch_ops" | jq -e 'length > 0' > /dev/null 2>&1; then
+      printf '%s' "$patch_ops" | kubectl patch helmrelease -n "$namespace" "$name" --type json --patch-file /dev/stdin
+      echo "Migrated $namespace/$name"
+    else
+      echo "No changes needed for $namespace/$name"
+    fi
+  done
+
+echo "Migration completed"
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=23 --dry-run=client -o yaml | kubectl apply -f-
+

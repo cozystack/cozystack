@@ -10,7 +10,7 @@ spec:
   releaseName: cozy-victoria-metrics-operator
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-victoria-metrics-operator
+    name: system-victoria-metrics-operator
     namespace: cozy-system
   kubeConfig:
     secretRef:

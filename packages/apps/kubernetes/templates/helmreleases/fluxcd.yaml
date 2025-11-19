@@ -10,7 +10,7 @@ spec:
   releaseName: fluxcd-operator
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-fluxcd-operator
+    name: system-fluxcd-operator
     namespace: cozy-system
   kubeConfig:
     secretRef:
@@ -53,7 +53,7 @@ spec:
   releaseName: fluxcd
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-fluxcd
+    name: system-fluxcd
     namespace: cozy-system
   kubeConfig:
     secretRef:

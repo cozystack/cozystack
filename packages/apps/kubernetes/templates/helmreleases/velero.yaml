@@ -10,7 +10,7 @@ spec:
   releaseName: velero
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-velero
+    name: system-velero
     namespace: cozy-system
   kubeConfig:
     secretRef:

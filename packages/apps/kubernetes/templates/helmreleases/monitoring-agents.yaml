@@ -12,7 +12,7 @@ spec:
   releaseName: cozy-monitoring-agents
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-monitoring-agents
+    name: system-monitoring-agents
     namespace: cozy-system
   kubeConfig:
     secretRef:

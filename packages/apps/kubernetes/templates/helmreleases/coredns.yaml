@@ -15,7 +15,7 @@ spec:
   releaseName: coredns
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-coredns
+    name: system-coredns
     namespace: cozy-system
   kubeConfig:
     secretRef:

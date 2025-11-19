@@ -8,7 +8,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-ingress-nginx
+    name: system-ingress-nginx
     namespace: cozy-system
   interval: 5m
   timeout: 10m

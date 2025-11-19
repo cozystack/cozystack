@@ -10,7 +10,7 @@ spec:
   releaseName: gateway-api-crds
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-gateway-api-crds
+    name: system-gateway-api-crds
     namespace: cozy-system
   kubeConfig:
     secretRef:

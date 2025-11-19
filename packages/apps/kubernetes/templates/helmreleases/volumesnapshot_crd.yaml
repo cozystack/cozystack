@@ -9,7 +9,7 @@ spec:
   releaseName: vsnap-crd
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-vsnap-crd
+    name: system-vsnap-crd
     namespace: cozy-system
   kubeConfig:
     secretRef:

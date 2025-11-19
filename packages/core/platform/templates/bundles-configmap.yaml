@@ -7,11 +7,11 @@ metadata:
     cozystack.io/system: "true"
 data:
   paas-full.yaml: |
-{{- trim (tpl (.Files.Get "bundles/paas-full.yaml") .) | indent 4 }}
+    {{- trim (tpl (.Files.Get "bundles/paas-full.yaml") .) | nindent 4 }}
   paas-hosted.yaml: |
-{{- trim (tpl (.Files.Get "bundles/paas-hosted.yaml") .) | indent 4 }}
+    {{- trim (tpl (.Files.Get "bundles/paas-hosted.yaml") .) | nindent 4 }}
   distro-full.yaml: |
-{{- trim (tpl (.Files.Get "bundles/distro-full.yaml") .) | indent 4 }}
+    {{- trim (tpl (.Files.Get "bundles/distro-full.yaml") .) | nindent 4 }}
   distro-hosted.yaml: |
-{{- trim (tpl (.Files.Get "bundles/distro-hosted.yaml") .) | indent 4 }}
+    {{- trim (tpl (.Files.Get "bundles/distro-hosted.yaml") .) | nindent 4 }}
 

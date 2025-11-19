@@ -10,7 +10,7 @@ spec:
   releaseName: csi
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-kubevirt-csi-node
+    name: system-kubevirt-csi-node
     namespace: cozy-system
   kubeConfig:
     secretRef:

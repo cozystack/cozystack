@@ -10,7 +10,7 @@ spec:
   releaseName: cert-manager-crds
   chartRef:
     kind: ExternalArtifact
-    name: system-cozy-cert-manager-crds
+    name: system-cert-manager-crds
     namespace: cozy-system
   kubeConfig:
     secretRef:
