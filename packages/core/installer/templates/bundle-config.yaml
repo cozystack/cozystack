@@ -1,0 +1,1150 @@
+---
+# Source: cozy-platform/templates/bundles-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: system-bundle
+  namespace: cozy-system
+  labels:
+    cozystack.io/system: "true"
+data:
+  paas-full.yaml: |
+    releases:
+    - name: fluxcd-operator
+      releaseName: fluxcd-operator
+      chart: fluxcd-operator
+      namespace: cozy-fluxcd
+      privileged: true
+      dependsOn: []
+    
+    - name: fluxcd
+      releaseName: fluxcd
+      chart: fluxcd
+      namespace: cozy-fluxcd
+      dependsOn: [fluxcd-operator,cilium,kubeovn]
+      values:
+        flux-instance:
+          instance:
+            cluster:
+              domain: cozy.local
+    
+    - name: cilium
+      releaseName: cilium
+      chart: cilium
+      namespace: cozy-cilium
+      privileged: true
+      dependsOn: []
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-kubeovn.yaml
+    
+    - name: cilium-networkpolicy
+      releaseName: cilium-networkpolicy
+      chart: cilium-networkpolicy
+      namespace: cozy-cilium
+      privileged: true
+      dependsOn: [cilium]
+    
+    - name: kubeovn
+      releaseName: kubeovn
+      chart: kubeovn
+      namespace: cozy-kubeovn
+      privileged: true
+      dependsOn: [cilium]
+      values:
+        cozystack:
+          nodesHash: 72edd7b4e36265096d329359e6aad6916382d17b7907de4cdb7d7de3e0a1e3b5
+        kube-ovn:
+          ipv4:
+            POD_CIDR: "10.244.0.0/16"
+            POD_GATEWAY: "10.244.0.1"
+            SVC_CIDR: "10.96.0.0/16"
+            JOIN_CIDR: "100.64.0.0/16"
+    
+    - name: kubeovn-webhook
+      releaseName: kubeovn-webhook
+      chart: kubeovn-webhook
+      namespace: cozy-kubeovn
+      privileged: true
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: kubeovn-plunger
+      releaseName: kubeovn-plunger
+      chart: kubeovn-plunger
+      namespace: cozy-kubeovn
+      dependsOn: [cilium,kubeovn]
+    
+    - name: multus
+      releaseName: multus
+      chart: multus
+      namespace: cozy-multus
+      privileged: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: cozy-proxy
+      releaseName: cozystack
+      chart: cozy-proxy
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn]
+    
+    - name: cert-manager-crds
+      releaseName: cert-manager-crds
+      chart: cert-manager-crds
+      namespace: cozy-cert-manager
+      dependsOn: [cilium, kubeovn]
+    
+    - name: cozystack-api
+      releaseName: cozystack-api
+      chart: cozystack-api
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn,cozystack-controller]
+    
+    - name: cozystack-controller
+      releaseName: cozystack-controller
+      chart: cozystack-controller
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn]
+    
+    - name: lineage-controller-webhook
+      releaseName: lineage-controller-webhook
+      chart: lineage-controller-webhook
+      namespace: cozy-system
+      dependsOn: [cozystack-controller,cilium,kubeovn,cert-manager]
+    
+    - name: cozystack-resource-definition-crd
+      releaseName: cozystack-resource-definition-crd
+      chart: cozystack-resource-definition-crd
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
+    
+    - name: cozystack-resource-definitions
+      releaseName: cozystack-resource-definitions
+      chart: cozystack-resource-definitions
+      namespace: cozy-system
+      dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
+    
+    - name: cert-manager
+      releaseName: cert-manager
+      chart: cert-manager
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager-crds]
+    
+    - name: cert-manager-issuers
+      releaseName: cert-manager-issuers
+      chart: cert-manager-issuers
+      namespace: cozy-cert-manager
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: victoria-metrics-operator
+      releaseName: victoria-metrics-operator
+      chart: victoria-metrics-operator
+      namespace: cozy-victoria-metrics-operator
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: monitoring-agents
+      releaseName: monitoring-agents
+      chart: monitoring-agents
+      namespace: cozy-monitoring
+      privileged: true
+      dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds]
+      values:
+        scrapeRules:
+          etcd:
+            enabled: true
+    
+    - name: kubevirt-operator
+      releaseName: kubevirt-operator
+      chart: kubevirt-operator
+      namespace: cozy-kubevirt
+      dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+    
+    - name: kubevirt
+      releaseName: kubevirt
+      chart: kubevirt
+      namespace: cozy-kubevirt
+      privileged: true
+      dependsOn: [cilium,kubeovn,kubevirt-operator]
+    
+    - name: kubevirt-instancetypes
+      releaseName: kubevirt-instancetypes
+      chart: kubevirt-instancetypes
+      namespace: cozy-kubevirt
+      dependsOn: [cilium,kubeovn,kubevirt-operator,kubevirt]
+    
+    - name: kubevirt-cdi-operator
+      releaseName: kubevirt-cdi-operator
+      chart: kubevirt-cdi-operator
+      namespace: cozy-kubevirt-cdi
+      dependsOn: [cilium,kubeovn]
+    
+    - name: kubevirt-cdi
+      releaseName: kubevirt-cdi
+      chart: kubevirt-cdi
+      namespace: cozy-kubevirt-cdi
+      dependsOn: [cilium,kubeovn,kubevirt-cdi-operator]
+    
+    - name: gpu-operator
+      releaseName: gpu-operator
+      chart: gpu-operator
+      namespace: cozy-gpu-operator
+      privileged: true
+      optional: true
+      dependsOn: [cilium,kubeovn]
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+    
+    - name: metallb
+      releaseName: metallb
+      chart: metallb
+      namespace: cozy-metallb
+      privileged: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: etcd-operator
+      releaseName: etcd-operator
+      chart: etcd-operator
+      namespace: cozy-etcd-operator
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: grafana-operator
+      releaseName: grafana-operator
+      chart: grafana-operator
+      namespace: cozy-grafana-operator
+      dependsOn: [cilium,kubeovn]
+    
+    - name: mariadb-operator
+      releaseName: mariadb-operator
+      chart: mariadb-operator
+      namespace: cozy-mariadb-operator
+      dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+      values:
+        mariadb-operator:
+          clusterName: cozy.local
+    
+    - name: postgres-operator
+      releaseName: postgres-operator
+      chart: postgres-operator
+      namespace: cozy-postgres-operator
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: kafka-operator
+      releaseName: kafka-operator
+      chart: kafka-operator
+      namespace: cozy-kafka-operator
+      dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+      values:
+        strimzi-kafka-operator:
+          kubernetesServiceDnsDomain: cozy.local
+    
+    - name: clickhouse-operator
+      releaseName: clickhouse-operator
+      chart: clickhouse-operator
+      namespace: cozy-clickhouse-operator
+      dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+    
+    - name: foundationdb-operator
+      releaseName: foundationdb-operator
+      chart: foundationdb-operator
+      namespace: cozy-foundationdb-operator
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: rabbitmq-operator
+      releaseName: rabbitmq-operator
+      chart: rabbitmq-operator
+      namespace: cozy-rabbitmq-operator
+      dependsOn: [cilium,kubeovn]
+    
+    - name: redis-operator
+      releaseName: redis-operator
+      chart: redis-operator
+      namespace: cozy-redis-operator
+      dependsOn: [cilium,kubeovn]
+    
+    - name: piraeus-operator
+      releaseName: piraeus-operator
+      chart: piraeus-operator
+      namespace: cozy-linstor
+      dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+    
+    - name: linstor
+      releaseName: linstor
+      chart: linstor
+      namespace: cozy-linstor
+      privileged: true
+      dependsOn: [piraeus-operator,cilium,kubeovn,cert-manager,snapshot-controller]
+    
+    - name: nfs-driver
+      releaseName: nfs-driver
+      chart: nfs-driver
+      namespace: cozy-nfs-driver
+      privileged: true
+      dependsOn: [cilium,kubeovn]
+      optional: true
+    
+    - name: snapshot-controller
+      releaseName: snapshot-controller
+      chart: snapshot-controller
+      namespace: cozy-snapshot-controller
+      dependsOn: [cilium,kubeovn,cert-manager-issuers]
+    
+    - name: objectstorage-controller
+      releaseName: objectstorage-controller
+      chart: objectstorage-controller
+      namespace: cozy-objectstorage-controller
+      dependsOn: [cilium,kubeovn]
+    
+    - name: telepresence
+      releaseName: traffic-manager
+      chart: telepresence
+      namespace: cozy-telepresence
+      optional: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: dashboard
+      releaseName: dashboard
+      chart: dashboard
+      namespace: cozy-dashboard
+      values:
+        {}
+      dependsOn:
+      - cilium
+      - kubeovn
+      - keycloak-configure
+    
+    - name: kamaji
+      releaseName: kamaji
+      chart: kamaji
+      namespace: cozy-kamaji
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: capi-operator
+      releaseName: capi-operator
+      chart: capi-operator
+      namespace: cozy-cluster-api
+      privileged: true
+      dependsOn: [cilium,kubeovn,cert-manager]
+    
+    - name: capi-providers-bootstrap
+      releaseName: capi-providers-bootstrap
+      chart: capi-providers-bootstrap
+      namespace: cozy-cluster-api
+      privileged: true
+      dependsOn: [cilium,kubeovn,capi-operator]
+    
+    - name: capi-providers-core
+      releaseName: capi-providers-core
+      chart: capi-providers-core
+      namespace: cozy-cluster-api
+      privileged: true
+      dependsOn: [cilium,kubeovn,capi-operator]
+    
+    - name: capi-providers-cpprovider
+      releaseName: capi-providers-cpprovider
+      chart: capi-providers-cpprovider
+      namespace: cozy-cluster-api
+      privileged: true
+      dependsOn: [cilium,kubeovn,capi-operator]
+    
+    - name: capi-providers-infraprovider
+      releaseName: capi-providers-infraprovider
+      chart: capi-providers-infraprovider
+      namespace: cozy-cluster-api
+      privileged: true
+      dependsOn: [cilium,kubeovn,capi-operator]
+    
+    - name: external-dns
+      releaseName: external-dns
+      chart: external-dns
+      namespace: cozy-external-dns
+      optional: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: external-secrets-operator
+      releaseName: external-secrets-operator
+      chart: external-secrets-operator
+      namespace: cozy-external-secrets-operator
+      optional: true
+      dependsOn: [cilium,kubeovn]
+    
+    - name: bootbox
+      releaseName: bootbox
+      chart: bootbox
+      namespace: cozy-bootbox
+      privileged: true
+      optional: true
+      dependsOn: [cilium,kubeovn]
+    - name: keycloak
+      releaseName: keycloak
+      chart: keycloak
+      namespace: cozy-keycloak
+      dependsOn: [postgres-operator]
+    
+    - name: keycloak-operator
+      releaseName: keycloak-operator
+      chart: keycloak-operator
+      namespace: cozy-keycloak
+      dependsOn: [keycloak]
+    
+    - name: keycloak-configure
+      releaseName: keycloak-configure
+      chart: keycloak-configure
+      namespace: cozy-keycloak
+      dependsOn: [keycloak-operator]
+      values:
+        cozystack:
+          configHash: 8f0c52dd632b8398f4e975cf7a50ea2153b094e70c84c0b7e768b9cfbc513f0c
+    
+    - name: goldpinger
+      releaseName: goldpinger
+      chart: goldpinger
+      namespace: cozy-goldpinger
+      privileged: true
+      dependsOn: [monitoring-agents]
+    
+    - name: vertical-pod-autoscaler
+      releaseName: vertical-pod-autoscaler
+      chart: vertical-pod-autoscaler
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: [monitoring-agents]
+      values:
+        vertical-pod-autoscaler:
+          recommender:
+            extraArgs:
+              prometheus-address: http://vmselect-shortterm.tenant-root.svc.cozy.local:8481/select/0/prometheus/
+    
+    - name: vertical-pod-autoscaler-crds
+      releaseName: vertical-pod-autoscaler-crds
+      chart: vertical-pod-autoscaler-crds
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: [cilium, kubeovn]
+    
+    - name: reloader
+      releaseName: reloader
+      chart: reloader
+      namespace: cozy-reloader
+    
+    - name: velero
+      releaseName: velero
+      chart: velero
+      namespace: cozy-velero
+      privileged: true
+      optional: true
+      dependsOn: [monitoring-agents]
+    
+    - name: hetzner-robotlb
+      releaseName: robotlb
+      optional: true
+      chart: hetzner-robotlb
+      namespace: cozy-hetzner-robotlb
+      dependsOn: [cilium, kubeovn]
+  paas-hosted.yaml: |
+    releases:
+    - name: fluxcd-operator
+      releaseName: fluxcd-operator
+      chart: fluxcd-operator
+      namespace: cozy-fluxcd
+      privileged: true
+      dependsOn: []
+    
+    - name: fluxcd
+      releaseName: fluxcd
+      chart: fluxcd
+      namespace: cozy-fluxcd
+      dependsOn: [fluxcd-operator]
+      values:
+        flux-instance:
+          instance:
+            cluster:
+              domain: cozy.local
+    
+    - name: cert-manager-crds
+      releaseName: cert-manager-crds
+      chart: cert-manager-crds
+      namespace: cozy-cert-manager
+      dependsOn: []
+    
+    - name: cozystack-api
+      releaseName: cozystack-api
+      chart: cozystack-api
+      namespace: cozy-system
+      dependsOn: [cozystack-controller]
+      values:
+        cozystackAPI:
+          localK8sAPIEndpoint:
+            enabled: false
+    
+    - name: cozystack-controller
+      releaseName: cozystack-controller
+      chart: cozystack-controller
+      namespace: cozy-system
+      dependsOn: []
+    
+    - name: lineage-controller-webhook
+      releaseName: lineage-controller-webhook
+      chart: lineage-controller-webhook
+      namespace: cozy-system
+      dependsOn: [cozystack-controller,cert-manager]
+    
+    - name: cozystack-resource-definition-crd
+      releaseName: cozystack-resource-definition-crd
+      chart: cozystack-resource-definition-crd
+      namespace: cozy-system
+      dependsOn: [cozystack-api,cozystack-controller]
+    
+    - name: cozystack-resource-definitions
+      releaseName: cozystack-resource-definitions
+      chart: cozystack-resource-definitions
+      namespace: cozy-system
+      dependsOn: [cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
+    
+    - name: cert-manager
+      releaseName: cert-manager
+      chart: cert-manager
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager-crds]
+    
+    - name: cert-manager-issuers
+      releaseName: cert-manager-issuers
+      chart: cert-manager-issuers
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager]
+    
+    - name: victoria-metrics-operator
+      releaseName: victoria-metrics-operator
+      chart: victoria-metrics-operator
+      namespace: cozy-victoria-metrics-operator
+      dependsOn: [cert-manager]
+    
+    - name: monitoring-agents
+      releaseName: monitoring-agents
+      chart: monitoring-agents
+      namespace: cozy-monitoring
+      privileged: true
+      dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds]
+      values:
+        scrapeRules:
+          etcd:
+            enabled: true
+    
+    - name: etcd-operator
+      releaseName: etcd-operator
+      chart: etcd-operator
+      namespace: cozy-etcd-operator
+      dependsOn: [cert-manager]
+    
+    - name: grafana-operator
+      releaseName: grafana-operator
+      chart: grafana-operator
+      namespace: cozy-grafana-operator
+      dependsOn: []
+    
+    - name: mariadb-operator
+      releaseName: mariadb-operator
+      chart: mariadb-operator
+      namespace: cozy-mariadb-operator
+      dependsOn: [cert-manager,victoria-metrics-operator]
+      values:
+        mariadb-operator:
+          clusterName: cozy.local
+    
+    - name: postgres-operator
+      releaseName: postgres-operator
+      chart: postgres-operator
+      namespace: cozy-postgres-operator
+      dependsOn: [cert-manager,victoria-metrics-operator]
+    
+    - name: kafka-operator
+      releaseName: kafka-operator
+      chart: kafka-operator
+      namespace: cozy-kafka-operator
+      dependsOn: [victoria-metrics-operator]
+      values:
+        strimzi-kafka-operator:
+          kubernetesServiceDnsDomain: cozy.local
+    
+    - name: clickhouse-operator
+      releaseName: clickhouse-operator
+      chart: clickhouse-operator
+      namespace: cozy-clickhouse-operator
+      dependsOn: [victoria-metrics-operator]
+    
+    - name: foundationdb-operator
+      releaseName: foundationdb-operator
+      chart: foundationdb-operator
+      namespace: cozy-foundationdb-operator
+      dependsOn: [cert-manager]
+    
+    - name: rabbitmq-operator
+      releaseName: rabbitmq-operator
+      chart: rabbitmq-operator
+      namespace: cozy-rabbitmq-operator
+      dependsOn: []
+    
+    - name: redis-operator
+      releaseName: redis-operator
+      chart: redis-operator
+      namespace: cozy-redis-operator
+      dependsOn: []
+    
+    - name: piraeus-operator
+      releaseName: piraeus-operator
+      chart: piraeus-operator
+      namespace: cozy-linstor
+      dependsOn: [cert-manager]
+    
+    - name: objectstorage-controller
+      releaseName: objectstorage-controller
+      chart: objectstorage-controller
+      namespace: cozy-objectstorage-controller
+      dependsOn: []
+    
+    - name: telepresence
+      releaseName: traffic-manager
+      chart: telepresence
+      namespace: cozy-telepresence
+      optional: true
+      dependsOn: []
+    
+    - name: external-dns
+      releaseName: external-dns
+      chart: external-dns
+      namespace: cozy-external-dns
+      optional: true
+      dependsOn: []
+    
+    - name: external-secrets-operator
+      releaseName: external-secrets-operator
+      chart: external-secrets-operator
+      namespace: cozy-external-secrets-operator
+      optional: true
+      dependsOn: []
+    
+    - name: dashboard
+      releaseName: dashboard
+      chart: dashboard
+      namespace: cozy-dashboard
+      values:
+        {}
+      dependsOn: [keycloak-configure,cozystack-api]
+    - name: keycloak
+      releaseName: keycloak
+      chart: keycloak
+      namespace: cozy-keycloak
+      dependsOn: [postgres-operator]
+    
+    - name: keycloak-operator
+      releaseName: keycloak-operator
+      chart: keycloak-operator
+      namespace: cozy-keycloak
+      dependsOn: [keycloak]
+    
+    - name: keycloak-configure
+      releaseName: keycloak-configure
+      chart: keycloak-configure
+      namespace: cozy-keycloak
+      dependsOn: [keycloak-operator]
+      values:
+        cozystack:
+          configHash: 8f0c52dd632b8398f4e975cf7a50ea2153b094e70c84c0b7e768b9cfbc513f0c
+    
+    - name: goldpinger
+      releaseName: goldpinger
+      chart: goldpinger
+      namespace: cozy-goldpinger
+      privileged: true
+      dependsOn: [monitoring-agents]
+    
+    - name: vertical-pod-autoscaler
+      releaseName: vertical-pod-autoscaler
+      chart: vertical-pod-autoscaler
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: [monitoring-agents]
+      values:
+        vertical-pod-autoscaler:
+          recommender:
+            extraArgs:
+              prometheus-address: http://vmselect-shortterm.tenant-root.svc.cozy.local:8481/select/0/prometheus/
+    
+    - name: vertical-pod-autoscaler-crds
+      releaseName: vertical-pod-autoscaler-crds
+      chart: vertical-pod-autoscaler-crds
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: []
+    
+    - name: velero
+      releaseName: velero
+      chart: velero
+      namespace: cozy-velero
+      privileged: true
+      optional: true
+      dependsOn: [monitoring-agents]
+    
+    - name: hetzner-robotlb
+      releaseName: robotlb
+      optional: true
+      chart: hetzner-robotlb
+      namespace: cozy-hetzner-robotlb
+  distro-full.yaml: |
+    releases:
+    - name: fluxcd-operator
+      releaseName: fluxcd-operator
+      chart: fluxcd-operator
+      namespace: cozy-fluxcd
+      privileged: true
+      dependsOn: []
+    
+    - name: fluxcd
+      releaseName: fluxcd
+      chart: fluxcd
+      namespace: cozy-fluxcd
+      dependsOn: [fluxcd-operator,cilium]
+      values:
+        flux-instance:
+          instance:
+            cluster:
+              domain: cozy.local
+    
+    - name: cilium
+      releaseName: cilium
+      chart: cilium
+      namespace: cozy-cilium
+      privileged: true
+      dependsOn: []
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      values:
+        cilium:
+          enableIPv4Masquerade: true
+          enableIdentityMark: true
+          ipv4NativeRoutingCIDR: "10.244.0.0/16"
+          autoDirectNodeRoutes: true
+          routingMode: native
+    
+    - name: cilium-networkpolicy
+      releaseName: cilium-networkpolicy
+      chart: cilium-networkpolicy
+      namespace: cozy-cilium
+      privileged: true
+      dependsOn: [cilium]
+    
+    - name: cozy-proxy
+      releaseName: cozystack
+      chart: cozy-proxy
+      namespace: cozy-system
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: cert-manager-crds
+      releaseName: cert-manager-crds
+      chart: cert-manager-crds
+      namespace: cozy-cert-manager
+      dependsOn: [cilium]
+    
+    - name: cozystack-controller
+      releaseName: cozystack-controller
+      chart: cozystack-controller
+      namespace: cozy-system
+      dependsOn: [cilium]
+    
+    - name: lineage-controller-webhook
+      releaseName: lineage-controller-webhook
+      chart: lineage-controller-webhook
+      namespace: cozy-system
+      dependsOn: [cozystack-controller,cilium,cert-manager]
+    
+    - name: cert-manager
+      releaseName: cert-manager
+      chart: cert-manager
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager-crds]
+    
+    - name: cert-manager-issuers
+      releaseName: cert-manager-issuers
+      chart: cert-manager-issuers
+      namespace: cozy-cert-manager
+      optional: true
+      dependsOn: [cilium,cert-manager]
+    
+    - name: victoria-metrics-operator
+      releaseName: victoria-metrics-operator
+      chart: victoria-metrics-operator
+      namespace: cozy-victoria-metrics-operator
+      optional: true
+      dependsOn: [cilium,cert-manager]
+    
+    - name: monitoring-agents
+      releaseName: monitoring-agents
+      chart: monitoring-agents
+      namespace: cozy-monitoring
+      privileged: true
+      optional: true
+      dependsOn: [cilium,victoria-metrics-operator]
+      values:
+        scrapeRules:
+          etcd:
+            enabled: true
+    
+    - name: metallb
+      releaseName: metallb
+      chart: metallb
+      namespace: cozy-metallb
+      privileged: true
+      dependsOn: [cilium]
+    
+    - name: etcd-operator
+      releaseName: etcd-operator
+      chart: etcd-operator
+      namespace: cozy-etcd-operator
+      optional: true
+      dependsOn: [cilium,cert-manager]
+    
+    - name: grafana-operator
+      releaseName: grafana-operator
+      chart: grafana-operator
+      namespace: cozy-grafana-operator
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: mariadb-operator
+      releaseName: mariadb-operator
+      chart: mariadb-operator
+      namespace: cozy-mariadb-operator
+      optional: true
+      dependsOn: [cilium,cert-manager,victoria-metrics-operator]
+      values:
+        mariadb-operator:
+          clusterName: cozy.local
+    
+    - name: postgres-operator
+      releaseName: postgres-operator
+      chart: postgres-operator
+      namespace: cozy-postgres-operator
+      optional: true
+      dependsOn: [cilium,cert-manager,victoria-metrics-operator]
+    
+    - name: kafka-operator
+      releaseName: kafka-operator
+      chart: kafka-operator
+      namespace: cozy-kafka-operator
+      optional: true
+      dependsOn: [cilium,victoria-metrics-operator]
+      values:
+        strimzi-kafka-operator:
+          kubernetesServiceDnsDomain: cozy.local
+    
+    - name: clickhouse-operator
+      releaseName: clickhouse-operator
+      chart: clickhouse-operator
+      namespace: cozy-clickhouse-operator
+      optional: true
+      dependsOn: [cilium,victoria-metrics-operator]
+    
+    - name: foundationdb-operator
+      releaseName: foundationdb-operator
+      chart: foundationdb-operator
+      namespace: cozy-foundationdb-operator
+      optional: true
+      dependsOn: [cilium,cert-manager]
+    
+    - name: rabbitmq-operator
+      releaseName: rabbitmq-operator
+      chart: rabbitmq-operator
+      namespace: cozy-rabbitmq-operator
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: redis-operator
+      releaseName: redis-operator
+      chart: redis-operator
+      namespace: cozy-redis-operator
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: piraeus-operator
+      releaseName: piraeus-operator
+      chart: piraeus-operator
+      namespace: cozy-linstor
+      dependsOn: [cilium,cert-manager]
+    
+    - name: snapshot-controller
+      releaseName: snapshot-controller
+      chart: snapshot-controller
+      namespace: cozy-snapshot-controller
+      dependsOn: [cilium]
+    
+    - name: objectstorage-controller
+      releaseName: objectstorage-controller
+      chart: objectstorage-controller
+      namespace: cozy-objectstorage-controller
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: linstor
+      releaseName: linstor
+      chart: linstor
+      namespace: cozy-linstor
+      privileged: true
+      dependsOn: [piraeus-operator,cilium,cert-manager,snapshot-controller]
+    
+    - name: nfs-driver
+      releaseName: nfs-driver
+      chart: nfs-driver
+      namespace: cozy-nfs-driver
+      privileged: true
+      dependsOn: [cilium]
+      optional: true
+    
+    - name: telepresence
+      releaseName: traffic-manager
+      chart: telepresence
+      namespace: cozy-telepresence
+      optional: true
+      dependsOn: []
+    
+    - name: external-dns
+      releaseName: external-dns
+      chart: external-dns
+      namespace: cozy-external-dns
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: external-secrets-operator
+      releaseName: external-secrets-operator
+      chart: external-secrets-operator
+      namespace: cozy-external-secrets-operator
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: keycloak
+      releaseName: keycloak
+      chart: keycloak
+      namespace: cozy-keycloak
+      optional: true
+      dependsOn: [postgres-operator]
+    
+    - name: keycloak-operator
+      releaseName: keycloak-operator
+      chart: keycloak-operator
+      namespace: cozy-keycloak
+      optional: true
+      dependsOn: [keycloak]
+    
+    - name: bootbox
+      releaseName: bootbox
+      chart: bootbox
+      namespace: cozy-bootbox
+      privileged: true
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: reloader
+      releaseName: reloader
+      chart: reloader
+      namespace: cozy-reloader
+    
+    - name: velero
+      releaseName: velero
+      chart: velero
+      namespace: cozy-velero
+      privileged: true
+      optional: true
+      dependsOn: [cilium]
+    
+    - name: hetzner-robotlb
+      releaseName: robotlb
+      optional: true
+      chart: hetzner-robotlb
+      namespace: cozy-hetzner-robotlb
+      dependsOn: [cilium]
+  distro-hosted.yaml: |
+    releases:
+    - name: fluxcd-operator
+      releaseName: fluxcd-operator
+      chart: fluxcd-operator
+      namespace: cozy-fluxcd
+      privileged: true
+      dependsOn: []
+    
+    - name: fluxcd
+      releaseName: fluxcd
+      chart: fluxcd
+      namespace: cozy-fluxcd
+      dependsOn: [fluxcd-operator]
+      values:
+        flux-instance:
+          instance:
+            cluster:
+              domain: cozy.local
+    
+    - name: cert-manager-crds
+      releaseName: cert-manager-crds
+      chart: cert-manager-crds
+      namespace: cozy-cert-manager
+      dependsOn: []
+    
+    - name: cozystack-controller
+      releaseName: cozystack-controller
+      chart: cozystack-controller
+      namespace: cozy-system
+    
+    - name: lineage-controller-webhook
+      releaseName: lineage-controller-webhook
+      chart: lineage-controller-webhook
+      namespace: cozy-system
+      dependsOn: [cozystack-controller,cert-manager]
+    
+    - name: cert-manager
+      releaseName: cert-manager
+      chart: cert-manager
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager-crds]
+    
+    - name: cert-manager-issuers
+      releaseName: cert-manager-issuers
+      chart: cert-manager-issuers
+      namespace: cozy-cert-manager
+      optional: true
+      dependsOn: [cert-manager]
+    
+    - name: victoria-metrics-operator
+      releaseName: victoria-metrics-operator
+      chart: victoria-metrics-operator
+      namespace: cozy-victoria-metrics-operator
+      optional: true
+      dependsOn: [cert-manager]
+    
+    - name: monitoring-agents
+      releaseName: monitoring-agents
+      chart: monitoring-agents
+      namespace: cozy-monitoring
+      privileged: true
+      optional: true
+      dependsOn: [victoria-metrics-operator]
+      values:
+        scrapeRules:
+          etcd:
+            enabled: true
+    
+    - name: etcd-operator
+      releaseName: etcd-operator
+      chart: etcd-operator
+      namespace: cozy-etcd-operator
+      optional: true
+      dependsOn: [cert-manager]
+    
+    - name: grafana-operator
+      releaseName: grafana-operator
+      chart: grafana-operator
+      namespace: cozy-grafana-operator
+      optional: true
+      dependsOn: []
+    
+    - name: mariadb-operator
+      releaseName: mariadb-operator
+      chart: mariadb-operator
+      namespace: cozy-mariadb-operator
+      optional: true
+      dependsOn: [victoria-metrics-operator]
+      values:
+        mariadb-operator:
+          clusterName: cozy.local
+    
+    - name: postgres-operator
+      releaseName: postgres-operator
+      chart: postgres-operator
+      namespace: cozy-postgres-operator
+      optional: true
+      dependsOn: [victoria-metrics-operator]
+    
+    - name: kafka-operator
+      releaseName: kafka-operator
+      chart: kafka-operator
+      namespace: cozy-kafka-operator
+      optional: true
+      dependsOn: [victoria-metrics-operator]
+      values:
+        strimzi-kafka-operator:
+          kubernetesServiceDnsDomain: cozy.local
+    
+    - name: clickhouse-operator
+      releaseName: clickhouse-operator
+      chart: clickhouse-operator
+      namespace: cozy-clickhouse-operator
+      optional: true
+      dependsOn: [victoria-metrics-operator]
+    
+    - name: foundationdb-operator
+      releaseName: foundationdb-operator
+      chart: foundationdb-operator
+      namespace: cozy-foundationdb-operator
+      optional: true
+      dependsOn: [cert-manager]
+    
+    - name: rabbitmq-operator
+      releaseName: rabbitmq-operator
+      chart: rabbitmq-operator
+      namespace: cozy-rabbitmq-operator
+      optional: true
+      dependsOn: []
+    
+    - name: redis-operator
+      releaseName: redis-operator
+      chart: redis-operator
+      namespace: cozy-redis-operator
+      optional: true
+      dependsOn: []
+    
+    - name: telepresence
+      releaseName: traffic-manager
+      chart: telepresence
+      namespace: cozy-telepresence
+      optional: true
+      dependsOn: []
+    
+    - name: external-dns
+      releaseName: external-dns
+      chart: external-dns
+      namespace: cozy-external-dns
+      optional: true
+      dependsOn: []
+    
+    - name: external-secrets-operator
+      releaseName: external-secrets-operator
+      chart: external-secrets-operator
+      namespace: cozy-external-secrets-operator
+      optional: true
+      dependsOn: []
+    
+    - name: keycloak
+      releaseName: keycloak
+      chart: keycloak
+      namespace: cozy-keycloak
+      optional: true
+      dependsOn: [postgres-operator]
+    
+    - name: keycloak-operator
+      releaseName: keycloak-operator
+      chart: keycloak-operator
+      namespace: cozy-keycloak
+      optional: true
+      dependsOn: [keycloak]
+    
+    - name: velero
+      releaseName: velero
+      chart: velero
+      namespace: cozy-velero
+      privileged: true
+      optional: true
+    
+    - name: hetzner-robotlb
+      releaseName: robotlb
+      optional: true
+      chart: hetzner-robotlb
+      namespace: cozy-hetzner-robotlb
