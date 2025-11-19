@@ -1,0 +1,3 @@
+quota:
+  services.loadbalancers: "2"
+  cpu: "2"
