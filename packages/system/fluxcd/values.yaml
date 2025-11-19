@@ -34,17 +34,21 @@ flux-instance:
                 memory: 2048Mi
         - target:
             kind: Deployment
-            name: (source-controller|source-watcher)
+            name: source-controller
           patch: |
             - op: add
               path: /spec/template/spec/containers/0/args/-
               value: --storage-adv-addr=source-controller.cozy-fluxcd.svc
-            - op: add
-              path: /spec/template/spec/containers/0/args/-
-              value: --events-addr=http://notification-controller.cozy-fluxcd.svc/
         - target:
             kind: Deployment
-            name: (kustomize-controller|helm-controller|image-reflector-controller|image-automation-controller)
+            name: source-watcher
+          patch: |
+            - op: add
+              path: /spec/template/spec/containers/0/args/-
+              value: --storage-adv-addr=source-watcher.cozy-fluxcd.svc
+        - target:
+            kind: Deployment
+            name: (kustomize-controller|helm-controller|image-reflector-controller|image-automation-controller|source-controller|source-watcher)
           patch: |
             - op: add
               path: /spec/template/spec/containers/0/args/-
