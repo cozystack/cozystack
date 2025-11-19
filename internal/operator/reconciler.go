@@ -490,7 +490,7 @@ func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, nam
 			for i, valuesFile := range valuesFiles {
 				// Copy values file from GitRepository to artifact
 				// Path in GitRepository: packages/{name}/{pkg}/{valuesFile}
-				// Path in artifact: {pkg}/{valuesFile}
+				// All files should be merged into values.yaml in artifact
 				// First file should use Overwrite (to replace original values.yaml), others use Merge
 				strategy := "Merge"
 				if i == 0 {
@@ -498,10 +498,10 @@ func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, nam
 				}
 				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
 					From:     fmt.Sprintf("@cozystack/packages/%s/%s/%s", name, pkg, valuesFile),
-					To:       fmt.Sprintf("@artifact/%s/%s", pkg, valuesFile),
+					To:       fmt.Sprintf("@artifact/%s/values.yaml", pkg),
 					Strategy: strategy,
 				})
-				logger.Info("Adding valuesFile copy operation", "package", pkg, "valuesFile", valuesFile, "strategy", strategy)
+				logger.Info("Adding valuesFile copy operation", "package", pkg, "valuesFile", valuesFile, "strategy", strategy, "target", "values.yaml")
 			}
 		}
 
