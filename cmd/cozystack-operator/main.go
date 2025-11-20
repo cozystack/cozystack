@@ -31,6 +31,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
@@ -38,11 +39,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -63,6 +67,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
+	utilruntime.Must(cozyv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(helmv2.AddToScheme(scheme))
 	utilruntime.Must(sourcev1.AddToScheme(scheme))
 	utilruntime.Must(sourcewatcherv1beta1.AddToScheme(scheme))
@@ -154,6 +159,24 @@ func main() {
 	}
 	if err = platformReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Platform")
+		os.Exit(1)
+	}
+
+	bundleReconciler := &operator.CozystackBundleReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err = bundleReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CozystackBundle")
+		os.Exit(1)
+	}
+
+	resourceDefinitionReconciler := &operator.CozystackResourceDefinitionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err = resourceDefinitionReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinition")
 		os.Exit(1)
 	}
 
@@ -444,8 +467,22 @@ func runMigrations(ctx context.Context, c client.Client, targetVersion int) erro
 	err := c.Get(ctx, key, cm)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			setupLog.Info("cozystack-version configmap does not exist, creating with version 0")
-			currentVersion = 0
+			// First run: create ConfigMap with current version, skip migrations
+			setupLog.Info("cozystack-version configmap does not exist, creating with current version", "version", targetVersion)
+			newCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cozystack-version",
+					Namespace: "cozy-system",
+				},
+				Data: map[string]string{
+					"version": strconv.Itoa(targetVersion),
+				},
+			}
+			if err := c.Create(ctx, newCM); err != nil {
+				return fmt.Errorf("failed to create version configmap: %w", err)
+			}
+			setupLog.Info("Created cozystack-version configmap with current version, skipping migrations")
+			return nil
 		} else {
 			return err
 		}
@@ -591,31 +628,85 @@ func ensureFluxCD(ctx context.Context, c client.Client) error {
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to install fluxcd-operator: %w", err)
 		}
+	} else if meta.IsNoMatchError(err) {
+		// CRD for HelmRelease doesn't exist yet, need to install fluxcd-operator first
+		setupLog.Info("HelmRelease CRD not found, installing fluxcd-operator to create CRDs")
+		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd-operator", "apply-locally")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to install fluxcd-operator: %w", err)
+		}
 	} else {
 		return fmt.Errorf("failed to check fluxcd-operator: %w", err)
 	}
 
-	// Wait for CRD
+	// Wait for FluxInstance CRD (created by fluxcd-operator)
 	if err := waitForCRDs(ctx, c, "fluxinstances.fluxcd.controlplane.io"); err != nil {
 		return err
 	}
 
-	// Install fluxcd
-	hr = &helmv2.HelmRelease{}
-	key = types.NamespacedName{Namespace: "cozy-fluxcd", Name: "fluxcd"}
-	err = c.Get(ctx, key, hr)
+	// Install fluxcd (flux-instance) via FluxInstance resource
+	// flux-instance is installed via FluxInstance, not HelmRelease
+	// We need to use unstructured client to check FluxInstance since it's not in our scheme yet
+	config := ctrl.GetConfigOrDie()
+	dyn, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	fluxInstanceGVR := schema.GroupVersionResource{
+		Group:    "fluxcd.controlplane.io",
+		Version:  "v1",
+		Resource: "fluxinstances",
+	}
+
+	_, err = dyn.Resource(fluxInstanceGVR).Namespace("cozy-fluxcd").Get(ctx, "flux", metav1.GetOptions{})
 	if err == nil {
-		// HelmRelease exists, apply and resume it
-		setupLog.Info("Applying and resuming fluxcd helmrelease")
-		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd", "apply", "resume")
+		// FluxInstance exists, check if HelmRelease exists before applying
+		// HelmRelease CRD might not exist yet, so we need to check carefully
+		helmReleaseGVR := schema.GroupVersionResource{
+			Group:    "helm.toolkit.fluxcd.io",
+			Version:  "v2",
+			Resource: "helmreleases",
+		}
+
+		// Try to get HelmRelease - if CRD doesn't exist, this will return IsNoMatchError
+		_, hrErr := dyn.Resource(helmReleaseGVR).Namespace("cozy-fluxcd").Get(ctx, "fluxcd", metav1.GetOptions{})
+		if hrErr == nil {
+			// HelmRelease exists, apply and resume it via make
+			setupLog.Info("FluxInstance and HelmRelease exist, applying and resuming fluxcd")
+			cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd", "apply", "resume")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to apply and resume fluxcd: %w", err)
+			}
+		} else if apierrors.IsNotFound(hrErr) || meta.IsNoMatchError(hrErr) {
+			// HelmRelease doesn't exist or CRD not available, use apply-locally
+			setupLog.Info("FluxInstance exists but HelmRelease not found, creating fluxcd using apply-locally")
+			cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd", "apply-locally")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to install fluxcd: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to check fluxcd HelmRelease: %w", hrErr)
+		}
+	} else if apierrors.IsNotFound(err) {
+		// FluxInstance doesn't exist, need to create it
+		setupLog.Info("Creating fluxcd (flux-instance) using make")
+		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd", "apply-locally")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to apply and resume fluxcd: %w", err)
+			return fmt.Errorf("failed to install fluxcd: %w", err)
 		}
-	} else if apierrors.IsNotFound(err) {
-		// HelmRelease doesn't exist, need to create it
-		setupLog.Info("Creating fluxcd using make (TODO: use helm-controller API)")
+	} else if meta.IsNoMatchError(err) {
+		// CRD for FluxInstance doesn't exist yet, but we already waited for it above
+		// This shouldn't happen, but if it does, try to install anyway
+		setupLog.Info("FluxInstance CRD not found (unexpected), trying to install fluxcd anyway")
 		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/fluxcd", "apply-locally")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -623,7 +714,14 @@ func ensureFluxCD(ctx context.Context, c client.Client) error {
 			return fmt.Errorf("failed to install fluxcd: %w", err)
 		}
 	} else {
-		return fmt.Errorf("failed to check fluxcd: %w", err)
+		return fmt.Errorf("failed to check fluxcd FluxInstance: %w", err)
+	}
+
+	// Wait for HelmRelease CRD to be created by flux-instance
+	// flux-instance installs Flux which creates HelmRelease CRD
+	setupLog.Info("Waiting for HelmRelease CRD to be created by flux-instance")
+	if err := waitForCRDs(ctx, c, "helmreleases.helm.toolkit.fluxcd.io"); err != nil {
+		return fmt.Errorf("failed to wait for HelmRelease CRD: %w", err)
 	}
 
 	// Wait for CRDs
@@ -739,28 +837,74 @@ func resumeHelmRelease(ctx context.Context, c client.Client, hr *helmv2.HelmRele
 }
 
 func installBasicCharts(ctx context.Context, c client.Client, bundle string) error {
-	if bundle == "paas-full" || bundle == "distro-full" {
-		// Install cilium
+	// Check if cilium and kubeovn are present in CozystackBundle resources
+	hasCilium := false
+	hasKubeovn := false
+
+	// List all CozystackBundle resources
+	bundleList := &cozyv1alpha1.CozystackBundleList{}
+	if err := c.List(ctx, bundleList); err != nil {
+		setupLog.Info("Failed to list CozystackBundles, skipping component checks", "error", err)
+		// If bundle loading fails, fall back to old behavior for backward compatibility
+		if bundle == "paas-full" || bundle == "distro-full" {
+			setupLog.Info("Installing cilium using make (fallback mode)")
+			cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/cilium", "apply", "resume")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to install cilium: %w", err)
+			}
+		}
+		if bundle == "paas-full" {
+			setupLog.Info("Installing kubeovn using make (fallback mode)")
+			cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/kubeovn", "apply", "resume")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to install kubeovn: %w", err)
+			}
+		}
+		return nil
+	}
+
+	// Check all bundles for cilium and kubeovn packages
+	for _, bundleResource := range bundleList.Items {
+		for _, pkg := range bundleResource.Spec.Packages {
+			if pkg.Name == "cilium" && !pkg.Disabled {
+				hasCilium = true
+			}
+			if pkg.Name == "kubeovn" && !pkg.Disabled {
+				hasKubeovn = true
+			}
+		}
+	}
+
+	// Install cilium only if present in bundle
+	if hasCilium {
 		// TODO: Create HelmRelease for cilium using helm-controller API
-		setupLog.Info("Installing cilium using make (TODO: use helm-controller API)")
+		setupLog.Info("Installing cilium using make (found in bundle)")
 		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/cilium", "apply", "resume")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to install cilium: %w", err)
 		}
+	} else {
+		setupLog.Info("Skipping cilium installation (not found in bundle)")
 	}
 
-	if bundle == "paas-full" {
-		// Install kubeovn
+	// Install kubeovn only if present in bundle
+	if hasKubeovn {
 		// TODO: Create HelmRelease for kubeovn using helm-controller API
-		setupLog.Info("Installing kubeovn using make (TODO: use helm-controller API)")
+		setupLog.Info("Installing kubeovn using make (found in bundle)")
 		cmd := exec.CommandContext(ctx, "make", "-C", "packages/system/kubeovn", "apply", "resume")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to install kubeovn: %w", err)
 		}
+	} else {
+		setupLog.Info("Skipping kubeovn installation (not found in bundle)")
 	}
 
 	return nil

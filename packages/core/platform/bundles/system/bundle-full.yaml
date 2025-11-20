@@ -145,12 +145,6 @@ spec:
       namespace: cozy-system
       dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
     
-    - name: cozystack-resource-definitions
-      releaseName: cozystack-resource-definitions
-      path: packages/system/cozystack-resource-definitions
-      namespace: cozy-system
-      dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller,cozystack-resource-definition-crd]
-    
     - name: cert-manager
       releaseName: cert-manager
       path: packages/system/cert-manager
