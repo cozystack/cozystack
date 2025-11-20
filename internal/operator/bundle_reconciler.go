@@ -177,80 +177,70 @@ func (r *CozystackBundleReconciler) resolveDependencies(ctx context.Context, bun
 }
 
 // reconcileArtifactGenerators generates ArtifactGenerators from bundle packages
+// Creates a separate ArtifactGenerator for each package
 func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
 	logger := log.FromContext(ctx)
 
-	// Group packages by prefix (system, apps, extra)
-	packageGroups := make(map[string][]cozyv1alpha1.BundleRelease)
 	libraryMap := make(map[string]cozyv1alpha1.BundleLibrary)
 	for _, lib := range bundle.Spec.Libraries {
 		libraryMap[lib.Name] = lib
 	}
 
+	// Create ArtifactGenerator for each package
 	for _, pkg := range packages {
-		// Determine prefix from path
+		// Determine prefix and namespace from path
 		prefix := r.getPackagePrefix(pkg.Path)
 		if prefix == "" {
 			logger.Info("skipping package with unknown prefix", "name", pkg.Name, "path", pkg.Path)
 			continue
 		}
 
-		packageGroups[prefix] = append(packageGroups[prefix], pkg)
-	}
-
-	// Create ArtifactGenerator for each group
-	for prefix, pkgs := range packageGroups {
 		namespace := r.getNamespaceForPrefix(prefix)
-		agName := fmt.Sprintf("%s-%s", bundle.Name, prefix)
+		// ArtifactGenerator name: bundle-name-package-name
+		agName := fmt.Sprintf("%s-%s", bundle.Name, pkg.Name)
 
-		// Build output artifacts
-		outputArtifacts := []sourcewatcherv1beta1.OutputArtifact{}
-		for _, pkg := range pkgs {
-			// Extract package name from path (last component)
-			pkgName := r.getPackageNameFromPath(pkg.Path)
-			if pkgName == "" {
-				logger.Info("skipping package with invalid path", "name", pkg.Name, "path", pkg.Path)
-				continue
-			}
+		// Extract package name from path (last component)
+		pkgName := r.getPackageNameFromPath(pkg.Path)
+		if pkgName == "" {
+			logger.Info("skipping package with invalid path", "name", pkg.Name, "path", pkg.Path)
+			continue
+		}
 
-			copyOps := []sourcewatcherv1beta1.CopyOperation{
-				{
-					From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, pkg.Path),
-					To:   fmt.Sprintf("@artifact/%s/", pkgName),
-				},
-			}
+		// Build copy operations
+		copyOps := []sourcewatcherv1beta1.CopyOperation{
+			{
+				From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, pkg.Path),
+				To:   fmt.Sprintf("@artifact/%s/", pkgName),
+			},
+		}
 
-			// Add libraries if specified
-			for _, libName := range pkg.Libraries {
-				if lib, ok := libraryMap[libName]; ok {
-					copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
-						From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, lib.Path),
-						To:   fmt.Sprintf("@artifact/%s/charts/%s/", pkgName, libName),
-					})
-				}
-			}
-
-			// Add valuesFiles if specified
-			for i, valuesFile := range pkg.ValuesFiles {
-				strategy := "Merge"
-				if i == 0 {
-					strategy = "Overwrite"
-				}
+		// Add libraries if specified
+		for _, libName := range pkg.Libraries {
+			if lib, ok := libraryMap[libName]; ok {
 				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
-					From:     fmt.Sprintf("@%s/%s/%s", bundle.Spec.SourceRef.Name, pkg.Path, valuesFile),
-					To:       fmt.Sprintf("@artifact/%s/values.yaml", pkgName),
-					Strategy: strategy,
+					From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, lib.Path),
+					To:   fmt.Sprintf("@artifact/%s/charts/%s/", pkgName, libName),
 				})
 			}
+		}
 
-			artifactName := fmt.Sprintf("%s-%s", prefix, pkgName)
-			outputArtifacts = append(outputArtifacts, sourcewatcherv1beta1.OutputArtifact{
-				Name: artifactName,
-				Copy: copyOps,
+		// Add valuesFiles if specified
+		for i, valuesFile := range pkg.ValuesFiles {
+			strategy := "Merge"
+			if i == 0 {
+				strategy = "Overwrite"
+			}
+			copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
+				From:     fmt.Sprintf("@%s/%s/%s", bundle.Spec.SourceRef.Name, pkg.Path, valuesFile),
+				To:       fmt.Sprintf("@artifact/%s/values.yaml", pkgName),
+				Strategy: strategy,
 			})
 		}
 
-		// Create ArtifactGenerator
+		// Artifact name: prefix-package-name (e.g., system-cilium)
+		artifactName := fmt.Sprintf("%s-%s", prefix, pkgName)
+
+		// Create ArtifactGenerator for this package
 		ag := &sourcewatcherv1beta1.ArtifactGenerator{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      agName,
@@ -274,14 +264,19 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 						Namespace: bundle.Spec.SourceRef.Namespace,
 					},
 				},
-				OutputArtifacts: outputArtifacts,
+				OutputArtifacts: []sourcewatcherv1beta1.OutputArtifact{
+					{
+						Name: artifactName,
+						Copy: copyOps,
+					},
+				},
 			},
 		}
 
 		if err := r.createOrUpdate(ctx, ag); err != nil {
 			return fmt.Errorf("failed to reconcile ArtifactGenerator %s: %w", agName, err)
 		}
-		logger.Info("reconciled ArtifactGenerator", "name", agName, "namespace", namespace)
+		logger.Info("reconciled ArtifactGenerator", "name", agName, "namespace", namespace, "package", pkg.Name)
 	}
 
 	// Cleanup orphaned ArtifactGenerators
@@ -292,10 +287,28 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
 	logger := log.FromContext(ctx)
 
-	// Build package name map for dependency resolution
+	// Build package name map for dependency resolution (from current bundle)
 	packageNameMap := make(map[string]cozyv1alpha1.BundleRelease)
 	for _, pkg := range packages {
 		packageNameMap[pkg.Name] = pkg
+	}
+
+	// Build global package name map from all bundles for finding dependencies
+	globalPackageMap := make(map[string]cozyv1alpha1.BundleRelease)
+	bundleList := &cozyv1alpha1.CozystackBundleList{}
+	if err := r.List(ctx, bundleList); err == nil {
+		for _, b := range bundleList.Items {
+			for _, pkg := range b.Spec.Packages {
+				// Only add if not already in map (first occurrence wins, or use current bundle's packages)
+				if _, exists := globalPackageMap[pkg.Name]; !exists {
+					globalPackageMap[pkg.Name] = pkg
+				}
+			}
+		}
+	}
+	// Override with packages from current bundle (they take precedence)
+	for _, pkg := range packages {
+		globalPackageMap[pkg.Name] = pkg
 	}
 
 	// Create HelmRelease for each package
@@ -356,9 +369,9 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 		if len(pkg.DependsOn) > 0 {
 			dependsOn := make([]helmv2.DependencyReference, 0, len(pkg.DependsOn))
 			for _, depName := range pkg.DependsOn {
-				depPkg, ok := packageNameMap[depName]
+				depPkg, ok := globalPackageMap[depName]
 				if !ok {
-					logger.Info("dependent package not found, using same namespace", "name", pkg.Name, "dependsOn", depName)
+					logger.Info("dependent package not found in any bundle, using same namespace", "name", pkg.Name, "dependsOn", depName)
 					dependsOn = append(dependsOn, helmv2.DependencyReference{
 						Name:      depName,
 						Namespace: pkg.Namespace,
@@ -471,10 +484,10 @@ func (r *CozystackBundleReconciler) cleanupOrphanedArtifactGenerators(ctx contex
 		return err
 	}
 
-	// Build desired names
+	// Build desired names: bundle-name-package-name for each package
 	desiredNames := make(map[string]bool)
-	for prefix := range map[string]bool{"system": true, "apps": true, "extra": true} {
-		desiredNames[fmt.Sprintf("%s-%s", bundle.Name, prefix)] = true
+	for _, pkg := range bundle.Spec.Packages {
+		desiredNames[fmt.Sprintf("%s-%s", bundle.Name, pkg.Name)] = true
 	}
 
 	// Find ArtifactGenerators owned by this bundle
