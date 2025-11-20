@@ -1,0 +1,25 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackPlatformConfiguration
+metadata:
+  name: cozystack-platform
+spec:
+  # Source configuration for GitRepository
+  source:
+    url: https://github.com/cozystack/cozystack.git
+    ref:
+      branch: refactor-engine
+    interval: 1m0s
+    timeout: 60s
+  
+  # Chart configuration for HelmRelease
+  chart:
+    path: ./packages/core/platform
+    interval: 5m
+  
+  # Values to pass to HelmRelease
+  values:
+    sourceRef:
+      kind: GitRepository
+      name: cozystack-platform
+      namespace: cozy-system

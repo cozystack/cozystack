@@ -119,6 +119,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Wait for GitRepository CRD (needed for PlatformConfiguration controller)
+	// HelmRelease CRD is already waited for in phase 1
+	setupLog.Info("Waiting for GitRepository CRD (needed for PlatformConfiguration controller)")
+	if err := waitForCRDs(ctx, bootstrapClient, "gitrepositories.source.toolkit.fluxcd.io"); err != nil {
+		setupLog.Error(err, "failed to wait for GitRepository CRD, PlatformConfiguration controller will not be registered")
+	}
+
 	// Now that CRDs are available, we can start the controller manager
 	// The controller manager needs CRDs to be registered in the scheme
 	setupLog.Info("Starting controller manager (CRDs are now available)")
@@ -178,6 +185,26 @@ func main() {
 	if err = resourceDefinitionReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinition")
 		os.Exit(1)
+	}
+
+	// PlatformConfigurationReconciler needs GitRepository and HelmRelease CRDs
+	// These CRDs are created in phase 1, so we register the controller after phase 1 completes
+	// Check if CRDs are available (we already waited for them above)
+	crdCtx, crdCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer crdCancel()
+	if err := waitForCRDs(crdCtx, bootstrapClient, "gitrepositories.source.toolkit.fluxcd.io", "helmreleases.helm.toolkit.fluxcd.io"); err == nil {
+		setupLog.Info("GitRepository and HelmRelease CRDs are available, registering PlatformConfiguration controller")
+		platformConfigurationReconciler := &operator.CozystackPlatformConfigurationReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}
+		if err := platformConfigurationReconciler.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "CozystackPlatformConfiguration")
+		} else {
+			setupLog.Info("PlatformConfiguration controller registered successfully")
+		}
+	} else {
+		setupLog.Info("CRDs not yet available, PlatformConfiguration controller will not be registered", "error", err)
 	}
 
 	// +kubebuilder:scaffold:builder

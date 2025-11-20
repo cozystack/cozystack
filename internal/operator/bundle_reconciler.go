@@ -18,8 +18,10 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -60,6 +62,13 @@ func (r *CozystackBundleReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Resolve dependencies from other bundles
 	resolvedPackages, err := r.resolveDependencies(ctx, bundle)
 	if err != nil {
+		// If dependency bundle is not found, requeue to try again later
+		// Check if the error is wrapped IsNotFound
+		unwrappedErr := errors.Unwrap(err)
+		if unwrappedErr != nil && apierrors.IsNotFound(unwrappedErr) {
+			logger.Info("Dependency bundle not found, requeuing", "bundle", bundle.Name, "error", err)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 		logger.Error(err, "failed to resolve dependencies")
 		return ctrl.Result{}, err
 	}
@@ -74,6 +83,26 @@ func (r *CozystackBundleReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.reconcileHelmReleases(ctx, bundle, resolvedPackages); err != nil {
 		logger.Error(err, "failed to reconcile HelmReleases")
 		return ctrl.Result{}, err
+	}
+
+	// Check if we need to run phase2 (install basic charts)
+	// Phase2 should run when:
+	// 1. Any bundle contains cilium and kubeovn
+	// 2. Flux is not ready
+	hasCilium, hasKubeovn, err := HasCiliumAndKubeovn(ctx, r.Client)
+	if err != nil {
+		logger.Error(err, "failed to check bundles for cilium/kubeovn")
+	} else if hasCilium && hasKubeovn {
+		fluxOK, err := FluxIsOK(ctx, r.Client)
+		if err != nil {
+			logger.Error(err, "failed to check flux status")
+		} else if !fluxOK {
+			logger.Info("Bundles contain cilium and kubeovn, and flux is not ready, running phase2")
+			if err := InstallBasicCharts(ctx, r.Client); err != nil {
+				logger.Error(err, "failed to install basic charts in phase2")
+				// Don't return error, just log it - phase2 is best effort
+			}
+		}
 	}
 
 	return ctrl.Result{}, nil
@@ -105,6 +134,10 @@ func (r *CozystackBundleReconciler) resolveDependencies(ctx context.Context, bun
 		// Get the bundle
 		depBundle := &cozyv1alpha1.CozystackBundle{}
 		if err := r.Get(ctx, types.NamespacedName{Name: bundleName}, depBundle); err != nil {
+			// If bundle is not found, return wrapped error so we can check it in Reconcile
+			if apierrors.IsNotFound(err) {
+				return nil, fmt.Errorf("failed to get bundle %s: %w", bundleName, err)
+			}
 			return nil, fmt.Errorf("failed to get bundle %s: %w", bundleName, err)
 		}
 

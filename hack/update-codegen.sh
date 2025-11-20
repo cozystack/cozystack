@@ -58,3 +58,5 @@ mv packages/system/cozystack-controller/crds/cozystack.io_cozystackresourcedefin
         packages/system/cozystack-resource-definition-crd/definition/cozystack.io_cozystackresourcedefinitions.yaml
 mv packages/system/cozystack-controller/crds/cozystack.io_cozystackbundles.yaml \
         packages/system/cozystack-resource-definition-crd/definition/cozystack.io_cozystackbundles.yaml
+mv packages/system/cozystack-controller/crds/cozystack.io_cozystackplatformconfigurations.yaml \
+        packages/core/installer/templates/cozystack.io_cozystackplatformconfigurations.yaml
