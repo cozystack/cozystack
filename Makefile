@@ -1,4 +1,4 @@
-.PHONY: manifests repos assets
+.PHONY: manifests repos assets unit-tests helm-unit-tests
 
 build-deps:
 	@command -V find docker skopeo jq gh helm > /dev/null
@@ -45,6 +45,11 @@ assets:
 test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
+
+unit-tests: helm-unit-tests
+
+helm-unit-tests:
+	hack/helm-unit-tests.sh
 
 prepare-env:
 	make -C packages/core/testing apply
