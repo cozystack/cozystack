@@ -14,4 +14,17 @@ spec:
     - name: cozy-lib
       path: packages/library/cozy-lib
 
+  artifacts:
+    - name: http-cache
+      path: packages/apps/http-cache
+      libraries: [cozy-lib]
+
+    - name: tcp-balancer
+      path: packages/apps/tcp-balancer
+      libraries: [cozy-lib]
+
+    - name: vpn
+      path: packages/apps/vpn
+      libraries: [cozy-lib]
+
   packages: []

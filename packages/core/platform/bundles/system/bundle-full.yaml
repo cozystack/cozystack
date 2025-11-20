@@ -31,6 +31,33 @@ spec:
     - name: cozy-lib
       path: packages/library/cozy-lib
 
+  artifacts:
+    - name: tenant
+      path: packages/apps/tenant
+      libraries: [cozy-lib]
+    - name: bootbox
+      path: packages/extra/bootbox
+      libraries: [cozy-lib]
+    - name: etcd
+      path: packages/extra/etcd
+      libraries: [cozy-lib]
+    - name: ingress
+      path: packages/extra/ingress
+      libraries: [cozy-lib]
+    - name: ingress-system
+      path: packages/system/ingress
+    - name: seaweedfs
+      path: packages/extra/seaweedfs
+      libraries: [cozy-lib]
+    - name: seaweedfs-system
+      path: packages/system/seaweedfs
+    - name: info
+      path: packages/extra/info
+      libraries: [cozy-lib]
+    - name: monitoring
+      path: packages/extra/monitoring
+      libraries: [cozy-lib]
+
   packages:
     - name: fluxcd-operator
       releaseName: fluxcd-operator

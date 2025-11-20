@@ -10,7 +10,7 @@ spec:
   releaseName: gateway-api-crds
   chartRef:
     kind: ExternalArtifact
-    name: system-gateway-api-crds
+    name: cozystack-iaas-kubernetes-gateway-api-crds
     namespace: cozy-system
   kubeConfig:
     secretRef:

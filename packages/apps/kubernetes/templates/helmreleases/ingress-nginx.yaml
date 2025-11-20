@@ -29,7 +29,7 @@ spec:
   releaseName: ingress-nginx
   chartRef:
     kind: ExternalArtifact
-    name: system-ingress-nginx
+    name: cozystack-iaas-kubernetes-ingress-nginx
     namespace: cozy-system
   kubeConfig:
     secretRef:

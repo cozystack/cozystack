@@ -26,6 +26,66 @@ spec:
     - name: cozy-lib
       path: packages/library/cozy-lib
 
+  artifacts:
+    - name: bucket
+      path: packages/apps/bucket
+      libraries: [cozy-lib]
+    - name: bucket-system
+      path: packages/apps/bucket
+      libraries: [cozy-lib]
+
+    - name: kubernetes
+      path: packages/apps/kubernetes
+      libraries: [cozy-lib]
+    - name: kubernetes-ingress-nginx
+      path: packages/system/ingress-nginx
+    - name: kubernetes-cert-manager-crds
+      path: packages/system/cert-manager-crds
+    - name: kubernetes-volumesnapshot-crd
+      path: packages/system/kubernetes-vsnap-crd
+    - name: kubernetes-velero
+      path: packages/system/kubernetes-velero
+    - name: kubernetes-gateway-api-crds
+      path: packages/system/kubernetes-gateway-api-crds
+    - name: kubernetes-victoria-metrics-operator
+      path: packages/system/victoria-metrics-operator
+    - name: kubernetes-kubevirt-csi-node
+      path: packages/system/kubevirt-csi-node
+    - name: kubernetes-vertical-pod-autoscaler-crds
+      path: packages/system/vertical-pod-autoscaler-crds
+    - name: kubernetes-coredns
+      path: packages/system/coredns
+    - name: kubernetes-cert-manager
+      path: packages/system/cert-manager
+    - name: kubernetes-fluxcd-operator
+      path: packages/system/fluxcd-operator
+    - name: kubernetes-fluxcd
+      path: packages/system/fluxcd
+    - name: kubernetes-monitoring-agents
+      path: packages/system/monitoring-agents
+    - name: kubernetes-cilium
+      path: packages/system/cilium
+    - name: kubernetes-gpu-operator
+      path: packages/system/gpu-operator
+    - name: kubernetes-vertical-pod-autoscaler
+      path: packages/system/vertical-pod-autoscaler 
+
+    - name: virtual-machine
+      path: packages/apps/virtual-machine
+      libraries: [cozy-lib]
+
+    - name: vpc
+      path: packages/apps/vpc
+      libraries: [cozy-lib]
+
+    - name: vm-disk
+      path: packages/apps/vm-disk
+      libraries: [cozy-lib]
+
+    - name: vm-instance
+      path: packages/apps/vm-instance
+      libraries: [cozy-lib]
+
   packages:
   - name: kubevirt-operator
     releaseName: kubevirt-operator

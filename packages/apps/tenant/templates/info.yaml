@@ -11,7 +11,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: extra-info
+    name: cozystack-system-info
     namespace: cozy-public
   interval: 5m
   timeout: 10m

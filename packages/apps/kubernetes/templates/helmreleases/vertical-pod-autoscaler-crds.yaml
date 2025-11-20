@@ -11,7 +11,7 @@ spec:
   releaseName: vertical-pod-autoscaler-crds
   chartRef:
     kind: ExternalArtifact
-    name: system-vertical-pod-autoscaler-crds
+    name: cozystack-iaas-kubernetes-vertical-pod-autoscaler-crds
     namespace: cozy-system
   kubeConfig:
     secretRef:

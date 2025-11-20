@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: ingress
 spec:
-  source:
-    bundleName: cozystack-system
-    path: packages/extra/ingress
-    libraries: [cozy-lib]
-
   application:
     kind: Ingress
     plural: ingresses
@@ -22,7 +17,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: extra-ingress
+        name: cozystack-system-ingress
         namespace: cozy-public
   dashboard:
     category: Administration

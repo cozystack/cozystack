@@ -10,7 +10,7 @@ spec:
   releaseName: fluxcd-operator
   chartRef:
     kind: ExternalArtifact
-    name: system-fluxcd-operator
+    name: cozystack-iaas-kubernetes-fluxcd-operator
     namespace: cozy-system
   kubeConfig:
     secretRef:
@@ -53,7 +53,7 @@ spec:
   releaseName: fluxcd
   chartRef:
     kind: ExternalArtifact
-    name: system-fluxcd
+    name: cozystack-iaas-kubernetes-fluxcd
     namespace: cozy-system
   kubeConfig:
     secretRef:

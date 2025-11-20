@@ -13,8 +13,8 @@ spec:
       chart: bootbox
       reconcileStrategy: Revision
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
+        kind: ExternalArtifact
+        name: cozystack-system-bootbox
         namespace: cozy-public
       version: '>= 0.0.0-0'
   interval: 1m0s

@@ -15,7 +15,7 @@ spec:
   releaseName: coredns
   chartRef:
     kind: ExternalArtifact
-    name: system-coredns
+    name: cozystack-iaas-kubernetes-coredns
     namespace: cozy-system
   kubeConfig:
     secretRef:

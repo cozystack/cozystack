@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: info
 spec:
-  source:
-    bundleName: cozystack-system
-    path: packages/extra/info
-    libraries: [cozy-lib]
-
   application:
     kind: Info
     plural: infos
@@ -22,7 +17,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: extra-info
+        name: cozystack-system-info
         namespace: cozy-public
   dashboard:
     name: info

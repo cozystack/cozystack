@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: etcd
 spec:
-  source:
-    bundleName: cozystack-system
-    path: packages/extra/etcd
-    libraries: [cozy-lib]
-
   application:
     kind: Etcd
     plural: etcds
@@ -22,7 +17,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: extra-etcd
+        name: cozystack-system-etcd
         namespace: cozy-public
   dashboard:
     category: Administration

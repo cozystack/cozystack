@@ -38,7 +38,7 @@ spec:
   releaseName: vertical-pod-autoscaler
   chartRef:
     kind: ExternalArtifact
-    name: system-vertical-pod-autoscaler
+    name: cozystack-iaas-kubernetes-vertical-pod-autoscaler
     namespace: cozy-system
   kubeConfig:
     secretRef:

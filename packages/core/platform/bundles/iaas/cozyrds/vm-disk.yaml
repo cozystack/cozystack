@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: vm-disk
 spec:
-  source:
-    bundleName: cozystack-iaas
-    path: packages/apps/vm-disk
-    libraries: [cozy-lib]
-
   application:
     kind: VMDisk
     singular: vmdisk
@@ -21,7 +16,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: apps-vm-disk
+        name: cozystack-iaas-vm-disk
         namespace: cozy-public
   dashboard:
     category: IaaS

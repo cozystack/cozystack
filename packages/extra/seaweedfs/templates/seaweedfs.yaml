@@ -44,8 +44,8 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: system-seaweedfs
-    namespace: cozy-system
+    name: cozystack-system-seaweedfs-system
+    namespace: cozy-public
   interval: 5m
   timeout: 10m
   install:

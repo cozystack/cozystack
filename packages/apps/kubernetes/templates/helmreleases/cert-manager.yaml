@@ -10,7 +10,7 @@ spec:
   releaseName: cert-manager
   chartRef:
     kind: ExternalArtifact
-    name: system-cert-manager
+    name: cozystack-iaas-kubernetes-cert-manager
     namespace: cozy-system
   kubeConfig:
     secretRef:

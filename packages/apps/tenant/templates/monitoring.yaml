@@ -12,7 +12,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: extra-monitoring
+    name: cozystack-system-monitoring
     namespace: cozy-public
   interval: 5m
   timeout: 10m

@@ -5,7 +5,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: system-bucket
+    name: cozystack-iaas-bucket
     namespace: cozy-system
   interval: 5m
   timeout: 10m

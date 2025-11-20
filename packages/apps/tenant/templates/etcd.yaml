@@ -12,7 +12,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: extra-etcd
+    name: cozystack-system-etcd
     namespace: cozy-public
   interval: 5m
   timeout: 10m

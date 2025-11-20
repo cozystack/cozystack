@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: redis
 spec:
-  source:
-    bundleName: cozystack-paas
-    path: packages/apps/redis
-    libraries: [cozy-lib]
-
   application:
     kind: Redis
     plural: redises
@@ -21,7 +16,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: apps-redis
+        name: cozystack-paas-redis
         namespace: cozy-public
   dashboard:
     category: PaaS

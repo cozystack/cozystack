@@ -67,6 +67,11 @@ type CozystackBundleSpec struct {
 	// +optional
 	Libraries []BundleLibrary `json:"libraries,omitempty"`
 
+	// Artifacts is a list of Helm charts that will be built as ExternalArtifacts
+	// These artifacts can be referenced by CozystackResourceDefinitions
+	// +optional
+	Artifacts []BundleArtifact `json:"artifacts,omitempty"`
+
 	// Packages is a list of Helm releases to be installed as part of this bundle
 	// +required
 	Packages []BundleRelease `json:"packages"`
@@ -94,6 +99,21 @@ type BundleLibrary struct {
 	// Path is the path to the library chart directory
 	// +required
 	Path string `json:"path"`
+}
+
+// BundleArtifact defines a Helm chart artifact that will be built as ExternalArtifact
+type BundleArtifact struct {
+	// Name is the unique identifier for this artifact (used as ExternalArtifact name)
+	// +required
+	Name string `json:"name"`
+
+	// Path is the path to the Helm chart directory
+	// +required
+	Path string `json:"path"`
+
+	// Libraries is a list of library names that this artifact depends on
+	// +optional
+	Libraries []string `json:"libraries,omitempty"`
 }
 
 // BundleSourceRef defines the source reference for bundle charts

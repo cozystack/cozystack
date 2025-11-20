@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: vpn
 spec:
-  source:
-    bundleName: cozystack-naas
-    path: packages/apps/vpn
-    libraries: [cozy-lib]
-
   application:
     kind: VPN
     plural: vpns
@@ -21,7 +16,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: apps-vpn
+        name: cozystack-naas-vpn
         namespace: cozy-public
   dashboard:
     category: NaaS

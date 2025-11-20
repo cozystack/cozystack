@@ -37,7 +37,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: system-nats
+    name: cozystack-paas-nats
     namespace: cozy-system
   interval: 5m
   timeout: 10m

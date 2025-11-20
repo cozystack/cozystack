@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: virtualprivatecloud
 spec:
-  source:
-    bundleName: cozystack-iaas
-    path: packages/apps/vpc
-    libraries: [cozy-lib]
-
   application:
     kind: VirtualPrivateCloud
     plural: virtualprivateclouds
@@ -21,7 +16,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: apps-virtualprivatecloud
+        name: cozystack-iaas-vpc
         namespace: cozy-public
   dashboard:
     category: IaaS

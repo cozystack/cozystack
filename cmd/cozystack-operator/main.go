@@ -178,14 +178,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	resourceDefinitionReconciler := &operator.CozystackResourceDefinitionReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}
-	if err = resourceDefinitionReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinition")
-		os.Exit(1)
-	}
 
 	// PlatformConfigurationReconciler needs GitRepository and HelmRelease CRDs
 	// These CRDs are created in phase 1, so we register the controller after phase 1 completes

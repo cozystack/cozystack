@@ -8,8 +8,8 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: system-ingress-nginx
-    namespace: cozy-system
+    name: cozystack-system-ingress-system
+    namespace: cozy-public
   interval: 5m
   timeout: 10m
   install:

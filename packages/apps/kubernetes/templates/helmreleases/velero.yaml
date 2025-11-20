@@ -10,7 +10,7 @@ spec:
   releaseName: velero
   chartRef:
     kind: ExternalArtifact
-    name: system-velero
+    name: cozystack-iaas-kubernetes-velero
     namespace: cozy-system
   kubeConfig:
     secretRef:

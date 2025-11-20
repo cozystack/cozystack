@@ -288,7 +288,7 @@ func (r *PlatformReconciler) reconcileTenantRoot(ctx context.Context, cfg *confi
 			ReleaseName: "tenant-root",
 			ChartRef: &helmv2.CrossNamespaceSourceReference{
 				Kind:      "ExternalArtifact",
-				Name:      "apps-tenant",
+				Name:      "cozystack-system-tenant",
 				Namespace: "cozy-public",
 			},
 			Values: &apiextensionsv1.JSON{

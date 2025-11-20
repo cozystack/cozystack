@@ -3,11 +3,6 @@ kind: CozystackResourceDefinition
 metadata:
   name: kubernetes
 spec:
-  source:
-    bundleName: cozystack-iaas
-    path: packages/apps/kubernetes
-    libraries: [cozy-lib]
-
   application:
     kind: Kubernetes
     singular: kubernetes
@@ -21,7 +16,7 @@ spec:
     chartRef:
       sourceRef:
         kind: ExternalArtifact
-        name: apps-kubernetes
+        name: cozystack-iaas-kubernetes
         namespace: cozy-public
   dashboard:
     category: IaaS

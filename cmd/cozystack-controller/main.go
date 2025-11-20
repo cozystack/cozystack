@@ -216,19 +216,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	cozyAPIKind := "DaemonSet"
-	if reconcileDeployment {
-		cozyAPIKind = "Deployment"
-	}
-	if err = (&controller.CozystackResourceDefinitionReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		CozystackAPIKind: cozyAPIKind,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
-		os.Exit(1)
-	}
-
 	dashboardManager := &dashboard.Manager{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

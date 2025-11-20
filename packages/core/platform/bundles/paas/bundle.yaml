@@ -27,6 +27,45 @@ spec:
     - name: cozy-lib
       path: packages/library/cozy-lib
 
+  artifacts:
+    - name: clickhouse
+      path: packages/apps/clickhouse
+      libraries: [cozy-lib]
+
+    - name: ferretdb
+      path: packages/apps/ferretdb
+      libraries: [cozy-lib]
+
+    - name: foundationdb
+      path: packages/apps/foundationdb
+      libraries: [cozy-lib]
+
+    - name: kafka
+      path: packages/apps/kafka
+      libraries: [cozy-lib]
+
+    - name: mysql
+      path: packages/apps/mysql
+      libraries: [cozy-lib]
+
+    - name: nats
+      path: packages/apps/nats
+      libraries: [cozy-lib]
+    - name: nats-system
+      path: packages/system/nats
+
+    - name: postgres
+      path: packages/apps/postgres
+      libraries: [cozy-lib]
+
+    - name: rabbitmq
+      path: packages/apps/rabbitmq
+      libraries: [cozy-lib]
+
+    - name: redis
+      path: packages/apps/redis
+      libraries: [cozy-lib]
+
   packages:
   - name: mariadb-operator
     releaseName: mariadb-operator

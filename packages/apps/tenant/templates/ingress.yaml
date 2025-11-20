@@ -12,7 +12,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: extra-ingress
+    name: cozystack-system-ingress
     namespace: cozy-public
   interval: 5m
   timeout: 10m

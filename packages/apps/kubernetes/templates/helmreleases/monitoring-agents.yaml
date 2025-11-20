@@ -12,7 +12,7 @@ spec:
   releaseName: cozy-monitoring-agents
   chartRef:
     kind: ExternalArtifact
-    name: system-monitoring-agents
+    name: cozystack-iaas-kubernetes-monitoring-agents
     namespace: cozy-system
   kubeConfig:
     secretRef:

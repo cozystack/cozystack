@@ -10,7 +10,7 @@ spec:
   releaseName: gpu-operator
   chartRef:
     kind: ExternalArtifact
-    name: system-gpu-operator
+    name: cozystack-iaas-kubernetes-gpu-operator
     namespace: cozy-system
   kubeConfig:
     secretRef:

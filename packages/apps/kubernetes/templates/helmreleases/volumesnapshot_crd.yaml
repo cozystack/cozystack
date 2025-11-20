@@ -9,7 +9,7 @@ spec:
   releaseName: vsnap-crd
   chartRef:
     kind: ExternalArtifact
-    name: system-vsnap-crd
+    name: cozystack-iaas-kubernetes-volumesnapshot-crd
     namespace: cozy-system
   kubeConfig:
     secretRef:
