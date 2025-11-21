@@ -25,8 +25,8 @@ sleep 5
 cozypkg -n cozy-system -C packages/system/cozystack-resource-definition-crd apply cozystack-resource-definition-crd --plain
 cozypkg -n cozy-system -C packages/system/cozystack-resource-definitions apply cozystack-resource-definitions --plain
 cozypkg -n cozy-system -C packages/system/cozystack-api apply cozystack-api --plain
-helm upgrade --install -n cozy-system cozystack-controller ./packages/system/cozystack-controller/ --take-ownership
-helm upgrade --install -n cozy-system lineage-controller-webhook ./packages/system/lineage-controller-webhook/ --take-ownership
+cozypkg -n cozy-system -C packages/system/cozystack-controller/ apply cozystack-api --plain --take-ownership
+cozypkg -n cozy-system -C packages/system/lineage-controller-webhook/ apply cozystack-api --plain --take-ownership
 
 sleep 5
 kubectl delete ns cozy-lineage-webhook-test --ignore-not-found && kubectl create ns cozy-lineage-webhook-test

@@ -15,7 +15,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-system-bootbox
-        namespace: cozy-public
+        namespace: cozy-system
       version: '>= 0.0.0-0'
   interval: 1m0s
   timeout: 5m0s

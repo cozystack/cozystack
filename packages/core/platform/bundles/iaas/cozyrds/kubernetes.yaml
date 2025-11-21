@@ -17,7 +17,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-iaas-kubernetes
-        namespace: cozy-public
+        namespace: cozy-system
   dashboard:
     category: IaaS
     singular: Kubernetes

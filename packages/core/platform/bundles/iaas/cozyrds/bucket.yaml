@@ -17,7 +17,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-iaas-bucket
-        namespace: cozy-public
+        namespace: cozy-system
   dashboard:
     singular: Bucket
     plural: Buckets

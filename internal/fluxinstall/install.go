@@ -38,7 +38,7 @@ import (
 // Install installs Flux components using embedded manifests.
 // It extracts the manifests and applies them to the cluster.
 // The namespace is automatically determined from the Namespace object in the manifests.
-func Install(ctx context.Context, k8sClient client.Client) error {
+func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifests func(string) error) error {
 	logger := log.FromContext(ctx)
 
 	// Create temporary directory for manifests
@@ -82,6 +82,11 @@ func Install(ctx context.Context, k8sClient client.Client) error {
 
 	if len(objects) == 0 {
 		return fmt.Errorf("no objects found in manifests")
+	}
+
+	// Inject KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT if set in operator environment
+	if err := injectKubernetesServiceEnv(objects); err != nil {
+		logger.Info("Failed to inject KUBERNETES_SERVICE_* env vars, continuing anyway", "error", err)
 	}
 
 	// Extract namespace from Namespace object in manifests
@@ -227,5 +232,121 @@ func extractNamespace(objects []*unstructured.Unstructured) (string, error) {
 func isClusterDefinition(obj *unstructured.Unstructured) bool {
 	kind := obj.GetKind()
 	return kind == "CustomResourceDefinition" || kind == "Namespace"
+}
+
+// injectKubernetesServiceEnv injects KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT
+// environment variables into all containers of Deployment, StatefulSet, and DaemonSet objects
+// if these variables are set in the operator's environment.
+func injectKubernetesServiceEnv(objects []*unstructured.Unstructured) error {
+	kubernetesHost := os.Getenv("KUBERNETES_SERVICE_HOST")
+	kubernetesPort := os.Getenv("KUBERNETES_SERVICE_PORT")
+
+	// If neither variable is set, nothing to do
+	if kubernetesHost == "" && kubernetesPort == "" {
+		return nil
+	}
+
+	for _, obj := range objects {
+		kind := obj.GetKind()
+		if kind != "Deployment" && kind != "StatefulSet" && kind != "DaemonSet" {
+			continue
+		}
+
+		// Navigate to spec.template.spec.containers
+		spec, found, err := unstructured.NestedMap(obj.Object, "spec", "template", "spec")
+		if !found || err != nil {
+			continue
+		}
+
+		// Update containers
+		containers, found, err := unstructured.NestedSlice(spec, "containers")
+		if found && err == nil {
+			containers = updateContainersEnv(containers, kubernetesHost, kubernetesPort)
+			if err := unstructured.SetNestedSlice(spec, containers, "containers"); err != nil {
+				continue
+			}
+		}
+
+		// Update initContainers
+		initContainers, found, err := unstructured.NestedSlice(spec, "initContainers")
+		if found && err == nil {
+			initContainers = updateContainersEnv(initContainers, kubernetesHost, kubernetesPort)
+			if err := unstructured.SetNestedSlice(spec, initContainers, "initContainers"); err != nil {
+				continue
+			}
+		}
+
+		// Update spec in the object
+		if err := unstructured.SetNestedMap(obj.Object, spec, "spec", "template", "spec"); err != nil {
+			continue
+		}
+	}
+
+	return nil
+}
+
+// updateContainersEnv updates environment variables for a slice of containers.
+func updateContainersEnv(containers []interface{}, kubernetesHost, kubernetesPort string) []interface{} {
+	for i, container := range containers {
+		containerMap, ok := container.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		env, found, err := unstructured.NestedSlice(containerMap, "env")
+		if err != nil {
+			continue
+		}
+
+		if !found {
+			env = []interface{}{}
+		}
+
+		// Update or add KUBERNETES_SERVICE_HOST
+		if kubernetesHost != "" {
+			env = setEnvVar(env, "KUBERNETES_SERVICE_HOST", kubernetesHost)
+		}
+
+		// Update or add KUBERNETES_SERVICE_PORT
+		if kubernetesPort != "" {
+			env = setEnvVar(env, "KUBERNETES_SERVICE_PORT", kubernetesPort)
+		}
+
+		// Update the container's env
+		if err := unstructured.SetNestedSlice(containerMap, env, "env"); err != nil {
+			continue
+		}
+
+		// Update the container in the slice
+		containers[i] = containerMap
+	}
+
+	return containers
+}
+
+// setEnvVar updates or adds an environment variable in the env slice.
+func setEnvVar(env []interface{}, name, value string) []interface{} {
+	// Check if variable already exists
+	for i, envVar := range env {
+		envVarMap, ok := envVar.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		if envVarMap["name"] == name {
+			// Update existing variable
+			envVarMap["value"] = value
+			env[i] = envVarMap
+			return env
+		}
+	}
+
+	// Add new variable
+	env = append(env, map[string]interface{}{
+		"name":  name,
+		"value": value,
+	})
+
+	return env
 }
 

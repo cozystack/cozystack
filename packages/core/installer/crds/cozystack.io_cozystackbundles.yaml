@@ -65,6 +65,20 @@ spec:
                   - path
                   type: object
                 type: array
+              deletionPolicy:
+                allOf:
+                - enum:
+                  - Delete
+                  - Orphan
+                - enum:
+                  - Delete
+                  - Orphan
+                default: Delete
+                description: |-
+                  DeletionPolicy defines how child resources should be handled when the bundle is deleted.
+                  - "Delete" (default): Child resources will be deleted when the bundle is deleted (via ownerReference).
+                  - "Orphan": Child resources will be orphaned (ownerReferences will be removed).
+                type: string
               dependencyTargets:
                 description: |-
                   DependencyTargets defines named groups of packages that can be referenced
@@ -99,6 +113,14 @@ spec:
                 items:
                   type: string
                 type: array
+              labels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Labels are labels that will be applied to all resources created by this bundle
+                  (ArtifactGenerators and HelmReleases). These labels are merged with the default
+                  cozystack.io/bundle label.
+                type: object
               libraries:
                 description: Libraries is a list of Helm library charts used by packages
                 items:
@@ -122,6 +144,12 @@ spec:
                   description: BundleRelease defines a single Helm release within
                     a bundle
                   properties:
+                    artifact:
+                      description: |-
+                        Artifact is the name of an artifact from the bundle's artifacts list
+                        The artifact must exist in the bundle's artifacts section
+                        Either Path or Artifact must be specified, but not both
+                      type: string
                     dependsOn:
                       description: DependsOn is a list of release names that must
                         be installed before this release
@@ -147,7 +175,9 @@ spec:
                         release will be installed
                       type: string
                     path:
-                      description: Path is the path to the Helm chart directory
+                      description: |-
+                        Path is the path to the Helm chart directory
+                        Either Path or Artifact must be specified, but not both
                       type: string
                     privileged:
                       description: Privileged indicates whether this release requires
@@ -168,9 +198,12 @@ spec:
                   required:
                   - name
                   - namespace
-                  - path
                   - releaseName
                   type: object
+                  x-kubernetes-validations:
+                  - message: either path or artifact must be set, but not both
+                    rule: (has(self.path) && !has(self.artifact)) || (!has(self.path)
+                      && has(self.artifact))
                 type: array
               sourceRef:
                 description: SourceRef is the source reference for the bundle charts

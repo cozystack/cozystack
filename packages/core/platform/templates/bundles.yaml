@@ -8,7 +8,9 @@
   {{- fail "ERROR: bundle-name not found in cozystack ConfigMap" }}
 {{- end }}
 
-{{- if eq $bundleName "paas-full" }}
+{{- if eq $bundleName "minimal" }}
+  {{ include "cozystack.render-file" (list . "bundles/system/bundle-minimal.yaml") }}
+{{- else if eq $bundleName "paas-full" }}
   {{- /* Deploy system-full, iaas, paas, naas bundles */ -}}
   {{ include "cozystack.render-file" (list . "bundles/system/bundle-full.yaml") }}
   {{ include "cozystack.render-file" (list . "bundles/iaas/bundle.yaml") }}
@@ -39,5 +41,5 @@
   {{- fail "ERROR: bundle-name 'distro-hosted' is deprecated and has been removed. Please use 'paas-hosted' instead." }}
 
 {{- else }}
-  {{- fail (printf "ERROR: unknown bundle-name '%s'. Supported values: 'paas-full', 'paas-hosted'" $bundleName) }}
+  {{- fail (printf "ERROR: unknown bundle-name '%s'. Supported values: 'minimal', 'paas-full', 'paas-hosted'" $bundleName) }}
 {{- end }}

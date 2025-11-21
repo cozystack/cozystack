@@ -13,7 +13,7 @@ spec:
   chartRef:
     kind: ExternalArtifact
     name: cozystack-system-ingress
-    namespace: cozy-public
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:

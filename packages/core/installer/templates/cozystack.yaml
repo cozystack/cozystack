@@ -58,8 +58,9 @@ spec:
           value: "7445"
         args:
         - --leader-elect=true
+        - --install-flux=true
         - --metrics-bind-address=0
-        - --health-probe-bind-address=:8082
+        - --health-probe-bind-address=
       tolerations:
       - key: "node.kubernetes.io/not-ready"
         operator: "Exists"

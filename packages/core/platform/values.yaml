@@ -1,4 +1,4 @@
 sourceRef:
   kind: GitRepository
-  name: cozystack-platform
+  name: cozystack
   namespace: cozy-system

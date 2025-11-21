@@ -17,7 +17,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-iaas-vm-disk
-        namespace: cozy-public
+        namespace: cozy-system
   dashboard:
     category: IaaS
     singular: VM Disk

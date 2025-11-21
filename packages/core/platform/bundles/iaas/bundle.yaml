@@ -42,11 +42,11 @@ spec:
     - name: kubernetes-cert-manager-crds
       path: packages/system/cert-manager-crds
     - name: kubernetes-volumesnapshot-crd
-      path: packages/system/kubernetes-vsnap-crd
+      path: packages/system/vsnap-crd
     - name: kubernetes-velero
-      path: packages/system/kubernetes-velero
+      path: packages/system/velero
     - name: kubernetes-gateway-api-crds
-      path: packages/system/kubernetes-gateway-api-crds
+      path: packages/system/gateway-api-crds
     - name: kubernetes-victoria-metrics-operator
       path: packages/system/victoria-metrics-operator
     - name: kubernetes-kubevirt-csi-node

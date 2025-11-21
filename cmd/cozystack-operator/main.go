@@ -126,23 +126,13 @@ func main() {
 		defer installCancel()
 
 		// The namespace will be automatically extracted from the embedded manifests
-		if err := fluxinstall.Install(installCtx, mgr.GetClient()); err != nil {
+		if err := fluxinstall.Install(installCtx, mgr.GetClient(), fluxinstall.WriteEmbeddedManifests); err != nil {
 			setupLog.Error(err, "failed to install Flux, continuing anyway")
 			// Don't exit - allow operator to start even if Flux install fails
 			// This allows the operator to work in environments where Flux is already installed
 		} else {
 			setupLog.Info("Flux installation completed successfully")
 		}
-	}
-
-	// Setup PlatformReconciler
-	platformReconciler := &operator.PlatformReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}
-	if err = platformReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Platform")
-		os.Exit(1)
 	}
 
 	bundleReconciler := &operator.CozystackBundleReconciler{

@@ -1,0 +1,70 @@
+{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index $cozyConfig.data "root-host" }}
+{{- if not $host }}
+{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- end }}
+{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- if not $apiServerEndpoint }}
+{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- end }}
+
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackBundle
+metadata:
+  name: cozystack-minimal
+spec:
+  dependencyTargets:
+  - name: network
+    packages: []
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: packages/library/cozy-lib
+
+  artifacts:
+    - name: tenant
+      path: packages/apps/tenant
+      libraries: [cozy-lib]
+
+  packages:
+  - name: cozystack-api
+    releaseName: cozystack-api
+    path: packages/system/cozystack-api
+    namespace: cozy-system
+    dependsOn: [cozystack-controller]
+    values:
+      cozystackAPI:
+        localK8sAPIEndpoint:
+          enabled: false
+  
+  - name: cozystack-controller
+    releaseName: cozystack-controller
+    path: packages/system/cozystack-controller
+    namespace: cozy-system
+    dependsOn: []
+    {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
+    values:
+      cozystackController:
+        disableTelemetry: true
+    {{- end }}
+  
+  - name: lineage-controller-webhook
+    releaseName: lineage-controller-webhook
+    path: packages/system/lineage-controller-webhook
+    namespace: cozy-system
+    dependsOn: [cozystack-controller]
+  
+  - name: dashboard
+    releaseName: dashboard
+    path: packages/system/dashboard
+    namespace: cozy-dashboard
+    dependsOn:
+    - cozystack-api
+    - cozystack-controller

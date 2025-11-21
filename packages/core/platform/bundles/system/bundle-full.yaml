@@ -14,13 +14,12 @@ apiVersion: cozystack.io/v1alpha1
 kind: CozystackBundle
 metadata:
   name: cozystack-system
-  finalizers:
-    - cozystack.io/system-bundle-protection
 spec:
+  deletionPolicy: Orphan
 
   dependencyTargets:
   - name: network
-    packages: [cilium,kubeovn]
+    packages: [cilium,kubeovn,cert-manager]
 
   sourceRef:
     kind: {{ .Values.sourceRef.kind }}
@@ -45,7 +44,7 @@ spec:
       path: packages/extra/ingress
       libraries: [cozy-lib]
     - name: ingress-system
-      path: packages/system/ingress
+      path: packages/system/ingress-nginx
     - name: seaweedfs
       path: packages/extra/seaweedfs
       libraries: [cozy-lib]
@@ -59,6 +58,15 @@ spec:
       libraries: [cozy-lib]
 
   packages:
+    - name: tenant-root
+      releaseName: tenant-root
+      artifact: tenant
+      namespace: tenant-root
+      labels:
+        cozystack.io/ui: "true"
+      values:
+        host: {{ $host }}
+
     - name: cilium
       releaseName: cilium
       path: packages/system/cilium
@@ -104,7 +112,7 @@ spec:
       releaseName: kubeovn-plunger
       path: packages/system/kubeovn-plunger
       namespace: cozy-kubeovn
-      dependsOn: [cilium,kubeovn]
+      dependsOn: [cilium,kubeovn,victoria-metrics-operator]
     
     - name: multus
       releaseName: multus
@@ -147,12 +155,6 @@ spec:
       path: packages/system/lineage-controller-webhook
       namespace: cozy-system
       dependsOn: [cozystack-controller,cilium,kubeovn,cert-manager]
-    
-    - name: cozystack-resource-definition-crd
-      releaseName: cozystack-resource-definition-crd
-      path: packages/system/cozystack-resource-definition-crd
-      namespace: cozy-system
-      dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
     
     - name: cert-manager
       releaseName: cert-manager
@@ -255,6 +257,8 @@ spec:
       dependsOn:
       - cilium
       - kubeovn
+      - cozystack-api
+      - cozystack-controller
       {{- if eq $oidcEnabled "true" }}
       - keycloak-configure
       {{- end }}

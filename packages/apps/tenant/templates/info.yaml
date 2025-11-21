@@ -12,7 +12,7 @@ spec:
   chartRef:
     kind: ExternalArtifact
     name: cozystack-system-info
-    namespace: cozy-public
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:

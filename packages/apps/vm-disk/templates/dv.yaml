@@ -21,10 +21,10 @@ spec:
   {{- end }}
   source:
     {{- if hasKey .Values.source "image" }}
-    {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" (printf "vm-image-%s" .Values.source.image.name) }}
+    {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-system" (printf "vm-image-%s" .Values.source.image.name) }}
     pvc:
       name: vm-image-{{ required "A valid .Values.source.image.name entry required!" .Values.source.image.name }}
-      namespace: cozy-public
+      namespace: cozy-system
     {{- else if hasKey .Values.source "http" }}
     http:
       url: {{ required "A valid .Values.source.http.url entry required!" .Values.source.http.url }}

@@ -17,7 +17,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-naas-http-cache
-        namespace: cozy-public
+        namespace: cozy-system
   dashboard:
     category: NaaS
     singular: HTTP Cache

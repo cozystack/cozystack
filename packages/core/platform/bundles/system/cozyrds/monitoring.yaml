@@ -18,7 +18,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-system-monitoring
-        namespace: cozy-public
+        namespace: cozy-system
   dashboard:
     category: Administration
     singular: Monitoring

@@ -17,7 +17,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-paas-foundationdb
-        namespace: cozy-public
+        namespace: cozy-system
   dashboard:
     category: PaaS
     singular: FoundationDB

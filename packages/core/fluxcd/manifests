@@ -1,1 +1,1 @@
-../../../cmd/cozystack-operator/manifests
+../../../internal/fluxinstall/manifests

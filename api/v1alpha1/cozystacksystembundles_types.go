@@ -75,7 +75,32 @@ type CozystackBundleSpec struct {
 	// Packages is a list of Helm releases to be installed as part of this bundle
 	// +required
 	Packages []BundleRelease `json:"packages"`
+
+	// DeletionPolicy defines how child resources should be handled when the bundle is deleted.
+	// - "Delete" (default): Child resources will be deleted when the bundle is deleted (via ownerReference).
+	// - "Orphan": Child resources will be orphaned (ownerReferences will be removed).
+	// +kubebuilder:validation:Enum=Delete;Orphan
+	// +kubebuilder:default=Delete
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
+	// Labels are labels that will be applied to all resources created by this bundle
+	// (ArtifactGenerators and HelmReleases). These labels are merged with the default
+	// cozystack.io/bundle label.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
 }
+
+// DeletionPolicy defines how child resources should be handled when the parent is deleted.
+// +kubebuilder:validation:Enum=Delete;Orphan
+type DeletionPolicy string
+
+const (
+	// DeletionPolicyDelete means child resources will be deleted when the parent is deleted.
+	DeletionPolicyDelete DeletionPolicy = "Delete"
+	// DeletionPolicyOrphan means child resources will be orphaned (ownerReferences removed).
+	DeletionPolicyOrphan DeletionPolicy = "Orphan"
+)
 
 // BundleDependencyTarget defines a named group of packages that can be referenced
 // by other bundles via dependsOn
@@ -132,6 +157,7 @@ type BundleSourceRef struct {
 	Namespace string `json:"namespace"`
 }
 
+// +kubebuilder:validation:XValidation:rule="(has(self.path) && !has(self.artifact)) || (!has(self.path) && has(self.artifact))",message="either path or artifact must be set, but not both"
 // BundleRelease defines a single Helm release within a bundle
 type BundleRelease struct {
 	// Name is the unique identifier for this release within the bundle
@@ -143,8 +169,15 @@ type BundleRelease struct {
 	ReleaseName string `json:"releaseName"`
 
 	// Path is the path to the Helm chart directory
-	// +required
-	Path string `json:"path"`
+	// Either Path or Artifact must be specified, but not both
+	// +optional
+	Path string `json:"path,omitempty"`
+
+	// Artifact is the name of an artifact from the bundle's artifacts list
+	// The artifact must exist in the bundle's artifacts section
+	// Either Path or Artifact must be specified, but not both
+	// +optional
+	Artifact string `json:"artifact,omitempty"`
 
 	// Namespace is the Kubernetes namespace where the release will be installed
 	// +required

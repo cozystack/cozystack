@@ -18,7 +18,7 @@ spec:
       sourceRef:
         kind: ExternalArtifact
         name: cozystack-system-info
-        namespace: cozy-public
+        namespace: cozy-system
   dashboard:
     name: info
     category: Administration

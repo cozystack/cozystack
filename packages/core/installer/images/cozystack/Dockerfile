@@ -24,8 +24,6 @@ RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/insta
 RUN apk add --no-cache make kubectl helm coreutils git jq ca-certificates
 
 COPY --from=builder /src/scripts /cozystack/scripts
-COPY --from=builder /src/packages/core /cozystack/packages/core
-COPY --from=builder /src/packages/system /cozystack/packages/system
 COPY --from=builder /cozystack-operator /usr/bin/cozystack-operator
 
 WORKDIR /cozystack

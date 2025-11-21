@@ -36,29 +36,25 @@ kubectl get helmreleases --all-namespaces -o json -l cozystack.io/ui=true | \
       continue
     fi
     
-    # Determine artifact prefix and namespace based on repository name or namespace
-    artifact_prefix=""
-    artifact_namespace="cozy-public"
+    # Determine bundle name from label or ownerReference
+    bundle_name=$(printf '%s' "$hr_json" | jq -r '.metadata.labels["cozystack.io/bundle"] // empty')
     
-    if [ "$namespace" = "cozy-system" ]; then
-      # System resources always use system- prefix in cozy-system namespace
-      artifact_prefix="system"
-      artifact_namespace="cozy-system"
-    elif [ "$source_name" = "cozystack-apps" ]; then
-      # Apps repository -> apps- prefix in cozy-public namespace
-      artifact_prefix="apps"
-      artifact_namespace="cozy-public"
-    elif [ "$source_name" = "cozystack-extra" ]; then
-      # Extra repository -> extra- prefix in cozy-public namespace
-      artifact_prefix="extra"
-      artifact_namespace="cozy-public"
-    else
-      echo "Skipping $namespace/$name: unknown repository $source_name"
+    # If no label, try to get from ownerReferences
+    if [ -z "$bundle_name" ]; then
+      bundle_name=$(printf '%s' "$hr_json" | jq -r '.metadata.ownerReferences[]? | select(.kind == "CozystackBundle") | .name' | head -n 1)
+    fi
+    
+    # Skip if no bundle found
+    if [ -z "$bundle_name" ]; then
+      echo "Skipping $namespace/$name: no bundle label or ownerReference found"
       continue
     fi
     
-    # Build artifact name
-    artifact_name="${artifact_prefix}-${chart_name}"
+    # Determine artifact namespace (always cozy-system for ExternalArtifacts)
+    artifact_namespace="cozy-system"
+    
+    # Build artifact name: bundle-name-package-name (new format)
+    artifact_name="${bundle_name}-${chart_name}"
     
     echo "Migrating $namespace/$name: $chart_name -> $artifact_name (from $source_name)"
     

@@ -27,8 +27,8 @@ import (
 //go:embed manifests/*.yaml
 var embeddedFluxManifests embed.FS
 
-// writeEmbeddedManifests extracts embedded Flux manifests to a temporary directory.
-func writeEmbeddedManifests(dir string) error {
+// WriteEmbeddedManifests extracts embedded Flux manifests to a temporary directory.
+func WriteEmbeddedManifests(dir string) error {
 	manifests, err := fs.ReadDir(embeddedFluxManifests, "manifests")
 	if err != nil {
 		return fmt.Errorf("failed to read embedded manifests: %w", err)

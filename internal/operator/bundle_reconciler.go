@@ -26,6 +26,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -45,6 +46,7 @@ type CozystackBundleReconciler struct {
 // +kubebuilder:rbac:groups=cozystack.io,resources=cozystackbundles/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=source.extensions.fluxcd.io,resources=artifactgenerators,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *CozystackBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -73,15 +75,21 @@ func (r *CozystackBundleReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Generate ArtifactGenerators for artifacts
-	if err := r.reconcileArtifactArtifactGenerators(ctx, bundle); err != nil {
-		logger.Error(err, "failed to reconcile ArtifactGenerators for artifacts")
+	// Reconcile namespaces from packages
+	if err := r.reconcileNamespaces(ctx, bundle, resolvedPackages); err != nil {
+		logger.Error(err, "failed to reconcile namespaces")
 		return ctrl.Result{}, err
 	}
 
-	// Generate ArtifactGenerators for packages
+	// Check for conflicts between packages with artifact and artifacts
+	if err := r.checkArtifactConflicts(ctx, bundle, resolvedPackages); err != nil {
+		logger.Error(err, "failed to check artifact conflicts")
+		return ctrl.Result{}, err
+	}
+
+	// Generate ArtifactGenerator for bundle (one generator per bundle with all OutputArtifacts)
 	if err := r.reconcileArtifactGenerators(ctx, bundle, resolvedPackages); err != nil {
-		logger.Error(err, "failed to reconcile ArtifactGenerators")
+		logger.Error(err, "failed to reconcile ArtifactGenerator")
 		return ctrl.Result{}, err
 	}
 
@@ -162,96 +170,8 @@ func (r *CozystackBundleReconciler) resolveDependencies(ctx context.Context, bun
 	return resolved, nil
 }
 
-// reconcileArtifactArtifactGenerators generates ArtifactGenerators from bundle artifacts
-func (r *CozystackBundleReconciler) reconcileArtifactArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
-	logger := log.FromContext(ctx)
-
-	libraryMap := make(map[string]cozyv1alpha1.BundleLibrary)
-	for _, lib := range bundle.Spec.Libraries {
-		libraryMap[lib.Name] = lib
-	}
-
-	// Create ArtifactGenerator for each artifact
-	for _, artifact := range bundle.Spec.Artifacts {
-		// Extract artifact name from path (last component)
-		artifactPathName := r.getPackageNameFromPath(artifact.Path)
-		if artifactPathName == "" {
-			logger.Info("skipping artifact with invalid path", "name", artifact.Name, "path", artifact.Path)
-			continue
-		}
-
-		// For artifacts: namespace is always cozy-public
-		namespace := "cozy-public"
-		// ArtifactGenerator name: bundle-name-artifact-name
-		agName := fmt.Sprintf("%s-artifact-%s", bundle.Name, artifact.Name)
-
-		// Build copy operations
-		copyOps := []sourcewatcherv1beta1.CopyOperation{
-			{
-				From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, artifact.Path),
-				To:   fmt.Sprintf("@artifact/%s/", artifactPathName),
-			},
-		}
-
-		// Add libraries if specified
-		for _, libName := range artifact.Libraries {
-			if lib, ok := libraryMap[libName]; ok {
-				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
-					From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, lib.Path),
-					To:   fmt.Sprintf("@artifact/%s/charts/%s/", artifactPathName, libName),
-				})
-			}
-		}
-
-		// Artifact name: {bundle-name}-{artifact-name}
-		// Bundle name already contains "cozystack-" prefix, so we just combine bundle name and artifact name
-		artifactName := fmt.Sprintf("%s-%s", bundle.Name, artifact.Name)
-
-		// Create ArtifactGenerator for this artifact
-		ag := &sourcewatcherv1beta1.ArtifactGenerator{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      agName,
-				Namespace: namespace,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: bundle.APIVersion,
-						Kind:       bundle.Kind,
-						Name:       bundle.Name,
-						UID:        bundle.UID,
-						Controller: func() *bool { b := true; return &b }(),
-					},
-				},
-			},
-			Spec: sourcewatcherv1beta1.ArtifactGeneratorSpec{
-				Sources: []sourcewatcherv1beta1.SourceReference{
-					{
-						Alias:     bundle.Spec.SourceRef.Name,
-						Kind:      bundle.Spec.SourceRef.Kind,
-						Name:      bundle.Spec.SourceRef.Name,
-						Namespace: bundle.Spec.SourceRef.Namespace,
-					},
-				},
-				OutputArtifacts: []sourcewatcherv1beta1.OutputArtifact{
-					{
-						Name: artifactName,
-						Copy: copyOps,
-					},
-				},
-			},
-		}
-
-		if err := r.createOrUpdate(ctx, ag); err != nil {
-			return fmt.Errorf("failed to reconcile ArtifactGenerator for artifact %s: %w", agName, err)
-		}
-		logger.Info("reconciled ArtifactGenerator for artifact", "name", agName, "namespace", namespace, "artifact", artifact.Name)
-	}
-
-	// Cleanup orphaned ArtifactGenerators for artifacts
-	return r.cleanupOrphanedArtifactArtifactGenerators(ctx, bundle)
-}
-
-// reconcileArtifactGenerators generates ArtifactGenerators from bundle packages
-// Creates a separate ArtifactGenerator for each package
+// reconcileArtifactGenerators generates a single ArtifactGenerator for the bundle
+// Creates one ArtifactGenerator per bundle with all OutputArtifacts from packages and artifacts
 func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
 	logger := log.FromContext(ctx)
 
@@ -260,19 +180,27 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 		libraryMap[lib.Name] = lib
 	}
 
-	// Create ArtifactGenerator for each package
+	// Namespace is always cozy-system
+	namespace := "cozy-system"
+	// ArtifactGenerator name is the bundle name
+	agName := bundle.Name
+
+	// Collect all OutputArtifacts
+	outputArtifacts := []sourcewatcherv1beta1.OutputArtifact{}
+
+	// Process packages
 	for _, pkg := range packages {
+		// Skip packages without path (they might use artifacts)
+		if pkg.Path == "" {
+			continue
+		}
+
 		// Determine prefix from path
 		prefix := r.getPackagePrefix(pkg.Path)
 		if prefix == "" {
 			logger.Info("skipping package with unknown prefix", "name", pkg.Name, "path", pkg.Path)
 			continue
 		}
-
-		// For packages: namespace is always cozy-system
-		namespace := "cozy-system"
-		// ArtifactGenerator name: bundle-name-package-name
-		agName := fmt.Sprintf("%s-%s", bundle.Name, pkg.Name)
 
 		// Extract package name from path (last component)
 		pkgName := r.getPackageNameFromPath(pkg.Path)
@@ -312,47 +240,115 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 			})
 		}
 
-		// Artifact name: prefix-package-name (e.g., system-cilium)
-		artifactName := fmt.Sprintf("%s-%s", prefix, pkgName)
+		// Artifact name: bundle-name-package-name (e.g., cozystack-system-cilium)
+		artifactName := fmt.Sprintf("%s-%s", bundle.Name, pkgName)
 
-		// Create ArtifactGenerator for this package
-		ag := &sourcewatcherv1beta1.ArtifactGenerator{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      agName,
-				Namespace: namespace,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: bundle.APIVersion,
-						Kind:       bundle.Kind,
-						Name:       bundle.Name,
-						UID:        bundle.UID,
-						Controller: func() *bool { b := true; return &b }(),
-					},
-				},
-			},
-			Spec: sourcewatcherv1beta1.ArtifactGeneratorSpec{
-				Sources: []sourcewatcherv1beta1.SourceReference{
-					{
-						Alias:     bundle.Spec.SourceRef.Name,
-						Kind:      bundle.Spec.SourceRef.Kind,
-						Name:      bundle.Spec.SourceRef.Name,
-						Namespace: bundle.Spec.SourceRef.Namespace,
-					},
-				},
-				OutputArtifacts: []sourcewatcherv1beta1.OutputArtifact{
-					{
-						Name: artifactName,
-						Copy: copyOps,
-					},
-				},
-			},
-		}
+		outputArtifacts = append(outputArtifacts, sourcewatcherv1beta1.OutputArtifact{
+			Name: artifactName,
+			Copy: copyOps,
+		})
 
-		if err := r.createOrUpdate(ctx, ag); err != nil {
-			return fmt.Errorf("failed to reconcile ArtifactGenerator %s: %w", agName, err)
-		}
-		logger.Info("reconciled ArtifactGenerator", "name", agName, "namespace", namespace, "package", pkg.Name)
+		logger.Info("added OutputArtifact for package", "bundle", bundle.Name, "package", pkg.Name, "artifactName", artifactName)
 	}
+
+	// Process artifacts
+	for _, artifact := range bundle.Spec.Artifacts {
+		logger.Info("processing artifact", "bundle", bundle.Name, "artifact", artifact.Name, "path", artifact.Path)
+		// Extract artifact name from path (last component)
+		artifactPathName := r.getPackageNameFromPath(artifact.Path)
+		if artifactPathName == "" {
+			logger.Info("skipping artifact with invalid path", "name", artifact.Name, "path", artifact.Path)
+			continue
+		}
+
+		// Build copy operations
+		copyOps := []sourcewatcherv1beta1.CopyOperation{
+			{
+				From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, artifact.Path),
+				To:   fmt.Sprintf("@artifact/%s/", artifactPathName),
+			},
+		}
+
+		// Add libraries if specified
+		for _, libName := range artifact.Libraries {
+			if lib, ok := libraryMap[libName]; ok {
+				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
+					From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, lib.Path),
+					To:   fmt.Sprintf("@artifact/%s/charts/%s/", artifactPathName, libName),
+				})
+			}
+		}
+
+		// Artifact name: {bundle-name}-{artifact-name}
+		artifactName := fmt.Sprintf("%s-%s", bundle.Name, artifact.Name)
+
+		outputArtifacts = append(outputArtifacts, sourcewatcherv1beta1.OutputArtifact{
+			Name: artifactName,
+			Copy: copyOps,
+		})
+
+		logger.Info("added OutputArtifact for artifact", "bundle", bundle.Name, "artifact", artifact.Name, "artifactName", artifactName)
+	}
+
+	// If there are no OutputArtifacts, cleanup and return
+	if len(outputArtifacts) == 0 {
+		logger.Info("no OutputArtifacts to generate, skipping ArtifactGenerator creation", "bundle", bundle.Name)
+		// Cleanup orphaned ArtifactGenerators (to remove existing generator if it exists)
+		return r.cleanupOrphanedArtifactGenerators(ctx, bundle)
+	}
+
+	// Build labels: merge bundle labels with default cozystack.io/bundle label
+	labels := make(map[string]string)
+	if bundle.Spec.Labels != nil {
+		for k, v := range bundle.Spec.Labels {
+			labels[k] = v
+		}
+	}
+	labels["cozystack.io/bundle"] = bundle.Name
+
+	// Create single ArtifactGenerator for the bundle
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agName,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: sourcewatcherv1beta1.ArtifactGeneratorSpec{
+			Sources: []sourcewatcherv1beta1.SourceReference{
+				{
+					Alias:     bundle.Spec.SourceRef.Name,
+					Kind:      bundle.Spec.SourceRef.Kind,
+					Name:      bundle.Spec.SourceRef.Name,
+					Namespace: bundle.Spec.SourceRef.Namespace,
+				},
+			},
+			OutputArtifacts: outputArtifacts,
+		},
+	}
+
+	// Set ownerReference only if deletionPolicy is not Orphan
+	if bundle.Spec.DeletionPolicy != cozyv1alpha1.DeletionPolicyOrphan {
+		ag.OwnerReferences = []metav1.OwnerReference{
+			{
+				APIVersion: bundle.APIVersion,
+				Kind:       bundle.Kind,
+				Name:       bundle.Name,
+				UID:        bundle.UID,
+				Controller: func() *bool { b := true; return &b }(),
+			},
+		}
+	} else {
+		// Explicitly set empty ownerReferences for Orphan policy
+		ag.OwnerReferences = []metav1.OwnerReference{}
+	}
+
+	logger.Info("creating ArtifactGenerator for bundle", "bundle", bundle.Name, "agName", agName, "namespace", namespace, "outputArtifactCount", len(outputArtifacts))
+
+	if err := r.createOrUpdate(ctx, ag); err != nil {
+		return fmt.Errorf("failed to reconcile ArtifactGenerator %s: %w", agName, err)
+	}
+
+	logger.Info("reconciled ArtifactGenerator for bundle", "name", agName, "namespace", namespace, "outputArtifactCount", len(outputArtifacts))
 
 	// Cleanup orphaned ArtifactGenerators
 	return r.cleanupOrphanedArtifactGenerators(ctx, bundle)
@@ -386,34 +382,56 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 		globalPackageMap[pkg.Name] = pkg
 	}
 
+	// Build artifact name map from bundle artifacts for conflict checking
+	artifactNameMap := make(map[string]bool)
+	for _, artifact := range bundle.Spec.Artifacts {
+		artifactNameMap[artifact.Name] = true
+	}
+
 	// Create HelmRelease for each package
 	for _, pkg := range packages {
-		// Determine artifact name from path
-		prefix := r.getPackagePrefix(pkg.Path)
-		pkgName := r.getPackageNameFromPath(pkg.Path)
-		if prefix == "" || pkgName == "" {
-			logger.Info("skipping package with invalid path", "name", pkg.Name, "path", pkg.Path)
+		var artifactName string
+		artifactNamespace := "cozy-system"
+
+		if pkg.Artifact != "" {
+			// Package uses an artifact reference
+			// Check if artifact exists in bundle
+			if !artifactNameMap[pkg.Artifact] {
+				logger.Error(fmt.Errorf("artifact %s not found in bundle artifacts", pkg.Artifact), "skipping package", "name", pkg.Name)
+				continue
+			}
+			// Artifact name format: {bundle-name}-{artifact-name}
+			artifactName = fmt.Sprintf("%s-%s", bundle.Name, pkg.Artifact)
+		} else if pkg.Path != "" {
+			// Package uses a path (legacy behavior)
+			prefix := r.getPackagePrefix(pkg.Path)
+			pkgName := r.getPackageNameFromPath(pkg.Path)
+			if prefix == "" || pkgName == "" {
+				logger.Info("skipping package with invalid path", "name", pkg.Name, "path", pkg.Path)
+				continue
+			}
+			// Artifact name format: {bundle-name}-{package-name}
+			artifactName = fmt.Sprintf("%s-%s", bundle.Name, pkgName)
+		} else {
+			logger.Error(fmt.Errorf("neither artifact nor path specified"), "skipping package", "name", pkg.Name)
 			continue
 		}
 
-		artifactName := fmt.Sprintf("%s-%s", prefix, pkgName)
-		// For packages: artifacts are always in cozy-system
-		artifactNamespace := "cozy-system"
+		// Build labels: merge bundle labels with default cozystack.io/bundle label
+		hrLabels := make(map[string]string)
+		if bundle.Spec.Labels != nil {
+			for k, v := range bundle.Spec.Labels {
+				hrLabels[k] = v
+			}
+		}
+		hrLabels["cozystack.io/bundle"] = bundle.Name
 
 		// Create HelmRelease
 		hr := &helmv2.HelmRelease{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      pkg.Name,
 				Namespace: pkg.Namespace,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: bundle.APIVersion,
-						Kind:       bundle.Kind,
-						Name:       bundle.Name,
-						UID:        bundle.UID,
-						Controller: func() *bool { b := true; return &b }(),
-					},
-				},
+				Labels:    hrLabels,
 			},
 			Spec: helmv2.HelmReleaseSpec{
 				Interval:    metav1.Duration{Duration: 5 * 60 * 1000000000}, // 5m
@@ -434,6 +452,22 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 					},
 				},
 			},
+		}
+
+		// Set ownerReference only if deletionPolicy is not Orphan
+		if bundle.Spec.DeletionPolicy != cozyv1alpha1.DeletionPolicyOrphan {
+			hr.OwnerReferences = []metav1.OwnerReference{
+				{
+					APIVersion: bundle.APIVersion,
+					Kind:       bundle.Kind,
+					Name:       bundle.Name,
+					UID:        bundle.UID,
+					Controller: func() *bool { b := true; return &b }(),
+				},
+			}
+		} else {
+			// Explicitly set empty ownerReferences for Orphan policy
+			hr.OwnerReferences = []metav1.OwnerReference{}
 		}
 
 		// Set values if provided
@@ -517,6 +551,24 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 	}
 	obj.SetAnnotations(annotations)
 
+	// Update ownerReferences: always use the ones from obj
+	// This allows deletionPolicy = Orphan to work by setting empty ownerReferences array
+	// When ownerReferences field is set in obj (even as empty array), use it
+	// Empty array will clear ownerReferences (for deletionPolicy = Orphan or when policy changes)
+	// If ownerReferences field is not set in obj (nil), preserve existing ones
+	objOwnerRefs := obj.GetOwnerReferences()
+	if objOwnerRefs != nil {
+		// obj has ownerReferences set (either populated or empty array), use them
+		// Empty array (len == 0) means we want to remove all ownerReferences (deletionPolicy = Orphan)
+		// This handles policy changes from Delete to Orphan
+		// objOwnerRefs is already set in obj, so it will be used in Update
+		// No need to do anything else - Update will use the ownerReferences from obj
+	} else if len(existing.GetOwnerReferences()) > 0 {
+		// obj doesn't have ownerReferences set (nil), but existing does
+		// Preserve existing ones (they might be from other owners)
+		obj.SetOwnerReferences(existing.GetOwnerReferences())
+	}
+
 	return r.Update(ctx, obj)
 }
 
@@ -552,34 +604,32 @@ func (r *CozystackBundleReconciler) getPackageNameFromPath(path string) string {
 func (r *CozystackBundleReconciler) cleanupOrphanedArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
 	logger := log.FromContext(ctx)
 
+	// Find ArtifactGenerators by label
 	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
-	if err := r.List(ctx, agList); err != nil {
+	if err := r.List(ctx, agList, client.MatchingLabels{
+		"cozystack.io/bundle": bundle.Name,
+	}); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
 		return err
 	}
 
-	// Build desired names: bundle-name-package-name for each package
-	desiredNames := make(map[string]bool)
-	for _, pkg := range bundle.Spec.Packages {
-		desiredNames[fmt.Sprintf("%s-%s", bundle.Name, pkg.Name)] = true
-	}
+	// Desired name: bundle name (one ArtifactGenerator per bundle)
+	desiredName := bundle.Name
 
-	// Find ArtifactGenerators owned by this bundle
+	// Find ArtifactGenerators with this bundle label
 	for _, ag := range agList.Items {
-		isOwned := false
-		for _, ownerRef := range ag.OwnerReferences {
-			if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundle.Name && ownerRef.UID == bundle.UID {
-				isOwned = true
-				break
-			}
-		}
+		// Check if it's the desired name
+		isDesired := ag.Name == desiredName
 
-		if isOwned && !desiredNames[ag.Name] {
+		if !isDesired {
+			// Delete ArtifactGenerators that don't match the desired name
+			// This includes old pattern ArtifactGenerators (for migration from per-package/per-artifact to per-bundle)
+			logger.Info("deleting orphaned ArtifactGenerator", "name", ag.Name, "bundle", bundle.Name, "desiredName", desiredName)
 			if err := r.Delete(ctx, &ag); err != nil {
 				if !apierrors.IsNotFound(err) {
-					logger.Error(err, "failed to delete ArtifactGenerator", "name", ag.Name)
+					logger.Error(err, "failed to delete orphaned ArtifactGenerator", "name", ag.Name)
 				}
 			} else {
 				logger.Info("deleted orphaned ArtifactGenerator", "name", ag.Name)
@@ -590,55 +640,14 @@ func (r *CozystackBundleReconciler) cleanupOrphanedArtifactGenerators(ctx contex
 	return nil
 }
 
-func (r *CozystackBundleReconciler) cleanupOrphanedArtifactArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
-	logger := log.FromContext(ctx)
-
-	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
-	if err := r.List(ctx, agList); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	// Build desired names: bundle-name-artifact-name for each artifact
-	desiredNames := make(map[string]bool)
-	for _, artifact := range bundle.Spec.Artifacts {
-		desiredNames[fmt.Sprintf("%s-artifact-%s", bundle.Name, artifact.Name)] = true
-	}
-
-	// Find ArtifactGenerators owned by this bundle for artifacts
-	for _, ag := range agList.Items {
-		if !strings.HasPrefix(ag.Name, fmt.Sprintf("%s-artifact-", bundle.Name)) {
-			continue
-		}
-		isOwned := false
-		for _, ownerRef := range ag.OwnerReferences {
-			if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundle.Name && ownerRef.UID == bundle.UID {
-				isOwned = true
-				break
-			}
-		}
-
-		if isOwned && !desiredNames[ag.Name] {
-			if err := r.Delete(ctx, &ag); err != nil {
-				if !apierrors.IsNotFound(err) {
-					logger.Error(err, "failed to delete ArtifactGenerator for artifact", "name", ag.Name)
-				}
-			} else {
-				logger.Info("deleted orphaned ArtifactGenerator for artifact", "name", ag.Name)
-			}
-		}
-	}
-
-	return nil
-}
-
 func (r *CozystackBundleReconciler) cleanupOrphanedHelmReleases(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
 	logger := log.FromContext(ctx)
 
+	// Find HelmReleases by label
 	hrList := &helmv2.HelmReleaseList{}
-	if err := r.List(ctx, hrList); err != nil {
+	if err := r.List(ctx, hrList, client.MatchingLabels{
+		"cozystack.io/bundle": bundle.Name,
+	}); err != nil {
 		return err
 	}
 
@@ -648,26 +657,17 @@ func (r *CozystackBundleReconciler) cleanupOrphanedHelmReleases(ctx context.Cont
 		desiredNames[types.NamespacedName{Name: pkg.Name, Namespace: pkg.Namespace}] = true
 	}
 
-	// Find HelmReleases owned by this bundle
+	// Find HelmReleases with this bundle label
 	for _, hr := range hrList.Items {
-		isOwned := false
-		for _, ownerRef := range hr.OwnerReferences {
-			if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundle.Name && ownerRef.UID == bundle.UID {
-				isOwned = true
-				break
-			}
-		}
-
-		if isOwned {
-			key := types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}
-			if !desiredNames[key] {
-				if err := r.Delete(ctx, &hr); err != nil {
-					if !apierrors.IsNotFound(err) {
-						logger.Error(err, "failed to delete HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
-					}
-				} else {
-					logger.Info("deleted orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
+		key := types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}
+		if !desiredNames[key] {
+			logger.Info("deleting orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace, "bundle", bundle.Name)
+			if err := r.Delete(ctx, &hr); err != nil {
+				if !apierrors.IsNotFound(err) {
+					logger.Error(err, "failed to delete HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
 				}
+			} else {
+				logger.Info("deleted orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
 			}
 		}
 	}
@@ -678,35 +678,226 @@ func (r *CozystackBundleReconciler) cleanupOrphanedHelmReleases(ctx context.Cont
 func (r *CozystackBundleReconciler) cleanupOrphanedResources(ctx context.Context, bundleKey types.NamespacedName) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Cleanup ArtifactGenerators
+	// Cleanup ArtifactGenerators by label
 	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
-	if err := r.List(ctx, agList); err == nil {
+	if err := r.List(ctx, agList, client.MatchingLabels{
+		"cozystack.io/bundle": bundleKey.Name,
+	}); err == nil {
 		for _, ag := range agList.Items {
-			for _, ownerRef := range ag.OwnerReferences {
-				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundleKey.Name {
-					if err := r.Delete(ctx, &ag); err != nil && !apierrors.IsNotFound(err) {
-						logger.Error(err, "failed to delete orphaned ArtifactGenerator", "name", ag.Name)
-					}
-				}
+			logger.Info("deleting orphaned ArtifactGenerator", "name", ag.Name, "bundle", bundleKey.Name)
+			if err := r.Delete(ctx, &ag); err != nil && !apierrors.IsNotFound(err) {
+				logger.Error(err, "failed to delete orphaned ArtifactGenerator", "name", ag.Name)
 			}
 		}
 	}
 
-	// Cleanup HelmReleases
+	// Cleanup HelmReleases by label
 	hrList := &helmv2.HelmReleaseList{}
-	if err := r.List(ctx, hrList); err == nil {
+	if err := r.List(ctx, hrList, client.MatchingLabels{
+		"cozystack.io/bundle": bundleKey.Name,
+	}); err == nil {
 		for _, hr := range hrList.Items {
-			for _, ownerRef := range hr.OwnerReferences {
-				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundleKey.Name {
-					if err := r.Delete(ctx, &hr); err != nil && !apierrors.IsNotFound(err) {
-						logger.Error(err, "failed to delete orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
-					}
-				}
+			logger.Info("deleting orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace, "bundle", bundleKey.Name)
+			if err := r.Delete(ctx, &hr); err != nil && !apierrors.IsNotFound(err) {
+				logger.Error(err, "failed to delete orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
 			}
 		}
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// reconcileNamespaces creates or updates namespaces based on packages in the bundle.
+func (r *CozystackBundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
+	logger := log.FromContext(ctx)
+
+	// Collect namespaces from packages
+	// Map: namespace -> isPrivileged (true if at least one package in this namespace is privileged)
+	namespacesMap := make(map[string]bool)
+
+	for _, pkg := range packages {
+		// Skip disabled packages
+		if pkg.Disabled {
+			continue
+		}
+
+		// Skip if namespace is empty
+		if pkg.Namespace == "" {
+			continue
+		}
+
+		// If package is privileged, mark namespace as privileged
+		// If namespace already exists and is privileged, keep it privileged
+		if pkg.Privileged {
+			namespacesMap[pkg.Namespace] = true
+		} else {
+			// Only set to false if not already marked as privileged
+			if _, exists := namespacesMap[pkg.Namespace]; !exists {
+				namespacesMap[pkg.Namespace] = false
+			}
+		}
+	}
+
+	// Create or update all namespaces
+	for nsName, privileged := range namespacesMap {
+		namespace := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: nsName,
+				Labels: map[string]string{
+					"cozystack.io/system": "true",
+				},
+				Annotations: map[string]string{
+					"helm.sh/resource-policy": "keep",
+				},
+			},
+		}
+
+		// Add privileged label if needed
+		if privileged {
+			namespace.Labels["pod-security.kubernetes.io/enforce"] = "privileged"
+		}
+
+		if err := r.createOrUpdateNamespace(ctx, namespace); err != nil {
+			logger.Error(err, "failed to reconcile namespace", "name", nsName, "privileged", privileged)
+			return fmt.Errorf("failed to reconcile namespace %s: %w", nsName, err)
+		}
+		logger.Info("reconciled namespace", "name", nsName, "privileged", privileged)
+	}
+
+	return nil
+}
+
+// createOrUpdateNamespace creates or updates a namespace.
+func (r *CozystackBundleReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace) error {
+	existing := &corev1.Namespace{}
+	key := types.NamespacedName{Name: namespace.Name}
+
+	err := r.Get(ctx, key, existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, namespace)
+	} else if err != nil {
+		return err
+	}
+
+	// Preserve resource version
+	namespace.SetResourceVersion(existing.GetResourceVersion())
+
+	// Merge labels
+	labels := namespace.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	for k, v := range existing.GetLabels() {
+		if _, ok := labels[k]; !ok {
+			labels[k] = v
+		}
+	}
+	namespace.SetLabels(labels)
+
+	// Merge annotations
+	annotations := namespace.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	for k, v := range existing.GetAnnotations() {
+		if _, ok := annotations[k]; !ok {
+			annotations[k] = v
+		}
+	}
+	namespace.SetAnnotations(annotations)
+
+	return r.Update(ctx, namespace)
+}
+
+// checkArtifactConflicts checks for conflicts between packages using artifacts and bundle artifacts
+func (r *CozystackBundleReconciler) checkArtifactConflicts(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
+	// Build artifact name map from bundle artifacts
+	artifactNameMap := make(map[string]bool)
+	for _, artifact := range bundle.Spec.Artifacts {
+		artifactNameMap[artifact.Name] = true
+	}
+
+	// Check packages that use artifacts
+	for _, pkg := range packages {
+		if pkg.Artifact != "" {
+			if !artifactNameMap[pkg.Artifact] {
+				return fmt.Errorf("package %s references artifact %s which is not defined in bundle artifacts", pkg.Name, pkg.Artifact)
+			}
+		}
+	}
+
+	return nil
+}
+
+// removeOwnerReferences removes ownerReferences from all resources with bundle label
+func (r *CozystackBundleReconciler) removeOwnerReferences(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
+	logger := log.FromContext(ctx)
+
+	// Remove ownerReferences from ArtifactGenerators by label
+	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
+	if err := r.List(ctx, agList, client.MatchingLabels{
+		"cozystack.io/bundle": bundle.Name,
+	}); err == nil {
+		for i := range agList.Items {
+			ag := &agList.Items[i]
+			updated := false
+			newOwnerRefs := []metav1.OwnerReference{}
+
+			for _, ownerRef := range ag.OwnerReferences {
+				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundle.Name {
+					// Skip this ownerReference (remove it)
+					// Check by name only, not UID, to handle bundle updates
+					updated = true
+				} else {
+					// Keep other ownerReferences
+					newOwnerRefs = append(newOwnerRefs, ownerRef)
+				}
+			}
+
+			if updated {
+				ag.SetOwnerReferences(newOwnerRefs)
+				if err := r.Update(ctx, ag); err != nil {
+					logger.Error(err, "failed to remove ownerReference from ArtifactGenerator", "name", ag.Name, "namespace", ag.Namespace)
+				} else {
+					logger.Info("removed ownerReference from ArtifactGenerator", "name", ag.Name, "namespace", ag.Namespace)
+				}
+			}
+		}
+	}
+
+	// Remove ownerReferences from HelmReleases by label
+	hrList := &helmv2.HelmReleaseList{}
+	if err := r.List(ctx, hrList, client.MatchingLabels{
+		"cozystack.io/bundle": bundle.Name,
+	}); err == nil {
+		for i := range hrList.Items {
+			hr := &hrList.Items[i]
+			updated := false
+			newOwnerRefs := []metav1.OwnerReference{}
+
+			for _, ownerRef := range hr.OwnerReferences {
+				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundle.Name {
+					// Skip this ownerReference (remove it)
+					// Check by name only, not UID, to handle bundle updates
+					updated = true
+				} else {
+					// Keep other ownerReferences
+					newOwnerRefs = append(newOwnerRefs, ownerRef)
+				}
+			}
+
+			if updated {
+				hr.SetOwnerReferences(newOwnerRefs)
+				if err := r.Update(ctx, hr); err != nil {
+					logger.Error(err, "failed to remove ownerReference from HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
+				} else {
+					logger.Info("removed ownerReference from HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -716,4 +907,3 @@ func (r *CozystackBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&cozyv1alpha1.CozystackBundle{}).
 		Complete(r)
 }
-
