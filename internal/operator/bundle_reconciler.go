@@ -91,26 +91,6 @@ func (r *CozystackBundleReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Check if we need to run phase2 (install basic charts)
-	// Phase2 should run when:
-	// 1. Any bundle contains cilium and kubeovn
-	// 2. Flux is not ready
-	hasCilium, hasKubeovn, err := HasCiliumAndKubeovn(ctx, r.Client)
-	if err != nil {
-		logger.Error(err, "failed to check bundles for cilium/kubeovn")
-	} else if hasCilium && hasKubeovn {
-		fluxOK, err := FluxIsOK(ctx, r.Client)
-		if err != nil {
-			logger.Error(err, "failed to check flux status")
-		} else if !fluxOK {
-			logger.Info("Bundles contain cilium and kubeovn, and flux is not ready, running phase2")
-			if err := InstallBasicCharts(ctx, r.Client); err != nil {
-				logger.Error(err, "failed to install basic charts in phase2")
-				// Don't return error, just log it - phase2 is best effort
-			}
-		}
-	}
-
 	return ctrl.Result{}, nil
 }
 

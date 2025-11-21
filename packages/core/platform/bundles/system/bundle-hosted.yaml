@@ -59,24 +59,6 @@ spec:
       libraries: [cozy-lib]
 
   packages:
-  - name: fluxcd-operator
-    releaseName: fluxcd-operator
-    path: packages/system/fluxcd-operator
-    namespace: cozy-fluxcd
-    privileged: true
-    dependsOn: []
-  
-  - name: fluxcd
-    releaseName: fluxcd
-    path: packages/system/fluxcd
-    namespace: cozy-fluxcd
-    dependsOn: [fluxcd-operator]
-    values:
-      flux-instance:
-        instance:
-          cluster:
-            domain: {{ $clusterDomain }}
-  
   - name: cert-manager-crds
     releaseName: cert-manager-crds
     path: packages/system/cert-manager-crds

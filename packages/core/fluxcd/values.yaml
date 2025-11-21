@@ -1,0 +1,55 @@
+flux-instance:
+  instance:
+    cluster:
+      networkPolicy: false # -- disable due to liveness/readiness probes issues with network policies
+      domain: cozy.local # -- default value is overriden in patches
+    distribution:
+      artifact: ""
+      version: 2.7.x
+      registry: ghcr.io/fluxcd
+    components:
+      - source-controller
+      - source-watcher
+      - kustomize-controller
+      - helm-controller
+      - notification-controller
+      - image-reflector-controller
+      - image-automation-controller
+    kustomize:
+      patches:
+        - target:
+            kind: Deployment
+            name: "(kustomize-controller|helm-controller|source-controller)"
+          patch: |
+            - op: add
+              path: /spec/template/spec/containers/0/args/-
+              value: --concurrent=20
+            - op: add
+              path: /spec/template/spec/containers/0/args/-
+              value: --requeue-dependency=5s
+            - op: replace
+              path: /spec/template/spec/containers/0/resources/limits
+              value:
+                cpu: 2000m
+                memory: 2048Mi
+        - target:
+            kind: Deployment
+            name: source-controller
+          patch: |
+            - op: add
+              path: /spec/template/spec/containers/0/args/-
+              value: --storage-adv-addr=source-controller.cozy-fluxcd.svc
+        - target:
+            kind: Deployment
+            name: source-watcher
+          patch: |
+            - op: add
+              path: /spec/template/spec/containers/0/args/-
+              value: --storage-adv-addr=source-watcher.cozy-fluxcd.svc
+        - target:
+            kind: Deployment
+            name: (kustomize-controller|helm-controller|image-reflector-controller|image-automation-controller|source-controller|source-watcher)
+          patch: |
+            - op: add
+              path: /spec/template/spec/containers/0/args/-
+              value: --events-addr=http://notification-controller.cozy-fluxcd.svc/
