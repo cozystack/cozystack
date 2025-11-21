@@ -174,68 +174,46 @@
 {{- end }}
 
 {{- define "cozy-lib.resources.flatten" -}}
-{{- /*
-This helper either outputs raw ResourceQuota fields (e.g., services.loadbalancers)
-as-is, or flattens sanitized resource maps into limits.* / requests.* keys.
+{{-   $out := dict -}}
+{{-   $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
+{{-   range $section, $values := $res }}
+{{-     range $k, $v := $values }}
+{{-       with include "cozy-lib.resources.flattenResource" (list $section $k) }}
+{{-         $_ := set $out . $v }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{-   $out | toYaml }}
+{{- end }}
 
-If ALL keys in the input are recognized quota keys (pods, services.*, etc.),
-the input is output directly as YAML. Otherwise, the input is treated as a
-resource map and processed through sanitize + flatten.
-
-Do not mix quota keys and resource keys in a single call.
-*/ -}}
-{{- $input := index . 0 -}}
-{{- $ctx := index . 1 -}}
-
-{{- $rawQuotaKeys := list
-"pods"
-"services"
-"services.loadbalancers"
-"services.nodeports"
-"services.clusterip"
-"configmaps"
-"secrets"
-"persistentvolumeclaims"
-"replicationcontrollers"
-"resourcequotas"
+{{/*
+  This is a helper function that takes an argument like `list "limits" "services.loadbalancers"`
+  or `list "limits" "storage"` or `list "requests" "cpu"` and returns "services.loadbalancers",
+  "", and "requests.cpu", respectively, thus transforming them to an acceptable format for k8s
+  ResourceQuotas objects.
+*/}}
+{{- define "cozy-lib.resources.flattenResource" }}
+{{-   $rawQuotaKeys := list
+        "pods"
+        "services"
+        "services.loadbalancers"
+        "services.nodeports"
+        "services.clusterip"
+        "configmaps"
+        "secrets"
+        "persistentvolumeclaims"
+        "replicationcontrollers"
+        "resourcequotas"
 -}}
-
-{{- $computeKeys := list
-"cpu"
-"memory"
-"ephemeral-storage"
--}}
-
-{{- $out := dict -}}
-{{- $computeResources := dict -}}
-{{- $quotaResources := dict -}}
-
-{{- range $k, $v := $input }}
-{{- if or (has $k $computeKeys) (hasPrefix "limits." $k) (hasPrefix "requests." $k) }}
-{{- $_ := set $computeResources $k $v }}
-{{- else if has $k $rawQuotaKeys }}
-{{- $_ := set $quotaResources $k $v }}
-{{- else }}
-{{- $_ := set $computeResources $k $v }}
-{{- end }}
-{{- end }}
-
-{{- if $computeResources }}
-{{- $res := include "cozy-lib.resources.sanitize" (list $computeResources (index . 1)) | fromYaml -}}
-{{- range $section, $values := $res }}
-{{- range $k, $v := $values }}
-{{- $key := printf "%s.%s" $section $k }}
-{{- if ne $key "limits.storage" }}
-{{- $_ := set $out $key $v }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
-
-{{- range $k, $v := $quotaResources }}
-{{- $_ := set $out $k $v }}
-{{- end }}
-
-{{- $out | toYaml }}
-
+{{-   $section := index . 0 }}
+{{-   $type := index . 1 }}
+{{-   $out := "" }}
+{{-   if and (eq $section "limits") (eq $type "storage") }}
+{{-     $out = "" }}
+{{-   else if and (eq $section "limits") (has $type $rawQuotaKeys) }}
+{{-     $out = $type }}
+{{-   else if not (has $type $rawQuotaKeys) }}
+{{-     $out = printf "%s.%s" $section $type }}
+{{-   end }}
+{{-   $out -}}
 {{- end }}
