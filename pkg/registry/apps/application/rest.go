@@ -1059,7 +1059,7 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 		},
 		Spec: hr.Spec.Values,
 		Status: appsv1alpha1.ApplicationStatus{
-			Version: hr.Status.LastAttemptedRevision,
+			Version: extractRevision(hr.Status.LastAttemptedRevision),
 		},
 	}
 
@@ -1277,6 +1277,22 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 	table.Rows = append(table.Rows, row)
 
 	return table
+}
+
+// extractRevision extracts only the revision part from a version string
+// If version is in format "0.1.4+abcdef", returns "abcdef"
+// Otherwise returns the original string
+func extractRevision(version string) string {
+	if version == "" {
+		return ""
+	}
+	// Check if version contains "+" separator
+	if idx := strings.LastIndex(version, "+"); idx >= 0 && idx < len(version)-1 {
+		// Return only the part after "+"
+		return version[idx+1:]
+	}
+	// If no "+" found, return original version
+	return version
 }
 
 // getVersion returns the application version or a placeholder if unknown
