@@ -19,12 +19,6 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 
 FROM alpine:3.22
 
-RUN wget -O- https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.4.0
-
-RUN apk add --no-cache make kubectl helm coreutils git jq ca-certificates
-
-COPY --from=builder /src/scripts /cozystack/scripts
 COPY --from=builder /cozystack-operator /usr/bin/cozystack-operator
 
-WORKDIR /cozystack
 ENTRYPOINT ["/usr/bin/cozystack-operator"]
