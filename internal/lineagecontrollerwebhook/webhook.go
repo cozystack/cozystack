@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -156,21 +155,9 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		ManagerKindKey: obj.GetKind(),
 		ManagerNameKey: obj.GetName(),
 	}
-	templateLabels := map[string]string{
-		"kind":      strings.ToLower(obj.GetKind()),
-		"name":      obj.GetName(),
-		"namespace": o.GetNamespace(),
-	}
-	cfg := h.config.Load().(*runtimeConfig)
-	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
-	resourceSelectors := h.getResourceSelectors(o.GroupVersionKind().GroupKind(), crd)
-
-	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
-		if b {
-			return corev1alpha1.TenantResourceLabelValue
-		}
-		return "false"
-	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), resourceSelectors))
+	// Resource selectors are no longer needed since we don't use CozystackResourceDefinitions
+	// Set tenant resource label to false by default (can be overridden by other logic if needed)
+	labels[corev1alpha1.TenantResourceLabelKey] = "false"
 	return labels, err
 }
 

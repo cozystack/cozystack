@@ -3,11 +3,11 @@
 
 set -euo pipefail
 
-echo "Migrating HelmReleases from spec.chart to spec.chartRef"
+echo "Migrating HelmReleases: adding application labels and migrating from spec.chart to spec.chartRef"
 
-# Process all HelmReleases that still use spec.chart (old format)
+# Process all HelmReleases with cozystack.io/ui=true label
 kubectl get helmreleases --all-namespaces -o json -l cozystack.io/ui=true | \
-  jq -r '.items[] | select(.spec.chart != null) | "\(.metadata.namespace)|\(.metadata.name)"' | \
+  jq -r '.items[] | "\(.metadata.namespace)|\(.metadata.name)"' | \
   while IFS='|' read -r namespace name; do
     echo "Processing HelmRelease $namespace/$name"
     
@@ -86,8 +86,78 @@ kubectl get helmreleases --all-namespaces -o json -l cozystack.io/ui=true | \
     if printf '%s' "$patch_ops" | jq -e 'length > 0' > /dev/null 2>&1; then
       printf '%s' "$patch_ops" | kubectl patch helmrelease -n "$namespace" "$name" --type json --patch-file /dev/stdin
       echo "Migrated $namespace/$name"
+    fi
+    
+    # Add application labels if missing
+    # Get CozystackResourceDefinition to determine application kind and group
+    app_kind=""
+    app_group="apps.cozystack.io"
+    app_name=""
+    
+    # Try to find CRD by chart or chartRef
+    if [ -n "$chart_name" ] && [ -n "$source_name" ]; then
+      # Try to find CRD by chart name and source
+      crd_json=$(kubectl get cozystackresourcedefinitions -n cozy-system -o json 2>/dev/null | \
+        jq -r --arg chart "$chart_name" --arg source "$source_name" \
+        '.items[] | select((.spec.release.chart.name == $chart and .spec.release.chart.sourceRef.name == $source) or (.spec.release.chartRef.sourceRef.name == $chart)) | .' | head -n 1)
+      
+      if [ -n "$crd_json" ]; then
+        app_kind=$(printf '%s' "$crd_json" | jq -r '.spec.application.kind // empty')
+        prefix=$(printf '%s' "$crd_json" | jq -r '.spec.release.prefix // empty')
+        
+        # Extract application name from HelmRelease name by removing prefix
+        if [ -n "$prefix" ] && [[ "$name" == "$prefix"* ]]; then
+          app_name="${name#$prefix}"
+        fi
+      fi
+    fi
+    
+    # If we couldn't determine from CRD, try to infer from HelmRelease name pattern
+    if [ -z "$app_name" ]; then
+      # Common prefixes to try
+      for prefix in "mysql-" "postgres-" "redis-" "clickhouse-" "kafka-" "nats-" "rabbitmq-" "ferretdb-" "foundationdb-" \
+                    "virtual-machine-" "vm-instance-" "vm-disk-" "virtualprivatecloud-" "bucket-" "kubernetes-" \
+                    "http-cache-" "tcp-balancer-" "vpn-" "tenant-" "monitoring-" "ingress-" "info-" "etcd-" "seaweedfs-" "bootbox-"; do
+        if [[ "$name" == "$prefix"* ]]; then
+          app_name="${name#$prefix}"
+          # Infer kind from prefix (capitalize and convert to CamelCase)
+          kind_part=$(echo "$prefix" | sed 's/-$//' | sed 's/-\([a-z]\)/\U\1/g' | sed 's/^\([a-z]\)/\U\1/g')
+          app_kind="$kind_part"
+          break
+        fi
+      done
+    fi
+    
+    # If still no app_name, use HelmRelease name as fallback
+    if [ -z "$app_name" ]; then
+      app_name="$name"
+    fi
+    
+    # Add labels if we have the information
+    if [ -n "$app_kind" ]; then
+      label_patch_ops="[]"
+      current_labels=$(printf '%s' "$hr_json" | jq -r '.metadata.labels // {}')
+      
+      # Check and add each label if missing
+      if [ "$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.kind"] // empty')" != "$app_kind" ]; then
+        label_patch_ops=$(printf '%s' "$label_patch_ops" | jq --arg kind "$app_kind" '. + [{"op": "add", "path": "/metadata/labels/apps.cozystack.io~1application.kind", "value": $kind}]')
+      fi
+      
+      if [ "$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.group"] // empty")" != "$app_group" ]; then
+        label_patch_ops=$(printf '%s' "$label_patch_ops" | jq --arg group "$app_group" '. + [{"op": "add", "path": "/metadata/labels/apps.cozystack.io~1application.group", "value": $group}]')
+      fi
+      
+      if [ "$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.name"] // empty")" != "$app_name" ]; then
+        label_patch_ops=$(printf '%s' "$label_patch_ops" | jq --arg name "$app_name" '. + [{"op": "add", "path": "/metadata/labels/apps.cozystack.io~1application.name", "value": $name}]')
+      fi
+      
+      # Apply label patch if there are operations
+      if printf '%s' "$label_patch_ops" | jq -e 'length > 0' > /dev/null 2>&1; then
+        printf '%s' "$label_patch_ops" | kubectl patch helmrelease -n "$namespace" "$name" --type json --patch-file /dev/stdin
+        echo "Added application labels to $namespace/$name (kind=$app_kind, group=$app_group, name=$app_name)"
+      fi
     else
-      echo "No changes needed for $namespace/$name"
+      echo "Warning: Could not determine application kind for $namespace/$name, skipping label addition"
     fi
   done
 

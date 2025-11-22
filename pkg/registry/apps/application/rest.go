@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	fields "k8s.io/apimachinery/pkg/fields"
 	labels "k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/duration"
@@ -166,6 +167,13 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
 	// Merge user labels with prefix
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if helmRelease.Labels == nil {
+		helmRelease.Labels = make(map[string]string)
+	}
+	helmRelease.Labels["apps.cozystack.io/application.kind"] = r.kindName
+	helmRelease.Labels["apps.cozystack.io/application.group"] = r.gvk.Group
+	helmRelease.Labels["apps.cozystack.io/application.name"] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
@@ -224,9 +232,10 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 		return nil, err
 	}
 
-	// Check if HelmRelease meets the required chartName and sourceRef criteria
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmReleaseName)
+	// Check if HelmRelease has required labels
+	if helmRelease.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+		helmRelease.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return a NotFound error for the Application resource
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
@@ -299,6 +308,19 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// Process label.selector
+	// Always add application metadata label requirements
+	appKindReq, err := labels.NewRequirement("apps.cozystack.io/application.kind", selection.Equals, []string{r.kindName})
+	if err != nil {
+		klog.Errorf("Error creating application kind label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application kind label requirement: %v", err)
+	}
+	appGroupReq, err := labels.NewRequirement("apps.cozystack.io/application.group", selection.Equals, []string{r.gvk.Group})
+	if err != nil {
+		klog.Errorf("Error creating application group label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application group label requirement: %v", err)
+	}
+	labelRequirements := []labels.Requirement{*appKindReq, *appGroupReq}
+
 	if options.LabelSelector != nil {
 		ls := options.LabelSelector.String()
 		parsedLabels, err := labels.Parse(ls)
@@ -318,9 +340,10 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 				}
 				prefixedReqs = append(prefixedReqs, *prefixedReq)
 			}
-			helmLabelSelector = labels.NewSelector().Add(prefixedReqs...).String()
+			labelRequirements = append(labelRequirements, prefixedReqs...)
 		}
 	}
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
 
 	// Set ListOptions for HelmRelease with selector mapping
 	metaOptions := metav1.ListOptions{
@@ -343,10 +366,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	items := make([]unstructured.Unstructured, 0)
 
 	// Iterate over HelmReleases and convert to Applications
+	// No need to filter by shouldIncludeHelmRelease since we're using label selectors
 	for i := range hrList.Items {
-		if !r.shouldIncludeHelmRelease(&hrList.Items[i]) {
-			continue
-		}
 
 		app, err := r.ConvertHelmReleaseToApplication(&hrList.Items[i])
 		if err != nil {
@@ -482,14 +503,22 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
 	// Merge user labels with prefix
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if helmRelease.Labels == nil {
+		helmRelease.Labels = make(map[string]string)
+	}
+	helmRelease.Labels["apps.cozystack.io/application.kind"] = r.kindName
+	helmRelease.Labels["apps.cozystack.io/application.group"] = r.gvk.Group
+	helmRelease.Labels["apps.cozystack.io/application.name"] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
-	// Before updating, ensure the HelmRelease meets the inclusion criteria
+	// Before updating, ensure the HelmRelease has required labels
 	// This prevents updating HelmReleases that should not be managed as Applications
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.Name)
+	if helmRelease.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+		helmRelease.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmRelease.Name)
 		// Return a NotFound error for the Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
@@ -501,9 +530,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
 	}
 
-	// After updating, ensure the updated HelmRelease still meets the inclusion criteria
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("Updated HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.GetName())
+	// After updating, ensure the updated HelmRelease still has required labels
+	if helmRelease.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+		helmRelease.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+		klog.Errorf("Updated HelmRelease %s does not match the required application labels", helmRelease.GetName())
 		// Return a NotFound error for the Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
