@@ -1,0 +1,2 @@
+# Talos installer values - no longer contains cozystack-operator
+# cozystack-operator is now in packages/core/cozystack-operator

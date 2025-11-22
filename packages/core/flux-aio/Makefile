@@ -1,4 +1,4 @@
-NAME=fluxcd
+NAME=flux-aio
 NAMESPACE=cozy-$(NAME)
 
 show:

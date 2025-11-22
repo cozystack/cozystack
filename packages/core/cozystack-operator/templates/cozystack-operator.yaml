@@ -46,21 +46,21 @@ spec:
       labels:
         app: cozystack-operator
     spec:
-      hostNetwork: true
       serviceAccountName: cozystack
       containers:
       - name: cozystack-operator
-        image: "{{ .Values.cozystack.image }}"
-        env:
-        - name: KUBERNETES_SERVICE_HOST
-          value: localhost
-        - name: KUBERNETES_SERVICE_PORT
-          value: "7445"
+        image: "{{ .Values.cozystackOperator.image }}"
         args:
         - --leader-elect=true
         - --install-flux=true
         - --metrics-bind-address=0
         - --health-probe-bind-address=
+        env:
+        - name: KUBERNETES_SERVICE_HOST
+          value: localhost
+        - name: KUBERNETES_SERVICE_PORT
+          value: "7445"
+      hostNetwork: true
       tolerations:
       - key: "node.kubernetes.io/not-ready"
         operator: "Exists"

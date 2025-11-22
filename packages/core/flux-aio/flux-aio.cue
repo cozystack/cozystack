@@ -9,7 +9,6 @@ bundle: {
 			}
 			namespace: "cozy-fluxcd"
 			values: {
-				hostNetwork:     true
 				securityProfile: "privileged"
 			}
 		}
