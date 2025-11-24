@@ -27,22 +27,3 @@ spec:
     kind: OCIRepository
     name: cozystack-packages
     namespace: cozy-system
----
-apiVersion: helm.toolkit.fluxcd.io/v2
-kind: HelmRelease
-metadata:
-  name: cozystack-platform
-  namespace: cozy-system
-spec:
-  interval: 5m
-  targetNamespace: cozy-system
-  releaseName: cozystack-platform
-  chartRef:
-    kind: ExternalArtifact
-    name: cozystack-core-platform
-    namespace: cozy-system
-  values:
-    sourceRef:
-      kind: OCIRepository
-      name: cozystack-packages
-      namespace: cozy-system

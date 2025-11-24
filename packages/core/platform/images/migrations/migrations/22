@@ -106,7 +106,7 @@ kubectl get helmreleases --all-namespaces -o json -l cozystack.io/ui=true | \
         prefix=$(printf '%s' "$crd_json" | jq -r '.spec.release.prefix // empty')
         
         # Extract application name from HelmRelease name by removing prefix
-        if [ -n "$prefix" ] && [[ "$name" == "$prefix"* ]]; then
+        if [ -n "$prefix" ] && [ "${name#$prefix}" != "$name" ]; then
           app_name="${name#$prefix}"
         fi
       fi
@@ -118,7 +118,7 @@ kubectl get helmreleases --all-namespaces -o json -l cozystack.io/ui=true | \
       for prefix in "mysql-" "postgres-" "redis-" "clickhouse-" "kafka-" "nats-" "rabbitmq-" "ferretdb-" "foundationdb-" \
                     "virtual-machine-" "vm-instance-" "vm-disk-" "virtualprivatecloud-" "bucket-" "kubernetes-" \
                     "http-cache-" "tcp-balancer-" "vpn-" "tenant-" "monitoring-" "ingress-" "info-" "etcd-" "seaweedfs-" "bootbox-"; do
-        if [[ "$name" == "$prefix"* ]]; then
+        if [ "${name#$prefix}" != "$name" ]; then
           app_name="${name#$prefix}"
           # Infer kind from prefix (capitalize and convert to CamelCase)
           kind_part=$(echo "$prefix" | sed 's/-$//' | sed 's/-\([a-z]\)/\U\1/g' | sed 's/^\([a-z]\)/\U\1/g')
@@ -139,15 +139,18 @@ kubectl get helmreleases --all-namespaces -o json -l cozystack.io/ui=true | \
       current_labels=$(printf '%s' "$hr_json" | jq -r '.metadata.labels // {}')
       
       # Check and add each label if missing
-      if [ "$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.kind"] // empty')" != "$app_kind" ]; then
+      current_kind=$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.kind"] // empty')
+      if [ "$current_kind" != "$app_kind" ]; then
         label_patch_ops=$(printf '%s' "$label_patch_ops" | jq --arg kind "$app_kind" '. + [{"op": "add", "path": "/metadata/labels/apps.cozystack.io~1application.kind", "value": $kind}]')
       fi
       
-      if [ "$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.group"] // empty")" != "$app_group" ]; then
+      current_group=$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.group"] // empty')
+      if [ "$current_group" != "$app_group" ]; then
         label_patch_ops=$(printf '%s' "$label_patch_ops" | jq --arg group "$app_group" '. + [{"op": "add", "path": "/metadata/labels/apps.cozystack.io~1application.group", "value": $group}]')
       fi
       
-      if [ "$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.name"] // empty")" != "$app_name" ]; then
+      current_app_name=$(printf '%s' "$current_labels" | jq -r '.["apps.cozystack.io/application.name"] // empty')
+      if [ "$current_app_name" != "$app_name" ]; then
         label_patch_ops=$(printf '%s' "$label_patch_ops" | jq --arg name "$app_name" '. + [{"op": "add", "path": "/metadata/labels/apps.cozystack.io~1application.name", "value": $name}]')
       fi
       

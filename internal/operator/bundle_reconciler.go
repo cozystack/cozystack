@@ -190,8 +190,11 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 
 	// Process packages
 	for _, pkg := range packages {
+		logger.V(1).Info("processing package for artifact", "bundle", bundle.Name, "package", pkg.Name, "path", pkg.Path, "disabled", pkg.Disabled)
+
 		// Skip packages without path (they might use artifacts)
 		if pkg.Path == "" {
+			logger.V(1).Info("skipping package without path", "name", pkg.Name)
 			continue
 		}
 
@@ -201,6 +204,8 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 			logger.Info("skipping package with invalid path", "name", pkg.Name, "path", pkg.Path)
 			continue
 		}
+
+		logger.V(1).Info("extracted package name from path", "name", pkg.Name, "path", pkg.Path, "pkgName", pkgName)
 
 		// Get basePath with default values
 		basePath := r.getBasePath(bundle)
@@ -567,6 +572,24 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 		obj.SetOwnerReferences(existing.GetOwnerReferences())
 	}
 
+	// For ArtifactGenerator, explicitly update Spec (OutputArtifacts and Sources)
+	// This ensures that OutputArtifacts from both packages and artifacts are properly updated
+	if ag, ok := obj.(*sourcewatcherv1beta1.ArtifactGenerator); ok {
+		if existingAG, ok := existing.(*sourcewatcherv1beta1.ArtifactGenerator); ok {
+			logger := log.FromContext(ctx)
+			logger.V(1).Info("updating ArtifactGenerator Spec", "name", ag.Name, "namespace", ag.Namespace,
+				"outputArtifactCount", len(ag.Spec.OutputArtifacts))
+			// Update Spec from obj (which contains the desired state with all OutputArtifacts)
+			existingAG.Spec = ag.Spec
+			// Preserve metadata updates we made above
+			existingAG.SetLabels(ag.GetLabels())
+			existingAG.SetAnnotations(ag.GetAnnotations())
+			existingAG.SetOwnerReferences(ag.GetOwnerReferences())
+			// Use existingAG for Update
+			obj = existingAG
+		}
+	}
+
 	return r.Update(ctx, obj)
 }
 
@@ -707,27 +730,59 @@ func (r *CozystackBundleReconciler) cleanupOrphanedResources(ctx context.Context
 	logger := log.FromContext(ctx)
 
 	// Cleanup ArtifactGenerators by label
+	// Only delete if they have ownerReferences to this bundle (deletionPolicy != Orphan)
 	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
 	if err := r.List(ctx, agList, client.MatchingLabels{
 		"cozystack.io/bundle": bundleKey.Name,
 	}); err == nil {
 		for _, ag := range agList.Items {
-			logger.Info("deleting orphaned ArtifactGenerator", "name", ag.Name, "bundle", bundleKey.Name)
-			if err := r.Delete(ctx, &ag); err != nil && !apierrors.IsNotFound(err) {
-				logger.Error(err, "failed to delete orphaned ArtifactGenerator", "name", ag.Name)
+			// Check if this resource has ownerReference to the deleted bundle
+			hasOwnerRef := false
+			for _, ownerRef := range ag.OwnerReferences {
+				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundleKey.Name {
+					hasOwnerRef = true
+					break
+				}
+			}
+
+			// Only delete if it has ownerReference (deletionPolicy != Orphan)
+			// If no ownerReference, it means deletionPolicy was Orphan, so we should not delete it
+			if hasOwnerRef {
+				logger.Info("deleting orphaned ArtifactGenerator", "name", ag.Name, "bundle", bundleKey.Name)
+				if err := r.Delete(ctx, &ag); err != nil && !apierrors.IsNotFound(err) {
+					logger.Error(err, "failed to delete orphaned ArtifactGenerator", "name", ag.Name)
+				}
+			} else {
+				logger.Info("skipping ArtifactGenerator deletion (deletionPolicy=Orphan)", "name", ag.Name, "bundle", bundleKey.Name)
 			}
 		}
 	}
 
 	// Cleanup HelmReleases by label
+	// Only delete if they have ownerReferences to this bundle (deletionPolicy != Orphan)
 	hrList := &helmv2.HelmReleaseList{}
 	if err := r.List(ctx, hrList, client.MatchingLabels{
 		"cozystack.io/bundle": bundleKey.Name,
 	}); err == nil {
 		for _, hr := range hrList.Items {
-			logger.Info("deleting orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace, "bundle", bundleKey.Name)
-			if err := r.Delete(ctx, &hr); err != nil && !apierrors.IsNotFound(err) {
-				logger.Error(err, "failed to delete orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
+			// Check if this resource has ownerReference to the deleted bundle
+			hasOwnerRef := false
+			for _, ownerRef := range hr.OwnerReferences {
+				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundleKey.Name {
+					hasOwnerRef = true
+					break
+				}
+			}
+
+			// Only delete if it has ownerReference (deletionPolicy != Orphan)
+			// If no ownerReference, it means deletionPolicy was Orphan, so we should not delete it
+			if hasOwnerRef {
+				logger.Info("deleting orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace, "bundle", bundleKey.Name)
+				if err := r.Delete(ctx, &hr); err != nil && !apierrors.IsNotFound(err) {
+					logger.Error(err, "failed to delete orphaned HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
+				}
+			} else {
+				logger.Info("skipping HelmRelease deletion (deletionPolicy=Orphan)", "name", hr.Name, "namespace", hr.Namespace, "bundle", bundleKey.Name)
 			}
 		}
 	}

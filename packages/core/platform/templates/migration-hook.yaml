@@ -18,7 +18,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-upgrade
     helm.sh/hook-weight: "1"
-    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: 3
   template:
