@@ -57,11 +57,11 @@ func (r *CozystackConfigReconciler) Reconcile(ctx context.Context, _ ctrl.Reques
 		}
 		patchTarget := hr.DeepCopy()
 
-		if hr.Annotations == nil {
-			hr.Annotations = map[string]string{}
+		if patchTarget.Annotations == nil {
+			patchTarget.Annotations = make(map[string]string)
 		}
 
-		if hr.Annotations[digestAnnotation] == digest {
+		if patchTarget.Annotations[digestAnnotation] == digest {
 			continue
 		}
 		patchTarget.Annotations[digestAnnotation] = digest

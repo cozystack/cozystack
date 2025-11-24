@@ -10,6 +10,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackresourcedefinitions,verbs=get;list;watch
+// +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;update;patch
 type CozystackResourceDefinitionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -37,6 +40,25 @@ type CozystackResourceDefinitionReconciler struct {
 }
 
 func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Get all CozystackResourceDefinitions
+	crdList := &cozyv1alpha1.CozystackResourceDefinitionList{}
+	if err := r.List(ctx, crdList); err != nil {
+		logger.Error(err, "failed to list CozystackResourceDefinitions")
+		return ctrl.Result{}, err
+	}
+
+	// Update HelmReleases for each CRD
+	for i := range crdList.Items {
+		crd := &crdList.Items[i]
+		if err := r.updateHelmReleasesForCRD(ctx, crd); err != nil {
+			logger.Error(err, "failed to update HelmReleases for CRD", "crd", crd.Name)
+			// Continue with other CRDs even if one fails
+		}
+	}
+
+	// Continue with debounced restart logic
 	return r.debouncedRestart(ctx)
 }
 
@@ -184,4 +206,116 @@ func sortCozyRDs(a, b cozyv1alpha1.CozystackResourceDefinition) int {
 		return -1
 	}
 	return 1
+}
+
+// updateHelmReleasesForCRD updates all HelmReleases that match the labels from CozystackResourceDefinition
+func (r *CozystackResourceDefinitionReconciler) updateHelmReleasesForCRD(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+	logger := log.FromContext(ctx)
+
+	// Skip if no labels defined
+	if len(crd.Spec.Release.Labels) == 0 {
+		return nil
+	}
+
+	// List all HelmReleases with matching labels
+	hrList := &helmv2.HelmReleaseList{}
+	labelSelector := client.MatchingLabels(crd.Spec.Release.Labels)
+	if err := r.List(ctx, hrList, labelSelector); err != nil {
+		return err
+	}
+
+	logger.Info("Found HelmReleases to update", "crd", crd.Name, "count", len(hrList.Items))
+
+	// Update each HelmRelease
+	for i := range hrList.Items {
+		hr := &hrList.Items[i]
+		if err := r.updateHelmReleaseChart(ctx, hr, crd); err != nil {
+			logger.Error(err, "failed to update HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
+			continue
+		}
+	}
+
+	return nil
+}
+
+// updateHelmReleaseChart updates the chart/chartRef in HelmRelease based on CozystackResourceDefinition
+func (r *CozystackResourceDefinitionReconciler) updateHelmReleaseChart(ctx context.Context, hr *helmv2.HelmRelease, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+	logger := log.FromContext(ctx)
+	updated := false
+	hrCopy := hr.DeepCopy()
+
+	// Update based on Chart or ChartRef configuration
+	if crd.Spec.Release.Chart != nil {
+		// Using Chart (HelmRepository)
+		if hrCopy.Spec.Chart == nil {
+			// Need to create Chart spec
+			hrCopy.Spec.Chart = &helmv2.HelmChartTemplate{
+				Spec: helmv2.HelmChartTemplateSpec{
+					Chart: crd.Spec.Release.Chart.Name,
+					SourceRef: helmv2.CrossNamespaceObjectReference{
+						Kind:      crd.Spec.Release.Chart.SourceRef.Kind,
+						Name:      crd.Spec.Release.Chart.SourceRef.Name,
+						Namespace: crd.Spec.Release.Chart.SourceRef.Namespace,
+					},
+				},
+			}
+			// Clear ChartRef if it exists
+			hrCopy.Spec.ChartRef = nil
+			updated = true
+		} else {
+			// Update existing Chart spec
+			if hrCopy.Spec.Chart.Spec.Chart != crd.Spec.Release.Chart.Name ||
+				hrCopy.Spec.Chart.Spec.SourceRef.Kind != crd.Spec.Release.Chart.SourceRef.Kind ||
+				hrCopy.Spec.Chart.Spec.SourceRef.Name != crd.Spec.Release.Chart.SourceRef.Name ||
+				hrCopy.Spec.Chart.Spec.SourceRef.Namespace != crd.Spec.Release.Chart.SourceRef.Namespace {
+				hrCopy.Spec.Chart.Spec.Chart = crd.Spec.Release.Chart.Name
+				hrCopy.Spec.Chart.Spec.SourceRef = helmv2.CrossNamespaceObjectReference{
+					Kind:      crd.Spec.Release.Chart.SourceRef.Kind,
+					Name:      crd.Spec.Release.Chart.SourceRef.Name,
+					Namespace: crd.Spec.Release.Chart.SourceRef.Namespace,
+				}
+				// Clear ChartRef if it exists
+				hrCopy.Spec.ChartRef = nil
+				updated = true
+			}
+		}
+	} else if crd.Spec.Release.ChartRef != nil {
+		// Using ChartRef (ExternalArtifact)
+		expectedChartRef := &helmv2.CrossNamespaceSourceReference{
+			Kind:      "ExternalArtifact",
+			Name:      crd.Spec.Release.ChartRef.SourceRef.Name,
+			Namespace: crd.Spec.Release.ChartRef.SourceRef.Namespace,
+		}
+
+		if hrCopy.Spec.ChartRef == nil {
+			// Need to create ChartRef
+			hrCopy.Spec.ChartRef = expectedChartRef
+			// Clear Chart if it exists
+			hrCopy.Spec.Chart = nil
+			updated = true
+		} else {
+			// Update existing ChartRef
+			if hrCopy.Spec.ChartRef.Kind != expectedChartRef.Kind ||
+				hrCopy.Spec.ChartRef.Name != expectedChartRef.Name ||
+				hrCopy.Spec.ChartRef.Namespace != expectedChartRef.Namespace {
+				hrCopy.Spec.ChartRef = expectedChartRef
+				// Clear Chart if it exists
+				hrCopy.Spec.Chart = nil
+				updated = true
+			}
+		}
+	}
+
+	if !updated {
+		return nil
+	}
+
+	// Update the HelmRelease
+	patch := client.MergeFrom(hr.DeepCopy())
+	if err := r.Patch(ctx, hrCopy, patch); err != nil {
+		return err
+	}
+
+	logger.Info("Updated HelmRelease chart/chartRef", "name", hr.Name, "namespace", hr.Namespace, "crd", crd.Name)
+	return nil
 }
