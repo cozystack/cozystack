@@ -19,6 +19,9 @@ spec:
         kind: ExternalArtifact
         name: cozystack-system-info
         namespace: cozy-system
+    values:
+      cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     name: info
     category: Administration

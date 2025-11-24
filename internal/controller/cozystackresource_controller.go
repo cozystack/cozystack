@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -26,6 +28,7 @@ import (
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=cozystackresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
 type CozystackResourceDefinitionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -208,23 +211,37 @@ func sortCozyRDs(a, b cozyv1alpha1.CozystackResourceDefinition) int {
 	return 1
 }
 
-// updateHelmReleasesForCRD updates all HelmReleases that match the labels from CozystackResourceDefinition
+// updateHelmReleasesForCRD updates all HelmReleases that match the application labels from CozystackResourceDefinition
 func (r *CozystackResourceDefinitionReconciler) updateHelmReleasesForCRD(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
 	logger := log.FromContext(ctx)
 
-	// Skip if no labels defined
-	if len(crd.Spec.Release.Labels) == 0 {
-		return nil
+	// Use application labels to find HelmReleases
+	// Labels: apps.cozystack.io/application.kind and apps.cozystack.io/application.group
+	applicationKind := crd.Spec.Application.Kind
+	applicationGroup := "apps.cozystack.io" // All applications use this group
+
+	// Build label selector for HelmReleases
+	// Only reconcile HelmReleases with cozystack.io/ui=true label
+	labelSelector := client.MatchingLabels{
+		"apps.cozystack.io/application.kind":  applicationKind,
+		"apps.cozystack.io/application.group": applicationGroup,
+		"cozystack.io/ui":                      "true",
 	}
 
 	// List all HelmReleases with matching labels
 	hrList := &helmv2.HelmReleaseList{}
-	labelSelector := client.MatchingLabels(crd.Spec.Release.Labels)
 	if err := r.List(ctx, hrList, labelSelector); err != nil {
+		logger.Error(err, "failed to list HelmReleases", "kind", applicationKind, "group", applicationGroup)
 		return err
 	}
 
-	logger.Info("Found HelmReleases to update", "crd", crd.Name, "count", len(hrList.Items))
+	logger.Info("Found HelmReleases to update", "crd", crd.Name, "kind", applicationKind, "count", len(hrList.Items), "hasValues", crd.Spec.Release.Values != nil)
+
+	// Log each HelmRelease that will be updated
+	for i := range hrList.Items {
+		hr := &hrList.Items[i]
+		logger.V(4).Info("Processing HelmRelease", "name", hr.Name, "namespace", hr.Namespace, "kind", applicationKind)
+	}
 
 	// Update each HelmRelease
 	for i := range hrList.Items {
@@ -238,7 +255,7 @@ func (r *CozystackResourceDefinitionReconciler) updateHelmReleasesForCRD(ctx con
 	return nil
 }
 
-// updateHelmReleaseChart updates the chart/chartRef in HelmRelease based on CozystackResourceDefinition
+// updateHelmReleaseChart updates the chart/chartRef and values in HelmRelease based on CozystackResourceDefinition
 func (r *CozystackResourceDefinitionReconciler) updateHelmReleaseChart(ctx context.Context, hr *helmv2.HelmRelease, crd *cozyv1alpha1.CozystackResourceDefinition) error {
 	logger := log.FromContext(ctx)
 	updated := false
@@ -306,6 +323,32 @@ func (r *CozystackResourceDefinitionReconciler) updateHelmReleaseChart(ctx conte
 		}
 	}
 
+	// Update Values from CRD if specified
+	if crd.Spec.Release.Values != nil {
+		logger.V(4).Info("Merging values from CRD", "name", hr.Name, "namespace", hr.Namespace, "crd", crd.Name)
+		mergedValues, err := r.mergeHelmReleaseValues(crd.Spec.Release.Values, hrCopy.Spec.Values)
+		if err != nil {
+			logger.Error(err, "failed to merge values", "name", hr.Name, "namespace", hr.Namespace)
+			return fmt.Errorf("failed to merge values: %w", err)
+		}
+
+		// After merging, ensure namespace is set from namespace labels (top-level)
+		// This matches the behavior in cozystack-api and NamespaceHelmReconciler
+		mergedValues, err = r.injectNamespaceLabelsIntoValues(ctx, mergedValues, hrCopy.Namespace)
+		if err != nil {
+			logger.Error(err, "failed to inject namespace labels", "name", hr.Name, "namespace", hr.Namespace)
+			// Continue even if namespace labels injection fails
+		}
+
+		// Always update values if CRD has values specified
+		// This ensures that CRD values are always applied, even if the merged result is the same
+		hrCopy.Spec.Values = mergedValues
+		updated = true
+		logger.Info("Updated values from CRD", "name", hr.Name, "namespace", hr.Namespace, "crd", crd.Name)
+	} else {
+		logger.V(4).Info("No values in CRD, skipping values update", "name", hr.Name, "namespace", hr.Namespace, "crd", crd.Name)
+	}
+
 	if !updated {
 		return nil
 	}
@@ -316,6 +359,141 @@ func (r *CozystackResourceDefinitionReconciler) updateHelmReleaseChart(ctx conte
 		return err
 	}
 
-	logger.Info("Updated HelmRelease chart/chartRef", "name", hr.Name, "namespace", hr.Namespace, "crd", crd.Name)
+	logger.Info("Updated HelmRelease", "name", hr.Name, "namespace", hr.Namespace, "crd", crd.Name)
 	return nil
+}
+
+// mergeHelmReleaseValues merges CRD default values with existing HelmRelease values
+// All fields are merged except "cozystack" which is fully overwritten from CRD values
+// Existing HelmRelease values (outside of cozystack) take precedence (user values override defaults)
+func (r *CozystackResourceDefinitionReconciler) mergeHelmReleaseValues(crdValues, existingValues *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
+	// If CRD has no values, preserve existing
+	if crdValues == nil || len(crdValues.Raw) == 0 {
+		return existingValues, nil
+	}
+
+	// If existing has no values, use CRD values
+	if existingValues == nil || len(existingValues.Raw) == 0 {
+		return crdValues, nil
+	}
+
+	var crdMap, existingMap map[string]interface{}
+
+	// Parse CRD values (defaults)
+	if err := json.Unmarshal(crdValues.Raw, &crdMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal CRD values: %w", err)
+	}
+
+	// Parse existing HelmRelease values
+	if err := json.Unmarshal(existingValues.Raw, &existingMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal existing values: %w", err)
+	}
+
+	// Start with CRD values (defaults) as base
+	// Then merge existing values on top (existing values override CRD defaults)
+	// This ensures user values have priority over CRD defaults
+	merged := deepMergeMaps(crdMap, existingMap)
+
+	// Explicitly handle "cozystack" field: CRD values completely overwrite existing
+	// This ensures cozystack field from CRD is always used, even if user modified it
+	if crdCozystack, exists := crdMap["cozystack"]; exists {
+		merged["cozystack"] = crdCozystack
+	}
+
+	// Explicitly handle "namespace" field: CRD values completely overwrite existing
+	// This ensures namespace field from CRD is always used, even if user modified it
+	if crdNamespace, exists := crdMap["namespace"]; exists {
+		merged["namespace"] = crdNamespace
+	}
+
+	mergedJSON, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merged values: %w", err)
+	}
+
+	return &apiextensionsv1.JSON{Raw: mergedJSON}, nil
+}
+
+// deepMergeMaps performs a deep merge of two maps
+func deepMergeMaps(base, override map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Copy base map
+	for k, v := range base {
+		result[k] = v
+	}
+
+	// Merge override map
+	for k, v := range override {
+		if baseVal, exists := result[k]; exists {
+			// If both are maps, recursively merge
+			if baseMap, ok := baseVal.(map[string]interface{}); ok {
+				if overrideMap, ok := v.(map[string]interface{}); ok {
+					result[k] = deepMergeMaps(baseMap, overrideMap)
+					continue
+				}
+			}
+		}
+		// Override takes precedence
+		result[k] = v
+	}
+
+	return result
+}
+
+// valuesEqual compares two JSON values for equality
+func valuesEqual(a, b *apiextensionsv1.JSON) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	// Simple byte comparison (could be improved with canonical JSON)
+	return string(a.Raw) == string(b.Raw)
+}
+
+// injectNamespaceLabelsIntoValues injects namespace.cozystack.io/* labels into namespace (top-level)
+// This matches the behavior in cozystack-api and NamespaceHelmReconciler
+func (r *CozystackResourceDefinitionReconciler) injectNamespaceLabelsIntoValues(ctx context.Context, values *apiextensionsv1.JSON, namespaceName string) (*apiextensionsv1.JSON, error) {
+	// Get namespace to extract namespace.cozystack.io/* labels
+	namespace := &corev1.Namespace{}
+	if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, namespace); err != nil {
+		// If namespace not found, return values as-is
+		return values, nil
+	}
+
+	// Extract namespace.cozystack.io/* labels
+	namespaceLabels := extractNamespaceLabelsFromNamespace(namespace)
+	if len(namespaceLabels) == 0 {
+		// No namespace labels, return values as-is
+		return values, nil
+	}
+
+	// Parse values
+	var valuesMap map[string]interface{}
+	if values != nil && len(values.Raw) > 0 {
+		if err := json.Unmarshal(values.Raw, &valuesMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal values: %w", err)
+		}
+	} else {
+		valuesMap = make(map[string]interface{})
+	}
+
+	// Convert namespaceLabels from map[string]string to map[string]interface{}
+	namespaceLabelsMap := make(map[string]interface{})
+	for k, v := range namespaceLabels {
+		namespaceLabelsMap[k] = v
+	}
+
+	// Namespace labels completely overwrite existing namespace field (top-level)
+	valuesMap["namespace"] = namespaceLabelsMap
+
+	// Marshal back to JSON
+	mergedJSON, err := json.Marshal(valuesMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal values with namespace labels: %w", err)
+	}
+
+	return &apiextensionsv1.JSON{Raw: mergedJSON}, nil
 }

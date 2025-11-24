@@ -45,15 +45,13 @@ spec:
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
 
   enableSuperuserAccess: true
-  {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-  {{- if $configMap }}
-  {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
-  {{- if $rawConstraints }}
-  {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
-    labelSelector:
-      matchLabels:
-        cnpg.io/cluster: {{ .Release.Name }}
-  {{- end }}
+  {{- $cozystack := .Values.cozystack | default dict }}
+  {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
+  {{- if $topologySpreadConstraints }}
+  topologySpreadConstraints:
+    {{- range $topologySpreadConstraints }}
+    - {{- mergeOverwrite (dict "labelSelector" (dict "matchLabels" (dict "cnpg.io/cluster" $.Release.Name))) . | toYaml | nindent 6 | trim }}
+    {{- end }}
   {{- end }}
   postgresql:
     parameters:

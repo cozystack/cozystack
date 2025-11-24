@@ -359,6 +359,11 @@ spec:
                   prefix:
                     description: Prefix for the release name
                     type: string
+                  values:
+                    description: |-
+                      Default values to be merged into every HelmRelease created from this resource definition
+                      User-specified values in Application spec will override these default values
+                    x-kubernetes-preserve-unknown-fields: true
                 required:
                 - prefix
                 type: object

@@ -1,8 +1,8 @@
 {{- define "cozystack.defaultVPAValues" -}}
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
+{{- $cozystack := .Values.cozystack | default dict }}
+{{- $clusterDomain := dig "networking" "clusterDomain" "cozy.local" $cozystack }}
+{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $targetTenant := dig "monitoring" "" $namespace }}
 vpaForVPA: false
 vertical-pod-autoscaler:
   recommender:

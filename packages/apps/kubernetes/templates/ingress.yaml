@@ -1,5 +1,6 @@
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
+{{- $cozystack := .Values.cozystack | default dict }}
+{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $ingress := dig "ingress" "" $namespace }}
 {{- if and (eq .Values.addons.ingressNginx.exposeMethod "Proxied") .Values.addons.ingressNginx.hosts }}
 ---
 apiVersion: networking.k8s.io/v1

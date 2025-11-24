@@ -216,6 +216,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controller.NamespaceHelmReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NamespaceHelmReconciler")
+		os.Exit(1)
+	}
+
+	if err = (&controller.CozystackResourceDefinitionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		CozystackAPIKind: "Deployment",
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
+		os.Exit(1)
+	}
+
 	dashboardManager := &dashboard.Manager{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

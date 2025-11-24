@@ -1,15 +1,21 @@
 {{- define "cozystack.namespace-anotations" }}
 {{- $context := index . 0 }}
-{{- $existingNS := index . 1 }}
+{{- $namespace := index . 1 }}
 {{- range $x := list "etcd" "monitoring" "ingress" "seaweedfs" }}
 {{- if (index $context.Values $x) }}
 namespace.cozystack.io/{{ $x }}: "{{ include "tenant.name" $context }}"
 {{- else }}
-namespace.cozystack.io/{{ $x }}: "{{ index $existingNS.metadata.annotations (printf "namespace.cozystack.io/%s" $x) | required (printf "namespace %s has no namespace.cozystack.io/%s annotation" $context.Release.Namespace $x) }}"
+{{- $value := dig $x "" $namespace }}
+{{- if $value }}
+namespace.cozystack.io/{{ $x }}: "{{ $value }}"
+{{- else }}
+{{- fail (printf "namespace %s has no namespace.cozystack.io/%s in values.namespace" $context.Release.Namespace $x) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
 
+{{- $namespace := dig "namespace" (dict) .Values }}
 {{- $existingNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if not $existingNS }}
 {{- fail (printf "error lookup existing namespace: %s" .Release.Namespace) }}
@@ -26,10 +32,13 @@ metadata:
     {{- if .Values.host }}
     namespace.cozystack.io/host: "{{ .Values.host }}"
     {{- else }}
-    {{ $parentHost := index $existingNS.metadata.annotations "namespace.cozystack.io/host" | required (printf "namespace %s has no namespace.cozystack.io/host annotation" .Release.Namespace) }}
+    {{- $parentHost := dig "host" "" $namespace }}
+    {{- if not $parentHost }}
+    {{- fail (printf "namespace %s has no host in values.namespace" .Release.Namespace) }}
+    {{- end }}
     namespace.cozystack.io/host: "{{ splitList "-" (include "tenant.name" .) | last }}.{{ $parentHost }}"
     {{- end }}
-    {{- include "cozystack.namespace-anotations" (list . $existingNS) | nindent 4 }}
+    {{- include "cozystack.namespace-anotations" (list . $namespace) | nindent 4 }}
   labels:
     tenant.cozystack.io/{{ include "tenant.name" $ }}: ""
     {{- if hasPrefix "tenant-" .Release.Namespace }}
@@ -40,7 +49,7 @@ metadata:
     {{- end }}
     {{- end }}
     {{- end }}
-    {{- include "cozystack.namespace-anotations" (list $ $existingNS) | nindent 4 }}
+    {{- include "cozystack.namespace-anotations" (list $ $namespace) | nindent 4 }}
     alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
   ownerReferences:
   - apiVersion: v1

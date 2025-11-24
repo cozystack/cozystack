@@ -61,8 +61,17 @@ spec:
       releaseName: tenant-root
       artifact: tenant
       namespace: tenant-root
+      namespaceLabels:
+        namespace.cozystack.io/host: {{ $host }}
+        namespace.cozystack.io/etcd: tenant-root
+        namespace.cozystack.io/ingress: tenant-root
+        namespace.cozystack.io/monitoring: tenant-root
+        namespace.cozystack.io/seaweedfs: tenant-root
       labels:
         cozystack.io/ui: "true"
+        apps.cozystack.io/application.kind: Tenant
+        apps.cozystack.io/application.group: apps.cozystack.io
+        apps.cozystack.io/application.name: tenant-root
       values:
         host: {{ $host }}
 

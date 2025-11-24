@@ -18,6 +18,9 @@ spec:
         kind: ExternalArtifact
         name: cozystack-system-tenant
         namespace: cozy-system
+    values:
+      cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: Administration
     singular: Tenant

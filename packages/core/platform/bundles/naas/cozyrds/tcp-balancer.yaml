@@ -18,6 +18,9 @@ spec:
         kind: ExternalArtifact
         name: cozystack-naas-tcp-balancer
         namespace: cozy-system
+    values:
+      cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: NaaS
     singular: TCP Balancer

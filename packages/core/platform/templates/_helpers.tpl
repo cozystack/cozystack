@@ -75,15 +75,30 @@ Usage: {{ include "cozystack.render-file" (list . "bundles/system/bundle-full.ya
 {{- end -}}
 
 {{/*
-Render all files matching a glob pattern
+Render all files matching a glob pattern with template processing
 Usage: {{ include "cozystack.render-glob" (list . "bundles/system/cozyrds/*.yaml") }}
+Escapes templates like {{ .name }} and {{ .namespace }} that should remain as-is
 */}}
 {{- define "cozystack.render-glob" -}}
 {{- $ := index . 0 }}
 {{- $pattern := index . 1 }}
 {{- range $path, $_ := $.Files.Glob $pattern }}
+{{- $content := $.Files.Get $path }}
+{{- /* Escape templates that should remain as-is using temporary markers */}}
+{{- /* Process complex patterns first (longer matches) */}}
+{{- $content = $content | replace "{{ slice .namespace 7 }}" "__TEMPLATE_SLICE_NAMESPACE_7__" }}
+{{- $content = $content | replace "{{ slice .namespace" "__TEMPLATE_SLICE_NAMESPACE__" }}
+{{- $content = $content | replace "{{ .namespace }}" "__TEMPLATE_DOT_NAMESPACE__" }}
+{{- $content = $content | replace "{{ .name }}" "__TEMPLATE_DOT_NAME__" }}
+{{- /* Render the template */}}
+{{- $rendered := trim (tpl $content $) }}
+{{- /* Restore escaped templates */}}
+{{- $rendered = $rendered | replace "__TEMPLATE_DOT_NAME__" "{{ .name }}" }}
+{{- $rendered = $rendered | replace "__TEMPLATE_DOT_NAMESPACE__" "{{ .namespace }}" }}
+{{- $rendered = $rendered | replace "__TEMPLATE_SLICE_NAMESPACE__" "{{ slice .namespace" }}
+{{- $rendered = $rendered | replace "__TEMPLATE_SLICE_NAMESPACE_7__" "{{ slice .namespace 7 }}" }}
 ---
-{{ $.Files.Get $path }}
+{{ $rendered }}
 {{- end }}
 {{- end -}}
 
@@ -142,4 +157,22 @@ Returns: Merged values dictionary
 {{- else }}
   {{- $defaultValues }}
 {{- end }}
+{{- end -}}
+
+{{/*
+Build cozystack values structure from root values
+Usage: {{ include "cozystack.build-values" . | nindent 8 }}
+Returns: YAML string with cozystack values structure
+*/}}
+{{- define "cozystack.build-values" -}}
+{{- $cozystack := dict }}
+{{- if .Values.networking }}{{ $_ := set $cozystack "networking" .Values.networking }}{{ end }}
+{{- if .Values.publishing }}{{ $_ := set $cozystack "publishing" .Values.publishing }}{{ end }}
+{{- if .Values.scheduling }}{{ $_ := set $cozystack "scheduling" .Values.scheduling }}{{ end }}
+{{- if .Values.authentication }}{{ $_ := set $cozystack "authentication" .Values.authentication }}{{ end }}
+{{- if .Values.telemetry }}{{ $_ := set $cozystack "telemetry" .Values.telemetry }}{{ end }}
+{{- if .Values.branding }}{{ $_ := set $cozystack "branding" .Values.branding }}{{ end }}
+{{- if .Values.registries }}{{ $_ := set $cozystack "registries" .Values.registries }}{{ end }}
+{{- if .Values.resources }}{{ $_ := set $cozystack "resources" .Values.resources }}{{ end }}
+{{- $cozystack | toYaml | trim }}
 {{- end -}}

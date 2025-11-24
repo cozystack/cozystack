@@ -1,5 +1,5 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $cozystack := .Values.cozystack | default dict }}
+{{- $clusterDomain := dig "networking" "clusterDomain" "cozy.local" $cozystack }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $passwords := dict }}
 

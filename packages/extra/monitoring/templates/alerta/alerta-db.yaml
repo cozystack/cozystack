@@ -5,15 +5,13 @@ metadata:
   name: alerta-db
 spec:
   instances: 2
-  {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-  {{- if $configMap }}
-  {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
-  {{- if $rawConstraints }}
-  {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
-    labelSelector:
-      matchLabels:
-        cnpg.io/cluster: alerta-db
-  {{- end }}
+  {{- $cozystack := .Values.cozystack | default dict }}
+  {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
+  {{- if $topologySpreadConstraints }}
+  topologySpreadConstraints:
+    {{- range $topologySpreadConstraints }}
+    - {{- mergeOverwrite (dict "labelSelector" (dict "matchLabels" (dict "cnpg.io/cluster" "alerta-db"))) . | toYaml | nindent 6 | trim }}
+    {{- end }}
   {{- end }}
   storage:
     size: {{ required ".Values.alerta.storage is required" .Values.alerta.storage }}

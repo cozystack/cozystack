@@ -31,9 +31,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	fields "k8s.io/apimachinery/pkg/fields"
 	labels "k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -41,13 +41,16 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 
 	// Importing API errors package to construct appropriate error responses
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -345,6 +348,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
 
+	klog.V(6).Infof("Using label selector: %s for kind: %s, group: %s", helmLabelSelector, r.kindName, r.gvk.Group)
+
 	// Set ListOptions for HelmRelease with selector mapping
 	metaOptions := metav1.ListOptions{
 		FieldSelector: helmFieldSelector,
@@ -362,16 +367,30 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
+	klog.V(6).Infof("Found %d HelmReleases with label selector, filtering by labels...", len(hrList.Items))
+
 	// Initialize unstructured items array
 	items := make([]unstructured.Unstructured, 0)
 
 	// Iterate over HelmReleases and convert to Applications
-	// No need to filter by shouldIncludeHelmRelease since we're using label selectors
+	// Filter by labels to ensure only relevant HelmReleases are included
+	// This is a safety check in case label selectors don't work perfectly or HelmReleases were created without labels
 	for i := range hrList.Items {
+		hr := &hrList.Items[i]
 
-		app, err := r.ConvertHelmReleaseToApplication(&hrList.Items[i])
+		// Verify that HelmRelease has the required labels
+		if hr.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+			hr.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+			klog.V(6).Infof("Skipping HelmRelease %s - missing or incorrect application labels (kind: %s, expected: %s, group: %s, expected: %s)",
+				hr.GetName(),
+				hr.Labels["apps.cozystack.io/application.kind"], r.kindName,
+				hr.Labels["apps.cozystack.io/application.group"], r.gvk.Group)
+			continue
+		}
+
+		app, err := r.ConvertHelmReleaseToApplication(hr)
 		if err != nil {
-			klog.Errorf("Error converting HelmRelease %s to Application: %v", hrList.Items[i].GetName(), err)
+			klog.Errorf("Error converting HelmRelease %s to Application: %v", hr.GetName(), err)
 			continue
 		}
 
@@ -1016,6 +1035,180 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	return processed
 }
 
+// getCozystackResourceDefinition retrieves the CozystackResourceDefinition for this resource kind
+func (r *REST) getCozystackResourceDefinition(ctx context.Context) (*cozyv1alpha1.CozystackResourceDefinition, error) {
+	crdList := &cozyv1alpha1.CozystackResourceDefinitionList{}
+	if err := r.c.List(ctx, crdList); err != nil {
+		return nil, fmt.Errorf("failed to list CozystackResourceDefinitions: %w", err)
+	}
+
+	for i := range crdList.Items {
+		crd := &crdList.Items[i]
+		if crd.Spec.Application.Kind == r.kindName {
+			return crd, nil
+		}
+	}
+
+	return nil, fmt.Errorf("CozystackResourceDefinition not found for kind %s", r.kindName)
+}
+
+// extractNamespaceLabels extracts namespace.cozystack.io/* labels from namespace and converts them to cozystack.namespace values
+func extractNamespaceLabels(ns *corev1.Namespace) map[string]interface{} {
+	namespaceValues := make(map[string]interface{})
+	prefix := "namespace.cozystack.io/"
+
+	if ns.Labels == nil {
+		return namespaceValues
+	}
+
+	for key, value := range ns.Labels {
+		if strings.HasPrefix(key, prefix) {
+			// Remove prefix and add to namespace values
+			namespaceKey := strings.TrimPrefix(key, prefix)
+			namespaceValues[namespaceKey] = value
+		}
+	}
+
+	return namespaceValues
+}
+
+// mergeValues merges two JSON values, with userValues taking precedence
+func mergeValues(defaultValues, userValues *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
+	var defaultMap, userMap map[string]interface{}
+
+	if defaultValues != nil && len(defaultValues.Raw) > 0 {
+		if err := json.Unmarshal(defaultValues.Raw, &defaultMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal default values: %w", err)
+		}
+	} else {
+		defaultMap = make(map[string]interface{})
+	}
+
+	if userValues != nil && len(userValues.Raw) > 0 {
+		if err := json.Unmarshal(userValues.Raw, &userMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal user values: %w", err)
+		}
+	} else {
+		userMap = make(map[string]interface{})
+	}
+
+	// Deep merge: defaultValues first, then userValues (userValues override)
+	merged := deepMergeMaps(defaultMap, userMap)
+
+	mergedJSON, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merged values: %w", err)
+	}
+
+	return &apiextensionsv1.JSON{Raw: mergedJSON}, nil
+}
+
+// deepMergeMaps performs a deep merge of two maps
+func deepMergeMaps(base, override map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Copy base map
+	for k, v := range base {
+		result[k] = v
+	}
+
+	// Merge override map
+	for k, v := range override {
+		if baseVal, exists := result[k]; exists {
+			// If both are maps, recursively merge
+			if baseMap, ok := baseVal.(map[string]interface{}); ok {
+				if overrideMap, ok := v.(map[string]interface{}); ok {
+					result[k] = deepMergeMaps(baseMap, overrideMap)
+					continue
+				}
+			}
+		}
+		// Override takes precedence
+		result[k] = v
+	}
+
+	return result
+}
+
+// removeCozystackFromValues removes the cozystack and namespace fields from values
+func removeCozystackFromValues(values *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
+	if values == nil || len(values.Raw) == 0 {
+		return values, nil
+	}
+
+	var valuesMap map[string]interface{}
+	if err := json.Unmarshal(values.Raw, &valuesMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal values: %w", err)
+	}
+
+	// Check if cozystack or namespace field exists before removing
+	if _, exists := valuesMap["cozystack"]; exists {
+		klog.V(4).Infof("Removing cozystack field from values (found in values map)")
+		delete(valuesMap, "cozystack")
+	} else {
+		klog.V(6).Infof("cozystack field not found in values map")
+	}
+	if _, exists := valuesMap["namespace"]; exists {
+		klog.V(4).Infof("Removing namespace field from values (found in values map)")
+		delete(valuesMap, "namespace")
+	} else {
+		klog.V(6).Infof("namespace field not found in values map")
+	}
+
+	// If map is empty, return empty JSON object instead of nil to ensure proper serialization
+	if len(valuesMap) == 0 {
+		klog.V(6).Infof("Values map is empty after removing cozystack/namespace, returning empty JSON object")
+		return &apiextensionsv1.JSON{Raw: []byte("{}")}, nil
+	}
+
+	cleanedJSON, err := json.Marshal(valuesMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal cleaned values: %w", err)
+	}
+
+	// Verify cozystack and namespace were removed
+	var verifyMap map[string]interface{}
+	if err := json.Unmarshal(cleanedJSON, &verifyMap); err == nil {
+		cozystackRemoved := true
+		namespaceRemoved := true
+		if _, stillExists := verifyMap["cozystack"]; stillExists {
+			klog.Errorf("ERROR: cozystack field still exists after removal attempt!")
+			cozystackRemoved = false
+		}
+		if _, stillExists := verifyMap["namespace"]; stillExists {
+			klog.Errorf("ERROR: namespace field still exists after removal attempt!")
+			namespaceRemoved = false
+		}
+		if cozystackRemoved && namespaceRemoved {
+			klog.V(6).Infof("Verified: cozystack and namespace fields successfully removed")
+		}
+	}
+
+	return &apiextensionsv1.JSON{Raw: cleanedJSON}, nil
+}
+
+// checkCozystackInValues checks if cozystack or namespace field exists in user values and returns an error if it does
+func checkCozystackInValues(values *apiextensionsv1.JSON) error {
+	if values == nil || len(values.Raw) == 0 {
+		return nil
+	}
+
+	var valuesMap map[string]interface{}
+	if err := json.Unmarshal(values.Raw, &valuesMap); err != nil {
+		return fmt.Errorf("failed to unmarshal values: %w", err)
+	}
+
+	if _, exists := valuesMap["cozystack"]; exists {
+		return fmt.Errorf("cozystack field is not allowed in user-specified values")
+	}
+
+	if _, exists := valuesMap["namespace"]; exists {
+		return fmt.Errorf("namespace field is not allowed in user-specified values")
+	}
+
+	return nil
+}
+
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
 func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
 	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
@@ -1029,6 +1222,39 @@ func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 
 	if err := r.applySpecDefaults(&app); err != nil {
 		return app, fmt.Errorf("defaulting error: %w", err)
+	}
+
+	// Remove cozystack field after applying defaults to ensure it's not shown to user
+	// This must be done after applySpecDefaults because defaults might add it back
+	if app.Spec != nil && len(app.Spec.Raw) > 0 {
+		cleanedValues, err := removeCozystackFromValues(app.Spec)
+		if err != nil {
+			return app, fmt.Errorf("failed to remove cozystack from values: %w", err)
+		}
+		app.Spec = cleanedValues
+
+		// Double-check that cozystack was removed
+		if app.Spec != nil && len(app.Spec.Raw) > 0 {
+			var verifyMap map[string]interface{}
+			if err := json.Unmarshal(app.Spec.Raw, &verifyMap); err == nil {
+				if _, stillExists := verifyMap["cozystack"]; stillExists {
+					klog.Errorf("CRITICAL: cozystack field still exists after removal! Attempting force removal...")
+					delete(verifyMap, "cozystack")
+				}
+				if _, stillExists := verifyMap["namespace"]; stillExists {
+					klog.Errorf("CRITICAL: namespace field still exists after removal! Attempting force removal...")
+					delete(verifyMap, "namespace")
+				}
+				if len(verifyMap) == 0 {
+					app.Spec = &apiextensionsv1.JSON{Raw: []byte("{}")}
+				} else {
+					forceCleanedJSON, err := json.Marshal(verifyMap)
+					if err == nil {
+						app.Spec = &apiextensionsv1.JSON{Raw: forceCleanedJSON}
+					}
+				}
+			}
+		}
 	}
 
 	klog.V(6).Infof("Successfully converted HelmRelease %s to Application", hr.GetName())
@@ -1087,6 +1313,73 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 
 // convertApplicationToHelmRelease implements the actual conversion logic
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	ctx := context.Background()
+
+	// Check if user specified cozystack field in values
+	if err := checkCozystackInValues(app.Spec); err != nil {
+		return nil, err
+	}
+
+	// Get CozystackResourceDefinition to extract default values
+	crd, err := r.getCozystackResourceDefinition(ctx)
+	if err != nil {
+		klog.V(6).Infof("Could not find CozystackResourceDefinition for kind %s: %v", r.kindName, err)
+		// Continue without default values if CRD not found
+		crd = nil
+	}
+
+	// Start with default values from CRD (if any)
+	var mergedValues *apiextensionsv1.JSON
+	if crd != nil && crd.Spec.Release.Values != nil {
+		mergedValues, err = mergeValues(crd.Spec.Release.Values, app.Spec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge default values with user values: %w", err)
+		}
+	} else {
+		// No default values, use user values as-is
+		mergedValues = app.Spec
+	}
+
+	// Get namespace to extract namespace.cozystack.io/* labels
+	namespace := &corev1.Namespace{}
+	if err := r.c.Get(ctx, client.ObjectKey{Name: app.Namespace}, namespace); err != nil {
+		klog.V(6).Infof("Could not get namespace %s: %v", app.Namespace, err)
+		// Continue without namespace labels if namespace not found
+		namespace = nil
+	}
+
+	// Extract namespace labels and add to namespace (top-level)
+	if namespace != nil {
+		namespaceLabels := extractNamespaceLabels(namespace)
+		if len(namespaceLabels) > 0 {
+			// Parse merged values to add namespace labels
+			var valuesMap map[string]interface{}
+			if mergedValues != nil && len(mergedValues.Raw) > 0 {
+				if err := json.Unmarshal(mergedValues.Raw, &valuesMap); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal merged values: %w", err)
+				}
+			} else {
+				valuesMap = make(map[string]interface{})
+			}
+
+			// Convert namespaceLabels to map[string]interface{}
+			namespaceLabelsMap := make(map[string]interface{})
+			for k, v := range namespaceLabels {
+				namespaceLabelsMap[k] = v
+			}
+
+			// Namespace labels completely overwrite existing namespace field (top-level)
+			valuesMap["namespace"] = namespaceLabelsMap
+
+			// Marshal back to JSON
+			mergedJSON, err := json.Marshal(valuesMap)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal values with namespace labels: %w", err)
+			}
+			mergedValues = &apiextensionsv1.JSON{Raw: mergedJSON}
+		}
+	}
+
 	helmRelease := &helmv2.HelmRelease{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "helm.toolkit.fluxcd.io/v2",
@@ -1112,7 +1405,7 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 					Retries: -1,
 				},
 			},
-			Values: app.Spec,
+			Values: mergedValues,
 		},
 	}
 

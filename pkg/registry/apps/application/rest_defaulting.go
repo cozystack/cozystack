@@ -21,7 +21,7 @@ import (
 	"fmt"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 )
 
@@ -42,11 +42,21 @@ func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
 	if err := defaultLikeKubernetes(&m, r.specSchema); err != nil {
 		return err
 	}
+	// Remove cozystack and namespace fields before marshaling to ensure they're never in the output
+	delete(m, "cozystack")
+	delete(m, "namespace")
+	
+	// Always return at least an empty JSON object, never nil
+	if len(m) == 0 {
+		app.Spec = &apiextensionsv1.JSON{Raw: []byte("{}")}
+		return nil
+	}
+	
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	app.Spec = &apiextv1.JSON{Raw: raw}
+	app.Spec = &apiextensionsv1.JSON{Raw: raw}
 	return nil
 }
 

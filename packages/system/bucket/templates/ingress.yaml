@@ -2,9 +2,9 @@
 {{- $publishing := $cozystack.publishing | default dict }}
 {{- $certificates := $publishing.certificates | default dict }}
 {{- $issuerType := $certificates.issuerType | default "http01" }}
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
+{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $host := dig "host" "" $namespace }}
+{{- $ingress := dig "ingress" "" $namespace }}
 
 apiVersion: networking.k8s.io/v1
 kind: Ingress

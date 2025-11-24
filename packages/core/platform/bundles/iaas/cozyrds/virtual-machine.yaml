@@ -18,6 +18,9 @@ spec:
         kind: ExternalArtifact
         name: cozystack-iaas-virtual-machine
         namespace: cozy-system
+    values:
+      cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: IaaS
     singular: Virtual Machine

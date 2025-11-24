@@ -1,3 +1,3 @@
 # Digest for OCIRepository cozystack-packages
 # This value is automatically updated by Makefile when building the image
-packagesDigest: "sha256:c9dd5657878db1eaf434875e951cf8c911d698a3e7d87e3820e6b174a120bf66"
+packagesDigest: "sha256:a1c14def709ed07d4d0dc8a776143388115a36c30e3558d5c4974f55ef653f35"

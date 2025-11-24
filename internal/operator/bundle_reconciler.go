@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,13 +28,16 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // CozystackBundleReconciler reconciles CozystackBundle resources
@@ -394,6 +398,12 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 
 	// Create HelmRelease for each package
 	for _, pkg := range packages {
+		// Skip disabled packages
+		if pkg.Disabled {
+			logger.V(1).Info("skipping disabled package", "name", pkg.Name, "namespace", pkg.Namespace)
+			continue
+		}
+
 		var artifactName string
 		artifactNamespace := "cozy-system"
 
@@ -603,8 +613,45 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 		if existingHR, ok := existing.(*helmv2.HelmRelease); ok {
 			logger := log.FromContext(ctx)
 			logger.V(1).Info("updating HelmRelease Spec", "name", hr.Name, "namespace", hr.Namespace)
-			// Update Spec from obj (which contains the desired state with all values and dependsOn)
-			existingHR.Spec = hr.Spec
+
+			// Check if this HelmRelease is managed through Application API
+			// If it has apps.cozystack.io/application.* labels, preserve user-modified values
+			isApplicationManaged := existingHR.Labels["apps.cozystack.io/application.kind"] != "" &&
+				existingHR.Labels["apps.cozystack.io/application.group"] != ""
+
+			if isApplicationManaged {
+				// For Application-managed HelmReleases, merge values but overwrite cozystack field
+				logger.V(1).Info("merging values for Application-managed HelmRelease, overwriting cozystack", "name", hr.Name, "namespace", hr.Namespace)
+				existingHR.Spec.Chart = hr.Spec.Chart
+				existingHR.Spec.ChartRef = hr.Spec.ChartRef
+				existingHR.Spec.Interval = hr.Spec.Interval
+				existingHR.Spec.Timeout = hr.Spec.Timeout
+				existingHR.Spec.ReleaseName = hr.Spec.ReleaseName
+				existingHR.Spec.DependsOn = hr.Spec.DependsOn
+				existingHR.Spec.Install = hr.Spec.Install
+				existingHR.Spec.Upgrade = hr.Spec.Upgrade
+				existingHR.Spec.Uninstall = hr.Spec.Uninstall
+				existingHR.Spec.Rollback = hr.Spec.Rollback
+				existingHR.Spec.StorageNamespace = hr.Spec.StorageNamespace
+				existingHR.Spec.KubeConfig = hr.Spec.KubeConfig
+				existingHR.Spec.TargetNamespace = hr.Spec.TargetNamespace
+				existingHR.Spec.PostRenderers = hr.Spec.PostRenderers
+				existingHR.Spec.ServiceAccountName = hr.Spec.ServiceAccountName
+				existingHR.Spec.Suspend = hr.Spec.Suspend
+
+				// Merge values: merge all fields except cozystack, which is fully overwritten
+				mergedValues, err := mergeHelmReleaseValues(existingHR.Spec.Values, hr.Spec.Values)
+				if err != nil {
+					logger.Error(err, "failed to merge values, using bundle values", "name", hr.Name, "namespace", hr.Namespace)
+					existingHR.Spec.Values = hr.Spec.Values
+				} else {
+					existingHR.Spec.Values = mergedValues
+				}
+			} else {
+				// For bundle-managed HelmReleases, update everything including values
+				existingHR.Spec = hr.Spec
+			}
+
 			// Preserve metadata updates we made above
 			existingHR.SetLabels(hr.GetLabels())
 			existingHR.SetAnnotations(hr.GetAnnotations())
@@ -615,6 +662,78 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 	}
 
 	return r.Update(ctx, obj)
+}
+
+// mergeHelmReleaseValues merges two HelmRelease values JSON objects
+// All fields are merged except "cozystack" which is fully overwritten from bundleValues
+func mergeHelmReleaseValues(existingValues, bundleValues *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
+	// If bundle has no values, preserve existing
+	if bundleValues == nil || len(bundleValues.Raw) == 0 {
+		return existingValues, nil
+	}
+
+	// If existing has no values, use bundle values
+	if existingValues == nil || len(existingValues.Raw) == 0 {
+		return bundleValues, nil
+	}
+
+	// Parse both values
+	var existingMap map[string]interface{}
+	if err := json.Unmarshal(existingValues.Raw, &existingMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal existing values: %w", err)
+	}
+
+	var bundleMap map[string]interface{}
+	if err := json.Unmarshal(bundleValues.Raw, &bundleMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal bundle values: %w", err)
+	}
+
+	// Merge: start with existing values
+	mergedMap := deepMergeMaps(existingMap, bundleMap)
+
+	// Overwrite cozystack field completely from bundle
+	if cozystackVal, exists := bundleMap["cozystack"]; exists {
+		mergedMap["cozystack"] = cozystackVal
+	} else {
+		// If bundle doesn't have cozystack, remove it from merged (optional - could also preserve)
+		delete(mergedMap, "cozystack")
+	}
+
+	// Marshal back to JSON
+	mergedJSON, err := json.Marshal(mergedMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merged values: %w", err)
+	}
+
+	return &apiextensionsv1.JSON{Raw: mergedJSON}, nil
+}
+
+// deepMergeMaps performs a deep merge of two maps
+// Values from override map take precedence, but nested maps are merged recursively
+func deepMergeMaps(base, override map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Copy base map
+	for k, v := range base {
+		result[k] = v
+	}
+
+	// Merge override map
+	for k, v := range override {
+		if baseVal, exists := result[k]; exists {
+			// If both are maps, recursively merge
+			if baseMap, ok := baseVal.(map[string]interface{}); ok {
+				if overrideMap, ok := v.(map[string]interface{}); ok {
+					result[k] = deepMergeMaps(baseMap, overrideMap)
+					continue
+				}
+			}
+		}
+		// Override takes precedence for non-map values or new keys
+		result[k] = v
+	}
+
+	return result
 }
 
 // Helper functions
@@ -726,10 +845,13 @@ func (r *CozystackBundleReconciler) cleanupOrphanedHelmReleases(ctx context.Cont
 		return err
 	}
 
-	// Build desired names
+	// Build desired names (excluding disabled packages)
 	desiredNames := make(map[types.NamespacedName]bool)
 	for _, pkg := range bundle.Spec.Packages {
-		desiredNames[types.NamespacedName{Name: pkg.Name, Namespace: pkg.Namespace}] = true
+		// Only include non-disabled packages in desired names
+		if !pkg.Disabled {
+			desiredNames[types.NamespacedName{Name: pkg.Name, Namespace: pkg.Namespace}] = true
+		}
 	}
 
 	// Find HelmReleases with this bundle label
@@ -819,8 +941,12 @@ func (r *CozystackBundleReconciler) reconcileNamespaces(ctx context.Context, bun
 	logger := log.FromContext(ctx)
 
 	// Collect namespaces from packages
-	// Map: namespace -> isPrivileged (true if at least one package in this namespace is privileged)
-	namespacesMap := make(map[string]bool)
+	// Map: namespace -> {isPrivileged, labels}
+	type namespaceInfo struct {
+		privileged bool
+		labels     map[string]string
+	}
+	namespacesMap := make(map[string]namespaceInfo)
 
 	for _, pkg := range packages {
 		// Skip disabled packages
@@ -833,20 +959,31 @@ func (r *CozystackBundleReconciler) reconcileNamespaces(ctx context.Context, bun
 			continue
 		}
 
-		// If package is privileged, mark namespace as privileged
-		// If namespace already exists and is privileged, keep it privileged
-		if pkg.Privileged {
-			namespacesMap[pkg.Namespace] = true
-		} else {
-			// Only set to false if not already marked as privileged
-			if _, exists := namespacesMap[pkg.Namespace]; !exists {
-				namespacesMap[pkg.Namespace] = false
+		info, exists := namespacesMap[pkg.Namespace]
+		if !exists {
+			info = namespaceInfo{
+				privileged: false,
+				labels:     make(map[string]string),
 			}
 		}
+
+		// If package is privileged, mark namespace as privileged
+		if pkg.Privileged {
+			info.privileged = true
+		}
+
+		// Merge namespace labels from package
+		if pkg.NamespaceLabels != nil {
+			for k, v := range pkg.NamespaceLabels {
+				info.labels[k] = v
+			}
+		}
+
+		namespacesMap[pkg.Namespace] = info
 	}
 
 	// Create or update all namespaces
-	for nsName, privileged := range namespacesMap {
+	for nsName, info := range namespacesMap {
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: nsName,
@@ -860,15 +997,20 @@ func (r *CozystackBundleReconciler) reconcileNamespaces(ctx context.Context, bun
 		}
 
 		// Add privileged label if needed
-		if privileged {
+		if info.privileged {
 			namespace.Labels["pod-security.kubernetes.io/enforce"] = "privileged"
 		}
 
+		// Merge namespace labels from packages
+		for k, v := range info.labels {
+			namespace.Labels[k] = v
+		}
+
 		if err := r.createOrUpdateNamespace(ctx, namespace); err != nil {
-			logger.Error(err, "failed to reconcile namespace", "name", nsName, "privileged", privileged)
+			logger.Error(err, "failed to reconcile namespace", "name", nsName, "privileged", info.privileged)
 			return fmt.Errorf("failed to reconcile namespace %s: %w", nsName, err)
 		}
-		logger.Info("reconciled namespace", "name", nsName, "privileged", privileged)
+		logger.Info("reconciled namespace", "name", nsName, "privileged", info.privileged, "labels", info.labels)
 	}
 
 	return nil
@@ -1012,5 +1154,25 @@ func (r *CozystackBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystack-bundle").
 		For(&cozyv1alpha1.CozystackBundle{}).
+		Watches(
+			&helmv2.HelmRelease{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				hr, ok := obj.(*helmv2.HelmRelease)
+				if !ok {
+					return nil
+				}
+				// Find the bundle that owns this HelmRelease by label
+				bundleName := hr.Labels["cozystack.io/bundle"]
+				if bundleName == "" {
+					return nil
+				}
+				// Reconcile the bundle to recreate the HelmRelease if it was deleted
+				return []reconcile.Request{{
+					NamespacedName: types.NamespacedName{
+						Name: bundleName,
+					},
+				}}
+			}),
+		).
 		Complete(r)
 }

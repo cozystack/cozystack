@@ -65,6 +65,12 @@ spec:
                   - path
                   type: object
                 type: array
+              basePath:
+                description: |-
+                  BasePath is the base path where packages are located in the source.
+                  For GitRepository, defaults to "packages" if not specified.
+                  For OCIRepository, defaults to empty string (root) if not specified.
+                type: string
               deletionPolicy:
                 allOf:
                 - enum:
@@ -160,6 +166,13 @@ spec:
                       description: Disabled indicates whether this release is disabled
                         (should not be installed)
                       type: boolean
+                    labels:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Labels are labels that will be applied to the HelmRelease created for this package
+                        These labels are merged with bundle-level labels and the default cozystack.io/bundle label
+                      type: object
                     libraries:
                       description: Libraries is a list of library names that this
                         package depends on
@@ -174,6 +187,13 @@ spec:
                       description: Namespace is the Kubernetes namespace where the
                         release will be installed
                       type: string
+                    namespaceLabels:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        NamespaceLabels are labels that will be applied to the namespace for this package
+                        These labels are merged with labels from other packages in the same namespace
+                      type: object
                     path:
                       description: |-
                         Path is the path to the Helm chart directory

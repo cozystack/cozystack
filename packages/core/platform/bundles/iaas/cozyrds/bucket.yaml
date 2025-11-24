@@ -18,6 +18,9 @@ spec:
         kind: ExternalArtifact
         name: cozystack-iaas-bucket
         namespace: cozy-system
+    values:
+      cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     singular: Bucket
     plural: Buckets

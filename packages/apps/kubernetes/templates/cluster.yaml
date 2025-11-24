@@ -1,7 +1,8 @@
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $etcd := index $myNS.metadata.annotations "namespace.cozystack.io/etcd" }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
+{{- $cozystack := .Values.cozystack | default dict }}
+{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $etcd := dig "etcd" "" $namespace }}
+{{- $ingress := dig "ingress" "" $namespace }}
+{{- $host := dig "host" "" $namespace }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
@@ -31,14 +32,11 @@ spec:
             {{- end }}
             cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ .groupName }}
         spec:
-          {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-          {{- if $configMap }}
-          {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
-          {{- if $rawConstraints }}
-          {{- $rawConstraints | fromYaml | toYaml | nindent 10 }}
-            labelSelector:
-              matchLabels:
-                cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
+          {{- $cozystack := $.Values.cozystack | default dict }}
+          {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
+          {{- if $topologySpreadConstraints }}
+          {{- range $topologySpreadConstraints }}
+          - {{- mergeOverwrite (dict "labelSelector" (dict "matchLabels" (dict "cluster.x-k8s.io/cluster-name" $.Release.Name))) . | toYaml | nindent 12 | trim }}
           {{- end }}
           {{- end }}
           domain:

@@ -217,4 +217,9 @@ type BundleRelease struct {
 	// These labels are merged with bundle-level labels and the default cozystack.io/bundle label
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// NamespaceLabels are labels that will be applied to the namespace for this package
+	// These labels are merged with labels from other packages in the same namespace
+	// +optional
+	NamespaceLabels map[string]string `json:"namespaceLabels,omitempty"`
 }

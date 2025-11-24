@@ -19,6 +19,9 @@ spec:
         kind: ExternalArtifact
         name: cozystack-system-seaweedfs
         namespace: cozy-system
+    values:
+      cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: Administration
     singular: SeaweedFS

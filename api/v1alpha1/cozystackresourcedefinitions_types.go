@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 // +kubebuilder:object:root=true
@@ -102,6 +103,10 @@ type CozystackResourceDefinitionRelease struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// Prefix for the release name
 	Prefix string `json:"prefix"`
+	// Default values to be merged into every HelmRelease created from this resource definition
+	// User-specified values in Application spec will override these default values
+	// +optional
+	Values *apiextensionsv1.JSON `json:"values,omitempty"`
 }
 
 type CozystackResourceDefinitionChartRef struct {

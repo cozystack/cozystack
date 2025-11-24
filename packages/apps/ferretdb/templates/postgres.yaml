@@ -50,15 +50,13 @@ spec:
   postgresUID: 999
   postgresGID: 999
   enableSuperuserAccess: true
-  {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-  {{- if $configMap }}
-  {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
-  {{- if $rawConstraints }}
-  {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
-    labelSelector:
-      matchLabels:
-        cnpg.io/cluster: {{ .Release.Name }}-postgres
-  {{- end }}
+  {{- $cozystack := .Values.cozystack | default dict }}
+  {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
+  {{- if $topologySpreadConstraints }}
+  topologySpreadConstraints:
+    {{- range $topologySpreadConstraints }}
+    - {{- mergeOverwrite (dict "labelSelector" (dict "matchLabels" (dict "cnpg.io/cluster" (printf "%s-postgres" $.Release.Name)))) . | toYaml | nindent 6 | trim }}
+    {{- end }}
   {{- end }}
   minSyncReplicas: {{ .Values.quorum.minSyncReplicas }}
   maxSyncReplicas: {{ .Values.quorum.maxSyncReplicas }}

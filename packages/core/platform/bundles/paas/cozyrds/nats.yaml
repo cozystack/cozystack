@@ -18,6 +18,9 @@ spec:
         kind: ExternalArtifact
         name: cozystack-paas-nats
         namespace: cozy-system
+    values:
+      cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: PaaS
     singular: NATS

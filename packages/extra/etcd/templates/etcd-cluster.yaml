@@ -49,16 +49,12 @@ spec:
         {{- with .Values.resources }}
         resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 10 }}
         {{- end }}
-    {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-    {{- $rawConstraints := "" }}
-    {{- if $configMap }}
-      {{- $rawConstraints = get $configMap.data "globalAppTopologySpreadConstraints" }}
-    {{- end }}
-    {{- if $rawConstraints }}
-      {{- $rawConstraints | fromYaml | toYaml | nindent 6 }}
-        labelSelector:
-          matchLabels:
-            app.kubernetes.io/instance: etcd
+    {{- $cozystack := .Values.cozystack | default dict }}
+    {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
+    {{- if $topologySpreadConstraints }}
+      {{- range $topologySpreadConstraints }}
+      - {{- mergeOverwrite (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/instance" "etcd"))) . | toYaml | nindent 8 | trim }}
+      {{- end }}
     {{- else }}
       topologySpreadConstraints:
       - maxSkew: 1
