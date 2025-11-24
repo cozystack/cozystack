@@ -8,12 +8,12 @@ image: image-migrations
 
 image-migrations:
 	docker buildx build images/migrations \
-		--tag $(REGISTRY)/migrations:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/migrations:latest \
+		--tag $(REGISTRY)/platform-migrations:$(call settag,$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/platform-migrations:latest \
 		--cache-to type=inline \
 		--metadata-file images/migrations.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/migrations:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/migrations.json -o json -r)" \
+	IMAGE="$(REGISTRY)/platform-migrations:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/migrations.json -o json -r)" \
 		yq -i '.migrations.image = strenv(IMAGE)' values.yaml
 	rm -f images/migrations.json
 

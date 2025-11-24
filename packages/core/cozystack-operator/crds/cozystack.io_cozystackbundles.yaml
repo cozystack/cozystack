@@ -212,6 +212,7 @@ spec:
                     description: Kind of the source reference
                     enum:
                     - GitRepository
+                    - OCIRepository
                     type: string
                   name:
                     description: Name of the source reference

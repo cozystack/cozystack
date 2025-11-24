@@ -89,6 +89,12 @@ type CozystackBundleSpec struct {
 	// cozystack.io/bundle label.
 	// +optional
 	Labels map[string]string `json:"labels,omitempty"`
+
+	// BasePath is the base path where packages are located in the source.
+	// For GitRepository, defaults to "packages" if not specified.
+	// For OCIRepository, defaults to empty string (root) if not specified.
+	// +optional
+	BasePath string `json:"basePath,omitempty"`
 }
 
 // DeletionPolicy defines how child resources should be handled when the parent is deleted.
@@ -144,7 +150,7 @@ type BundleArtifact struct {
 // BundleSourceRef defines the source reference for bundle charts
 type BundleSourceRef struct {
 	// Kind of the source reference
-	// +kubebuilder:validation:Enum=GitRepository
+	// +kubebuilder:validation:Enum=GitRepository;OCIRepository
 	// +required
 	Kind string `json:"kind"`
 

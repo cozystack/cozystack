@@ -25,51 +25,51 @@ spec:
 
   libraries:
     - name: cozy-lib
-      path: packages/library/cozy-lib
+      path: library/cozy-lib
 
   artifacts:
     - name: clickhouse
-      path: packages/apps/clickhouse
+      path: apps/clickhouse
       libraries: [cozy-lib]
 
     - name: ferretdb
-      path: packages/apps/ferretdb
+      path: apps/ferretdb
       libraries: [cozy-lib]
 
     - name: foundationdb
-      path: packages/apps/foundationdb
+      path: apps/foundationdb
       libraries: [cozy-lib]
 
     - name: kafka
-      path: packages/apps/kafka
+      path: apps/kafka
       libraries: [cozy-lib]
 
     - name: mysql
-      path: packages/apps/mysql
+      path: apps/mysql
       libraries: [cozy-lib]
 
     - name: nats
-      path: packages/apps/nats
+      path: apps/nats
       libraries: [cozy-lib]
     - name: nats-system
-      path: packages/system/nats
+      path: system/nats
 
     - name: postgres
-      path: packages/apps/postgres
+      path: apps/postgres
       libraries: [cozy-lib]
 
     - name: rabbitmq
-      path: packages/apps/rabbitmq
+      path: apps/rabbitmq
       libraries: [cozy-lib]
 
     - name: redis
-      path: packages/apps/redis
+      path: apps/redis
       libraries: [cozy-lib]
 
   packages:
   - name: mariadb-operator
     releaseName: mariadb-operator
-    path: packages/system/mariadb-operator
+    path: system/mariadb-operator
     namespace: cozy-mariadb-operator
     dependsOn: [cert-manager,victoria-metrics-operator]
     values:
@@ -78,7 +78,7 @@ spec:
   
   - name: kafka-operator
     releaseName: kafka-operator
-    path: packages/system/kafka-operator
+    path: system/kafka-operator
     namespace: cozy-kafka-operator
     dependsOn: [victoria-metrics-operator]
     values:
@@ -87,24 +87,24 @@ spec:
   
   - name: clickhouse-operator
     releaseName: clickhouse-operator
-    path: packages/system/clickhouse-operator
+    path: system/clickhouse-operator
     namespace: cozy-clickhouse-operator
     dependsOn: [victoria-metrics-operator]
   
   - name: foundationdb-operator
     releaseName: foundationdb-operator
-    path: packages/system/foundationdb-operator
+    path: system/foundationdb-operator
     namespace: cozy-foundationdb-operator
     dependsOn: [cert-manager]
   
   - name: rabbitmq-operator
     releaseName: rabbitmq-operator
-    path: packages/system/rabbitmq-operator
+    path: system/rabbitmq-operator
     namespace: cozy-rabbitmq-operator
     dependsOn: []
   
   - name: redis-operator
     releaseName: redis-operator
-    path: packages/system/redis-operator
+    path: system/redis-operator
     namespace: cozy-redis-operator
     dependsOn: []

@@ -12,19 +12,19 @@ spec:
 
   libraries:
     - name: cozy-lib
-      path: packages/library/cozy-lib
+      path: library/cozy-lib
 
   artifacts:
     - name: http-cache
-      path: packages/apps/http-cache
+      path: apps/http-cache
       libraries: [cozy-lib]
 
     - name: tcp-balancer
-      path: packages/apps/tcp-balancer
+      path: apps/tcp-balancer
       libraries: [cozy-lib]
 
     - name: vpn
-      path: packages/apps/vpn
+      path: apps/vpn
       libraries: [cozy-lib]
 
   packages: []

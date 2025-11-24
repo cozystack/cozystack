@@ -195,13 +195,6 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 			continue
 		}
 
-		// Determine prefix from path
-		prefix := r.getPackagePrefix(pkg.Path)
-		if prefix == "" {
-			logger.Info("skipping package with unknown prefix", "name", pkg.Name, "path", pkg.Path)
-			continue
-		}
-
 		// Extract package name from path (last component)
 		pkgName := r.getPackageNameFromPath(pkg.Path)
 		if pkgName == "" {
@@ -209,10 +202,13 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 			continue
 		}
 
+		// Get basePath with default values
+		basePath := r.getBasePath(bundle)
+
 		// Build copy operations
 		copyOps := []sourcewatcherv1beta1.CopyOperation{
 			{
-				From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, pkg.Path),
+				From: r.buildSourcePath(bundle.Spec.SourceRef.Name, basePath, pkg.Path),
 				To:   fmt.Sprintf("@artifact/%s/", pkgName),
 			},
 		}
@@ -221,7 +217,7 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 		for _, libName := range pkg.Libraries {
 			if lib, ok := libraryMap[libName]; ok {
 				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
-					From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, lib.Path),
+					From: r.buildSourcePath(bundle.Spec.SourceRef.Name, basePath, lib.Path),
 					To:   fmt.Sprintf("@artifact/%s/charts/%s/", pkgName, libName),
 				})
 			}
@@ -234,7 +230,7 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 				strategy = "Overwrite"
 			}
 			copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
-				From:     fmt.Sprintf("@%s/%s/%s", bundle.Spec.SourceRef.Name, pkg.Path, valuesFile),
+				From:     r.buildSourceFilePath(bundle.Spec.SourceRef.Name, basePath, fmt.Sprintf("%s/%s", pkg.Path, valuesFile)),
 				To:       fmt.Sprintf("@artifact/%s/values.yaml", pkgName),
 				Strategy: strategy,
 			})
@@ -261,10 +257,13 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 			continue
 		}
 
+		// Get basePath with default values
+		basePath := r.getBasePath(bundle)
+
 		// Build copy operations
 		copyOps := []sourcewatcherv1beta1.CopyOperation{
 			{
-				From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, artifact.Path),
+				From: r.buildSourcePath(bundle.Spec.SourceRef.Name, basePath, artifact.Path),
 				To:   fmt.Sprintf("@artifact/%s/", artifactPathName),
 			},
 		}
@@ -273,7 +272,7 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 		for _, libName := range artifact.Libraries {
 			if lib, ok := libraryMap[libName]; ok {
 				copyOps = append(copyOps, sourcewatcherv1beta1.CopyOperation{
-					From: fmt.Sprintf("@%s/%s/**", bundle.Spec.SourceRef.Name, lib.Path),
+					From: r.buildSourcePath(bundle.Spec.SourceRef.Name, basePath, lib.Path),
 					To:   fmt.Sprintf("@artifact/%s/charts/%s/", artifactPathName, libName),
 				})
 			}
@@ -403,10 +402,9 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 			// Artifact name format: {bundle-name}-{artifact-name}
 			artifactName = fmt.Sprintf("%s-%s", bundle.Name, pkg.Artifact)
 		} else if pkg.Path != "" {
-			// Package uses a path (legacy behavior)
-			prefix := r.getPackagePrefix(pkg.Path)
+			// Package uses a path
 			pkgName := r.getPackageNameFromPath(pkg.Path)
-			if prefix == "" || pkgName == "" {
+			if pkgName == "" {
 				logger.Info("skipping package with invalid path", "name", pkg.Name, "path", pkg.Path)
 				continue
 			}
@@ -573,32 +571,62 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 }
 
 // Helper functions
-func (r *CozystackBundleReconciler) getPackagePrefix(path string) string {
-	if strings.HasPrefix(path, "packages/system/") {
-		return "system"
-	}
-	if strings.HasPrefix(path, "packages/apps/") {
-		return "apps"
-	}
-	if strings.HasPrefix(path, "packages/extra/") {
-		return "extra"
-	}
-	return ""
-}
-
-func (r *CozystackBundleReconciler) getNamespaceForPrefix(prefix string) string {
-	if prefix == "system" {
-		return "cozy-system"
-	}
-	return "cozy-public"
-}
-
 func (r *CozystackBundleReconciler) getPackageNameFromPath(path string) string {
 	parts := strings.Split(path, "/")
 	if len(parts) > 0 {
 		return parts[len(parts)-1]
 	}
 	return ""
+}
+
+// getBasePath returns the basePath with default values based on source kind
+func (r *CozystackBundleReconciler) getBasePath(bundle *cozyv1alpha1.CozystackBundle) string {
+	// If basePath is explicitly set, use it
+	if bundle.Spec.BasePath != "" {
+		return bundle.Spec.BasePath
+	}
+	// Default values based on kind
+	if bundle.Spec.SourceRef.Kind == "OCIRepository" {
+		return "" // Root for OCI
+	}
+	// Default for GitRepository
+	return "packages"
+}
+
+// buildSourcePath builds the full source path using basePath with glob pattern
+func (r *CozystackBundleReconciler) buildSourcePath(sourceName, basePath, path string) string {
+	// Remove leading/trailing slashes and combine
+	parts := []string{}
+	if basePath != "" {
+		parts = append(parts, strings.Trim(basePath, "/"))
+	}
+	if path != "" {
+		parts = append(parts, strings.Trim(path, "/"))
+	}
+
+	fullPath := strings.Join(parts, "/")
+	if fullPath == "" {
+		return fmt.Sprintf("@%s/**", sourceName)
+	}
+	return fmt.Sprintf("@%s/%s/**", sourceName, fullPath)
+}
+
+// buildSourceFilePath builds the full source path for a specific file (without glob pattern)
+func (r *CozystackBundleReconciler) buildSourceFilePath(sourceName, basePath, path string) string {
+	// Remove leading/trailing slashes and combine
+	parts := []string{}
+	if basePath != "" {
+		parts = append(parts, strings.Trim(basePath, "/"))
+	}
+	if path != "" {
+		parts = append(parts, strings.Trim(path, "/"))
+	}
+
+	fullPath := strings.Join(parts, "/")
+	if fullPath == "" {
+		return fmt.Sprintf("@%s", sourceName)
+	}
+	return fmt.Sprintf("@%s/%s", sourceName, fullPath)
 }
 
 func (r *CozystackBundleReconciler) cleanupOrphanedArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {

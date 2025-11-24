@@ -24,78 +24,78 @@ spec:
 
   libraries:
     - name: cozy-lib
-      path: packages/library/cozy-lib
+      path: library/cozy-lib
 
   artifacts:
     - name: bucket
-      path: packages/apps/bucket
+      path: apps/bucket
       libraries: [cozy-lib]
     - name: bucket-system
-      path: packages/apps/bucket
+      path: apps/bucket
       libraries: [cozy-lib]
 
     - name: kubernetes
-      path: packages/apps/kubernetes
+      path: apps/kubernetes
       libraries: [cozy-lib]
     - name: kubernetes-ingress-nginx
-      path: packages/system/ingress-nginx
+      path: system/ingress-nginx
     - name: kubernetes-cert-manager-crds
-      path: packages/system/cert-manager-crds
+      path: system/cert-manager-crds
     - name: kubernetes-volumesnapshot-crd
-      path: packages/system/vsnap-crd
+      path: system/vsnap-crd
     - name: kubernetes-velero
-      path: packages/system/velero
+      path: system/velero
     - name: kubernetes-gateway-api-crds
-      path: packages/system/gateway-api-crds
+      path: system/gateway-api-crds
     - name: kubernetes-victoria-metrics-operator
-      path: packages/system/victoria-metrics-operator
+      path: system/victoria-metrics-operator
     - name: kubernetes-kubevirt-csi-node
-      path: packages/system/kubevirt-csi-node
+      path: system/kubevirt-csi-node
     - name: kubernetes-vertical-pod-autoscaler-crds
-      path: packages/system/vertical-pod-autoscaler-crds
+      path: system/vertical-pod-autoscaler-crds
     - name: kubernetes-coredns
-      path: packages/system/coredns
+      path: system/coredns
     - name: kubernetes-cert-manager
-      path: packages/system/cert-manager
+      path: system/cert-manager
     - name: kubernetes-fluxcd-operator
-      path: packages/system/fluxcd-operator
+      path: system/fluxcd-operator
     - name: kubernetes-fluxcd
-      path: packages/system/fluxcd
+      path: system/fluxcd
     - name: kubernetes-monitoring-agents
-      path: packages/system/monitoring-agents
+      path: system/monitoring-agents
     - name: kubernetes-cilium
-      path: packages/system/cilium
+      path: system/cilium
     - name: kubernetes-gpu-operator
-      path: packages/system/gpu-operator
+      path: system/gpu-operator
     - name: kubernetes-vertical-pod-autoscaler
-      path: packages/system/vertical-pod-autoscaler 
+      path: system/vertical-pod-autoscaler 
 
     - name: virtual-machine
-      path: packages/apps/virtual-machine
+      path: apps/virtual-machine
       libraries: [cozy-lib]
 
     - name: vpc
-      path: packages/apps/vpc
+      path: apps/vpc
       libraries: [cozy-lib]
 
     - name: vm-disk
-      path: packages/apps/vm-disk
+      path: apps/vm-disk
       libraries: [cozy-lib]
 
     - name: vm-instance
-      path: packages/apps/vm-instance
+      path: apps/vm-instance
       libraries: [cozy-lib]
 
   packages:
   - name: kubevirt-operator
     releaseName: kubevirt-operator
-    path: packages/system/kubevirt-operator
+    path: system/kubevirt-operator
     namespace: cozy-kubevirt
     dependsOn: [victoria-metrics-operator]
   
   - name: kubevirt
     releaseName: kubevirt
-    path: packages/system/kubevirt
+    path: system/kubevirt
     namespace: cozy-kubevirt
     privileged: true
     dependsOn: [kubevirt-operator]
@@ -107,25 +107,25 @@ spec:
   
   - name: kubevirt-instancetypes
     releaseName: kubevirt-instancetypes
-    path: packages/system/kubevirt-instancetypes
+    path: system/kubevirt-instancetypes
     namespace: cozy-kubevirt
     dependsOn: [kubevirt-operator,kubevirt]
   
   - name: kubevirt-cdi-operator
     releaseName: kubevirt-cdi-operator
-    path: packages/system/kubevirt-cdi-operator
+    path: system/kubevirt-cdi-operator
     namespace: cozy-kubevirt-cdi
     dependsOn: []
   
   - name: kubevirt-cdi
     releaseName: kubevirt-cdi
-    path: packages/system/kubevirt-cdi
+    path: system/kubevirt-cdi
     namespace: cozy-kubevirt-cdi
     dependsOn: [kubevirt-cdi-operator]
   
   - name: gpu-operator
     releaseName: gpu-operator
-    path: packages/system/gpu-operator
+    path: system/gpu-operator
     namespace: cozy-gpu-operator
     privileged: true
     disabled: true
@@ -136,41 +136,41 @@ spec:
   
   - name: kamaji
     releaseName: kamaji
-    path: packages/system/kamaji
+    path: system/kamaji
     namespace: cozy-kamaji
     dependsOn: []
   
   - name: capi-operator
     releaseName: capi-operator
-    path: packages/system/capi-operator
+    path: system/capi-operator
     namespace: cozy-cluster-api
     privileged: true
     dependsOn: []
   
   - name: capi-providers-bootstrap
     releaseName: capi-providers-bootstrap
-    path: packages/system/capi-providers-bootstrap
+    path: system/capi-providers-bootstrap
     namespace: cozy-cluster-api
     privileged: true
     dependsOn: [capi-operator]
   
   - name: capi-providers-core
     releaseName: capi-providers-core
-    path: packages/system/capi-providers-core
+    path: system/capi-providers-core
     namespace: cozy-cluster-api
     privileged: true
     dependsOn: [capi-operator]
   
   - name: capi-providers-cpprovider
     releaseName: capi-providers-cpprovider
-    path: packages/system/capi-providers-cpprovider
+    path: system/capi-providers-cpprovider
     namespace: cozy-cluster-api
     privileged: true
     dependsOn: [capi-operator]
   
   - name: capi-providers-infraprovider
     releaseName: capi-providers-infraprovider
-    path: packages/system/capi-providers-infraprovider
+    path: system/capi-providers-infraprovider
     namespace: cozy-cluster-api
     privileged: true
     dependsOn: [capi-operator]

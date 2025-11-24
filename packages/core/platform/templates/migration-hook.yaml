@@ -7,8 +7,6 @@
   {{- if lt $currentVersion $targetVersion }}
     {{- $shouldRunMigrationHook = true }}
   {{- end }}
-{{- else }}
-  {{- $shouldRunMigrationHook = true }}
 {{- end }}
 
 {{- if $shouldRunMigrationHook }}

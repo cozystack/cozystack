@@ -26,17 +26,17 @@ spec:
 
   libraries:
     - name: cozy-lib
-      path: packages/library/cozy-lib
+      path: library/cozy-lib
 
   artifacts:
     - name: tenant
-      path: packages/apps/tenant
+      path: apps/tenant
       libraries: [cozy-lib]
 
   packages:
   - name: cozystack-api
     releaseName: cozystack-api
-    path: packages/system/cozystack-api
+    path: system/cozystack-api
     namespace: cozy-system
     dependsOn: [cozystack-controller]
     values:
@@ -46,7 +46,7 @@ spec:
   
   - name: cozystack-controller
     releaseName: cozystack-controller
-    path: packages/system/cozystack-controller
+    path: system/cozystack-controller
     namespace: cozy-system
     dependsOn: []
     {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
@@ -57,13 +57,13 @@ spec:
   
   - name: lineage-controller-webhook
     releaseName: lineage-controller-webhook
-    path: packages/system/lineage-controller-webhook
+    path: system/lineage-controller-webhook
     namespace: cozy-system
     dependsOn: [cozystack-controller]
   
   - name: dashboard
     releaseName: dashboard
-    path: packages/system/dashboard
+    path: system/dashboard
     namespace: cozy-dashboard
     dependsOn:
     - cozystack-api

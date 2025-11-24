@@ -29,11 +29,13 @@ build: build-deps
 	make -C packages/core/cozystack-operator image
 	make -C packages/core/talos image
 	make -C packages/core/platform image
+	make -C packages/core/installer image
 	make manifests
 
 manifests:
 	mkdir -p _out/assets
-	(cd packages/core/cozystack-operator/; helm template -n cozy-installer talos .) > _out/assets/cozystack-installer.yaml
+	(cd packages/core/cozystack-operator/; helm template -n cozy-system cozystack-operator .) > _out/assets/cozystack-operator.yaml
+	(cd packages/core/installer/; helm template -n cozy-system installer .) > _out/assets/cozystack-installer.yaml
 
 assets:
 	make -C packages/core/talos assets
