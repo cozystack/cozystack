@@ -1,14 +1,4 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- $host := index $cozyConfig.data "root-host" }}
-{{- if not $host }}
-{{- fail "ERROR need root-host in cozystack ConfigMap" }}
-{{- end }}
-{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
-{{- if not $apiServerEndpoint }}
-{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
-{{- end }}
+{{- $clusterDomain := .Values.networking.clusterDomain | default "cozy.local" }}
 
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackBundle

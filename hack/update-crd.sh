@@ -8,7 +8,7 @@ need yq; need jq; need base64
 CHART_YAML="${CHART_YAML:-Chart.yaml}"
 VALUES_YAML="${VALUES_YAML:-values.yaml}"
 SCHEMA_JSON="${SCHEMA_JSON:-values.schema.json}"
-CRD_DIR="../../system/cozystack-resource-definitions/cozyrds"
+CRD_DIR="../../core/platform/bundles/*/cozyrds"
 
 [[ -f "$CHART_YAML" ]] || { echo "No $CHART_YAML found"; exit 1; }
 [[ -f "$SCHEMA_JSON" ]] || { echo "No $SCHEMA_JSON found"; exit 1; }
@@ -54,20 +54,9 @@ fi
 # Base64 (portable: no -w / -b options)
 ICON_B64="$(base64 < "$ICON_PATH" | tr -d '\n' | tr -d '\r')"
 
-# Decide which ExternalArtifact name to use based on path
-#   .../apps/...  -> apps-<name>
-#   .../extra/... -> extra-<name>
-# default: apps-<name>
-ARTIFACT_PREFIX="apps"
-case "$PWD" in
-  *"/apps/"*)  ARTIFACT_PREFIX="apps" ;;
-  *"/extra/"*) ARTIFACT_PREFIX="extra" ;;
-esac
-ARTIFACT_NAME="${ARTIFACT_PREFIX}-${NAME}"
-
-# If file doesn't exist, create a minimal skeleton
-OUT="${OUT:-$CRD_DIR/$NAME.yaml}"
-if [[ ! -f "$OUT" ]]; then
+# Find path to output CRD YAML
+OUT="$(find $CRD_DIR -type f -name "${NAME}.yaml" | head -n 1)"
+if [[ ! -s "$OUT" ]]; then
   cat >"$OUT" <<EOF
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackResourceDefinition
@@ -76,6 +65,9 @@ metadata:
 spec: {}
 EOF
 fi
+
+ARTIFACT_PREFIX="cozystack-$(basename $(dirname "$(dirname "$OUT")"))"  # apps | extra
+ARTIFACT_NAME="${ARTIFACT_PREFIX}-${NAME}"
 
 # Export vars for yq env()
 export RES_NAME="$NAME"
@@ -131,7 +123,7 @@ yq -i '
   del(.spec.release.chart) |
   .spec.release.chartRef.sourceRef.kind = "ExternalArtifact" |
   .spec.release.chartRef.sourceRef.name = strenv(ARTIFACT_NAME) |
-  .spec.release.chartRef.sourceRef.namespace = "cozy-public" |
+  .spec.release.chartRef.sourceRef.namespace = "cozy-system" |
   .spec.dashboard.description = strenv(DESCRIPTION) |
   .spec.dashboard.icon = strenv(ICON_B64) |
   .spec.dashboard.keysOrder = env(KEYS_ORDER)

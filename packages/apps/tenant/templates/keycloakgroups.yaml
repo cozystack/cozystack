@@ -1,6 +1,8 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- if eq $oidcEnabled "true" }}
+{{- $cozystack := .Values.cozystack | default dict }}
+{{- $authentication := $cozystack.authentication | default dict }}
+{{- $oidc := $authentication.oidc | default dict }}
+{{- $oidcEnabled := $oidc.enabled | default false }}
+{{- if $oidcEnabled }}
 {{- if .Capabilities.APIVersions.Has "v1.edp.epam.com/v1" }}
 apiVersion: v1.edp.epam.com/v1
 kind: KeycloakRealmGroup

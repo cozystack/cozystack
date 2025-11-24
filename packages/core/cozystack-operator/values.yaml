@@ -1,2 +1,2 @@
 cozystackOperator:
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:latest@sha256:66da9dcf32cc391610781c1cee660eb11ecef9017b9d6c45667683ef5121b066
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:latest@sha256:820395301bc703efbbe4b06d480ceb65e6186abba54ed2adc9a09946bc71bac7

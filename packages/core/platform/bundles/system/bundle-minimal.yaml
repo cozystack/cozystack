@@ -1,13 +1,11 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- $host := index $cozyConfig.data "root-host" }}
+{{- $host := .Values.publishing.host }}
 {{- if not $host }}
-{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.host is required" }}
 {{- end }}
-{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
+{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint }}
 {{- if not $apiServerEndpoint }}
-{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.apiServerEndpoint is required" }}
 {{- end }}
 
 apiVersion: cozystack.io/v1alpha1
@@ -51,7 +49,7 @@ spec:
     path: system/cozystack-controller
     namespace: cozy-system
     dependsOn: []
-    {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
+    {{- if not .Values.telemetry.enabled }}
     values:
       cozystackController:
         disableTelemetry: true
@@ -70,3 +68,24 @@ spec:
     dependsOn:
     - cozystack-api
     - cozystack-controller
+    values:
+      cozystack:
+        publishing:
+          host: {{ $host }}
+          ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+          exposedServices: {{ .Values.publishing.exposedServices | toJson }}
+          certificates:
+            issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+        authentication:
+          oidc:
+            enabled: {{ $oidcEnabled }}
+            dashboard:
+              extraRedirectUris: {{ .Values.authentication.oidc.dashboard.extraRedirectUris | toJson }}
+        branding:
+          dashboard:
+            tenantText: {{ .Values.branding.dashboard.tenantText | default "v0.38.0-alpha.1" | quote }}
+            footerText: {{ .Values.branding.dashboard.footerText | default "Cozystack" | quote }}
+            titleText: {{ .Values.branding.dashboard.titleText | default "Cozystack Dashboard" | quote }}
+            logoText: {{ .Values.branding.dashboard.logoText | default "" | quote }}
+            logoSvg: {{ .Values.branding.dashboard.logoSvg | default "" | quote }}
+            iconSvg: {{ .Values.branding.dashboard.iconSvg | default "" | quote }}

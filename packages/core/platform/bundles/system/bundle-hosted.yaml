@@ -1,13 +1,12 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- $host := index $cozyConfig.data "root-host" }}
+{{- $host := .Values.publishing.host }}
 {{- if not $host }}
-{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.host is required" }}
 {{- end }}
-{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- $clusterDomain := .Values.networking.clusterDomain | default "cozy.local" }}
+{{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
+{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint }}
 {{- if not $apiServerEndpoint }}
-{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.apiServerEndpoint is required" }}
 {{- end }}
 
 apiVersion: cozystack.io/v1alpha1
@@ -88,7 +87,7 @@ spec:
       path: system/cozystack-controller
       namespace: cozy-system
       dependsOn: []
-      {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
+      {{- if not .Values.telemetry.enabled }}
       values:
         cozystackController:
           disableTelemetry: true
@@ -148,7 +147,7 @@ spec:
       dependsOn: [cert-manager,victoria-metrics-operator]
       values:
         mariadb-operator:
-          clusterName: {{ $clusterDomain }}
+          clusterName: {{ .Values.networking.clusterDomain | default "cozy.local" }}
     
     - name: postgres-operator
       releaseName: postgres-operator
@@ -192,9 +191,27 @@ spec:
       - kubeovn
       - cozystack-api
       - cozystack-controller
-      {{- else }}
+      {{- if $oidcEnabled }}
       - keycloak-configure
       {{- end }}
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+            ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+            exposedServices: {{ .Values.publishing.exposedServices | toJson }}
+            certificates:
+              issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+          authentication:
+            oidc:
+              enabled: {{ $oidcEnabled }}
+              dashboard:
+                extraRedirectUris: {{ .Values.authentication.oidc.dashboard.extraRedirectUris | toJson }}
+          {{- if hasKey .Values.branding "dashboard" }}
+          branding:
+            dashboard:
+              {{- toYaml .Values.branding.dashboard | nindent 14 }}
+          {{- end }}
     
     {{- if $oidcEnabled }}
     - name: keycloak
@@ -203,6 +220,17 @@ spec:
       namespace: cozy-keycloak
       dependsOn: [postgres-operator]
       libraries: [cozy-lib]
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+            ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+            certificates:
+              issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+          networking:
+            clusterDomain: {{ $clusterDomain }}
+          scheduling:
+            topologySpreadConstraints: {{ .Values.scheduling.topologySpreadConstraints | default list | toJson }}
     
     - name: keycloak-operator
       releaseName: keycloak-operator
@@ -217,7 +245,16 @@ spec:
       dependsOn: [keycloak-operator]
       values:
         cozystack:
-          configHash: {{ $cozyConfig | toJson | sha256sum }}
+          publishing:
+            host: {{ $host }}
+          authentication:
+            oidc:
+              dashboard:
+                extraRedirectUris: {{ .Values.authentication.oidc.dashboard.extraRedirectUris | toJson }}
+          {{- if hasKey .Values.branding "keycloak" }}
+          branding:
+            {{- toYaml .Values.branding.keycloak | nindent 12 }}
+          {{- end }}
     {{- end }}
     
     - name: goldpinger

@@ -420,13 +420,21 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 			continue
 		}
 
-		// Build labels: merge bundle labels with default cozystack.io/bundle label
+		// Build labels: merge bundle labels, package labels, and default cozystack.io/bundle label
 		hrLabels := make(map[string]string)
+		// First, add bundle-level labels
 		if bundle.Spec.Labels != nil {
 			for k, v := range bundle.Spec.Labels {
 				hrLabels[k] = v
 			}
 		}
+		// Then, add package-level labels (they override bundle labels)
+		if pkg.Labels != nil {
+			for k, v := range pkg.Labels {
+				hrLabels[k] = v
+			}
+		}
+		// Finally, add default bundle label (it always takes precedence)
 		hrLabels["cozystack.io/bundle"] = bundle.Name
 
 		// Create HelmRelease
@@ -587,6 +595,22 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 			existingAG.SetOwnerReferences(ag.GetOwnerReferences())
 			// Use existingAG for Update
 			obj = existingAG
+		}
+	}
+
+	// For HelmRelease, explicitly update Spec to ensure values and dependsOn are properly updated
+	if hr, ok := obj.(*helmv2.HelmRelease); ok {
+		if existingHR, ok := existing.(*helmv2.HelmRelease); ok {
+			logger := log.FromContext(ctx)
+			logger.V(1).Info("updating HelmRelease Spec", "name", hr.Name, "namespace", hr.Namespace)
+			// Update Spec from obj (which contains the desired state with all values and dependsOn)
+			existingHR.Spec = hr.Spec
+			// Preserve metadata updates we made above
+			existingHR.SetLabels(hr.GetLabels())
+			existingHR.SetAnnotations(hr.GetAnnotations())
+			existingHR.SetOwnerReferences(hr.GetOwnerReferences())
+			// Use existingHR for Update
+			obj = existingHR
 		}
 	}
 

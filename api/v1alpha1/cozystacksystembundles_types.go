@@ -212,4 +212,9 @@ type BundleRelease struct {
 	// ValuesFiles is a list of values file names to use
 	// +optional
 	ValuesFiles []string `json:"valuesFiles,omitempty"`
+
+	// Labels are labels that will be applied to the HelmRelease created for this package
+	// These labels are merged with bundle-level labels and the default cozystack.io/bundle label
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
 }

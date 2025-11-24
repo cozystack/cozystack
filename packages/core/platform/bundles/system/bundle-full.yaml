@@ -1,13 +1,12 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- $host := index $cozyConfig.data "root-host" }}
+{{- $host := .Values.publishing.host }}
 {{- if not $host }}
-{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.host is required" }}
 {{- end }}
-{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- $clusterDomain := .Values.networking.clusterDomain | default "cozy.local" }}
+{{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
+{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint }}
 {{- if not $apiServerEndpoint }}
-{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.apiServerEndpoint is required" }}
 {{- end }}
 
 apiVersion: cozystack.io/v1alpha1
@@ -96,10 +95,10 @@ spec:
           nodesHash: {{ include "cozystack.master-node-ips" . | sha256sum }}
         kube-ovn:
           ipv4:
-            POD_CIDR: "{{ index $cozyConfig.data "ipv4-pod-cidr" }}"
-            POD_GATEWAY: "{{ index $cozyConfig.data "ipv4-pod-gateway" }}"
-            SVC_CIDR: "{{ index $cozyConfig.data "ipv4-svc-cidr" }}"
-            JOIN_CIDR: "{{ index $cozyConfig.data "ipv4-join-cidr" }}"
+            POD_CIDR: "{{ .Values.networking.podCIDR }}"
+            POD_GATEWAY: "{{ .Values.networking.podGateway }}"
+            SVC_CIDR: "{{ .Values.networking.serviceCIDR }}"
+            JOIN_CIDR: "{{ .Values.networking.joinCIDR }}"
     
     - name: kubeovn-webhook
       releaseName: kubeovn-webhook
@@ -138,13 +137,19 @@ spec:
       path: system/cozystack-api
       namespace: cozy-system
       dependsOn: [cilium,kubeovn,cozystack-controller]
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+            exposedServices: {{ .Values.publishing.exposedServices | default list | toJson }}
+            ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
     
     - name: cozystack-controller
       releaseName: cozystack-controller
       path: system/cozystack-controller
       namespace: cozy-system
       dependsOn: [cilium,kubeovn]
-      {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
+      {{- if not .Values.telemetry.enabled }}
       values:
         cozystackController:
           disableTelemetry: true
@@ -259,9 +264,27 @@ spec:
       - kubeovn
       - cozystack-api
       - cozystack-controller
-      {{- if eq $oidcEnabled "true" }}
+      {{- if $oidcEnabled }}
       - keycloak-configure
       {{- end }}
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+            ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+            exposedServices: {{ .Values.publishing.exposedServices | toJson }}
+            certificates:
+              issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+          authentication:
+            oidc:
+              enabled: {{ $oidcEnabled }}
+              dashboard:
+                extraRedirectUris: {{ .Values.authentication.oidc.dashboard.extraRedirectUris | toJson }}
+          {{- if hasKey .Values.branding "dashboard" }}
+          branding:
+            dashboard:
+              {{- toYaml .Values.branding.dashboard | nindent 14 }}
+          {{- end }}
     
     - name: external-dns
       releaseName: external-dns
@@ -292,6 +315,17 @@ spec:
       namespace: cozy-keycloak
       dependsOn: [postgres-operator]
       libraries: [cozy-lib]
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+            ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+            certificates:
+              issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+          networking:
+            clusterDomain: {{ $clusterDomain }}
+          scheduling:
+            topologySpreadConstraints: {{ .Values.scheduling.topologySpreadConstraints | default list | toJson }}
     
     - name: keycloak-operator
       releaseName: keycloak-operator
@@ -306,7 +340,13 @@ spec:
       dependsOn: [keycloak-operator]
       values:
         cozystack:
-          configHash: {{ $cozyConfig | toJson | sha256sum }}
+          publishing:
+            host: {{ $host }}
+          {{- if hasKey .Values.branding "keycloak" }}
+          branding:
+            {{- toYaml .Values.branding.keycloak | nindent 12 }}
+          {{- end }}
+
     {{- end }}
     
     - name: goldpinger

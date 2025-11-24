@@ -1,13 +1,11 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
-{{- $host := index $cozyConfig.data "root-host" }}
+{{- $clusterDomain := .Values.networking.clusterDomain | default "cozy.local" }}
+{{- $host := .Values.publishing.host }}
 {{- if not $host }}
-{{- fail "ERROR need root-host in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.host is required" }}
 {{- end }}
-{{- $apiServerEndpoint := index $cozyConfig.data "api-server-endpoint" }}
+{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint }}
 {{- if not $apiServerEndpoint }}
-{{- fail "ERROR need api-server-endpoint in cozystack ConfigMap" }}
+{{- fail "ERROR: publishing.apiServerEndpoint is required" }}
 {{- end }}
 
 apiVersion: cozystack.io/v1alpha1
@@ -99,11 +97,13 @@ spec:
     namespace: cozy-kubevirt
     privileged: true
     dependsOn: [kubevirt-operator]
-    {{- $cpuAllocationRatio := index $cozyConfig.data "cpu-allocation-ratio" }}
-    {{- if $cpuAllocationRatio }}
     values:
-      cpuAllocationRatio: {{ $cpuAllocationRatio }}
-    {{- end }}
+      cpuAllocationRatio: {{ .Values.resources.cpuAllocationRatio }}
+      cozystack:
+        publishing:
+          host: {{ $host }}
+          exposedServices: {{ .Values.publishing.exposedServices | default list | toJson }}
+          ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
   
   - name: kubevirt-instancetypes
     releaseName: kubevirt-instancetypes
@@ -122,6 +122,12 @@ spec:
     path: system/kubevirt-cdi
     namespace: cozy-kubevirt-cdi
     dependsOn: [kubevirt-cdi-operator]
+    values:
+      cozystack:
+        publishing:
+          host: {{ $host }}
+          exposedServices: {{ .Values.publishing.exposedServices | default list | toJson }}
+          ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
   
   - name: gpu-operator
     releaseName: gpu-operator
