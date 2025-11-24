@@ -1,45 +1,40 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- if not $cozyConfig }}
-  {{- fail "ERROR: cozystack ConfigMap not found in cozy-system namespace" }}
-{{- end }}
+{{- $systemBundleType := .Values.bundles.system.type | default "full" }}
 
-{{- $bundleName := index $cozyConfig.data "bundle-name" }}
-{{- if not $bundleName }}
-  {{- fail "ERROR: bundle-name not found in cozystack ConfigMap" }}
-{{- end }}
+{{- /* ====================================================================== */}}
+{{- /* System Bundle Deployment                                              */}}
+{{- /* ====================================================================== */}}
 
-{{- if eq $bundleName "minimal" }}
-  {{ include "cozystack.render-file" (list . "bundles/system/bundle-minimal.yaml") }}
-{{- else if eq $bundleName "paas-full" }}
-  {{- /* Deploy system-full, iaas, paas, naas bundles */ -}}
-  {{ include "cozystack.render-file" (list . "bundles/system/bundle-full.yaml") }}
-  {{ include "cozystack.render-file" (list . "bundles/iaas/bundle.yaml") }}
-  {{ include "cozystack.render-file" (list . "bundles/paas/bundle.yaml") }}
-  {{ include "cozystack.render-file" (list . "bundles/naas/bundle.yaml") }}
-
-  {{- /* Deploy all cozyrds */ -}}
-  {{ include "cozystack.render-glob" (list . "bundles/system/cozyrds/*.yaml") }}
-  {{ include "cozystack.render-glob" (list . "bundles/iaas/cozyrds/*.yaml") }}
-  {{ include "cozystack.render-glob" (list . "bundles/paas/cozyrds/*.yaml") }}
-  {{ include "cozystack.render-glob" (list . "bundles/naas/cozyrds/*.yaml") }}
-
-{{- else if eq $bundleName "paas-hosted" }}
-  {{- /* Deploy system-hosted, paas, naas bundles */ -}}
-  {{ include "cozystack.render-file" (list . "bundles/system/bundle-hosted.yaml") }}
-  {{ include "cozystack.render-file" (list . "bundles/paas/bundle.yaml") }}
-  {{ include "cozystack.render-file" (list . "bundles/naas/bundle.yaml") }}
-
-  {{- /* Deploy cozyrds from system, paas, naas (not iaas) */ -}}
-  {{ include "cozystack.render-glob" (list . "bundles/system/cozyrds/*.yaml") }}
-  {{ include "cozystack.render-glob" (list . "bundles/paas/cozyrds/*.yaml") }}
-  {{ include "cozystack.render-glob" (list . "bundles/naas/cozyrds/*.yaml") }}
-
-{{- else if eq $bundleName "distro-full" }}
-  {{- fail "ERROR: bundle-name 'distro-full' is deprecated and has been removed. Please use 'paas-full' instead." }}
-
-{{- else if eq $bundleName "distro-hosted" }}
-  {{- fail "ERROR: bundle-name 'distro-hosted' is deprecated and has been removed. Please use 'paas-hosted' instead." }}
-
+{{- if eq $systemBundleType "minimal" }}
+{{    include "cozystack.render-file" (list . "bundles/system/bundle-minimal.yaml") }}
+{{- else if eq $systemBundleType "full" }}
+{{    include "cozystack.render-file" (list . "bundles/system/bundle-full.yaml") }}
+{{- else if eq $systemBundleType "hosted" }}
+{{    include "cozystack.render-file" (list . "bundles/system/bundle-hosted.yaml") }}
 {{- else }}
-  {{- fail (printf "ERROR: unknown bundle-name '%s'. Supported values: 'minimal', 'paas-full', 'paas-hosted'" $bundleName) }}
+{{-   fail (printf "ERROR: unknown system bundle type '%s'. Supported values: 'minimal', 'full', 'hosted'" $systemBundleType) }}
 {{- end }}
+
+{{- /* IaaS bundle: only available with system type "full" */}}
+{{- if .Values.bundles.iaas.enabled }}
+{{-   if ne $systemBundleType "full" }}
+{{-     fail "ERROR: iaas bundle can only be used with system bundle type 'full'" }}
+{{-   end }}
+{{    include "cozystack.render-file" (list . "bundles/iaas/bundle.yaml") }}
+{{- end }}
+
+{{- /* PaaS bundle: only available with system type "full" or "hosted" */}}
+{{- if .Values.bundles.paas.enabled }}
+{{-   if and (ne $systemBundleType "full") (ne $systemBundleType "hosted") }}
+{{-     fail "ERROR: paas bundle can only be used with system bundle type 'full' or 'hosted'" }}
+{{- end }}
+{{    include "cozystack.render-file" (list . "bundles/paas/bundle.yaml") }}
+{{- end }}
+
+{{- /* NaaS bundle: only available with system type "full" or "hosted" */}}
+{{- if .Values.bundles.naas.enabled }}
+{{-   if and (ne $systemBundleType "full") (ne $systemBundleType "hosted") }}
+{{-     fail "ERROR: naas bundle can only be used with system bundle type 'full' or 'hosted'" }}
+{{-   end }}
+{{    include "cozystack.render-file" (list . "bundles/naas/bundle.yaml") }}
+{{- end }}
+
