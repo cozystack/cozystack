@@ -10,10 +10,11 @@ rules:
   resources:
   - secrets
   resourceNames:
-  {{- if eq $oidcEnabled "true" }}
+  {{- if $oidcEnabled }}
   - kubeconfig-{{ .Release.Namespace }}
   {{- else }}
   - {{ .Release.Namespace }}
+  - kubeconfig-{{ .Release.Namespace }}
   {{- end }}
   verbs: ["get", "list", "watch"]
 ---
@@ -22,7 +23,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: {{ .Release.Name }}-dashboard-resources
 subjects:
-{{- if eq $oidcEnabled "true" }}
+{{- if $oidcEnabled }}
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" .Release.Namespace) }}
 {{- else }}
 - kind: ServiceAccount
