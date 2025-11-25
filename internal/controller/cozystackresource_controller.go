@@ -24,6 +24,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"github.com/cozystack/cozystack/pkg/cozylib"
 )
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=cozystackresourcedefinitions,verbs=get;list;watch
@@ -358,7 +360,7 @@ func (r *CozystackResourceDefinitionReconciler) updateHelmReleaseChart(ctx conte
 	var err error
 	if crd.Spec.Release.Values != nil {
 		logger.V(4).Info("Merging values from CRD", "name", hr.Name, "namespace", hr.Namespace, "crd", crd.Name)
-		mergedValues, err = r.mergeHelmReleaseValues(crd.Spec.Release.Values, hrCopy.Spec.Values)
+		mergedValues, err = cozylib.MergeValuesWithCRDPriority(crd.Spec.Release.Values, hrCopy.Spec.Values)
 		if err != nil {
 			logger.Error(err, "failed to merge values", "name", hr.Name, "namespace", hr.Namespace)
 			return fmt.Errorf("failed to merge values: %w", err)
@@ -368,12 +370,15 @@ func (r *CozystackResourceDefinitionReconciler) updateHelmReleaseChart(ctx conte
 		mergedValues = hrCopy.Spec.Values
 	}
 
-	// Always inject namespace labels (top-level _namespace field)
+	// Always inject namespace annotations (top-level _namespace field)
 	// This matches the behavior in cozystack-api and NamespaceHelmReconciler
-	mergedValues, err = r.injectNamespaceLabelsIntoValues(ctx, mergedValues, hrCopy.Namespace)
-	if err != nil {
-		logger.Error(err, "failed to inject namespace labels", "name", hr.Name, "namespace", hr.Namespace)
-		// Continue even if namespace labels injection fails
+	namespace := &corev1.Namespace{}
+	if err := r.Get(ctx, client.ObjectKey{Name: hrCopy.Namespace}, namespace); err == nil {
+		mergedValues, err = cozylib.InjectNamespaceAnnotationsIntoValues(mergedValues, namespace)
+		if err != nil {
+			logger.Error(err, "failed to inject namespace annotations", "name", hr.Name, "namespace", hr.Namespace)
+			// Continue even if namespace annotations injection fails
+		}
 	}
 
 	// Always update values to ensure _cozystack and _namespace are applied
@@ -495,47 +500,3 @@ func valuesEqual(a, b *apiextensionsv1.JSON) bool {
 	return string(a.Raw) == string(b.Raw)
 }
 
-// injectNamespaceLabelsIntoValues injects namespace.cozystack.io/* labels into _namespace (top-level)
-// This matches the behavior in cozystack-api and NamespaceHelmReconciler
-func (r *CozystackResourceDefinitionReconciler) injectNamespaceLabelsIntoValues(ctx context.Context, values *apiextensionsv1.JSON, namespaceName string) (*apiextensionsv1.JSON, error) {
-	// Get namespace to extract namespace.cozystack.io/* labels
-	namespace := &corev1.Namespace{}
-	if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, namespace); err != nil {
-		// If namespace not found, return values as-is
-		return values, nil
-	}
-
-	// Extract namespace.cozystack.io/* labels
-	namespaceLabels := extractNamespaceLabelsFromNamespace(namespace)
-	if len(namespaceLabels) == 0 {
-		// No namespace labels, return values as-is
-		return values, nil
-	}
-
-	// Parse values
-	var valuesMap map[string]interface{}
-	if values != nil && len(values.Raw) > 0 {
-		if err := json.Unmarshal(values.Raw, &valuesMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal values: %w", err)
-		}
-	} else {
-		valuesMap = make(map[string]interface{})
-	}
-
-	// Convert namespaceLabels from map[string]string to map[string]interface{}
-	namespaceLabelsMap := make(map[string]interface{})
-	for k, v := range namespaceLabels {
-		namespaceLabelsMap[k] = v
-	}
-
-	// Namespace labels completely overwrite existing _namespace field (top-level)
-	valuesMap["_namespace"] = namespaceLabelsMap
-
-	// Marshal back to JSON
-	mergedJSON, err := json.Marshal(valuesMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal values with namespace labels: %w", err)
-	}
-
-	return &apiextensionsv1.JSON{Raw: mergedJSON}, nil
-}

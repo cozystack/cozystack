@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +28,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/cozystack/cozystack/pkg/cozylib"
 )
 
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch
@@ -49,8 +50,8 @@ func (r *NamespaceHelmReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Extract namespace.cozystack.io/* labels
-	namespaceLabels := extractNamespaceLabelsFromNamespace(namespace)
+		// Extract namespace.cozystack.io/* annotations
+		namespaceLabels := cozylib.ExtractNamespaceAnnotations(namespace)
 	if len(namespaceLabels) == 0 {
 		// No namespace labels to process, skip
 		return ctrl.Result{}, nil
@@ -83,25 +84,6 @@ func (r *NamespaceHelmReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
-// extractNamespaceLabelsFromNamespace extracts namespace.cozystack.io/* labels from namespace
-func extractNamespaceLabelsFromNamespace(ns *corev1.Namespace) map[string]string {
-	namespaceLabels := make(map[string]string)
-	prefix := "namespace.cozystack.io/"
-
-	if ns.Labels == nil {
-		return namespaceLabels
-	}
-
-	for key, value := range ns.Labels {
-		if strings.HasPrefix(key, prefix) {
-			// Remove prefix and add to namespace labels
-			namespaceKey := strings.TrimPrefix(key, prefix)
-			namespaceLabels[namespaceKey] = value
-		}
-	}
-
-	return namespaceLabels
-}
 
 // updateHelmReleaseWithNamespaceLabels updates HelmRelease values with namespace labels
 func (r *NamespaceHelmReconciler) updateHelmReleaseWithNamespaceLabels(ctx context.Context, hr *helmv2.HelmRelease, namespaceLabels map[string]string) error {

@@ -44,6 +44,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/cozylib"
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -1052,182 +1053,6 @@ func (r *REST) getCozystackResourceDefinition(ctx context.Context) (*cozyv1alpha
 	return nil, fmt.Errorf("CozystackResourceDefinition not found for kind %s", r.kindName)
 }
 
-// extractNamespaceLabels extracts namespace.cozystack.io/* labels from namespace and converts them to cozystack.namespace values
-func extractNamespaceLabels(ns *corev1.Namespace) map[string]interface{} {
-	namespaceValues := make(map[string]interface{})
-	prefix := "namespace.cozystack.io/"
-
-	if ns.Labels == nil {
-		return namespaceValues
-	}
-
-	for key, value := range ns.Labels {
-		if strings.HasPrefix(key, prefix) {
-			// Remove prefix and add to namespace values
-			namespaceKey := strings.TrimPrefix(key, prefix)
-			namespaceValues[namespaceKey] = value
-		}
-	}
-
-	return namespaceValues
-}
-
-// mergeValues merges two JSON values, with userValues taking precedence
-func mergeValues(defaultValues, userValues *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
-	var defaultMap, userMap map[string]interface{}
-
-	if defaultValues != nil && len(defaultValues.Raw) > 0 {
-		if err := json.Unmarshal(defaultValues.Raw, &defaultMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal default values: %w", err)
-		}
-	} else {
-		defaultMap = make(map[string]interface{})
-	}
-
-	if userValues != nil && len(userValues.Raw) > 0 {
-		if err := json.Unmarshal(userValues.Raw, &userMap); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal user values: %w", err)
-		}
-	} else {
-		userMap = make(map[string]interface{})
-	}
-
-	// Deep merge: defaultValues first, then userValues (userValues override)
-	merged := deepMergeMaps(defaultMap, userMap)
-
-	mergedJSON, err := json.Marshal(merged)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal merged values: %w", err)
-	}
-
-	return &apiextensionsv1.JSON{Raw: mergedJSON}, nil
-}
-
-// deepMergeMaps performs a deep merge of two maps
-func deepMergeMaps(base, override map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
-
-	// Copy base map
-	for k, v := range base {
-		result[k] = v
-	}
-
-	// Merge override map
-	for k, v := range override {
-		if baseVal, exists := result[k]; exists {
-			// If both are maps, recursively merge
-			if baseMap, ok := baseVal.(map[string]interface{}); ok {
-				if overrideMap, ok := v.(map[string]interface{}); ok {
-					result[k] = deepMergeMaps(baseMap, overrideMap)
-					continue
-				}
-			}
-		}
-		// Override takes precedence
-		result[k] = v
-	}
-
-	return result
-}
-
-// removeUnderscoreFields recursively removes all fields starting with "_" from values
-func removeUnderscoreFields(values *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
-	if values == nil || len(values.Raw) == 0 {
-		return values, nil
-	}
-
-	var valuesMap map[string]interface{}
-	if err := json.Unmarshal(values.Raw, &valuesMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal values: %w", err)
-	}
-
-	// Recursively remove all fields starting with "_"
-	removeUnderscoreFieldsRecursive(valuesMap)
-
-	// If map is empty, return empty JSON object instead of nil to ensure proper serialization
-	if len(valuesMap) == 0 {
-		return &apiextensionsv1.JSON{Raw: []byte("{}")}, nil
-	}
-
-	cleanedJSON, err := json.Marshal(valuesMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal cleaned values: %w", err)
-	}
-
-	return &apiextensionsv1.JSON{Raw: cleanedJSON}, nil
-}
-
-// removeUnderscoreFieldsRecursive recursively removes all fields starting with "_" from a map
-func removeUnderscoreFieldsRecursive(m map[string]interface{}) {
-	if m == nil {
-		return
-	}
-	// Collect keys to delete (we can't delete while iterating)
-	keysToDelete := make([]string, 0)
-	for k, v := range m {
-		if strings.HasPrefix(k, "_") {
-			keysToDelete = append(keysToDelete, k)
-		} else if nestedMap, ok := v.(map[string]interface{}); ok {
-			// Recursively process nested maps
-			removeUnderscoreFieldsRecursive(nestedMap)
-		} else if nestedArray, ok := v.([]interface{}); ok {
-			// Process arrays that might contain maps
-			for _, item := range nestedArray {
-				if itemMap, ok := item.(map[string]interface{}); ok {
-					removeUnderscoreFieldsRecursive(itemMap)
-		}
-	}
-		}
-	}
-
-	// Delete collected keys
-	for _, k := range keysToDelete {
-		delete(m, k)
-	}
-}
-
-// checkUnderscoreFields checks if any field starting with "_" exists in user values and returns an error if it does
-func checkUnderscoreFields(values *apiextensionsv1.JSON) error {
-	if values == nil || len(values.Raw) == 0 {
-		return nil
-	}
-
-	var valuesMap map[string]interface{}
-	if err := json.Unmarshal(values.Raw, &valuesMap); err != nil {
-		return fmt.Errorf("failed to unmarshal values: %w", err)
-	}
-
-	// Check for any field starting with "_"
-	if found := findUnderscoreFields(valuesMap); found != "" {
-		return fmt.Errorf("field %s is not allowed in user-specified values (fields starting with '_' are reserved)", found)
-	}
-
-	return nil
-}
-
-// findUnderscoreFields recursively finds the first field starting with "_" and returns its key path
-func findUnderscoreFields(m map[string]interface{}) string {
-	for k, v := range m {
-		if strings.HasPrefix(k, "_") {
-			return k
-		}
-		if nestedMap, ok := v.(map[string]interface{}); ok {
-			if found := findUnderscoreFields(nestedMap); found != "" {
-				return k + "." + found
-			}
-		} else if nestedArray, ok := v.([]interface{}); ok {
-			for i, item := range nestedArray {
-				if itemMap, ok := item.(map[string]interface{}); ok {
-					if found := findUnderscoreFields(itemMap); found != "" {
-						return fmt.Sprintf("%s[%d].%s", k, i, found)
-	}
-				}
-			}
-		}
-	}
-	return ""
-}
-
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
 func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
 	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
@@ -1246,7 +1071,7 @@ func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 	// Remove all fields starting with "_" after applying defaults to ensure they're not shown to user
 	// This must be done after applySpecDefaults because defaults might add them back
 	if app.Spec != nil && len(app.Spec.Raw) > 0 {
-		cleanedValues, err := removeUnderscoreFields(app.Spec)
+		cleanedValues, err := cozylib.RemoveUnderscoreFields(app.Spec)
 		if err != nil {
 			return app, fmt.Errorf("failed to remove underscore fields from values: %w", err)
 		}
@@ -1288,7 +1113,7 @@ func (r *REST) ConvertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 // convertHelmReleaseToApplication implements the actual conversion logic
 func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
 	// Remove all fields starting with "_" from values before setting spec to ensure they never appear in spec
-	cleanedValues, err := removeUnderscoreFields(hr.Spec.Values)
+	cleanedValues, err := cozylib.RemoveUnderscoreFields(hr.Spec.Values)
 	if err != nil {
 		// If removal fails, use original values (shouldn't happen, but be safe)
 		cleanedValues = hr.Spec.Values
@@ -1342,7 +1167,7 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	ctx := context.Background()
 
 	// Check if user specified any field starting with "_" in values
-	if err := checkUnderscoreFields(app.Spec); err != nil {
+	if err := cozylib.CheckUnderscoreFields(app.Spec); err != nil {
 		return nil, err
 	}
 
@@ -1357,7 +1182,7 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	// Start with default values from CRD (if any)
 	var mergedValues *apiextensionsv1.JSON
 	if crd != nil && crd.Spec.Release.Values != nil {
-		mergedValues, err = mergeValues(crd.Spec.Release.Values, app.Spec)
+		mergedValues, err = cozylib.MergeValues(crd.Spec.Release.Values, app.Spec)
 		if err != nil {
 			return nil, fmt.Errorf("failed to merge default values with user values: %w", err)
 		}
@@ -1374,35 +1199,12 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		namespace = nil
 	}
 
-	// Extract namespace labels and add to namespace (top-level)
+	// Extract namespace annotations and add to _namespace (top-level)
 	if namespace != nil {
-		namespaceLabels := extractNamespaceLabels(namespace)
-		if len(namespaceLabels) > 0 {
-			// Parse merged values to add namespace labels
-			var valuesMap map[string]interface{}
-			if mergedValues != nil && len(mergedValues.Raw) > 0 {
-				if err := json.Unmarshal(mergedValues.Raw, &valuesMap); err != nil {
-					return nil, fmt.Errorf("failed to unmarshal merged values: %w", err)
-				}
-			} else {
-				valuesMap = make(map[string]interface{})
-			}
-
-			// Convert namespaceLabels to map[string]interface{}
-			namespaceLabelsMap := make(map[string]interface{})
-			for k, v := range namespaceLabels {
-				namespaceLabelsMap[k] = v
-			}
-
-			// Namespace labels completely overwrite existing _namespace field (top-level)
-			valuesMap["_namespace"] = namespaceLabelsMap
-
-			// Marshal back to JSON
-			mergedJSON, err := json.Marshal(valuesMap)
-			if err != nil {
-				return nil, fmt.Errorf("failed to marshal values with namespace labels: %w", err)
-			}
-			mergedValues = &apiextensionsv1.JSON{Raw: mergedJSON}
+		var err error
+		mergedValues, err = cozylib.InjectNamespaceAnnotationsIntoValues(mergedValues, namespace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inject namespace annotations: %w", err)
 		}
 	}
 
