@@ -34,8 +34,7 @@ build: build-deps
 
 manifests:
 	mkdir -p _out/assets
-	(cd packages/core/cozystack-operator/; helm template -n cozy-system cozystack-operator .) > _out/assets/cozystack-operator.yaml
-	(cd packages/core/installer/; helm template -n cozy-system installer .) > _out/assets/cozystack-installer.yaml
+	(cd packages/core/installer/; helm template -n cozy-system cozystack-operator . | sed '/^WARNING/d') > _out/assets/cozystack-installer.yaml
 
 assets:
 	make -C packages/core/talos assets

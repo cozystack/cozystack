@@ -8,23 +8,49 @@
 }
 
 @test "Install Cozystack" {
-  # Create namespace & configmap required by installer
-  kubectl create namespace cozy-system --dry-run=client -o yaml | kubectl apply -f -
-  kubectl create configmap cozystack -n cozy-system \
-          --from-literal=bundle-name=paas-full \
-          --from-literal=ipv4-pod-cidr=10.244.0.0/16 \
-          --from-literal=ipv4-pod-gateway=10.244.0.1 \
-          --from-literal=ipv4-svc-cidr=10.96.0.0/16 \
-          --from-literal=ipv4-join-cidr=100.64.0.0/16 \
-          --from-literal=root-host=example.org \
-          --from-literal=api-server-endpoint=https://192.168.123.10:6443 \
-          --dry-run=client -o yaml | kubectl apply -f -
-
   # Apply installer manifests from file
   kubectl apply -f _out/assets/cozystack-installer.yaml
 
   # Wait for the installer deployment to become available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
+
+  # Wait for Flux deployment
+  kubectl wait deployment/flux -n cozy-fluxcd --timeout=1m --for=condition=Available
+
+  # Create Platform resource instead of configmap
+  kubectl apply -f - <<'EOF'
+apiVersion: cozystack.io/v1alpha1
+kind: Platform
+metadata:
+  name: cozystack-platform
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+  values:
+    bundles:
+      system:
+        type: "full"
+      paas:
+        enabled: true
+    networking:
+      podCIDR: "10.244.0.0/16"
+      podGateway: "10.244.0.1"
+      serviceCIDR: "10.96.0.0/16"
+      joinCIDR: "100.64.0.0/16"
+    publishing:
+      host: "example.org"
+      apiServerEndpoint: "https://192.168.123.10:6443"
+EOF
+
+  # Wait for ArtifactGenerator for cozystack-packages
+  timeout 60 sh -ec 'until kubectl get artifactgenerators.source.extensions.fluxcd.io cozystack-packages -n cozy-system >/dev/null 2>&1; do sleep 1; done'
+  kubectl wait artifactgenerators.source.extensions.fluxcd.io/cozystack-packages -n cozy-system --for=condition=ready --timeout=5m
+
+  # Wait for bundle ArtifactGenerators
+  timeout 60 sh -ec 'until kubectl get artifactgenerators.source.extensions.fluxcd.io cozystack-system cozystack-iaas cozystack-paas cozystack-naas -n cozy-system >/dev/null 2>&1; do sleep 1; done'
+  kubectl wait artifactgenerators.source.extensions.fluxcd.io -n cozy-system --for=condition=ready --timeout=5m cozystack-system cozystack-iaas cozystack-paas cozystack-naas
 
   # Wait until HelmReleases appear & reconcile them
   timeout 60 sh -ec 'until kubectl get hr -A -l cozystack.io/system-app=true | grep -q cozys; do sleep 1; done'
@@ -140,9 +166,8 @@ EOF
     kubectl wait hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready
   fi
 
-
   # Expose Cozystack services through ingress
-  kubectl patch configmap/cozystack -n cozy-system --type merge -p '{"data":{"expose-services":"api,dashboard,cdi-uploadproxy,vm-exportproxy,keycloak"}}'
+  kubectl patch platform/cozystack-platform --type merge -p '{"spec":{"values":{"publishing":{"exposedServices":["api","dashboard","cdi-uploadproxy","vm-exportproxy","keycloak"]}}}}'
 
   # NGINX ingress controller
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
@@ -169,7 +194,7 @@ EOF
 }
 
 @test "Keycloak OIDC stack is healthy" {
-  kubectl patch configmap/cozystack -n cozy-system --type merge -p '{"data":{"oidc-enabled":"true"}}'
+  kubectl patch platform/cozystack-platform --type merge -p '{"spec":{"values":{"authentication":{"oidc":{"enabled":true}}}}}'
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
