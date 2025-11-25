@@ -447,6 +447,11 @@ func (r *BundleReconciler) reconcileHelmReleases(ctx context.Context, bundle *co
 		// Finally, add default bundle label (it always takes precedence)
 		hrLabels["cozystack.io/bundle"] = bundle.Name
 
+		// Add system-app label if namespace starts with "cozy-"
+		if pkg.Namespace == "kube-system" || strings.HasPrefix(pkg.Namespace, "cozy-") {
+			hrLabels["cozystack.io/system-app"] = "true"
+		}
+
 		// Create HelmRelease
 		hr := &helmv2.HelmRelease{
 			ObjectMeta: metav1.ObjectMeta{
@@ -494,6 +499,11 @@ func (r *BundleReconciler) reconcileHelmReleases(ctx context.Context, bundle *co
 		// Set values if provided
 		if pkg.Values != nil {
 			hr.Spec.Values = pkg.Values
+		}
+
+		// Add system-app label if TargetNamespace starts with "cozy-"
+		if hr.Spec.TargetNamespace != "" && (hr.Spec.TargetNamespace == "kube-system" || strings.HasPrefix(hr.Spec.TargetNamespace, "cozy-")) {
+			hr.Labels["cozystack.io/system-app"] = "true"
 		}
 
 		// Set DependsOn
@@ -1016,7 +1026,7 @@ func (r *BundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozy
 	for nsName, info := range namespacesMap {
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: nsName,
+				Name:   nsName,
 				Labels: make(map[string]string),
 				Annotations: map[string]string{
 					"helm.sh/resource-policy": "keep",
