@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/objectstorage-sidecar:v0.37.7@sha256:e6bc53974c2710f45f71e8796bcf348ba18eebf4358dd0a51841611724364030
+ghcr.io/cozystack/cozystack/objectstorage-sidecar:v0.37.8@sha256:f83ded9a7ad1f59d225e26843d063b87a488f9bae353eeb51687643354125446
