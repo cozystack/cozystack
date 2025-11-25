@@ -12,13 +12,19 @@ command -V tar >/dev/null || exit $?
 
 echo "Collecting Cozystack information..."
 mkdir -p $REPORT_DIR/cozystack
-kubectl get deploy -n cozy-system cozystack -o jsonpath='{.spec.template.spec.containers[0].image}' > $REPORT_DIR/cozystack/image.txt 2>&1
-kubectl get cm -n cozy-system --no-headers | awk '$1 ~ /^cozystack/' |
-  while read NAME _; do
-    DIR=$REPORT_DIR/cozystack/configs
-    mkdir -p $DIR
-    kubectl get cm -n cozy-system $NAME -o yaml > $DIR/$NAME.yaml 2>&1
-  done
+kubectl get deploy -n cozy-system cozystack-operator cozystack-controller -o yaml > $REPORT_DIR/cozystack/deployments.yaml 2>&1
+
+echo "Collecting platforms..."
+kubectl get platforms.cozystack.io -A > $REPORT_DIR/cozystack/platforms.txt 2>&1
+kubectl get platforms.cozystack.io -A -o yaml > $REPORT_DIR/cozystack/platforms.yaml 2>&1
+
+echo "Collecting bundles..."
+kubectl get bundles.cozystack.io -A > $REPORT_DIR/cozystack/bundles.txt 2>&1
+kubectl get bundles.cozystack.io -A -o yaml > $REPORT_DIR/cozystack/bundles.yaml 2>&1
+
+echo "Collecting applicationdefinitions..."
+kubectl get applicationdefinitions.cozystack.io -A > $REPORT_DIR/cozystack/applicationdefinitions.txt 2>&1
+kubectl get applicationdefinitions.cozystack.io -A -o yaml > $REPORT_DIR/cozystack/applicationdefinitions.yaml 2>&1
 
 # -- kubernetes module
 
@@ -54,6 +60,16 @@ kubectl get hr -A --no-headers | awk '$4 != "True"' | \
     mkdir -p $DIR
     kubectl get hr -n $NAMESPACE $NAME -o yaml > $DIR/hr.yaml 2>&1
     kubectl describe hr -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+  done
+
+echo "Collecting artifactgenerators..."
+kubectl get artifactgenerators.source.extensions.fluxcd.io -A > $REPORT_DIR/kubernetes/artifactgenerators.txt 2>&1
+kubectl get artifactgenerators.source.extensions.fluxcd.io -A --no-headers | awk '$4 != "True"' | \
+  while read NAMESPACE NAME _; do
+    DIR=$REPORT_DIR/kubernetes/artifactgenerators/$NAMESPACE/$NAME
+    mkdir -p $DIR
+    kubectl get artifactgenerators.source.extensions.fluxcd.io -n $NAMESPACE $NAME -o yaml > $DIR/artifactgenerator.yaml 2>&1
+    kubectl describe artifactgenerators.source.extensions.fluxcd.io -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
   done
 
 echo "Collecting pods..."
