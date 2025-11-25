@@ -1,7 +1,7 @@
 export NAME=kubevirt-instancetypes
 export NAMESPACE=cozy-kubevirt
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf templates

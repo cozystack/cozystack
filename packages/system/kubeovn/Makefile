@@ -3,8 +3,8 @@ KUBEOVN_TAG=$(shell awk '$$1 == "version:" {print $$2}' charts/kube-ovn/Chart.ya
 export NAME=kubeovn
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts && mkdir -p charts/kube-ovn

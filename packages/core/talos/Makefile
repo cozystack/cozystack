@@ -3,7 +3,7 @@ NAMESPACE=cozy-system
 
 TALOS_VERSION=$(shell awk '/^version:/ {print $$2}' images/talos/profiles/installer.yaml)
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 
 update:
 	hack/gen-profiles.sh

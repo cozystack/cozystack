@@ -1,7 +1,7 @@
 NAME=fluxcd
 NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 apply-locally:
 	cozypkg apply --plain -n $(NAMESPACE) $(NAME)

@@ -1,7 +1,7 @@
 NAME=fluxcd-operator
 NAMESPACE=cozy-fluxcd
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 apply-locally:
 	cozypkg apply --plain -n $(NAMESPACE) $(NAME)

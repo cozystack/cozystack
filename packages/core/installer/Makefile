@@ -1,9 +1,9 @@
 NAME=cozystack-operator
 NAMESPACE=cozy-system
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 
-image: pre-checks image-cozystack-operator image-packages update-version
+image: pre-checks image-operator image-packages update-version
 
 pre-checks:
 	../../../hack/pre-checks.sh
