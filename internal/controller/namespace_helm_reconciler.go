@@ -123,17 +123,17 @@ func (r *NamespaceHelmReconciler) updateHelmReleaseWithNamespaceLabels(ctx conte
 		namespaceLabelsMap[k] = v
 	}
 
-	// Check if namespace labels need to be updated (top-level namespace field)
+	// Check if namespace labels need to be updated (top-level _namespace field)
 	needsUpdate := false
-	currentNamespace, exists := valuesMap["namespace"]
+	currentNamespace, exists := valuesMap["_namespace"]
 	if !exists {
 		needsUpdate = true
-		valuesMap["namespace"] = namespaceLabelsMap
+		valuesMap["_namespace"] = namespaceLabelsMap
 	} else {
 		currentNamespaceMap, ok := currentNamespace.(map[string]interface{})
 		if !ok {
 			needsUpdate = true
-			valuesMap["namespace"] = namespaceLabelsMap
+			valuesMap["_namespace"] = namespaceLabelsMap
 		} else {
 			// Compare and update if different
 			for k, v := range namespaceLabelsMap {
@@ -150,7 +150,7 @@ func (r *NamespaceHelmReconciler) updateHelmReleaseWithNamespaceLabels(ctx conte
 				}
 			}
 			if needsUpdate {
-				valuesMap["namespace"] = currentNamespaceMap
+				valuesMap["_namespace"] = currentNamespaceMap
 			}
 		}
 	}

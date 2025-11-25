@@ -1,5 +1,5 @@
-{{- $cozystack := .Values.cozystack | default dict }}
-{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $cozystack := .Values._cozystack | default dict }}
+{{- $namespace := .Values._namespace | default dict }}
 {{- $ingress := dig "ingress" "" $namespace }}
 {{- $host := dig "host" "" $namespace }}
 

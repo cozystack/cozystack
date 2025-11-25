@@ -1,5 +1,5 @@
-{{- $cozystack := .Values.cozystack | default dict }}
-{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $cozystack := .Values._cozystack | default dict }}
+{{- $namespace := .Values._namespace | default dict }}
 {{- $targetTenant := dig "monitoring" "" $namespace }}
 {{- if .Values.addons.monitoringAgents.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2

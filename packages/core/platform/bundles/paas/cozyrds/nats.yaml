@@ -19,7 +19,7 @@ spec:
         name: cozystack-paas-nats
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: PaaS
@@ -34,9 +34,9 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - nats-{{ .name }}-credentials
+          - "{{`nats-{{ .name }}-credentials`}}"
   services:
     exclude: []
     include:
       - resourceNames:
-          - nats-{{ .name }}
+          - "{{`nats-{{ .name }}`}}"

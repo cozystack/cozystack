@@ -50,7 +50,7 @@ spec:
   postgresUID: 999
   postgresGID: 999
   enableSuperuserAccess: true
-  {{- $cozystack := .Values.cozystack | default dict }}
+  {{- $cozystack := .Values._cozystack | default dict }}
   {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
   {{- if $topologySpreadConstraints }}
   topologySpreadConstraints:

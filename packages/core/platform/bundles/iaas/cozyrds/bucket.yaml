@@ -19,7 +19,7 @@ spec:
         name: cozystack-iaas-bucket
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     singular: Bucket
@@ -35,10 +35,10 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - bucket-{{ .name }}
-          - bucket-{{ .name }}-credentials
+          - "{{`bucket-{{ .name }}`}}"
+          - "{{`bucket-{{ .name }}-credentials`}}"
   ingresses:
     exclude: []
     include:
       - resourceNames:
-          - bucket-{{ .name }}-ui
+          - "{{`bucket-{{ .name }}-ui`}}"

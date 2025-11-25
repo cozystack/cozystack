@@ -18,8 +18,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -31,11 +34,14 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -50,6 +56,18 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 )
+
+// stringSliceFlag is a custom flag type that allows multiple values
+type stringSliceFlag []string
+
+func (f *stringSliceFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *stringSliceFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -72,6 +90,7 @@ func main() {
 	var telemetryEndpoint string
 	var telemetryInterval string
 	var cozystackVersion string
+	var installFluxResources stringSliceFlag
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -83,6 +102,7 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&installFlux, "install-flux", false, "Install Flux components before starting reconcile loop")
+	flag.Var(&installFluxResources, "install-flux-resource", "Install Flux resource (JSON format). Can be specified multiple times. Applied after Flux installation.")
 	flag.BoolVar(&disableTelemetry, "disable-telemetry", false,
 		"Disable telemetry collection")
 	flag.StringVar(&telemetryEndpoint, "telemetry-endpoint", "https://telemetry.cozystack.io",
@@ -163,12 +183,35 @@ func main() {
 		}
 	}
 
+	// Install Flux resources after Flux installation
+	if len(installFluxResources) > 0 {
+		setupLog.Info("Installing Flux resources", "count", len(installFluxResources))
+		installCtx, installCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer installCancel()
+
+		if err := installFluxResourcesFunc(installCtx, mgr.GetClient(), installFluxResources); err != nil {
+			setupLog.Error(err, "failed to install Flux resources, continuing anyway")
+			// Don't exit - allow operator to start even if resource installation fails
+		} else {
+			setupLog.Info("Flux resources installation completed successfully")
+		}
+	}
+
 	bundleReconciler := &operator.CozystackBundleReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}
 	if err = bundleReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CozystackBundle")
+		os.Exit(1)
+	}
+
+	platformReconciler := &operator.CozystackPlatformReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}
+	if err = platformReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CozystackPlatform")
 		os.Exit(1)
 	}
 
@@ -202,4 +245,68 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// installFluxResourcesFunc installs Flux resources from JSON strings
+func installFluxResourcesFunc(ctx context.Context, k8sClient client.Client, resources []string) error {
+	logger := log.FromContext(ctx)
+
+	for i, resourceJSON := range resources {
+		logger.Info("Installing Flux resource", "index", i+1, "total", len(resources))
+
+		// Parse JSON into unstructured object
+		var obj unstructured.Unstructured
+		if err := json.Unmarshal([]byte(resourceJSON), &obj.Object); err != nil {
+			return fmt.Errorf("failed to parse resource JSON at index %d: %w", i, err)
+		}
+
+		// Validate that it has required fields
+		if obj.GetAPIVersion() == "" {
+			return fmt.Errorf("resource at index %d missing apiVersion", i)
+		}
+		if obj.GetKind() == "" {
+			return fmt.Errorf("resource at index %d missing kind", i)
+		}
+		if obj.GetName() == "" {
+			return fmt.Errorf("resource at index %d missing metadata.name", i)
+		}
+
+		// Apply the resource (create or update)
+		logger.Info("Applying Flux resource",
+			"apiVersion", obj.GetAPIVersion(),
+			"kind", obj.GetKind(),
+			"name", obj.GetName(),
+			"namespace", obj.GetNamespace(),
+		)
+
+		// Use server-side apply or create/update
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(obj.GroupVersionKind())
+		key := client.ObjectKey{
+			Name:      obj.GetName(),
+			Namespace: obj.GetNamespace(),
+		}
+
+		err := k8sClient.Get(ctx, key, existing)
+		if err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				// Resource doesn't exist, create it
+				if err := k8sClient.Create(ctx, &obj); err != nil {
+					return fmt.Errorf("failed to create resource %s/%s: %w", obj.GetKind(), obj.GetName(), err)
+				}
+				logger.Info("Created Flux resource", "kind", obj.GetKind(), "name", obj.GetName())
+			} else {
+				return fmt.Errorf("failed to check if resource exists: %w", err)
+			}
+		} else {
+			// Resource exists, update it
+			obj.SetResourceVersion(existing.GetResourceVersion())
+			if err := k8sClient.Update(ctx, &obj); err != nil {
+				return fmt.Errorf("failed to update resource %s/%s: %w", obj.GetKind(), obj.GetName(), err)
+			}
+			logger.Info("Updated Flux resource", "kind", obj.GetKind(), "name", obj.GetName())
+		}
+	}
+
+	return nil
 }

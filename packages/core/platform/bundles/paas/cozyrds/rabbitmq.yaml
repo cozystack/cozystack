@@ -19,7 +19,7 @@ spec:
         name: cozystack-paas-rabbitmq
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: PaaS
@@ -34,11 +34,11 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - rabbitmq-{{ .name }}-default-user
+          - "{{`rabbitmq-{{ .name }}-default-user`}}"
       - matchLabels:
           apps.cozystack.io/user-secret: "true"
   services:
     exclude: []
     include:
       - resourceNames:
-          - rabbitmq-{{ .name }}
+          - "{{`rabbitmq-{{ .name }}`}}"

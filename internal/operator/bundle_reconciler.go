@@ -614,14 +614,15 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 			logger := log.FromContext(ctx)
 			logger.V(1).Info("updating HelmRelease Spec", "name", hr.Name, "namespace", hr.Namespace)
 
-			// Check if this HelmRelease is managed through Application API
-			// If it has apps.cozystack.io/application.* labels, preserve user-modified values
+			// Check if this HelmRelease is managed through Application API or Controller
+			// If it has apps.cozystack.io/application.* labels OR cozystack.io/ui=true label, merge values with bundle priority
 			isApplicationManaged := existingHR.Labels["apps.cozystack.io/application.kind"] != "" &&
 				existingHR.Labels["apps.cozystack.io/application.group"] != ""
+			isControllerManaged := existingHR.Labels["cozystack.io/ui"] == "true"
 
-			if isApplicationManaged {
-				// For Application-managed HelmReleases, merge values but overwrite cozystack field
-				logger.V(1).Info("merging values for Application-managed HelmRelease, overwriting cozystack", "name", hr.Name, "namespace", hr.Namespace)
+			if isApplicationManaged || isControllerManaged {
+				// For Application/Controller-managed HelmReleases, merge values with bundle priority
+				logger.V(1).Info("merging values for Application/Controller-managed HelmRelease with bundle priority", "name", hr.Name, "namespace", hr.Namespace, "isApplicationManaged", isApplicationManaged, "isControllerManaged", isControllerManaged)
 				existingHR.Spec.Chart = hr.Spec.Chart
 				existingHR.Spec.ChartRef = hr.Spec.ChartRef
 				existingHR.Spec.Interval = hr.Spec.Interval
@@ -639,8 +640,8 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 				existingHR.Spec.ServiceAccountName = hr.Spec.ServiceAccountName
 				existingHR.Spec.Suspend = hr.Spec.Suspend
 
-				// Merge values: merge all fields except cozystack, which is fully overwritten
-				mergedValues, err := mergeHelmReleaseValues(existingHR.Spec.Values, hr.Spec.Values)
+				// Merge values: bundle values have priority (override existing)
+				mergedValues, err := mergeHelmReleaseValuesWithBundlePriority(existingHR.Spec.Values, hr.Spec.Values)
 				if err != nil {
 					logger.Error(err, "failed to merge values, using bundle values", "name", hr.Name, "namespace", hr.Namespace)
 					existingHR.Spec.Values = hr.Spec.Values
@@ -665,7 +666,7 @@ func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj clie
 }
 
 // mergeHelmReleaseValues merges two HelmRelease values JSON objects
-// All fields are merged except "cozystack" which is fully overwritten from bundleValues
+// Existing values have priority (bundle values are merged into existing)
 func mergeHelmReleaseValues(existingValues, bundleValues *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
 	// If bundle has no values, preserve existing
 	if bundleValues == nil || len(bundleValues.Raw) == 0 {
@@ -688,16 +689,45 @@ func mergeHelmReleaseValues(existingValues, bundleValues *apiextensionsv1.JSON) 
 		return nil, fmt.Errorf("failed to unmarshal bundle values: %w", err)
 	}
 
-	// Merge: start with existing values
-	mergedMap := deepMergeMaps(existingMap, bundleMap)
+	// Merge: existing values have priority (bundle is merged into existing)
+	mergedMap := deepMergeMaps(bundleMap, existingMap)
 
-	// Overwrite cozystack field completely from bundle
-	if cozystackVal, exists := bundleMap["cozystack"]; exists {
-		mergedMap["cozystack"] = cozystackVal
-	} else {
-		// If bundle doesn't have cozystack, remove it from merged (optional - could also preserve)
-		delete(mergedMap, "cozystack")
+	// Marshal back to JSON
+	mergedJSON, err := json.Marshal(mergedMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal merged values: %w", err)
 	}
+
+	return &apiextensionsv1.JSON{Raw: mergedJSON}, nil
+}
+
+// mergeHelmReleaseValuesWithBundlePriority merges two HelmRelease values JSON objects
+// Bundle values have priority (override existing values)
+// All fields from bundle override existing, except nested merges for maps
+func mergeHelmReleaseValuesWithBundlePriority(existingValues, bundleValues *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
+	// If bundle has no values, preserve existing
+	if bundleValues == nil || len(bundleValues.Raw) == 0 {
+		return existingValues, nil
+	}
+
+	// If existing has no values, use bundle values
+	if existingValues == nil || len(existingValues.Raw) == 0 {
+		return bundleValues, nil
+	}
+
+	// Parse both values
+	var existingMap map[string]interface{}
+	if err := json.Unmarshal(existingValues.Raw, &existingMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal existing values: %w", err)
+	}
+
+	var bundleMap map[string]interface{}
+	if err := json.Unmarshal(bundleValues.Raw, &bundleMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal bundle values: %w", err)
+	}
+
+	// Merge: start with existing values, then bundle values override (bundle has priority)
+	mergedMap := deepMergeMaps(existingMap, bundleMap)
 
 	// Marshal back to JSON
 	mergedJSON, err := json.Marshal(mergedMap)
@@ -987,13 +1017,16 @@ func (r *CozystackBundleReconciler) reconcileNamespaces(ctx context.Context, bun
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: nsName,
-				Labels: map[string]string{
-					"cozystack.io/system": "true",
-				},
+				Labels: make(map[string]string),
 				Annotations: map[string]string{
 					"helm.sh/resource-policy": "keep",
 				},
 			},
+		}
+
+		// Add system label only for non-tenant namespaces
+		if !strings.HasPrefix(nsName, "tenant-") {
+			namespace.Labels["cozystack.io/system"] = "true"
 		}
 
 		// Add privileged label if needed

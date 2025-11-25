@@ -20,7 +20,7 @@ spec:
         name: cozystack-system-seaweedfs
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: Administration
@@ -38,9 +38,9 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - seaweedfs-{{ .name }}-s3
+          - "{{`seaweedfs-{{ .name }}-s3`}}"
   ingresses:
     exclude: []
     include:
       - resourceNames:
-          - ingress-seaweedfs-{{ .name }}-s3
+          - "{{`ingress-seaweedfs-{{ .name }}-s3`}}"

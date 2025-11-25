@@ -1,5 +1,5 @@
-{{- $cozystack := .Values.cozystack | default dict }}
-{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $cozystack := .Values._cozystack | default dict }}
+{{- $namespace := .Values._namespace | default dict }}
 {{- $seaweedfs := dig "seaweedfs" "" $namespace }}
 apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketClaim

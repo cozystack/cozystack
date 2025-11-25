@@ -20,7 +20,7 @@ spec:
         name: cozystack-system-info
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     name: info
@@ -35,5 +35,5 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - kubeconfig-{{ .namespace }}
-          - "{{ .namespace }}"
+          - "{{`kubeconfig-{{ .namespace }}`}}"
+          - "{{`{{ .namespace }}`}}"

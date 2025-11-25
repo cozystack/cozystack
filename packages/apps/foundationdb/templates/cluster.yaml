@@ -1,4 +1,4 @@
-{{- $cozystack := .Values.cozystack | default dict }}
+{{- $cozystack := .Values._cozystack | default dict }}
 {{- $clusterDomain := dig "networking" "clusterDomain" "cozy.local" $cozystack }}
 ---
 apiVersion: apps.foundationdb.org/v1beta2

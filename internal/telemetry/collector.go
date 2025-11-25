@@ -195,23 +195,23 @@ func (c *Collector) collect(ctx context.Context) {
 
 	// Collect node metrics
 	if len(nodeList.Items) > 0 {
-		nodeOSCount := make(map[string]int)
+	nodeOSCount := make(map[string]int)
 		kernelVersion := "unknown"
-		for _, node := range nodeList.Items {
-			key := fmt.Sprintf("%s (%s)", node.Status.NodeInfo.OperatingSystem, node.Status.NodeInfo.OSImage)
-			nodeOSCount[key] = nodeOSCount[key] + 1
+	for _, node := range nodeList.Items {
+		key := fmt.Sprintf("%s (%s)", node.Status.NodeInfo.OperatingSystem, node.Status.NodeInfo.OSImage)
+		nodeOSCount[key] = nodeOSCount[key] + 1
 			if kernelVersion == "unknown" && node.Status.NodeInfo.KernelVersion != "" {
 				kernelVersion = node.Status.NodeInfo.KernelVersion
 			}
-		}
+	}
 
-		for osKey, count := range nodeOSCount {
-			metrics.WriteString(fmt.Sprintf(
-				"cozy_nodes_count{os=\"%s\",kernel=\"%s\"} %d\n",
-				osKey,
+	for osKey, count := range nodeOSCount {
+		metrics.WriteString(fmt.Sprintf(
+			"cozy_nodes_count{os=\"%s\",kernel=\"%s\"} %d\n",
+			osKey,
 				kernelVersion,
-				count,
-			))
+			count,
+		))
 		}
 	}
 
@@ -294,15 +294,15 @@ func (c *Collector) collect(ctx context.Context) {
 		logger.Info(fmt.Sprintf("Failed to list WorkloadMonitors: %v", err))
 		// Continue without workload metrics instead of returning
 	} else {
-		for _, monitor := range monitorList.Items {
-			metrics.WriteString(fmt.Sprintf(
-				"cozy_workloads_count{uid=\"%s\",kind=\"%s\",type=\"%s\",version=\"%s\"} %d\n",
-				monitor.UID,
-				monitor.Spec.Kind,
-				monitor.Spec.Type,
-				monitor.Spec.Version,
-				monitor.Status.ObservedReplicas,
-			))
+	for _, monitor := range monitorList.Items {
+		metrics.WriteString(fmt.Sprintf(
+			"cozy_workloads_count{uid=\"%s\",kind=\"%s\",type=\"%s\",version=\"%s\"} %d\n",
+			monitor.UID,
+			monitor.Spec.Kind,
+			monitor.Spec.Type,
+			monitor.Spec.Version,
+			monitor.Status.ObservedReplicas,
+		))
 		}
 	}
 

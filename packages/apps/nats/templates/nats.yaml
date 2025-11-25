@@ -1,4 +1,4 @@
-{{- $cozystack := .Values.cozystack | default dict }}
+{{- $cozystack := .Values._cozystack | default dict }}
 {{- $clusterDomain := dig "networking" "clusterDomain" "cozy.local" $cozystack }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $passwords := dict }}

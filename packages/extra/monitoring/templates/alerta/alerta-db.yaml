@@ -5,7 +5,7 @@ metadata:
   name: alerta-db
 spec:
   instances: 2
-  {{- $cozystack := .Values.cozystack | default dict }}
+  {{- $cozystack := .Values._cozystack | default dict }}
   {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
   {{- if $topologySpreadConstraints }}
   topologySpreadConstraints:

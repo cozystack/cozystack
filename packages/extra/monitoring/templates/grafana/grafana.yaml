@@ -1,6 +1,6 @@
-{{- $cozystack := .Values.cozystack | default dict }}
+{{- $cozystack := .Values._cozystack | default dict }}
 {{- $issuerType := dig "publishing" "certificates" "issuerType" "http01" $cozystack }}
-{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $namespace := .Values._namespace | default dict }}
 {{- $ingress := dig "ingress" "" $namespace }}
 {{- $host := dig "host" "" $namespace }}
 ---

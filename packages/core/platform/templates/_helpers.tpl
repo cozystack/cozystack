@@ -77,28 +77,13 @@ Usage: {{ include "cozystack.render-file" (list . "bundles/system/bundle-full.ya
 {{/*
 Render all files matching a glob pattern with template processing
 Usage: {{ include "cozystack.render-glob" (list . "bundles/system/cozyrds/*.yaml") }}
-Escapes templates like {{ .name }} and {{ .namespace }} that should remain as-is
 */}}
 {{- define "cozystack.render-glob" -}}
 {{- $ := index . 0 }}
 {{- $pattern := index . 1 }}
 {{- range $path, $_ := $.Files.Glob $pattern }}
-{{- $content := $.Files.Get $path }}
-{{- /* Escape templates that should remain as-is using temporary markers */}}
-{{- /* Process complex patterns first (longer matches) */}}
-{{- $content = $content | replace "{{ slice .namespace 7 }}" "__TEMPLATE_SLICE_NAMESPACE_7__" }}
-{{- $content = $content | replace "{{ slice .namespace" "__TEMPLATE_SLICE_NAMESPACE__" }}
-{{- $content = $content | replace "{{ .namespace }}" "__TEMPLATE_DOT_NAMESPACE__" }}
-{{- $content = $content | replace "{{ .name }}" "__TEMPLATE_DOT_NAME__" }}
-{{- /* Render the template */}}
-{{- $rendered := trim (tpl $content $) }}
-{{- /* Restore escaped templates */}}
-{{- $rendered = $rendered | replace "__TEMPLATE_DOT_NAME__" "{{ .name }}" }}
-{{- $rendered = $rendered | replace "__TEMPLATE_DOT_NAMESPACE__" "{{ .namespace }}" }}
-{{- $rendered = $rendered | replace "__TEMPLATE_SLICE_NAMESPACE__" "{{ slice .namespace" }}
-{{- $rendered = $rendered | replace "__TEMPLATE_SLICE_NAMESPACE_7__" "{{ slice .namespace 7 }}" }}
 ---
-{{ $rendered }}
+{{ trim (tpl ($.Files.Get $path) $) }}
 {{- end }}
 {{- end -}}
 
@@ -173,5 +158,6 @@ Returns: YAML string with cozystack values structure
 {{- if .Values.branding }}{{ $_ := set $cozystack "branding" .Values.branding }}{{ end }}
 {{- if .Values.registries }}{{ $_ := set $cozystack "registries" .Values.registries }}{{ end }}
 {{- if .Values.resources }}{{ $_ := set $cozystack "resources" .Values.resources }}{{ end }}
+{{- if .Values.components }}{{ $_ := set $cozystack "components" .Values.components }}{{ end }}
 {{- $cozystack | toYaml | trim }}
 {{- end -}}

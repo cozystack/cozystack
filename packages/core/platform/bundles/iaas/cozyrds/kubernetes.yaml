@@ -19,7 +19,7 @@ spec:
         name: cozystack-iaas-kubernetes
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: IaaS
@@ -35,14 +35,14 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - kubernetes-{{ .name }}-admin-kubeconfig
+          - "{{`kubernetes-{{ .name }}-admin-kubeconfig`}}"
   services:
     exclude: []
     include:
       - resourceNames:
-          - kubernetes-{{ .name }}
+          - "{{`kubernetes-{{ .name }}`}}"
   ingresses:
     exclude: []
     include:
       - resourceNames:
-          - kubernetes-{{ .name }}
+          - "{{`kubernetes-{{ .name }}`}}"

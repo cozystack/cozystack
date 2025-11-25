@@ -19,6 +19,7 @@ package application
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -39,12 +40,16 @@ func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
 	if m == nil {
 		m = map[string]any{}
 	}
+	// Remove all fields starting with "_" BEFORE applying defaults to prevent them from being processed
+	removeUnderscoreFieldsFromMap(m)
+	
 	if err := defaultLikeKubernetes(&m, r.specSchema); err != nil {
 		return err
 	}
-	// Remove cozystack and namespace fields before marshaling to ensure they're never in the output
-	delete(m, "cozystack")
-	delete(m, "namespace")
+	
+	// Remove all fields starting with "_" AFTER applying defaults to ensure they're never in the output
+	// This is a safety measure in case defaults added them back
+	removeUnderscoreFieldsFromMap(m)
 	
 	// Always return at least an empty JSON object, never nil
 	if len(m) == 0 {
@@ -58,6 +63,35 @@ func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
 	}
 	app.Spec = &apiextensionsv1.JSON{Raw: raw}
 	return nil
+}
+
+// removeUnderscoreFieldsFromMap recursively removes all fields starting with "_" from a map
+func removeUnderscoreFieldsFromMap(m map[string]any) {
+	if m == nil {
+		return
+	}
+	// Collect keys to delete (we can't delete while iterating)
+	keysToDelete := make([]string, 0)
+	for k, v := range m {
+		if strings.HasPrefix(k, "_") {
+			keysToDelete = append(keysToDelete, k)
+		} else if nestedMap, ok := v.(map[string]any); ok {
+			// Recursively process nested maps
+			removeUnderscoreFieldsFromMap(nestedMap)
+		} else if nestedArray, ok := v.([]any); ok {
+			// Process arrays that might contain maps
+			for _, item := range nestedArray {
+				if itemMap, ok := item.(map[string]any); ok {
+					removeUnderscoreFieldsFromMap(itemMap)
+				}
+			}
+		}
+	}
+
+	// Delete collected keys
+	for _, k := range keysToDelete {
+		delete(m, k)
+	}
 }
 
 func defaultLikeKubernetes(root *map[string]any, s *structuralschema.Structural) error {
@@ -126,6 +160,10 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 		if s.AdditionalProperties != nil && s.AdditionalProperties.Structural != nil {
 			ap := s.AdditionalProperties.Structural
 			for k, cur := range mv {
+				// Skip fields starting with "_" - they are internal and should not be processed
+				if strings.HasPrefix(k, "_") {
+					continue
+				}
 				if _, isKnown := s.Properties[k]; isKnown {
 					continue
 				}

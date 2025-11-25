@@ -1,5 +1,5 @@
-{{- $cozystack := .Values.cozystack | default dict }}
-{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $cozystack := .Values._cozystack | default dict }}
+{{- $namespace := .Values._namespace | default dict }}
 {{- $etcd := dig "etcd" "" $namespace }}
 {{- $ingress := dig "ingress" "" $namespace }}
 {{- $host := dig "host" "" $namespace }}
@@ -32,7 +32,7 @@ spec:
             {{- end }}
             cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ .groupName }}
         spec:
-          {{- $cozystack := $.Values.cozystack | default dict }}
+          {{- $cozystack := $.Values._cozystack | default dict }}
           {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
           {{- if $topologySpreadConstraints }}
           {{- range $topologySpreadConstraints }}

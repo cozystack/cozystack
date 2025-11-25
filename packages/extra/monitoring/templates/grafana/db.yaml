@@ -6,7 +6,7 @@ spec:
   instances: 2
   storage:
     size: {{ .Values.grafana.db.size }}
-  {{- $cozystack := .Values.cozystack | default dict }}
+  {{- $cozystack := .Values._cozystack | default dict }}
   {{- $topologySpreadConstraints := dig "scheduling" "topologySpreadConstraints" (list) $cozystack }}
   {{- if $topologySpreadConstraints }}
   topologySpreadConstraints:

@@ -20,7 +20,7 @@ spec:
         name: cozystack-system-monitoring
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: Administration

@@ -19,7 +19,7 @@ spec:
         name: cozystack-paas-redis
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: PaaS
@@ -34,12 +34,12 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - redis-{{ .name }}-auth
+          - "{{`redis-{{ .name }}-auth`}}"
   services:
     exclude: []
     include:
       - resourceNames:
-          - rfs-redis-{{ .name }}
-          - rfrm-redis-{{ .name }}
-          - rfrs-redis-{{ .name }}
-          - redis-{{ .name }}-external-lb
+          - "{{`rfs-redis-{{ .name }}`}}"
+          - "{{`rfrm-redis-{{ .name }}`}}"
+          - "{{`rfrs-redis-{{ .name }}`}}"
+          - "{{`redis-{{ .name }}-external-lb`}}"

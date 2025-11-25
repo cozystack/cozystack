@@ -1130,8 +1130,8 @@ func deepMergeMaps(base, override map[string]interface{}) map[string]interface{}
 	return result
 }
 
-// removeCozystackFromValues removes the cozystack and namespace fields from values
-func removeCozystackFromValues(values *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
+// removeUnderscoreFields recursively removes all fields starting with "_" from values
+func removeUnderscoreFields(values *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
 	if values == nil || len(values.Raw) == 0 {
 		return values, nil
 	}
@@ -1141,23 +1141,11 @@ func removeCozystackFromValues(values *apiextensionsv1.JSON) (*apiextensionsv1.J
 		return nil, fmt.Errorf("failed to unmarshal values: %w", err)
 	}
 
-	// Check if cozystack or namespace field exists before removing
-	if _, exists := valuesMap["cozystack"]; exists {
-		klog.V(4).Infof("Removing cozystack field from values (found in values map)")
-		delete(valuesMap, "cozystack")
-	} else {
-		klog.V(6).Infof("cozystack field not found in values map")
-	}
-	if _, exists := valuesMap["namespace"]; exists {
-		klog.V(4).Infof("Removing namespace field from values (found in values map)")
-		delete(valuesMap, "namespace")
-	} else {
-		klog.V(6).Infof("namespace field not found in values map")
-	}
+	// Recursively remove all fields starting with "_"
+	removeUnderscoreFieldsRecursive(valuesMap)
 
 	// If map is empty, return empty JSON object instead of nil to ensure proper serialization
 	if len(valuesMap) == 0 {
-		klog.V(6).Infof("Values map is empty after removing cozystack/namespace, returning empty JSON object")
 		return &apiextensionsv1.JSON{Raw: []byte("{}")}, nil
 	}
 
@@ -1166,29 +1154,40 @@ func removeCozystackFromValues(values *apiextensionsv1.JSON) (*apiextensionsv1.J
 		return nil, fmt.Errorf("failed to marshal cleaned values: %w", err)
 	}
 
-	// Verify cozystack and namespace were removed
-	var verifyMap map[string]interface{}
-	if err := json.Unmarshal(cleanedJSON, &verifyMap); err == nil {
-		cozystackRemoved := true
-		namespaceRemoved := true
-		if _, stillExists := verifyMap["cozystack"]; stillExists {
-			klog.Errorf("ERROR: cozystack field still exists after removal attempt!")
-			cozystackRemoved = false
-		}
-		if _, stillExists := verifyMap["namespace"]; stillExists {
-			klog.Errorf("ERROR: namespace field still exists after removal attempt!")
-			namespaceRemoved = false
-		}
-		if cozystackRemoved && namespaceRemoved {
-			klog.V(6).Infof("Verified: cozystack and namespace fields successfully removed")
-		}
-	}
-
 	return &apiextensionsv1.JSON{Raw: cleanedJSON}, nil
 }
 
-// checkCozystackInValues checks if cozystack or namespace field exists in user values and returns an error if it does
-func checkCozystackInValues(values *apiextensionsv1.JSON) error {
+// removeUnderscoreFieldsRecursive recursively removes all fields starting with "_" from a map
+func removeUnderscoreFieldsRecursive(m map[string]interface{}) {
+	if m == nil {
+		return
+	}
+	// Collect keys to delete (we can't delete while iterating)
+	keysToDelete := make([]string, 0)
+	for k, v := range m {
+		if strings.HasPrefix(k, "_") {
+			keysToDelete = append(keysToDelete, k)
+		} else if nestedMap, ok := v.(map[string]interface{}); ok {
+			// Recursively process nested maps
+			removeUnderscoreFieldsRecursive(nestedMap)
+		} else if nestedArray, ok := v.([]interface{}); ok {
+			// Process arrays that might contain maps
+			for _, item := range nestedArray {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					removeUnderscoreFieldsRecursive(itemMap)
+		}
+	}
+		}
+	}
+
+	// Delete collected keys
+	for _, k := range keysToDelete {
+		delete(m, k)
+	}
+}
+
+// checkUnderscoreFields checks if any field starting with "_" exists in user values and returns an error if it does
+func checkUnderscoreFields(values *apiextensionsv1.JSON) error {
 	if values == nil || len(values.Raw) == 0 {
 		return nil
 	}
@@ -1198,15 +1197,35 @@ func checkCozystackInValues(values *apiextensionsv1.JSON) error {
 		return fmt.Errorf("failed to unmarshal values: %w", err)
 	}
 
-	if _, exists := valuesMap["cozystack"]; exists {
-		return fmt.Errorf("cozystack field is not allowed in user-specified values")
-	}
-
-	if _, exists := valuesMap["namespace"]; exists {
-		return fmt.Errorf("namespace field is not allowed in user-specified values")
+	// Check for any field starting with "_"
+	if found := findUnderscoreFields(valuesMap); found != "" {
+		return fmt.Errorf("field %s is not allowed in user-specified values (fields starting with '_' are reserved)", found)
 	}
 
 	return nil
+}
+
+// findUnderscoreFields recursively finds the first field starting with "_" and returns its key path
+func findUnderscoreFields(m map[string]interface{}) string {
+	for k, v := range m {
+		if strings.HasPrefix(k, "_") {
+			return k
+		}
+		if nestedMap, ok := v.(map[string]interface{}); ok {
+			if found := findUnderscoreFields(nestedMap); found != "" {
+				return k + "." + found
+			}
+		} else if nestedArray, ok := v.([]interface{}); ok {
+			for i, item := range nestedArray {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					if found := findUnderscoreFields(itemMap); found != "" {
+						return fmt.Sprintf("%s[%d].%s", k, i, found)
+	}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
@@ -1224,27 +1243,27 @@ func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 		return app, fmt.Errorf("defaulting error: %w", err)
 	}
 
-	// Remove cozystack field after applying defaults to ensure it's not shown to user
-	// This must be done after applySpecDefaults because defaults might add it back
+	// Remove all fields starting with "_" after applying defaults to ensure they're not shown to user
+	// This must be done after applySpecDefaults because defaults might add them back
 	if app.Spec != nil && len(app.Spec.Raw) > 0 {
-		cleanedValues, err := removeCozystackFromValues(app.Spec)
+		cleanedValues, err := removeUnderscoreFields(app.Spec)
 		if err != nil {
-			return app, fmt.Errorf("failed to remove cozystack from values: %w", err)
+			return app, fmt.Errorf("failed to remove underscore fields from values: %w", err)
 		}
 		app.Spec = cleanedValues
 
-		// Double-check that cozystack was removed
+		// Double-check that underscore fields were removed
 		if app.Spec != nil && len(app.Spec.Raw) > 0 {
 			var verifyMap map[string]interface{}
 			if err := json.Unmarshal(app.Spec.Raw, &verifyMap); err == nil {
-				if _, stillExists := verifyMap["cozystack"]; stillExists {
-					klog.Errorf("CRITICAL: cozystack field still exists after removal! Attempting force removal...")
-					delete(verifyMap, "cozystack")
+				// Check for any remaining underscore fields
+				for k := range verifyMap {
+					if strings.HasPrefix(k, "_") {
+						klog.Errorf("CRITICAL: Field %s still exists after removal! Removing forcefully...", k)
+						delete(verifyMap, k)
+					}
 				}
-				if _, stillExists := verifyMap["namespace"]; stillExists {
-					klog.Errorf("CRITICAL: namespace field still exists after removal! Attempting force removal...")
-					delete(verifyMap, "namespace")
-				}
+				// Re-marshal if we removed anything
 				if len(verifyMap) == 0 {
 					app.Spec = &apiextensionsv1.JSON{Raw: []byte("{}")}
 				} else {
@@ -1268,6 +1287,13 @@ func (r *REST) ConvertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 
 // convertHelmReleaseToApplication implements the actual conversion logic
 func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+	// Remove all fields starting with "_" from values before setting spec to ensure they never appear in spec
+	cleanedValues, err := removeUnderscoreFields(hr.Spec.Values)
+	if err != nil {
+		// If removal fails, use original values (shouldn't happen, but be safe)
+		cleanedValues = hr.Spec.Values
+	}
+
 	app := appsv1alpha1.Application{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps.cozystack.io/v1alpha1",
@@ -1283,7 +1309,7 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 			Labels:            filterPrefixedMap(hr.Labels, LabelPrefix),
 			Annotations:       filterPrefixedMap(hr.Annotations, AnnotationPrefix),
 		},
-		Spec: hr.Spec.Values,
+		Spec: cleanedValues,
 		Status: appsv1alpha1.ApplicationStatus{
 			Version: extractRevision(hr.Status.LastAttemptedRevision),
 		},
@@ -1315,8 +1341,8 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
 	ctx := context.Background()
 
-	// Check if user specified cozystack field in values
-	if err := checkCozystackInValues(app.Spec); err != nil {
+	// Check if user specified any field starting with "_" in values
+	if err := checkUnderscoreFields(app.Spec); err != nil {
 		return nil, err
 	}
 
@@ -1368,8 +1394,8 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 				namespaceLabelsMap[k] = v
 			}
 
-			// Namespace labels completely overwrite existing namespace field (top-level)
-			valuesMap["namespace"] = namespaceLabelsMap
+			// Namespace labels completely overwrite existing _namespace field (top-level)
+			valuesMap["_namespace"] = namespaceLabelsMap
 
 			// Marshal back to JSON
 			mergedJSON, err := json.Marshal(valuesMap)

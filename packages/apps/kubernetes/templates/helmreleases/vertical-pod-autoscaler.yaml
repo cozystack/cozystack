@@ -1,7 +1,7 @@
 {{- define "cozystack.defaultVPAValues" -}}
-{{- $cozystack := .Values.cozystack | default dict }}
+{{- $cozystack := .Values._cozystack | default dict }}
 {{- $clusterDomain := dig "networking" "clusterDomain" "cozy.local" $cozystack }}
-{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $namespace := .Values._namespace | default dict }}
 {{- $targetTenant := dig "monitoring" "" $namespace }}
 vpaForVPA: false
 vertical-pod-autoscaler:

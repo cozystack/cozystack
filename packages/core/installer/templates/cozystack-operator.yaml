@@ -1,3 +1,15 @@
+{{- define "cozystack-operator.flux-resource" -}}
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: cozystack-packages
+  namespace: cozy-system
+spec:
+  interval: 5m0s
+  url: oci://ghcr.io/cozystack/cozystack/platform-packages
+  ref:
+    digest: {{ .Values.cozystackOperator.packagesDigest }}
+{{- end -}}
 ---
 apiVersion: v1
 kind: Namespace
@@ -58,6 +70,9 @@ spec:
         - --cozystack-version={{ .Values.cozystackOperator.cozystackVersion }}
         {{- if .Values.cozystackOperator.disableTelemetry }}
         - --disable-telemetry
+        {{- end }}
+        {{- if .Values.cozystackOperator.packagesDigest }}
+        - --install-flux-resource={{ include "cozystack-operator.flux-resource" . | fromYaml | toJson }}
         {{- end }}
         env:
         - name: KUBERNETES_SERVICE_HOST

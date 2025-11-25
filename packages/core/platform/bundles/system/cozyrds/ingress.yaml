@@ -20,7 +20,7 @@ spec:
         name: cozystack-system-ingress
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: Administration
@@ -38,4 +38,4 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - "{{ slice .namespace 7 }}-ingress-controller"
+          - "{{`{{ slice .namespace 7 }}-ingress-controller`}}"

@@ -1,4 +1,4 @@
-{{- $cozystack := .Values.cozystack | default dict }}
+{{- $cozystack := .Values._cozystack | default dict }}
 {{- $authentication := $cozystack.authentication | default dict }}
 {{- $oidc := $authentication.oidc | default dict }}
 {{- $oidcEnabled := $oidc.enabled | default false }}

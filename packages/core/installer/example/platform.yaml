@@ -1,0 +1,30 @@
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackPlatform
+metadata:
+  name: cozystack-platform
+spec:
+  interval: 5m
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+  values:
+    bundles:
+      system:
+        type: "full"
+      iaas:
+        enabled: true
+      paas:
+        enabled: true
+      naas:
+        enabled: false
+    publishing:
+      host: "dev5.infra.aenix.org"
+      apiServerEndpoint: "https://api.dev5.infra.aenix.org"
+      externalIPs:
+      - 10.4.0.246
+      - 10.4.0.180
+      - 10.4.0.46
+    authentication:
+      oidc:
+        enabled: true

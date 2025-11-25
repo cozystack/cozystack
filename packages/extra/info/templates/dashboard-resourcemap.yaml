@@ -1,4 +1,4 @@
-{{- $cozystack := .Values.cozystack | default dict }}
+{{- $cozystack := .Values._cozystack | default dict }}
 {{- $oidcEnabled := dig "authentication" "oidc" "enabled" false $cozystack | toString }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

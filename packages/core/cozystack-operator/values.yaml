@@ -1,4 +1,0 @@
-cozystackOperator:
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:latest@sha256:33294c84ea575ece5aa0d301b43a0a71b455668f8f1c60c992aa3f6b3c9a8c8f
-  disableTelemetry: false
-  cozystackVersion: "latest"

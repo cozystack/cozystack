@@ -15,7 +15,7 @@ namespace.cozystack.io/{{ $x }}: "{{ $value }}"
 {{- end }}
 {{- end }}
 
-{{- $namespace := dig "namespace" (dict) .Values }}
+{{- $namespace := .Values._namespace | default dict }}
 {{- $existingNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if not $existingNS }}
 {{- fail (printf "error lookup existing namespace: %s" .Release.Namespace) }}

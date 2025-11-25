@@ -19,7 +19,7 @@ spec:
         name: cozystack-iaas-virtual-machine
         namespace: cozy-system
     values:
-      cozystack:
+      _cozystack:
         {{- include "cozystack.build-values" . | nindent 8 }}
   dashboard:
     category: IaaS
@@ -38,4 +38,4 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - virtual-machine-{{ .name }}
+          - "{{`virtual-machine-{{ .name }}`}}"
