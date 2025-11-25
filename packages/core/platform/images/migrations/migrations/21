@@ -11,7 +11,11 @@ do
   sleep 1
 done
 
+kubectl delete hr -n cozy-system cozystack-resource-definitions --ignore-not-found
+kubectl delete hr -n cozy-system cozystack-resource-definition-crd --ignore-not-found
+kubectl delete crd cozystackresourcedefinitions.cozycloud.io --ignore-not-found
+kubectl delete hr -n cozy-fluxcd fluxcd --ignore-not-found
+
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
   --from-literal=version=22 --dry-run=client -o yaml | kubectl apply -f-
-
