@@ -25,10 +25,24 @@ sleep 5
 cozypkg -n cozy-system -C packages/system/cozystack-resource-definition-crd apply cozystack-resource-definition-crd --plain
 cozypkg -n cozy-system -C packages/system/cozystack-resource-definitions apply cozystack-resource-definitions --plain
 cozypkg -n cozy-system -C packages/system/cozystack-api apply cozystack-api --plain
+if kubectl get ds cozystack-api -n cozy-system >/dev/null 2>&1; then
+  echo "Waiting for cozystack-api daemonset"
+  kubectl rollout status ds/cozystack-api -n cozy-system --timeout=5m || exit 1
+else
+  echo "Waiting for cozystack-api deployment"
+  kubectl rollout status deploy/cozystack-api -n cozy-system --timeout=5m || exit 1
+fi
+
 helm upgrade --install -n cozy-system cozystack-controller ./packages/system/cozystack-controller/ --take-ownership
+echo "Waiting for cozystack-controller"
+kubectl rollout status deploy/cozystack-controller -n cozy-system --timeout=5m || exit 1
+
 helm upgrade --install -n cozy-system lineage-controller-webhook ./packages/system/lineage-controller-webhook/ --take-ownership
+echo "Waiting for lineage-webhook"
+kubectl rollout status ds/lineage-controller-webhook -n cozy-system --timeout=5m || exit 1
 
 sleep 5
+echo "Running lineage-webhook test"
 kubectl delete ns cozy-lineage-webhook-test --ignore-not-found && kubectl create ns cozy-lineage-webhook-test
 cleanup_test_ns() {
   kubectl delete ns cozy-lineage-webhook-test --ignore-not-found
@@ -36,9 +50,6 @@ cleanup_test_ns() {
 trap cleanup_test_ns ERR
 timeout 60 sh -c 'until kubectl -n cozy-lineage-webhook-test create service clusterip lineage-webhook-test --clusterip="None" --dry-run=server; do sleep 1; done'
 cleanup_test_ns
-
-kubectl wait deployment/cozystack-api -n cozy-system --timeout=4m --for=condition=available || exit 1
-kubectl wait deployment/cozystack-controller -n cozy-system --timeout=4m --for=condition=available || exit 1
 
 timestamp=$(date --rfc-3339=ns || date)
 kubectl get namespace -o custom-columns=NAME:.metadata.name --no-headers |
@@ -50,6 +61,7 @@ kubectl get namespace -o custom-columns=NAME:.metadata.name --no-headers |
       -n "$namespace" --all \
       migration.cozystack.io="$timestamp" --overwrite || true)
   done
+
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
   --from-literal=version=21 --dry-run=client -o yaml | kubectl apply -f-
