@@ -72,6 +72,10 @@ spec:
       path: apps/vpc
       libraries: [cozy-lib]
 
+    - name: virtualprivatecloud
+      path: apps/vpc
+      libraries: [cozy-lib]
+
     - name: vm-disk
       path: apps/vm-disk
       libraries: [cozy-lib]

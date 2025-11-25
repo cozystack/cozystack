@@ -6,7 +6,7 @@ metadata:
   namespace: cozy-system
 spec:
   interval: 5m0s
-  url: oci://ghcr.io/cozystack/cozystack/platform-packages
+  url: {{ .Values.cozystackOperator.packagesRepository }}
   ref:
     digest: {{ .Values.cozystackOperator.packagesDigest }}
 {{- end -}}

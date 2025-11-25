@@ -40,5 +40,7 @@ image-packages:
 		--source=https://github.com/cozystack/cozystack \
 		--revision="$$(git describe --tags):$$(git rev-parse HEAD)" \
 	2>&1 | tee images/cozystack-packages.log
-	DIGEST=$$(awk -F@ '/artifact successfully pushed/ {print $$2}' images/cozystack-packages.log; rm -f images/cozystack-packages.log) \
-		yq -i '.cozystackOperator.packagesDigest = strenv(DIGEST)' values.yaml
+	REPO="oci://$(REGISTRY)/platform-packages" \
+		yq -i '.cozystackOperator.packagesRepository = strenv(REPO)' values.yaml
+	export DIGEST=$$(awk -F@ '/artifact successfully pushed/ {print $$2}' images/cozystack-packages.log; rm -f images/cozystack-packages.log); \
+		test -n "$$DIGEST" && yq -i '.cozystackOperator.packagesDigest = strenv(DIGEST)' values.yaml

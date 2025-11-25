@@ -56,24 +56,65 @@ ICON_B64="$(base64 < "$ICON_PATH" | tr -d '\n' | tr -d '\r')"
 
 # Find path to output CRD YAML
 OUT="$(find $CRD_DIR -type f -name "${NAME}.yaml" | head -n 1)"
+if [[ -z "$OUT" ]]; then
+  echo "Error: ApplicationDefinition file for '${NAME}' not found in ${CRD_DIR}"
+  echo "Please create the file first in one of the following directories:"
+  
+  # Auto-detect existing directories
+  BASE_DIR="../../core/platform/bundles"
+  if [[ -d "$BASE_DIR" ]]; then
+    for bundle_dir in "$BASE_DIR"/*/applicationdefinitions; do
+      if [[ -d "$bundle_dir" ]]; then
+        bundle_name="$(basename "$(dirname "$bundle_dir")")"
+        echo "  touch ${bundle_dir}/${NAME}.yaml  # ${bundle_name}"
+      fi
+    done
+  else
+    # Fallback if base directory doesn't exist
+    echo "  touch ../../core/platform/bundles/iaas/applicationdefinitions/${NAME}.yaml"
+    echo "  touch ../../core/platform/bundles/paas/applicationdefinitions/${NAME}.yaml"
+    echo "  touch ../../core/platform/bundles/naas/applicationdefinitions/${NAME}.yaml"
+    echo "  touch ../../core/platform/bundles/system/applicationdefinitions/${NAME}.yaml"
+  fi
+  exit 1
+fi
+
 if [[ ! -s "$OUT" ]]; then
   cat >"$OUT" <<EOF
 apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: ${NAME}
-spec: {}
+spec:
+  release:
+    values:
+      _cozystack:
 EOF
 fi
 
-ARTIFACT_PREFIX="cozystack-$(basename $(dirname "$(dirname "$OUT")"))"  # apps | extra
+# Determine package type (apps or extra) from current directory
+CURRENT_DIR="$(pwd)"
+PACKAGE_TYPE="apps"  # default
+if [[ "$CURRENT_DIR" == *"/packages/extra/"* ]]; then
+  PACKAGE_TYPE="extra"
+elif [[ "$CURRENT_DIR" == *"/packages/apps/"* ]]; then
+  PACKAGE_TYPE="apps"
+fi
+
+# Extract bundle type (iaas, paas, naas, system) from OUT path
+OUT_DIR="$(dirname "$OUT")"
+BUNDLE_DIR="$(dirname "$OUT_DIR")"
+BUNDLE_TYPE="$(basename "$BUNDLE_DIR")"
+ARTIFACT_PREFIX="cozystack-${BUNDLE_TYPE}"
 ARTIFACT_NAME="${ARTIFACT_PREFIX}-${NAME}"
 
 # Export vars for yq env()
 export RES_NAME="$NAME"
-export PREFIX="$NAME-"
-if [ "$ARTIFACT_PREFIX" == "extra" ]; then
+# For packages/extra, prefix should be empty; for packages/apps, prefix is "${NAME}-"
+if [[ "$PACKAGE_TYPE" == "extra" ]]; then
   export PREFIX=""
+else
+  export PREFIX="${NAME}-"
 fi
 export DESCRIPTION="$DESC"
 export ICON_B64="$ICON_B64"
@@ -107,6 +148,12 @@ export KEYS_ORDER="$(
   '
 )"
 
+# Remove lines with cozystack.build-values before updating (Helm template syntax breaks yq parsing)
+if [[ -f "$OUT" && -n "$OUT" ]]; then
+  # Use grep to filter out the line, more reliable than sed
+  grep -v 'cozystack\.build-values' "$OUT" > "${OUT}.tmp" && mv "${OUT}.tmp" "$OUT"
+fi
+
 # Update only necessary fields in-place
 # - openAPISchema is loaded from file as a multi-line string (block scalar)
 # - labels ensure cozystack.io/ui: "true"
@@ -128,5 +175,12 @@ yq -i '
   .spec.dashboard.icon = strenv(ICON_B64) |
   .spec.dashboard.keysOrder = env(KEYS_ORDER)
 ' "$OUT"
+
+# Add back the Helm template line after _cozystack
+if [[ -f "$OUT" && -n "$OUT" ]]; then
+  HELM_TEMPLATE='        {{- include "cozystack.build-values" . | nindent 8 }}'
+  # Use awk for more reliable insertion
+  awk -v template="$HELM_TEMPLATE" '/_cozystack:/ {print; print template; next} {print}' "$OUT" > "${OUT}.tmp" && mv "${OUT}.tmp" "$OUT"
+fi
 
 echo "Updated $OUT"

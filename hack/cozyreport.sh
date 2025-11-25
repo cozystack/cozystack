@@ -72,6 +72,26 @@ kubectl get artifactgenerators.source.extensions.fluxcd.io -A --no-headers | awk
     kubectl describe artifactgenerators.source.extensions.fluxcd.io -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
   done
 
+echo "Collecting ocirepositories..."
+kubectl get ocirepositories.source.toolkit.fluxcd.io -A > $REPORT_DIR/kubernetes/ocirepositories.txt 2>&1
+kubectl get ocirepositories.source.toolkit.fluxcd.io -A --no-headers | awk '$4 != "True"' | \
+  while read NAMESPACE NAME _; do
+    DIR=$REPORT_DIR/kubernetes/ocirepositories/$NAMESPACE/$NAME
+    mkdir -p $DIR
+    kubectl get ocirepositories.source.toolkit.fluxcd.io -n $NAMESPACE $NAME -o yaml > $DIR/ocirepository.yaml 2>&1
+    kubectl describe ocirepositories.source.toolkit.fluxcd.io -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+  done
+
+echo "Collecting gitrepositories..."
+kubectl get gitrepositories.source.toolkit.fluxcd.io -A > $REPORT_DIR/kubernetes/gitrepositories.txt 2>&1
+kubectl get gitrepositories.source.toolkit.fluxcd.io -A --no-headers | awk '$4 != "True"' | \
+  while read NAMESPACE NAME _; do
+    DIR=$REPORT_DIR/kubernetes/gitrepositories/$NAMESPACE/$NAME
+    mkdir -p $DIR
+    kubectl get gitrepositories.source.toolkit.fluxcd.io -n $NAMESPACE $NAME -o yaml > $DIR/gitrepository.yaml 2>&1
+    kubectl describe gitrepositories.source.toolkit.fluxcd.io -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+  done
+
 echo "Collecting pods..."
 kubectl get pod -A -o wide > $REPORT_DIR/kubernetes/pods.txt 2>&1
 kubectl get pod -A --no-headers | awk '$4 !~ /Running|Succeeded|Completed/' |
