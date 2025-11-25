@@ -174,15 +174,68 @@
 {{- end }}
 
 {{- define "cozy-lib.resources.flatten" -}}
+{{- /*
+This helper either outputs raw ResourceQuota fields (e.g., services.loadbalancers)
+as-is, or flattens sanitized resource maps into limits.* / requests.* keys.
+
+If ALL keys in the input are recognized quota keys (pods, services.*, etc.),
+the input is output directly as YAML. Otherwise, the input is treated as a
+resource map and processed through sanitize + flatten.
+
+Do not mix quota keys and resource keys in a single call.
+*/ -}}
+{{- $input := index . 0 -}}
+{{- $ctx := index . 1 -}}
+
+{{- $rawQuotaKeys := list
+"pods"
+"services"
+"services.loadbalancers"
+"services.nodeports"
+"services.clusterip"
+"configmaps"
+"secrets"
+"persistentvolumeclaims"
+"replicationcontrollers"
+"resourcequotas"
+-}}
+
+{{- $computeKeys := list
+"cpu"
+"memory"
+"ephemeral-storage"
+-}}
+
 {{- $out := dict -}}
-{{- $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
-{{- range $section, $values := $res }}
-  {{- range $k, $v := $values }}
-    {{- $key := printf "%s.%s" $section $k }}
-    {{- if ne $key "limits.storage" }}
-        {{- $_ := set $out $key $v }}
-    {{- end }}
-  {{- end }}
+{{- $computeResources := dict -}}
+{{- $quotaResources := dict -}}
+
+{{- range $k, $v := $input }}
+{{- if or (has $k $computeKeys) (hasPrefix "limits." $k) (hasPrefix "requests." $k) }}
+{{- $_ := set $computeResources $k $v }}
+{{- else if has $k $rawQuotaKeys }}
+{{- $_ := set $quotaResources $k $v }}
+{{- else }}
+{{- $_ := set $computeResources $k $v }}
 {{- end }}
+{{- end }}
+
+{{- if $computeResources }}
+{{- $res := include "cozy-lib.resources.sanitize" (list $computeResources (index . 1)) | fromYaml -}}
+{{- range $section, $values := $res }}
+{{- range $k, $v := $values }}
+{{- $key := printf "%s.%s" $section $k }}
+{{- if ne $key "limits.storage" }}
+{{- $_ := set $out $key $v }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- range $k, $v := $quotaResources }}
+{{- $_ := set $out $k $v }}
+{{- end }}
+
 {{- $out | toYaml }}
+
 {{- end }}
