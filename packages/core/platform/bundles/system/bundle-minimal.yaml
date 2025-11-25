@@ -3,10 +3,6 @@
 {{- fail "ERROR: publishing.host is required" }}
 {{- end }}
 {{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
-{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint }}
-{{- if not $apiServerEndpoint }}
-{{- fail "ERROR: publishing.apiServerEndpoint is required" }}
-{{- end }}
 
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackBundle

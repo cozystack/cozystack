@@ -4,10 +4,6 @@
 {{- end }}
 {{- $clusterDomain := .Values.networking.clusterDomain | default "cozy.local" }}
 {{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
-{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint }}
-{{- if not $apiServerEndpoint }}
-{{- fail "ERROR: publishing.apiServerEndpoint is required" }}
-{{- end }}
 
 apiVersion: cozystack.io/v1alpha1
 kind: CozystackBundle
