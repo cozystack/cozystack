@@ -3,7 +3,7 @@ sourceRef:
   name: cozystack-packages
   namespace: cozy-system
 migrations:
-  image: ghcr.io/cozystack/cozystack/platform-migrations:latest@sha256:ce668a50982cc6954b95255bcb02d9fa5a2b17f34bd31f1d02c814ed02fcc7b2
+  image: ghcr.io/cozystack/cozystack/platform-migrations:latest@sha256:390dff1ac16d99c7677a2b580e0dc41bcb2ffd50232ddf4adff81d6f86aae70b
   targetVersion: 23
 # Bundle deployment configuration
 bundles:

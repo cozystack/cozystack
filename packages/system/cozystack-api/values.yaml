@@ -1,5 +1,5 @@
 cozystackAPI:
-  image: ghcr.io/cozystack/cozystack/cozystack-api:v0.38.0@sha256:5eb5d6369c7c7ba0fa6b34b7c5022faa15c860b72e441b5fbde3eceda94efc88
+  image: ghcr.io/cozystack/cozystack/cozystack-api:latest@sha256:fe1878ecb05e179e4bf43f75f3f3c134a759f56a4d0c3f1011b77df27f92b587
   localK8sAPIEndpoint:
     enabled: true
   replicas: 2
