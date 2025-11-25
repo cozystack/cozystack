@@ -14,13 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package fuzzer
+package install
 
 import (
-	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	"testing"
+
+	sdnfuzzer "github.com/cozystack/cozystack/pkg/apis/sdn/fuzzer"
+	"k8s.io/apimachinery/pkg/api/apitesting/roundtrip"
 )
 
-// Funcs returns the fuzzer functions for the apps api group.
-var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
-	return []interface{}{}
+func TestRoundTripTypes(t *testing.T) {
+	roundtrip.RoundTripTestForAPIGroup(t, Install, sdnfuzzer.Funcs)
+	// TODO: enable protobuf generation for the sample-apiserver
+	// roundtrip.RoundTripProtobufTestForAPIGroup(t, Install, corefuzzer.Funcs)
 }
