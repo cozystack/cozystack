@@ -1,6 +1,6 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
 {{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
-{{- $exposeExternalIPs := (index $cozyConfig.data "expose-external-ips") | default "" }}
+{{- $exposeExternalIPs := (index $cozyConfig.data "expose-external-ips") | default "" | nospace }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
