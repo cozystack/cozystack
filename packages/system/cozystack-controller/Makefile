@@ -4,7 +4,7 @@ NAMESPACE=cozy-system
 include ../../../scripts/common-envs.mk
 include ../../../scripts/package.mk
 
-image: image-cozystack-controller update-version
+image: image-cozystack-controller
 
 image-cozystack-controller:
 	docker buildx build -f images/cozystack-controller/Dockerfile ../../.. \
@@ -16,7 +16,3 @@ image-cozystack-controller:
 	IMAGE="$(REGISTRY)/cozystack-controller:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/cozystack-controller.json -o json -r)" \
 		yq -i '.cozystackController.image = strenv(IMAGE)' values.yaml
 	rm -f images/cozystack-controller.json
-
-update-version:
-	TAG="$(call settag,$(TAG))" \
-		yq -i '.cozystackController.cozystackVersion = strenv(TAG)' values.yaml

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -120,16 +121,50 @@ func (c *Collector) collect(ctx context.Context) {
 
 	clusterID := string(kubeSystemNS.UID)
 
-	var cozystackCM corev1.ConfigMap
-	if err := c.client.Get(ctx, types.NamespacedName{Namespace: "cozy-system", Name: "cozystack"}, &cozystackCM); err != nil {
-		logger.Info(fmt.Sprintf("Failed to get cozystack configmap in cozy-system namespace: %v", err))
-		return
-	}
+	// Get all CozystackBundles
+	var bundleList cozyv1alpha1.CozystackBundleList
+	bundleNameStr := ""
+	bundleEnable := ""
+	bundleDisable := ""
+	oidcEnabled := "false"
 
-	oidcEnabled := cozystackCM.Data["oidc-enabled"]
-	bundle := cozystackCM.Data["bundle-name"]
-	bundleEnable := cozystackCM.Data["bundle-enable"]
-	bundleDisable := cozystackCM.Data["bundle-disable"]
+	if err := c.client.List(ctx, &bundleList); err != nil {
+		logger.Info(fmt.Sprintf("Failed to list CozystackBundles: %v", err))
+		// Continue with empty bundle data instead of returning
+	} else {
+		// Collect bundle names (sorted alphabetically)
+		bundleNames := make([]string, 0, len(bundleList.Items))
+		for _, bundle := range bundleList.Items {
+			bundleNames = append(bundleNames, bundle.Name)
+		}
+		sort.Strings(bundleNames)
+		bundleNameStr = strings.Join(bundleNames, ",")
+
+		// Collect all packages from all bundles
+		var allEnabledPackages []string
+		var allDisabledPackages []string
+
+		for _, bundle := range bundleList.Items {
+			for _, pkg := range bundle.Spec.Packages {
+				if pkg.Disabled {
+					allDisabledPackages = append(allDisabledPackages, pkg.Name)
+				} else {
+					allEnabledPackages = append(allEnabledPackages, pkg.Name)
+					// Check if keycloak package is enabled
+					if pkg.Name == "keycloak" {
+						oidcEnabled = "true"
+					}
+				}
+			}
+		}
+
+		// Sort package lists alphabetically
+		sort.Strings(allEnabledPackages)
+		sort.Strings(allDisabledPackages)
+
+		bundleEnable = strings.Join(allEnabledPackages, ",")
+		bundleDisable = strings.Join(allDisabledPackages, ",")
+	}
 
 	// Get Kubernetes version from nodes
 	var nodeList corev1.NodeList
@@ -143,32 +178,41 @@ func (c *Collector) collect(ctx context.Context) {
 
 	// Add Cozystack info metric
 	if len(nodeList.Items) > 0 {
-		k8sVersion, _ := c.discoveryClient.ServerVersion()
+		k8sVersion := "unknown"
+		if version, err := c.discoveryClient.ServerVersion(); err == nil && version != nil {
+			k8sVersion = version.String()
+		}
 		metrics.WriteString(fmt.Sprintf(
-			"cozy_cluster_info{cozystack_version=\"%s\",kubernetes_version=\"%s\",oidc_enabled=\"%s\",bundle_name=\"%s\",bunde_enable=\"%s\",bunde_disable=\"%s\"} 1\n",
+			"cozy_cluster_info{cozystack_version=\"%s\",kubernetes_version=\"%s\",oidc_enabled=\"%s\",bundle_name=\"%s\",bundle_enable=\"%s\",bundle_disable=\"%s\"} 1\n",
 			c.config.CozystackVersion,
 			k8sVersion,
 			oidcEnabled,
-			bundle,
+			bundleNameStr,
 			bundleEnable,
 			bundleDisable,
 		))
 	}
 
 	// Collect node metrics
-	nodeOSCount := make(map[string]int)
-	for _, node := range nodeList.Items {
-		key := fmt.Sprintf("%s (%s)", node.Status.NodeInfo.OperatingSystem, node.Status.NodeInfo.OSImage)
-		nodeOSCount[key] = nodeOSCount[key] + 1
-	}
+	if len(nodeList.Items) > 0 {
+		nodeOSCount := make(map[string]int)
+		kernelVersion := "unknown"
+		for _, node := range nodeList.Items {
+			key := fmt.Sprintf("%s (%s)", node.Status.NodeInfo.OperatingSystem, node.Status.NodeInfo.OSImage)
+			nodeOSCount[key] = nodeOSCount[key] + 1
+			if kernelVersion == "unknown" && node.Status.NodeInfo.KernelVersion != "" {
+				kernelVersion = node.Status.NodeInfo.KernelVersion
+			}
+		}
 
-	for osKey, count := range nodeOSCount {
-		metrics.WriteString(fmt.Sprintf(
-			"cozy_nodes_count{os=\"%s\",kernel=\"%s\"} %d\n",
-			osKey,
-			nodeList.Items[0].Status.NodeInfo.KernelVersion,
-			count,
-		))
+		for osKey, count := range nodeOSCount {
+			metrics.WriteString(fmt.Sprintf(
+				"cozy_nodes_count{os=\"%s\",kernel=\"%s\"} %d\n",
+				osKey,
+				kernelVersion,
+				count,
+			))
+		}
 	}
 
 	// Collect LoadBalancer services metrics
@@ -248,18 +292,18 @@ func (c *Collector) collect(ctx context.Context) {
 	var monitorList cozyv1alpha1.WorkloadMonitorList
 	if err := c.client.List(ctx, &monitorList); err != nil {
 		logger.Info(fmt.Sprintf("Failed to list WorkloadMonitors: %v", err))
-		return
-	}
-
-	for _, monitor := range monitorList.Items {
-		metrics.WriteString(fmt.Sprintf(
-			"cozy_workloads_count{uid=\"%s\",kind=\"%s\",type=\"%s\",version=\"%s\"} %d\n",
-			monitor.UID,
-			monitor.Spec.Kind,
-			monitor.Spec.Type,
-			monitor.Spec.Version,
-			monitor.Status.ObservedReplicas,
-		))
+		// Continue without workload metrics instead of returning
+	} else {
+		for _, monitor := range monitorList.Items {
+			metrics.WriteString(fmt.Sprintf(
+				"cozy_workloads_count{uid=\"%s\",kind=\"%s\",type=\"%s\",version=\"%s\"} %d\n",
+				monitor.UID,
+				monitor.Spec.Kind,
+				monitor.Spec.Type,
+				monitor.Spec.Version,
+				monitor.Status.ObservedReplicas,
+			))
+		}
 	}
 
 	// Send metrics

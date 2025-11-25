@@ -3,7 +3,7 @@ NAMESPACE=cozy-system
 
 include ../../../scripts/common-envs.mk
 
-image: pre-checks image-cozystack-operator
+image: pre-checks image-cozystack-operator update-version
 
 pre-checks:
 	../../../hack/pre-checks.sh
@@ -28,3 +28,6 @@ image-cozystack-operator:
 		yq -i '.cozystackOperator.image = strenv(IMAGE)' values.yaml
 	rm -f images/cozystack-operator.json
 
+update-version:
+	TAG="$(call settag,$(TAG))" \
+		yq -i '.cozystackOperator.cozystackVersion = strenv(TAG)' values.yaml

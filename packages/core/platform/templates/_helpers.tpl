@@ -170,7 +170,6 @@ Returns: YAML string with cozystack values structure
 {{- if .Values.publishing }}{{ $_ := set $cozystack "publishing" .Values.publishing }}{{ end }}
 {{- if .Values.scheduling }}{{ $_ := set $cozystack "scheduling" .Values.scheduling }}{{ end }}
 {{- if .Values.authentication }}{{ $_ := set $cozystack "authentication" .Values.authentication }}{{ end }}
-{{- if .Values.telemetry }}{{ $_ := set $cozystack "telemetry" .Values.telemetry }}{{ end }}
 {{- if .Values.branding }}{{ $_ := set $cozystack "branding" .Values.branding }}{{ end }}
 {{- if .Values.registries }}{{ $_ := set $cozystack "registries" .Values.registries }}{{ end }}
 {{- if .Values.resources }}{{ $_ := set $cozystack "resources" .Values.resources }}{{ end }}

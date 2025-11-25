@@ -96,11 +96,6 @@ spec:
       path: system/cozystack-controller
       namespace: cozy-system
       dependsOn: []
-      {{- if not .Values.telemetry.enabled }}
-      values:
-        cozystackController:
-          disableTelemetry: true
-      {{- end }}
     
     - name: lineage-controller-webhook
       releaseName: lineage-controller-webhook

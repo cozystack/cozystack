@@ -42,6 +42,7 @@ import (
 
 	"github.com/cozystack/cozystack/internal/fluxinstall"
 	"github.com/cozystack/cozystack/internal/operator"
+	"github.com/cozystack/cozystack/internal/telemetry"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -67,6 +68,10 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var installFlux bool
+	var disableTelemetry bool
+	var telemetryEndpoint string
+	var telemetryInterval string
+	var cozystackVersion string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -78,12 +83,35 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&installFlux, "install-flux", false, "Install Flux components before starting reconcile loop")
+	flag.BoolVar(&disableTelemetry, "disable-telemetry", false,
+		"Disable telemetry collection")
+	flag.StringVar(&telemetryEndpoint, "telemetry-endpoint", "https://telemetry.cozystack.io",
+		"Endpoint for sending telemetry data")
+	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
+		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
+		"Version of Cozystack")
 
 	opts := zap.Options{
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// Parse telemetry interval
+	interval, err := time.ParseDuration(telemetryInterval)
+	if err != nil {
+		setupLog.Error(err, "invalid telemetry interval")
+		os.Exit(1)
+	}
+
+	// Configure telemetry
+	telemetryConfig := telemetry.Config{
+		Disabled:         disableTelemetry,
+		Endpoint:         telemetryEndpoint,
+		Interval:         interval,
+		CozystackVersion: cozystackVersion,
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
@@ -153,6 +181,19 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+
+	// Initialize telemetry collector
+	collector, err := telemetry.NewCollector(mgr.GetClient(), &telemetryConfig, mgr.GetConfig())
+	if err != nil {
+		setupLog.V(1).Error(err, "unable to create telemetry collector, telemetry will be disabled")
+	}
+
+	if collector != nil {
+		if err := mgr.Add(collector); err != nil {
+			setupLog.Error(err, "unable to set up telemetry collector")
+			setupLog.V(1).Error(err, "unable to set up telemetry collector, continuing without telemetry")
+		}
 	}
 
 	setupLog.Info("Starting controller manager")
