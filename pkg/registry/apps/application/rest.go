@@ -1036,11 +1036,11 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	return processed
 }
 
-// getCozystackResourceDefinition retrieves the CozystackResourceDefinition for this resource kind
-func (r *REST) getCozystackResourceDefinition(ctx context.Context) (*cozyv1alpha1.CozystackResourceDefinition, error) {
-	crdList := &cozyv1alpha1.CozystackResourceDefinitionList{}
+// getApplicationDefinition retrieves the ApplicationDefinition for this resource kind
+func (r *REST) getApplicationDefinition(ctx context.Context) (*cozyv1alpha1.ApplicationDefinition, error) {
+	crdList := &cozyv1alpha1.ApplicationDefinitionList{}
 	if err := r.c.List(ctx, crdList); err != nil {
-		return nil, fmt.Errorf("failed to list CozystackResourceDefinitions: %w", err)
+		return nil, fmt.Errorf("failed to list ApplicationDefinitions: %w", err)
 	}
 
 	for i := range crdList.Items {
@@ -1050,7 +1050,7 @@ func (r *REST) getCozystackResourceDefinition(ctx context.Context) (*cozyv1alpha
 		}
 	}
 
-	return nil, fmt.Errorf("CozystackResourceDefinition not found for kind %s", r.kindName)
+	return nil, fmt.Errorf("ApplicationDefinition not found for kind %s", r.kindName)
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
@@ -1171,10 +1171,10 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		return nil, err
 	}
 
-	// Get CozystackResourceDefinition to extract default values
-	crd, err := r.getCozystackResourceDefinition(ctx)
+	// Get ApplicationDefinition to extract default values
+	crd, err := r.getApplicationDefinition(ctx)
 	if err != nil {
-		klog.V(6).Infof("Could not find CozystackResourceDefinition for kind %s: %v", r.kindName, err)
+		klog.V(6).Infof("Could not find ApplicationDefinition for kind %s: %v", r.kindName, err)
 		// Continue without default values if CRD not found
 		crd = nil
 	}

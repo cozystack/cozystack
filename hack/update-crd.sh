@@ -8,7 +8,7 @@ need yq; need jq; need base64
 CHART_YAML="${CHART_YAML:-Chart.yaml}"
 VALUES_YAML="${VALUES_YAML:-values.yaml}"
 SCHEMA_JSON="${SCHEMA_JSON:-values.schema.json}"
-CRD_DIR="../../core/platform/bundles/*/cozyrds"
+CRD_DIR="../../core/platform/bundles/*/applicationdefinitions"
 
 [[ -f "$CHART_YAML" ]] || { echo "No $CHART_YAML found"; exit 1; }
 [[ -f "$SCHEMA_JSON" ]] || { echo "No $SCHEMA_JSON found"; exit 1; }
@@ -59,7 +59,7 @@ OUT="$(find $CRD_DIR -type f -name "${NAME}.yaml" | head -n 1)"
 if [[ ! -s "$OUT" ]]; then
   cat >"$OUT" <<EOF
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: ${NAME}
 spec: {}
@@ -114,7 +114,7 @@ export KEYS_ORDER="$(
 # - sourceRef derived from directory (apps|extra)
 yq -i '
   .apiVersion = (.apiVersion // "cozystack.io/v1alpha1") |
-  .kind       = (.kind       // "CozystackResourceDefinition") |
+  .kind       = (.kind       // "ApplicationDefinition") |
   .metadata.name = strenv(RES_NAME) |
   .spec.application.openAPISchema = strenv(SCHEMA_JSON_MIN) |
   (.spec.application.openAPISchema style="literal") |

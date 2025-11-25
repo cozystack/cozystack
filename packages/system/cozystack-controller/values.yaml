@@ -1,4 +1,4 @@
 cozystackController:
-  image: ghcr.io/cozystack/cozystack/cozystack-controller:latest@sha256:196c769a58423f108ffca1760805f022155c63accab38c6a5bd736c6008b8b54
+  image: ghcr.io/cozystack/cozystack/cozystack-controller:latest@sha256:b525651506d8f57cf8d81b733e444cb282d03e9e20f6f257515fc87e18484b2f
   debug: false
   cozystackAPIKind: "DaemonSet"

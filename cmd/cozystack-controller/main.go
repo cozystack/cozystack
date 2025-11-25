@@ -179,12 +179,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.CozystackResourceDefinitionReconciler{
+	if err = (&controller.ApplicationDefinitionReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		CozystackAPIKind: "Deployment",
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
+		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionReconciler")
 		os.Exit(1)
 	}
 

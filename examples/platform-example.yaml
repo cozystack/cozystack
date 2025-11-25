@@ -1,0 +1,31 @@
+apiVersion: cozystack.io/v1alpha1
+kind: Platform
+metadata:
+  name: cozystack-platform
+  # Cluster-scoped resource, no namespace needed
+spec:
+  # SourceRef is required - reference to the OCIRepository or GitRepository
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+  
+  # Optional: Interval for HelmRelease reconciliation (default: 5m)
+  interval: 5m
+  
+  # Optional: BasePath is the base path where the platform chart is located in the source.
+  # For GitRepository, defaults to "packages/core/platform" if not specified.
+  # For OCIRepository, defaults to "core/platform" if not specified.
+  # basePath: core/platform
+  
+  # Optional: Values to pass to HelmRelease
+  # These values will be merged with sourceRef (which is automatically added)
+  values:
+    # Any custom values can be added here
+    # sourceRef will be automatically added by the controller
+    # Example custom values:
+    # customKey: customValue
+    # nested:
+    #   config:
+    #     enabled: true
+

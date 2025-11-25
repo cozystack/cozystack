@@ -40,23 +40,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// CozystackBundleReconciler reconciles CozystackBundle resources
-type CozystackBundleReconciler struct {
+// BundleReconciler reconciles Bundle resources
+type BundleReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackbundles,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackbundles/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cozystack.io,resources=bundles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cozystack.io,resources=bundles/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=source.extensions.fluxcd.io,resources=artifactgenerators,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop
-func (r *CozystackBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *BundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	bundle := &cozyv1alpha1.CozystackBundle{}
+	bundle := &cozyv1alpha1.Bundle{}
 	if err := r.Get(ctx, req.NamespacedName, bundle); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Cleanup orphaned resources
@@ -107,7 +107,7 @@ func (r *CozystackBundleReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 }
 
 // resolveDependencies resolves dependencies from other bundles
-func (r *CozystackBundleReconciler) resolveDependencies(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) ([]cozyv1alpha1.BundleRelease, error) {
+func (r *BundleReconciler) resolveDependencies(ctx context.Context, bundle *cozyv1alpha1.Bundle) ([]cozyv1alpha1.BundleRelease, error) {
 	resolved := make([]cozyv1alpha1.BundleRelease, 0, len(bundle.Spec.Packages))
 	packageMap := make(map[string]bool)
 
@@ -130,7 +130,7 @@ func (r *CozystackBundleReconciler) resolveDependencies(ctx context.Context, bun
 		targetName := parts[1]
 
 		// Get the bundle
-		depBundle := &cozyv1alpha1.CozystackBundle{}
+		depBundle := &cozyv1alpha1.Bundle{}
 		if err := r.Get(ctx, types.NamespacedName{Name: bundleName}, depBundle); err != nil {
 			// If bundle is not found, return wrapped error so we can check it in Reconcile
 			if apierrors.IsNotFound(err) {
@@ -176,7 +176,7 @@ func (r *CozystackBundleReconciler) resolveDependencies(ctx context.Context, bun
 
 // reconcileArtifactGenerators generates a single ArtifactGenerator for the bundle
 // Creates one ArtifactGenerator per bundle with all OutputArtifacts from packages and artifacts
-func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
+func (r *BundleReconciler) reconcileArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.Bundle, packages []cozyv1alpha1.BundleRelease) error {
 	logger := log.FromContext(ctx)
 
 	libraryMap := make(map[string]cozyv1alpha1.BundleLibrary)
@@ -363,7 +363,7 @@ func (r *CozystackBundleReconciler) reconcileArtifactGenerators(ctx context.Cont
 }
 
 // reconcileHelmReleases generates HelmReleases from bundle packages
-func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
+func (r *BundleReconciler) reconcileHelmReleases(ctx context.Context, bundle *cozyv1alpha1.Bundle, packages []cozyv1alpha1.BundleRelease) error {
 	logger := log.FromContext(ctx)
 
 	// Build package name map for dependency resolution (from current bundle)
@@ -374,7 +374,7 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 
 	// Build global package name map from all bundles for finding dependencies
 	globalPackageMap := make(map[string]cozyv1alpha1.BundleRelease)
-	bundleList := &cozyv1alpha1.CozystackBundleList{}
+	bundleList := &cozyv1alpha1.BundleList{}
 	if err := r.List(ctx, bundleList); err == nil {
 		for _, b := range bundleList.Items {
 			for _, pkg := range b.Spec.Packages {
@@ -536,7 +536,7 @@ func (r *CozystackBundleReconciler) reconcileHelmReleases(ctx context.Context, b
 }
 
 // createOrUpdate creates or updates a resource
-func (r *CozystackBundleReconciler) createOrUpdate(ctx context.Context, obj client.Object) error {
+func (r *BundleReconciler) createOrUpdate(ctx context.Context, obj client.Object) error {
 	existing := obj.DeepCopyObject().(client.Object)
 	key := client.ObjectKeyFromObject(obj)
 
@@ -767,7 +767,7 @@ func deepMergeMaps(base, override map[string]interface{}) map[string]interface{}
 }
 
 // Helper functions
-func (r *CozystackBundleReconciler) getPackageNameFromPath(path string) string {
+func (r *BundleReconciler) getPackageNameFromPath(path string) string {
 	parts := strings.Split(path, "/")
 	if len(parts) > 0 {
 		return parts[len(parts)-1]
@@ -776,7 +776,7 @@ func (r *CozystackBundleReconciler) getPackageNameFromPath(path string) string {
 }
 
 // getBasePath returns the basePath with default values based on source kind
-func (r *CozystackBundleReconciler) getBasePath(bundle *cozyv1alpha1.CozystackBundle) string {
+func (r *BundleReconciler) getBasePath(bundle *cozyv1alpha1.Bundle) string {
 	// If basePath is explicitly set, use it
 	if bundle.Spec.BasePath != "" {
 		return bundle.Spec.BasePath
@@ -790,7 +790,7 @@ func (r *CozystackBundleReconciler) getBasePath(bundle *cozyv1alpha1.CozystackBu
 }
 
 // buildSourcePath builds the full source path using basePath with glob pattern
-func (r *CozystackBundleReconciler) buildSourcePath(sourceName, basePath, path string) string {
+func (r *BundleReconciler) buildSourcePath(sourceName, basePath, path string) string {
 	// Remove leading/trailing slashes and combine
 	parts := []string{}
 	if basePath != "" {
@@ -808,7 +808,7 @@ func (r *CozystackBundleReconciler) buildSourcePath(sourceName, basePath, path s
 }
 
 // buildSourceFilePath builds the full source path for a specific file (without glob pattern)
-func (r *CozystackBundleReconciler) buildSourceFilePath(sourceName, basePath, path string) string {
+func (r *BundleReconciler) buildSourceFilePath(sourceName, basePath, path string) string {
 	// Remove leading/trailing slashes and combine
 	parts := []string{}
 	if basePath != "" {
@@ -825,7 +825,7 @@ func (r *CozystackBundleReconciler) buildSourceFilePath(sourceName, basePath, pa
 	return fmt.Sprintf("@%s/%s", sourceName, fullPath)
 }
 
-func (r *CozystackBundleReconciler) cleanupOrphanedArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
+func (r *BundleReconciler) cleanupOrphanedArtifactGenerators(ctx context.Context, bundle *cozyv1alpha1.Bundle) error {
 	logger := log.FromContext(ctx)
 
 	// Find ArtifactGenerators by label
@@ -864,7 +864,7 @@ func (r *CozystackBundleReconciler) cleanupOrphanedArtifactGenerators(ctx contex
 	return nil
 }
 
-func (r *CozystackBundleReconciler) cleanupOrphanedHelmReleases(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
+func (r *BundleReconciler) cleanupOrphanedHelmReleases(ctx context.Context, bundle *cozyv1alpha1.Bundle) error {
 	logger := log.FromContext(ctx)
 
 	// Find HelmReleases by label
@@ -902,7 +902,7 @@ func (r *CozystackBundleReconciler) cleanupOrphanedHelmReleases(ctx context.Cont
 	return nil
 }
 
-func (r *CozystackBundleReconciler) cleanupOrphanedResources(ctx context.Context, bundleKey types.NamespacedName) (ctrl.Result, error) {
+func (r *BundleReconciler) cleanupOrphanedResources(ctx context.Context, bundleKey types.NamespacedName) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Cleanup ArtifactGenerators by label
@@ -915,7 +915,7 @@ func (r *CozystackBundleReconciler) cleanupOrphanedResources(ctx context.Context
 			// Check if this resource has ownerReference to the deleted bundle
 			hasOwnerRef := false
 			for _, ownerRef := range ag.OwnerReferences {
-				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundleKey.Name {
+				if ownerRef.Kind == "Bundle" && ownerRef.Name == bundleKey.Name {
 					hasOwnerRef = true
 					break
 				}
@@ -944,7 +944,7 @@ func (r *CozystackBundleReconciler) cleanupOrphanedResources(ctx context.Context
 			// Check if this resource has ownerReference to the deleted bundle
 			hasOwnerRef := false
 			for _, ownerRef := range hr.OwnerReferences {
-				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundleKey.Name {
+				if ownerRef.Kind == "Bundle" && ownerRef.Name == bundleKey.Name {
 					hasOwnerRef = true
 					break
 				}
@@ -967,7 +967,7 @@ func (r *CozystackBundleReconciler) cleanupOrphanedResources(ctx context.Context
 }
 
 // reconcileNamespaces creates or updates namespaces based on packages in the bundle.
-func (r *CozystackBundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
+func (r *BundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozyv1alpha1.Bundle, packages []cozyv1alpha1.BundleRelease) error {
 	logger := log.FromContext(ctx)
 
 	// Collect namespaces from packages
@@ -1050,7 +1050,7 @@ func (r *CozystackBundleReconciler) reconcileNamespaces(ctx context.Context, bun
 }
 
 // createOrUpdateNamespace creates or updates a namespace.
-func (r *CozystackBundleReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace) error {
+func (r *BundleReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace) error {
 	existing := &corev1.Namespace{}
 	key := types.NamespacedName{Name: namespace.Name}
 
@@ -1092,7 +1092,7 @@ func (r *CozystackBundleReconciler) createOrUpdateNamespace(ctx context.Context,
 }
 
 // checkArtifactConflicts checks for conflicts between packages using artifacts and bundle artifacts
-func (r *CozystackBundleReconciler) checkArtifactConflicts(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle, packages []cozyv1alpha1.BundleRelease) error {
+func (r *BundleReconciler) checkArtifactConflicts(ctx context.Context, bundle *cozyv1alpha1.Bundle, packages []cozyv1alpha1.BundleRelease) error {
 	// Build artifact name map from bundle artifacts
 	artifactNameMap := make(map[string]bool)
 	for _, artifact := range bundle.Spec.Artifacts {
@@ -1112,7 +1112,7 @@ func (r *CozystackBundleReconciler) checkArtifactConflicts(ctx context.Context, 
 }
 
 // removeOwnerReferences removes ownerReferences from all resources with bundle label
-func (r *CozystackBundleReconciler) removeOwnerReferences(ctx context.Context, bundle *cozyv1alpha1.CozystackBundle) error {
+func (r *BundleReconciler) removeOwnerReferences(ctx context.Context, bundle *cozyv1alpha1.Bundle) error {
 	logger := log.FromContext(ctx)
 
 	// Remove ownerReferences from ArtifactGenerators by label
@@ -1126,7 +1126,7 @@ func (r *CozystackBundleReconciler) removeOwnerReferences(ctx context.Context, b
 			newOwnerRefs := []metav1.OwnerReference{}
 
 			for _, ownerRef := range ag.OwnerReferences {
-				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundle.Name {
+				if ownerRef.Kind == "Bundle" && ownerRef.Name == bundle.Name {
 					// Skip this ownerReference (remove it)
 					// Check by name only, not UID, to handle bundle updates
 					updated = true
@@ -1158,7 +1158,7 @@ func (r *CozystackBundleReconciler) removeOwnerReferences(ctx context.Context, b
 			newOwnerRefs := []metav1.OwnerReference{}
 
 			for _, ownerRef := range hr.OwnerReferences {
-				if ownerRef.Kind == "CozystackBundle" && ownerRef.Name == bundle.Name {
+				if ownerRef.Kind == "Bundle" && ownerRef.Name == bundle.Name {
 					// Skip this ownerReference (remove it)
 					// Check by name only, not UID, to handle bundle updates
 					updated = true
@@ -1183,10 +1183,10 @@ func (r *CozystackBundleReconciler) removeOwnerReferences(ctx context.Context, b
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *CozystackBundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *BundleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystack-bundle").
-		For(&cozyv1alpha1.CozystackBundle{}).
+		For(&cozyv1alpha1.Bundle{}).
 		Watches(
 			&helmv2.HelmRelease{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {

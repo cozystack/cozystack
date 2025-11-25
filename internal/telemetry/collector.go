@@ -121,15 +121,15 @@ func (c *Collector) collect(ctx context.Context) {
 
 	clusterID := string(kubeSystemNS.UID)
 
-	// Get all CozystackBundles
-	var bundleList cozyv1alpha1.CozystackBundleList
+	// Get all Bundles
+	var bundleList cozyv1alpha1.BundleList
 	bundleNameStr := ""
 	bundleEnable := ""
 	bundleDisable := ""
 	oidcEnabled := "false"
 
 	if err := c.client.List(ctx, &bundleList); err != nil {
-		logger.Info(fmt.Sprintf("Failed to list CozystackBundles: %v", err))
+		logger.Info(fmt.Sprintf("Failed to list Bundles: %v", err))
 		// Continue with empty bundle data instead of returning
 	} else {
 		// Collect bundle names (sorted alphabetically)

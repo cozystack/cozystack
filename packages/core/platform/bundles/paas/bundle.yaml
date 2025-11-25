@@ -1,7 +1,7 @@
 {{- $clusterDomain := .Values.networking.clusterDomain | default "cozy.local" }}
 
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackBundle
+kind: Bundle
 metadata:
   name: cozystack-paas
 spec:

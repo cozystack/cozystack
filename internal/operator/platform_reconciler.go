@@ -38,22 +38,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// CozystackPlatformReconciler reconciles CozystackPlatform resources
-type CozystackPlatformReconciler struct {
+// PlatformReconciler reconciles Platform resources
+type PlatformReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackplatforms,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackplatforms/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cozystack.io,resources=platforms,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cozystack.io,resources=platforms/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=source.extensions.fluxcd.io,resources=artifactgenerators,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop
-func (r *CozystackPlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	platform := &cozyv1alpha1.CozystackPlatform{}
+	platform := &cozyv1alpha1.Platform{}
 	if err := r.Get(ctx, req.NamespacedName, platform); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Cleanup orphaned resources
@@ -83,7 +83,7 @@ func (r *CozystackPlatformReconciler) Reconcile(ctx context.Context, req ctrl.Re
 }
 
 // reconcileArtifactGenerator creates or updates the ArtifactGenerator for the platform
-func (r *CozystackPlatformReconciler) reconcileArtifactGenerator(ctx context.Context, platform *cozyv1alpha1.CozystackPlatform) error {
+func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, platform *cozyv1alpha1.Platform) error {
 	logger := log.FromContext(ctx)
 
 	// ArtifactGenerator name is the sourceRef name
@@ -156,7 +156,7 @@ func (r *CozystackPlatformReconciler) reconcileArtifactGenerator(ctx context.Con
 }
 
 // reconcileHelmRelease creates or updates the HelmRelease for the platform
-func (r *CozystackPlatformReconciler) reconcileHelmRelease(ctx context.Context, platform *cozyv1alpha1.CozystackPlatform) error {
+func (r *PlatformReconciler) reconcileHelmRelease(ctx context.Context, platform *cozyv1alpha1.Platform) error {
 	logger := log.FromContext(ctx)
 
 	// HelmRelease name is fixed: cozystack-platform
@@ -226,7 +226,7 @@ func (r *CozystackPlatformReconciler) reconcileHelmRelease(ctx context.Context, 
 }
 
 // mergeValuesWithSourceRef merges platform values with sourceRef
-func (r *CozystackPlatformReconciler) mergeValuesWithSourceRef(values *apiextensionsv1.JSON, sourceRef cozyv1alpha1.SourceRef) *apiextensionsv1.JSON {
+func (r *PlatformReconciler) mergeValuesWithSourceRef(values *apiextensionsv1.JSON, sourceRef cozyv1alpha1.SourceRef) *apiextensionsv1.JSON {
 	// Build sourceRef map
 	sourceRefMap := map[string]interface{}{
 		"kind":      sourceRef.Kind,
@@ -268,7 +268,7 @@ func (r *CozystackPlatformReconciler) mergeValuesWithSourceRef(values *apiextens
 }
 
 // getBasePath returns the basePath with default values based on source kind
-func (r *CozystackPlatformReconciler) getBasePath(platform *cozyv1alpha1.CozystackPlatform) string {
+func (r *PlatformReconciler) getBasePath(platform *cozyv1alpha1.Platform) string {
 	if platform.Spec.BasePath != "" {
 		return platform.Spec.BasePath
 	}
@@ -281,7 +281,7 @@ func (r *CozystackPlatformReconciler) getBasePath(platform *cozyv1alpha1.Cozysta
 }
 
 // buildSourcePath builds the full source path from basePath and chart path
-func (r *CozystackPlatformReconciler) buildSourcePath(sourceName, basePath, chartPath string) string {
+func (r *PlatformReconciler) buildSourcePath(sourceName, basePath, chartPath string) string {
 	// Remove leading/trailing slashes and combine
 	parts := []string{}
 	if basePath != "" {
@@ -297,8 +297,8 @@ func (r *CozystackPlatformReconciler) buildSourcePath(sourceName, basePath, char
 	return fmt.Sprintf("@%s/%s", sourceName, fullPath)
 }
 
-// cleanupOrphanedResources removes ArtifactGenerator and HelmRelease when CozystackPlatform is deleted
-func (r *CozystackPlatformReconciler) cleanupOrphanedResources(ctx context.Context, name client.ObjectKey) (ctrl.Result, error) {
+// cleanupOrphanedResources removes ArtifactGenerator and HelmRelease when Platform is deleted
+func (r *PlatformReconciler) cleanupOrphanedResources(ctx context.Context, name client.ObjectKey) (ctrl.Result, error) {
 	// OwnerReferences should handle cleanup automatically
 	// This function is kept for potential future cleanup logic
 	// Note: name is ObjectKey, but for cluster-scoped resources only Name is used
@@ -306,7 +306,7 @@ func (r *CozystackPlatformReconciler) cleanupOrphanedResources(ctx context.Conte
 }
 
 // createOrUpdate creates or updates a resource
-func (r *CozystackPlatformReconciler) createOrUpdate(ctx context.Context, obj client.Object) error {
+func (r *PlatformReconciler) createOrUpdate(ctx context.Context, obj client.Object) error {
 	existing := obj.DeepCopyObject().(client.Object)
 	key := client.ObjectKeyFromObject(obj)
 
@@ -374,10 +374,10 @@ func (r *CozystackPlatformReconciler) createOrUpdate(ctx context.Context, obj cl
 }
 
 // SetupWithManager sets up the controller with the Manager
-func (r *CozystackPlatformReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *PlatformReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystack-platform").
-		For(&cozyv1alpha1.CozystackPlatform{}).
+		For(&cozyv1alpha1.Platform{}).
 		Watches(
 			&helmv2.HelmRelease{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {

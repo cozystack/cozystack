@@ -5,7 +5,7 @@
 {{- end }}
 
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackBundle
+kind: Bundle
 metadata:
   name: cozystack-iaas
 spec:

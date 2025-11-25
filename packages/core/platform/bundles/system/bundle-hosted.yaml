@@ -6,7 +6,7 @@
 {{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
 
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackBundle
+kind: Bundle
 metadata:
   name: cozystack-system
 spec:

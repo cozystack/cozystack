@@ -197,21 +197,21 @@ func main() {
 		}
 	}
 
-	bundleReconciler := &operator.CozystackBundleReconciler{
+	bundleReconciler := &operator.BundleReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}
 	if err = bundleReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackBundle")
+		setupLog.Error(err, "unable to create controller", "controller", "Bundle")
 		os.Exit(1)
 	}
 
-	platformReconciler := &operator.CozystackPlatformReconciler{
+	platformReconciler := &operator.PlatformReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}
 	if err = platformReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackPlatform")
+		setupLog.Error(err, "unable to create controller", "controller", "Platform")
 		os.Exit(1)
 	}
 

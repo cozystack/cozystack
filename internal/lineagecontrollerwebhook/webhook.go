@@ -32,8 +32,8 @@ const (
 	ManagerNameKey   = "apps.cozystack.io/application.name"
 )
 
-// getResourceSelectors returns the appropriate CozystackResourceDefinitionResources for a given GroupKind
-func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.CozystackResourceDefinition) *cozyv1alpha1.CozystackResourceDefinitionResources {
+// getResourceSelectors returns the appropriate ApplicationDefinitionResources for a given GroupKind
+func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.ApplicationDefinition) *cozyv1alpha1.ApplicationDefinitionResources {
 	switch {
 	case gk.Group == "" && gk.Kind == "Secret":
 		return &crd.Spec.Secrets
@@ -159,7 +159,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		ManagerKindKey: obj.GetKind(),
 		ManagerNameKey: obj.GetName(),
 	}
-	// Resource selectors are no longer needed since we don't use CozystackResourceDefinitions
+	// Resource selectors are no longer needed since we don't use ApplicationDefinitions
 	// Set tenant resource label to false by default (can be overridden by other logic if needed)
 	labels[corev1alpha1.TenantResourceLabelKey] = "false"
 	return labels, err

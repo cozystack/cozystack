@@ -76,7 +76,7 @@ Usage: {{ include "cozystack.render-file" (list . "bundles/system/bundle-full.ya
 
 {{/*
 Render all files matching a glob pattern with template processing
-Usage: {{ include "cozystack.render-glob" (list . "bundles/system/cozyrds/*.yaml") }}
+Usage: {{ include "cozystack.render-glob" (list . "bundles/system/applicationdefinitions/*.yaml") }}
 */}}
 {{- define "cozystack.render-glob" -}}
 {{- $ := index . 0 }}

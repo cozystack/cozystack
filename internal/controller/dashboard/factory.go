@@ -15,7 +15,7 @@ import (
 )
 
 // ensureFactory creates or updates a Factory resource for the given CRD
-func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
 	g, v, kind := pickGVK(crd)
 	plural := pickPlural(kind, crd)
 
@@ -524,7 +524,7 @@ type factoryFlags struct {
 
 // factoryFeatureFlags tries several conventional locations so you can evolve the API
 // without breaking the controller. Defaults are false (hidden).
-func factoryFeatureFlags(crd *cozyv1alpha1.CozystackResourceDefinition) factoryFlags {
+func factoryFeatureFlags(crd *cozyv1alpha1.ApplicationDefinition) factoryFlags {
 	var f factoryFlags
 
 	f.Workloads = true
