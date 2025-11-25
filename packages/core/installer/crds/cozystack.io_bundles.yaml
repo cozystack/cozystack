@@ -189,6 +189,13 @@ spec:
                       description: Namespace is the Kubernetes namespace where the
                         release will be installed
                       type: string
+                    namespaceAnnotations:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        NamespaceAnnotations are annotations that will be applied to the namespace for this package
+                        These annotations are merged with annotations from other packages in the same namespace
+                      type: object
                     namespaceLabels:
                       additionalProperties:
                         type: string

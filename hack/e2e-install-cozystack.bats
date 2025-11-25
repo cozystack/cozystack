@@ -14,7 +14,11 @@
   # Wait for the installer deployment to become available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
 
+  # Wait for cozy-fluxcd namespace to be created
+  timeout 30 sh -ec 'until kubectl get namespace cozy-fluxcd >/dev/null 2>&1; do sleep 1; done'
+
   # Wait for Flux deployment
+  timeout 30 sh -ec 'until kubectl get deployment/flux -n cozy-fluxcd >/dev/null 2>&1; do sleep 1; done'
   kubectl wait deployment/flux -n cozy-fluxcd --timeout=1m --for=condition=Available
 
   # Create Platform resource instead of configmap
@@ -32,8 +36,6 @@ spec:
     bundles:
       system:
         type: "full"
-      paas:
-        enabled: true
     networking:
       podCIDR: "10.244.0.0/16"
       podGateway: "10.244.0.1"

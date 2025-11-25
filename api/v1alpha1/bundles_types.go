@@ -222,4 +222,9 @@ type BundleRelease struct {
 	// These labels are merged with labels from other packages in the same namespace
 	// +optional
 	NamespaceLabels map[string]string `json:"namespaceLabels,omitempty"`
+
+	// NamespaceAnnotations are annotations that will be applied to the namespace for this package
+	// These annotations are merged with annotations from other packages in the same namespace
+	// +optional
+	NamespaceAnnotations map[string]string `json:"namespaceAnnotations,omitempty"`
 }

@@ -57,8 +57,13 @@ spec:
       releaseName: tenant-root
       artifact: tenant
       namespace: tenant-root
-      namespaceLabels:
+      namespaceAnnotations:
         namespace.cozystack.io/host: {{ $host }}
+        namespace.cozystack.io/etcd: tenant-root
+        namespace.cozystack.io/ingress: tenant-root
+        namespace.cozystack.io/monitoring: tenant-root
+        namespace.cozystack.io/seaweedfs: tenant-root
+      namespaceLabels:
         namespace.cozystack.io/etcd: tenant-root
         namespace.cozystack.io/ingress: tenant-root
         namespace.cozystack.io/monitoring: tenant-root

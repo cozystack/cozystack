@@ -79,6 +79,12 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	// Cleanup orphaned resources with platform label
+	if err := r.cleanupOrphanedPlatformResources(ctx, platform); err != nil {
+		logger.Error(err, "failed to cleanup orphaned platform resources")
+		// Don't return error, just log it - cleanup is best effort
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -86,20 +92,18 @@ func (r *PlatformReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, platform *cozyv1alpha1.Platform) error {
 	logger := log.FromContext(ctx)
 
-	// ArtifactGenerator name is the sourceRef name
-	agName := platform.Spec.SourceRef.Name
 	// Use fixed namespace for cluster-scoped resource
 	namespace := "cozy-system"
 
 	// Get basePath with default values (already includes full path to platform)
 	basePath := r.getBasePath(platform)
-	
+
 	// Build full path from basePath (basePath already contains the full path)
 	fullPath := r.buildSourcePath(platform.Spec.SourceRef.Name, basePath, "")
 	// Extract the last component for the artifact name
 	artifactPathParts := strings.Split(strings.Trim(basePath, "/"), "/")
 	artifactName := artifactPathParts[len(artifactPathParts)-1]
-	
+
 	copyOps := []sourcewatcherv1beta1.CopyOperation{
 		{
 			From: fullPath + "/**",
@@ -110,7 +114,7 @@ func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, pla
 	// Create ArtifactGenerator
 	ag := &sourcewatcherv1beta1.ArtifactGenerator{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      agName,
+			Name:      platform.Name,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"cozystack.io/platform": platform.Name,
@@ -145,13 +149,13 @@ func (r *PlatformReconciler) reconcileArtifactGenerator(ctx context.Context, pla
 		},
 	}
 
-	logger.Info("reconciling ArtifactGenerator", "name", agName, "namespace", namespace)
+	logger.Info("reconciling ArtifactGenerator", "name", platform.Name, "namespace", namespace)
 
 	if err := r.createOrUpdate(ctx, ag); err != nil {
-		return fmt.Errorf("failed to reconcile ArtifactGenerator %s: %w", agName, err)
+		return fmt.Errorf("failed to reconcile ArtifactGenerator %s: %w", platform.Name, err)
 	}
 
-	logger.Info("reconciled ArtifactGenerator", "name", agName, "namespace", namespace)
+	logger.Info("reconciled ArtifactGenerator", "name", platform.Name, "namespace", namespace)
 	return nil
 }
 
@@ -160,7 +164,6 @@ func (r *PlatformReconciler) reconcileHelmRelease(ctx context.Context, platform 
 	logger := log.FromContext(ctx)
 
 	// HelmRelease name is fixed: cozystack-platform
-	hrName := "cozystack-platform"
 	// Use fixed namespace for cluster-scoped resource
 	namespace := "cozy-system"
 
@@ -175,7 +178,7 @@ func (r *PlatformReconciler) reconcileHelmRelease(ctx context.Context, platform 
 	// Create HelmRelease
 	hr := &helmv2.HelmRelease{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      hrName,
+			Name:      platform.Name,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"cozystack.io/platform": platform.Name,
@@ -215,13 +218,13 @@ func (r *PlatformReconciler) reconcileHelmRelease(ctx context.Context, platform 
 		},
 	}
 
-	logger.Info("reconciling HelmRelease", "name", hrName, "namespace", namespace)
+	logger.Info("reconciling HelmRelease", "name", platform.Name, "namespace", namespace)
 
 	if err := r.createOrUpdate(ctx, hr); err != nil {
-		return fmt.Errorf("failed to reconcile HelmRelease %s: %w", hrName, err)
+		return fmt.Errorf("failed to reconcile HelmRelease %s: %w", platform.Name, err)
 	}
 
-	logger.Info("reconciled HelmRelease", "name", hrName, "namespace", namespace)
+	logger.Info("reconciled HelmRelease", "name", platform.Name, "namespace", namespace)
 	return nil
 }
 
@@ -299,10 +302,108 @@ func (r *PlatformReconciler) buildSourcePath(sourceName, basePath, chartPath str
 
 // cleanupOrphanedResources removes ArtifactGenerator and HelmRelease when Platform is deleted
 func (r *PlatformReconciler) cleanupOrphanedResources(ctx context.Context, name client.ObjectKey) (ctrl.Result, error) {
-	// OwnerReferences should handle cleanup automatically
-	// This function is kept for potential future cleanup logic
-	// Note: name is ObjectKey, but for cluster-scoped resources only Name is used
+	logger := log.FromContext(ctx)
+	namespace := "cozy-system"
+
+	// Cleanup HelmReleases with the platform label that don't match
+	hrList := &helmv2.HelmReleaseList{}
+	if err := r.List(ctx, hrList, client.InNamespace(namespace), client.MatchingLabels{
+		"cozystack.io/platform": name.Name,
+	}); err != nil {
+		logger.Error(err, "failed to list HelmReleases for cleanup")
+		return ctrl.Result{}, err
+	}
+
+	for i := range hrList.Items {
+		hr := &hrList.Items[i]
+		// Check if this HelmRelease should exist (matches current Platform name)
+		// Since Platform is being deleted, all matching HelmReleases should be deleted
+		// OwnerReferences should handle this, but we'll also delete explicitly
+		if err := r.Delete(ctx, hr); err != nil {
+			if !apierrors.IsNotFound(err) {
+				logger.Error(err, "failed to delete orphaned HelmRelease", "name", hr.Name)
+			}
+		} else {
+			logger.Info("deleted orphaned HelmRelease", "name", hr.Name)
+		}
+	}
+
+	// Cleanup ArtifactGenerators with the platform label
+	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
+	if err := r.List(ctx, agList, client.InNamespace(namespace), client.MatchingLabels{
+		"cozystack.io/platform": name.Name,
+	}); err != nil {
+		logger.Error(err, "failed to list ArtifactGenerators for cleanup")
+		return ctrl.Result{}, err
+	}
+
+	for i := range agList.Items {
+		ag := &agList.Items[i]
+		if err := r.Delete(ctx, ag); err != nil {
+			if !apierrors.IsNotFound(err) {
+				logger.Error(err, "failed to delete orphaned ArtifactGenerator", "name", ag.Name)
+			}
+		} else {
+			logger.Info("deleted orphaned ArtifactGenerator", "name", ag.Name)
+		}
+	}
+
 	return ctrl.Result{}, nil
+}
+
+// cleanupOrphanedPlatformResources removes HelmRelease and ArtifactGenerator resources
+// that have the platform label but don't match the current Platform
+func (r *PlatformReconciler) cleanupOrphanedPlatformResources(ctx context.Context, platform *cozyv1alpha1.Platform) error {
+	logger := log.FromContext(ctx)
+	namespace := "cozy-system"
+	platformName := platform.Name
+
+	// Cleanup orphaned HelmReleases
+	hrList := &helmv2.HelmReleaseList{}
+	if err := r.List(ctx, hrList, client.InNamespace(namespace), client.MatchingLabels{
+		"cozystack.io/platform": platformName,
+	}); err != nil {
+		return fmt.Errorf("failed to list HelmReleases: %w", err)
+	}
+
+	for i := range hrList.Items {
+		hr := &hrList.Items[i]
+		// Only delete if it doesn't match the current Platform name
+		// (in case Platform name changed)
+		if hr.Name != platformName {
+			logger.Info("deleting orphaned HelmRelease", "name", hr.Name, "expected", platformName)
+			if err := r.Delete(ctx, hr); err != nil {
+				if !apierrors.IsNotFound(err) {
+					logger.Error(err, "failed to delete orphaned HelmRelease", "name", hr.Name)
+					// Continue with other resources
+				}
+			}
+		}
+	}
+
+	// Cleanup orphaned ArtifactGenerators
+	agList := &sourcewatcherv1beta1.ArtifactGeneratorList{}
+	if err := r.List(ctx, agList, client.InNamespace(namespace), client.MatchingLabels{
+		"cozystack.io/platform": platformName,
+	}); err != nil {
+		return fmt.Errorf("failed to list ArtifactGenerators: %w", err)
+	}
+
+	for i := range agList.Items {
+		ag := &agList.Items[i]
+		// Only delete if it doesn't match the current Platform name
+		if ag.Name != platformName {
+			logger.Info("deleting orphaned ArtifactGenerator", "name", ag.Name, "expected", platformName)
+			if err := r.Delete(ctx, ag); err != nil {
+				if !apierrors.IsNotFound(err) {
+					logger.Error(err, "failed to delete orphaned ArtifactGenerator", "name", ag.Name)
+					// Continue with other resources
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // createOrUpdate creates or updates a resource
@@ -438,4 +539,3 @@ func (r *PlatformReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Complete(r)
 }
-

@@ -981,10 +981,11 @@ func (r *BundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozy
 	logger := log.FromContext(ctx)
 
 	// Collect namespaces from packages
-	// Map: namespace -> {isPrivileged, labels}
+	// Map: namespace -> {isPrivileged, labels, annotations}
 	type namespaceInfo struct {
-		privileged bool
-		labels     map[string]string
+		privileged  bool
+		labels      map[string]string
+		annotations map[string]string
 	}
 	namespacesMap := make(map[string]namespaceInfo)
 
@@ -1002,8 +1003,9 @@ func (r *BundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozy
 		info, exists := namespacesMap[pkg.Namespace]
 		if !exists {
 			info = namespaceInfo{
-				privileged: false,
-				labels:     make(map[string]string),
+				privileged:  false,
+				labels:      make(map[string]string),
+				annotations: make(map[string]string),
 			}
 		}
 
@@ -1016,6 +1018,13 @@ func (r *BundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozy
 		if pkg.NamespaceLabels != nil {
 			for k, v := range pkg.NamespaceLabels {
 				info.labels[k] = v
+			}
+		}
+
+		// Merge namespace annotations from package
+		if pkg.NamespaceAnnotations != nil {
+			for k, v := range pkg.NamespaceAnnotations {
+				info.annotations[k] = v
 			}
 		}
 
@@ -1049,11 +1058,16 @@ func (r *BundleReconciler) reconcileNamespaces(ctx context.Context, bundle *cozy
 			namespace.Labels[k] = v
 		}
 
+		// Merge namespace annotations from packages
+		for k, v := range info.annotations {
+			namespace.Annotations[k] = v
+		}
+
 		if err := r.createOrUpdateNamespace(ctx, namespace); err != nil {
 			logger.Error(err, "failed to reconcile namespace", "name", nsName, "privileged", info.privileged)
 			return fmt.Errorf("failed to reconcile namespace %s: %w", nsName, err)
 		}
-		logger.Info("reconciled namespace", "name", nsName, "privileged", info.privileged, "labels", info.labels)
+		logger.Info("reconciled namespace", "name", nsName, "privileged", info.privileged, "labels", info.labels, "annotations", info.annotations)
 	}
 
 	return nil
