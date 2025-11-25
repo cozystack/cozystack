@@ -75,7 +75,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: "{{ .Release.Name }}-subnets"
-subjects: {{- include "cozy-lib.rbac.subjectsForTenant" (list "view" .Release.Namespace ) | nindent 2 }}
+subjects: {{- include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" .Release.Namespace ) | nindent 2 }}
 roleRef:
   kind: Role
   name: "{{ .Release.Name }}-subnets"

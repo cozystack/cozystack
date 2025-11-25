@@ -23,20 +23,26 @@ data:
         tag: v1.32.3
         image: piraeus-server
       linstor-csi:
-        tag: v1.9.0
+        tag: v1.10.2
         image: piraeus-csi
+      nfs-server:
+        tag: v1.10.2
+        image: piraeus-csi-nfs-server
       drbd-reactor:
-        tag: v1.9.0
+        tag: v1.10.0
         image: drbd-reactor
       ha-controller:
-        tag: v1.3.0
+        tag: v1.3.1
         image: piraeus-ha-controller
       drbd-shutdown-guard:
-        tag: v1.0.0
+        tag: v1.1.1
         image: drbd-shutdown-guard
       ktls-utils:
         tag: v1.2.1
         image: ktls-utils
+      linstor-affinity-controller:
+        tag: v1.3.0
+        image: linstor-affinity-controller
       drbd-module-loader:
         tag: v9.2.15
         # The special "match" attribute is used to select an image based on the node's reported OS.
@@ -93,13 +99,13 @@ data:
         tag: v2.17.0
         image: livenessprobe
       csi-provisioner:
-        tag: v5.3.0
+        tag: v6.0.0
         image: csi-provisioner
       csi-snapshotter:
-        tag: v8.3.0
+        tag: v8.4.0
         image: csi-snapshotter
       csi-resizer:
-        tag: v1.14.0
+        tag: v2.0.0
         image: csi-resizer
       csi-external-health-monitor-controller:
         tag: v0.16.0

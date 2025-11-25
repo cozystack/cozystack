@@ -1,5 +1,2 @@
-cozystackOperator:
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:latest@sha256:f20a7380e72e377b233b349a8513314fe72617bbf7cceb2a9731cb8ec9ea33d4
-  disableTelemetry: false
-  cozystackVersion: "latest"
-  packagesDigest: sha256:73f930bdc12810604ccb116f1fb5df59ba3e03eab0b834c5b0e2f5e6327ab5e6
+cozystack:
+  image: ghcr.io/cozystack/cozystack/installer:v0.38.0@sha256:1a902ebd15fe375079098c088dd5b40475926c8d9576faf6348433f0fd86a963

@@ -13,9 +13,15 @@ spec:
   template:
     metadata:
       labels:
-      {{- include "piraeus-operator.selectorLabels" . | nindent 8 }}
+        {{- include "piraeus-operator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         kubectl.kubernetes.io/default-container: manager
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       containers:
       - args:
@@ -90,6 +96,9 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+        {{- with .Values.podSecurityContext }}
+        {{ toYaml . | nindent 8 }}
+        {{- end }}
       serviceAccountName: {{ include "piraeus-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10
       priorityClassName: {{ .Values.priorityClassName | default "system-cluster-critical" }}

@@ -44,6 +44,9 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Applicati
 	if flags.Secrets {
 		tabs = append(tabs, secretsTab(kind))
 	}
+	if prefix, ok := vncTabPrefix(kind); ok {
+		tabs = append(tabs, vncTab(prefix))
+	}
 	tabs = append(tabs, yamlTab(plural))
 
 	// Use unified factory creation
@@ -346,6 +349,36 @@ func yamlTab(plural string) map[string]any {
 					"prefillValuesRequestIndex": float64(0),
 					"readOnly":                  true,
 					"substractHeight":           float64(400),
+				},
+			},
+		},
+	}
+}
+
+func vncTabPrefix(kind string) (string, bool) {
+	switch kind {
+	case "VirtualMachine":
+		return "virtual-machine", true
+	case "VMInstance":
+		return "vm-instance", true
+	default:
+		return "", false
+	}
+}
+
+func vncTab(prefix string) map[string]any {
+	return map[string]any{
+		"key":   "vnc",
+		"label": "VNC",
+		"children": []any{
+			map[string]any{
+				"type": "VMVNC",
+				"data": map[string]any{
+					"id":              "vm-vnc",
+					"cluster":         "{2}",
+					"namespace":       "{reqsJsonPath[0]['.metadata.namespace']['-']}",
+					"substractHeight": float64(400),
+					"vmName":          fmt.Sprintf("%s-{reqsJsonPath[0]['.metadata.name']['-']}", prefix),
 				},
 			},
 		},

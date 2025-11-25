@@ -33,6 +33,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Run unit tests
+        run: make unit-tests
+
       - name: Set up Docker config
         run: |
           if [ -d ~/.docker ]; then

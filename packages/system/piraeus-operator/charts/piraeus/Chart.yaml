@@ -3,8 +3,8 @@ name: piraeus
 description: |
   The Piraeus Operator manages software defined storage clusters using LINSTOR in Kubernetes.
 type: application
-version: 2.9.1
-appVersion: "v2.9.1"
+version: 2.10.1
+appVersion: "v2.10.1"
 maintainers:
   - name: Piraeus Datastore
     url: https://piraeus.io

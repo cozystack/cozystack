@@ -186,15 +186,46 @@
 {{- end }}
 
 {{- define "cozy-lib.resources.flatten" -}}
-{{- $out := dict -}}
-{{- $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
-{{- range $section, $values := $res }}
-  {{- range $k, $v := $values }}
-    {{- $key := printf "%s.%s" $section $k }}
-    {{- if ne $key "limits.storage" }}
-        {{- $_ := set $out $key $v }}
-    {{- end }}
-  {{- end }}
+{{-   $out := dict -}}
+{{-   $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
+{{-   range $section, $values := $res }}
+{{-     range $k, $v := $values }}
+{{-       with include "cozy-lib.resources.flattenResource" (list $section $k) }}
+{{-         $_ := set $out . $v }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{-   $out | toYaml }}
 {{- end }}
-{{- $out | toYaml }}
+
+{{/*
+  This is a helper function that takes an argument like `list "limits" "services.loadbalancers"`
+  or `list "limits" "storage"` or `list "requests" "cpu"` and returns "services.loadbalancers",
+  "", and "requests.cpu", respectively, thus transforming them to an acceptable format for k8s
+  ResourceQuotas objects.
+*/}}
+{{- define "cozy-lib.resources.flattenResource" }}
+{{-   $rawQuotaKeys := list
+        "pods"
+        "services"
+        "services.loadbalancers"
+        "services.nodeports"
+        "services.clusterip"
+        "configmaps"
+        "secrets"
+        "persistentvolumeclaims"
+        "replicationcontrollers"
+        "resourcequotas"
+-}}
+{{-   $section := index . 0 }}
+{{-   $type := index . 1 }}
+{{-   $out := "" }}
+{{-   if and (eq $section "limits") (eq $type "storage") }}
+{{-     $out = "" }}
+{{-   else if and (eq $section "limits") (has $type $rawQuotaKeys) }}
+{{-     $out = $type }}
+{{-   else if not (has $type $rawQuotaKeys) }}
+{{-     $out = printf "%s.%s" $section $type }}
+{{-   end }}
+{{-   $out -}}
 {{- end }}

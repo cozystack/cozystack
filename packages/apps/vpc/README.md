@@ -19,7 +19,7 @@ Subnet name and ip address range must be unique within a VPC.
 Subnet ip address space must not overlap with the default management network ip address range, subsets of 172.16.0.0/12 are recommended.
 Currently there are no fail-safe checks, however they are planned for the future.
 
-Different VPCs may have subnets with ovelapping ip address ranges.
+Different VPCs may have subnets with overlapping ip address ranges.
 
 A VM or a pod may be connected to multiple secondary Subnets at once. Each secondary connection will be represented as an additional network interface.
 

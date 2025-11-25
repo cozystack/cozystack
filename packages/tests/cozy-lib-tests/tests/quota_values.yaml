@@ -1,0 +1,5 @@
+quota:
+  services.loadbalancers: "2"
+  cpu: "20"
+  storage: "5Gi"
+  foobar: "3"

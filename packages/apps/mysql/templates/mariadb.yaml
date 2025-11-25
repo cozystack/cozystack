@@ -37,6 +37,10 @@ spec:
     #  automaticFailover: true
   {{- end }}
 
+  podMetadata:
+    labels:
+      "policy.cozystack.io/allow-to-apiserver": "true"
+
   metrics:
     enabled: true
     exporter:

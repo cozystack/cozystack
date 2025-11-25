@@ -15,7 +15,41 @@ spec:
     singular: linstorcluster
   scope: Cluster
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - description: If the LINSTOR Cluster is available
+      jsonPath: .status.conditions[?(@.type=='Available')].status
+      name: Available
+      type: string
+    - description: If the LINSTOR Cluster is fully configured
+      jsonPath: .status.conditions[?(@.type=='Configured')].status
+      name: Configured
+      type: string
+    - description: The version of the LINSTOR Cluster
+      jsonPath: .status.version
+      name: Version
+      priority: 10
+      type: string
+    - description: The number of running/expected Satellites
+      jsonPath: .status.satellites
+      name: Satellites
+      type: string
+    - description: The used capacity in all storage pools
+      jsonPath: .status.capacity
+      name: Used Capacity
+      type: string
+    - description: The number of volumes in the cluster
+      jsonPath: .status.numberOfVolumes
+      name: Volumes
+      type: integer
+    - description: The number of snapshots in the cluster
+      jsonPath: .status.numberOfSnapshots
+      name: Snapshots
+      priority: 10
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: LinstorCluster is the Schema for the linstorclusters API
@@ -40,6 +74,30 @@ spec:
           spec:
             description: LinstorClusterSpec defines the desired state of LinstorCluster
             properties:
+              affinityController:
+                description: AffinityController controls the deployment of the Affinity
+                  Controller Deployment.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                  replicas:
+                    description: Number of desired pods. Defaults to 1.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
               apiTLS:
                 description: |-
                   ApiTLS secures the LINSTOR API.
@@ -47,6 +105,11 @@ spec:
                   This configures the TLS key and certificate used to secure the LINSTOR API.
                 nullable: true
                 properties:
+                  affinityControllerSecretName:
+                    description: |-
+                      AffinityControllerSecretName references a secret holding the TLS key and certificate used by the Affinity
+                      Controller to monitor volume state. Defaults to "linstor-affinity-controller-tls".
+                    type: string
                   apiSecretName:
                     description: |-
                       ApiSecretName references a secret holding the TLS key and certificate used to protect the API.
@@ -114,6 +177,11 @@ spec:
                       CsiNodeSecretName references a secret holding the TLS key and certificate used by the CSI Nodes to query
                       the volume state. Defaults to "linstor-csi-node-tls".
                     type: string
+                  nfsServerSecretName:
+                    description: |-
+                      NFSServerSecretName references a secret holding the TLS key and certificate used by the NFS Server to query
+                      the cluster state. Defaults to "linstor-csi-nfs-server-tls".
+                    type: string
                 type: object
               controller:
                 description: Controller controls the deployment of the LINSTOR Controller
@@ -152,6 +220,11 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                     x-kubernetes-preserve-unknown-fields: true
+                  replicas:
+                    description: Number of desired pods. Defaults to 1.
+                    format: int32
+                    minimum: 0
+                    type: integer
                 type: object
               csiNode:
                 description: CSINode controls the deployment of the CSI Node DaemonSet.
@@ -272,6 +345,25 @@ spec:
                   * Store credentials for accessing remotes for backups.
                   See https://linbit.com/drbd-user-guide/linstor-guide-1_0-en/#s-encrypt_commands for more information.
                 type: string
+              nfsServer:
+                description: NFSServer controls the deployment of the LINSTOR CSI
+                  NFS Server DaemonSet.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
               nodeAffinity:
                 description: |-
                   NodeAffinity selects the nodes on which LINSTOR Satellites will be deployed.
@@ -379,9 +471,16 @@ spec:
                     JSON patch and its targets.
                   properties:
                     options:
-                      additionalProperties:
-                        type: boolean
                       description: Options is a list of options for the patch
+                      properties:
+                        allowKindChange:
+                          description: AllowKindChange allows kind changes to the
+                            resource.
+                          type: boolean
+                        allowNameChange:
+                          description: AllowNameChange allows name changes to the
+                            resource.
+                          type: boolean
                       type: object
                     patch:
                       description: Patch is the content of a patch.
@@ -493,6 +592,15 @@ spec:
           status:
             description: LinstorClusterStatus defines the observed state of LinstorCluster
             properties:
+              availableCapacityBytes:
+                description: The number of bytes in total in all storage pools in
+                  the LINSTOR Cluster.
+                format: int64
+                type: integer
+              capacity:
+                description: Capacity mirrors the information from TotalCapacityBytes
+                  and FreeCapacityBytes in a human-readable string
+                type: string
               conditions:
                 description: Current LINSTOR Cluster state
                 items:
@@ -553,6 +661,35 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              freeCapacityBytes:
+                description: The number of bytes free in all storage pools in the
+                  LINSTOR Cluster.
+                format: int64
+                type: integer
+              numberOfSnapshots:
+                description: The number of snapshots in the LINSTOR Cluster.
+                format: int32
+                type: integer
+              numberOfVolumes:
+                description: The number of volumes in the LINSTOR Cluster.
+                format: int32
+                type: integer
+              runningSatellites:
+                description: The number of LINSTOR Satellites currently running.
+                format: int32
+                type: integer
+              satellites:
+                description: Satellites mirrors the information from ScheduledSatellites
+                  and RunningSatellites in a human-readable string
+                type: string
+              scheduledSatellites:
+                description: The number of LINSTOR Satellites that are expected to
+                  run.
+                format: int32
+                type: integer
+              version:
+                description: The Version of the LINSTOR Cluster.
+                type: string
             type: object
         type: object
     served: true
@@ -575,7 +712,15 @@ spec:
     singular: linstornodeconnection
   scope: Cluster
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - description: If the LINSTOR Node Connection is fully configured
+      jsonPath: .status.conditions[?(@.type=='Configured')].status
+      name: Configured
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: LinstorNodeConnection is the Schema for the linstornodeconnections
@@ -777,7 +922,28 @@ spec:
     singular: linstorsatelliteconfiguration
   scope: Cluster
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - description: The node selector used
+      jsonPath: .spec.nodeSelector
+      name: Selector
+      type: string
+    - description: If the Configuration was applied
+      jsonPath: .status.conditions[?(@.type=='Applied')].status
+      name: Applied
+      type: string
+    - description: Number of Satellites this Configuration has been applied to
+      jsonPath: .status.matched
+      name: Matched
+      type: integer
+    - description: Satellites this Configuration has been applied to
+      jsonPath: .status.appliedTo
+      name: Satellites
+      priority: 10
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: LinstorSatelliteConfiguration is the Schema for the linstorsatelliteconfigurations
@@ -1013,9 +1179,16 @@ spec:
                     JSON patch and its targets.
                   properties:
                     options:
-                      additionalProperties:
-                        type: boolean
                       description: Options is a list of options for the patch
+                      properties:
+                        allowKindChange:
+                          description: AllowKindChange allows kind changes to the
+                            resource.
+                          type: boolean
+                        allowNameChange:
+                          description: AllowNameChange allows name changes to the
+                            resource.
+                          type: boolean
                       type: object
                     patch:
                       description: Patch is the content of a patch.
@@ -1274,6 +1447,12 @@ spec:
             description: LinstorSatelliteConfigurationStatus defines the observed
               state of LinstorSatelliteConfiguration
             properties:
+              appliedTo:
+                description: AppliedTo lists the LinstorSatellite resource this configuration
+                  was applied to
+                items:
+                  type: string
+                type: array
               conditions:
                 description: Current LINSTOR Satellite Config state
                 items:
@@ -1334,6 +1513,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              matched:
+                description: Number of configured LinstorSatellite resource.
+                format: int64
+                type: integer
             type: object
         type: object
     served: true
@@ -1356,7 +1539,51 @@ spec:
     singular: linstorsatellite
   scope: Cluster
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - description: If the LINSTOR Satellite is connected
+      jsonPath: .status.conditions[?(@.type=='Available')].status
+      name: Connected
+      type: string
+    - description: If the LINSTOR Satellite is fully configured
+      jsonPath: .status.conditions[?(@.type=='Configured')].status
+      name: Configured
+      type: string
+    - description: The Satellite Configurations applied to this Satellite
+      jsonPath: .metadata.annotations.piraeus\.io/applied-configurations
+      name: Applied Configurations
+      priority: 10
+      type: string
+    - description: The deletion policy of the Satellite
+      jsonPath: .spec.deletionPolicy
+      name: Deletion Policy
+      type: string
+    - description: The used capacity on the node
+      jsonPath: .status.capacity
+      name: Used Capacity
+      type: string
+    - description: The number of volumes on the node
+      jsonPath: .status.numberOfVolumes
+      name: Volumes
+      type: integer
+    - description: The number of snapshots on the node
+      jsonPath: .status.numberOfSnapshots
+      name: Snapshots
+      priority: 10
+      type: integer
+    - description: The storage providers supported by the node
+      jsonPath: .status.storageProviders
+      name: Storage Providers
+      priority: 10
+      type: string
+    - description: The device layers supported by the node
+      jsonPath: .status.deviceLayers
+      name: Device Layers
+      priority: 10
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: LinstorSatellite is the Schema for the linstorsatellites API
@@ -1546,9 +1773,16 @@ spec:
                     JSON patch and its targets.
                   properties:
                     options:
-                      additionalProperties:
-                        type: boolean
                       description: Options is a list of options for the patch
+                      properties:
+                        allowKindChange:
+                          description: AllowKindChange allows kind changes to the
+                            resource.
+                          type: boolean
+                        allowNameChange:
+                          description: AllowNameChange allows name changes to the
+                            resource.
+                          type: boolean
                       type: object
                     patch:
                       description: Patch is the content of a patch.
@@ -1801,6 +2035,15 @@ spec:
           status:
             description: LinstorSatelliteStatus defines the observed state of LinstorSatellite
             properties:
+              availableCapacityBytes:
+                description: The number of bytes in total in all storage pools on
+                  this Satellite.
+                format: int64
+                type: integer
+              capacity:
+                description: Capacity mirrors the information from TotalCapacityBytes
+                  and FreeCapacityBytes in a human-readable string.
+                type: string
               conditions:
                 description: Current LINSTOR Satellite state
                 items:
@@ -1861,6 +2104,31 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              deviceLayers:
+                description: DeviceLayers lists the device layers (LUKS, CACHE, etc...)
+                  this Satellite supports.
+                items:
+                  type: string
+                type: array
+              freeCapacityBytes:
+                description: The number of bytes free in all storage pools on this
+                  Satellite.
+                format: int64
+                type: integer
+              numberOfSnapshots:
+                description: The number of snapshots on this Satellite.
+                format: int32
+                type: integer
+              numberOfVolumes:
+                description: The number of volumes on this Satellite.
+                format: int32
+                type: integer
+              storageProviders:
+                description: StorageProviders lists the storage providers (LVM, ZFS,
+                  etc...) this Satellite supports.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

@@ -1,0 +1,50 @@
+# ./tests/quota_test.yaml
+suite: quota helper
+
+templates:
+  - templates/tests/quota.yaml
+
+tests:
+  - it: correctly interprets special kubernetes quota types
+    values:
+      - quota_values.yaml
+
+    release:
+      name: myrelease
+      namespace: default
+      revision: 1
+      isUpgrade: false
+
+    asserts:
+      - equal:
+          path: spec.hard["limits.cpu"]
+          value: "20"
+
+      - equal:
+          path: spec.hard["requests.cpu"]
+          value: "2"
+
+      - equal:
+          path: spec.hard["limits.foobar"]
+          value: "3"
+
+      - equal:
+          path: spec.hard["requests.foobar"]
+          value: "3"
+
+      - equal:
+          path: spec.hard["services.loadbalancers"]
+          value: "2"
+
+      - equal:
+          path: spec.hard["requests.storage"]
+          value: "5Gi"
+
+      - notExists:
+          path: spec.hard["limits.storage"]
+
+      - notExists:
+          path: spec.hard["limits.services.loadbalancers"]
+
+      - notExists:
+          path: spec.hard["requests.services.loadbalancers"]
