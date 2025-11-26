@@ -1,6 +1,7 @@
 # AI Agents Overview
 
-This directory contains instructions for AI coding assistants working with Cozystack.
+This file provides structured guidance for AI coding assistants and agents
+working with the **Cozystack** project.
 
 ## Agent Documentation
 
@@ -8,6 +9,7 @@ This directory contains instructions for AI coding assistants working with Cozys
 |-------|---------|
 | [overview.md](./docs/agents/overview.md) | Project structure and conventions |
 | [contributing.md](./docs/agents/contributing.md) | Commits, pull requests, and git workflow |
+| [changelog.md](./docs/agents/changelog.md) | Changelog generation instructions |
 | [releasing.md](./docs/agents/releasing.md) | Release process and workflow |
 
 ## Project Overview
