@@ -3,12 +3,15 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
-    "helm.sh/hook": post-delete
+    "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
   name: {{ .Release.Name }}-cleanup
 spec:
   template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
     spec:
       serviceAccountName: {{ .Release.Name }}-cleanup
       restartPolicy: Never
@@ -24,14 +27,43 @@ spec:
           command:
             - /bin/sh
             - -c
-            - kubectl -n {{ .Release.Namespace }} delete datavolumes
-              -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}"
-              --ignore-not-found=true
+            - |
+              set -e
+              echo "Step 1: Suspending all HelmReleases with label cozystack.io/target-cluster-name={{ .Release.Name }}"
+              for hr in $(kubectl -n {{ .Release.Namespace }} get helmreleases.helm.toolkit.fluxcd.io -l "cozystack.io/target-cluster-name={{ .Release.Name }}" -o name 2>/dev/null || true); do
+                if [ -n "$hr" ]; then           
+                  echo "  Suspending $hr"
+                  kubectl -n {{ .Release.Namespace }} patch "$hr" \
+                    -p '{"spec": {"suspend": true}}' \
+                    --type=merge --field-manager=flux-client-side-apply
+                fi
+              done
 
-              kubectl -n {{ .Release.Namespace }} delete services
-              -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}"
-              --field-selector spec.type=LoadBalancer
-              --ignore-not-found=true
+              echo "Step 2: Deleting HelmReleases with label cozystack.io/target-cluster-name={{ .Release.Name }}"
+              kubectl -n {{ .Release.Namespace }} delete helmreleases.helm.toolkit.fluxcd.io \
+                -l "cozystack.io/target-cluster-name={{ .Release.Name }}" \
+                --ignore-not-found=true --wait=true
+
+              echo "Step 3: Deleting KamajiControlPlane {{ .Release.Name }}"
+              kubectl -n {{ .Release.Namespace }} delete kamajicontrolplanes.controlplane.cluster.x-k8s.io {{ .Release.Name }} \
+                --ignore-not-found=true
+
+              echo "Step 4: Deleting TenantControlPlane {{ .Release.Name }}"
+              kubectl -n {{ .Release.Namespace }} delete tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
+                --ignore-not-found=true
+
+              echo "Step 5: Cleaning up DataVolumes"
+              kubectl -n {{ .Release.Namespace }} delete datavolumes \
+                -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
+                --ignore-not-found=true
+
+              echo "Step 6: Cleaning up LoadBalancer Services"
+              kubectl -n {{ .Release.Namespace }} delete services \
+                -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
+                --field-selector spec.type=LoadBalancer \
+                --ignore-not-found=true
+
+              echo "Cleanup completed successfully"
 
 
 ---
@@ -40,7 +72,7 @@ kind: ServiceAccount
 metadata:
   name: {{ .Release.Name }}-cleanup
   annotations:
-    helm.sh/hook: post-delete
+    helm.sh/hook: pre-delete
     helm.sh/hook-delete-policy: before-hook-creation,hook-failed,hook-succeeded
     helm.sh/hook-weight: "0"
 ---
@@ -48,11 +80,39 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   annotations:
-    "helm.sh/hook": post-delete
+    "helm.sh/hook": pre-delete
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
     "helm.sh/hook-weight": "5"
   name: {{ .Release.Name }}-cleanup
 rules:
+  - apiGroups:
+      - "helm.toolkit.fluxcd.io"
+    resources:
+      - helmreleases
+    verbs:
+      - get
+      - list
+      - watch
+      - patch
+      - delete
+  - apiGroups:
+      - "controlplane.cluster.x-k8s.io"
+    resources:
+      - kamajicontrolplanes
+    verbs:
+      - get
+      - list
+      - watch
+      - delete
+  - apiGroups:
+      - "kamaji.clastix.io"
+    resources:
+      - tenantcontrolplanes
+    verbs:
+      - get
+      - list
+      - watch
+      - delete
   - apiGroups:
       - "cdi.kubevirt.io"
     resources:
@@ -60,6 +120,7 @@ rules:
     verbs:
       - get
       - list
+      - watch
       - delete
   - apiGroups:
       - ""
@@ -68,13 +129,14 @@ rules:
     verbs:
       - get
       - list
+      - watch
       - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   annotations:
-    "helm.sh/hook": post-delete
+    "helm.sh/hook": pre-delete
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
     "helm.sh/hook-weight": "5"
   name: {{ .Release.Name }}-cleanup
@@ -86,4 +148,3 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Release.Name }}-cleanup
     namespace: {{ .Release.Namespace }}
-
