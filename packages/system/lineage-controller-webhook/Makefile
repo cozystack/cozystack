@@ -1,8 +1,8 @@
 NAME=lineage-controller-webhook
 NAMESPACE=cozy-system
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 image: image-lineage-controller-webhook
 

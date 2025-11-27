@@ -6,7 +6,7 @@ SANDBOX_NAME := cozy-e2e-sandbox-$(shell echo "$$(hostname):$$(pwd)" | sha256sum
 
 ROOT_DIR = $(dir $(abspath $(firstword $(MAKEFILE_LIST))/../../..))
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 
 
 help: ## Show this help.

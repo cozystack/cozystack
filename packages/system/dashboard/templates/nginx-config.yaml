@@ -1,5 +1,9 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
+{{- $cozystack := .Values.cozystack | default dict }}
+{{- $publishing := $cozystack.publishing | default dict }}
+{{- $host := $publishing.host | default "" }}
+{{- if not $host }}
+{{- fail "ERROR: cozystack.publishing.host is required" }}
+{{- end }}
 
 apiVersion: v1
 data:

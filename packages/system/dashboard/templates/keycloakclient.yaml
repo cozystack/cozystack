@@ -1,6 +1,13 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
-{{- $extraRedirectUris := splitList "," ((index $cozyConfig.data "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
+{{- $cozystack := .Values.cozystack | default dict }}
+{{- $publishing := $cozystack.publishing | default dict }}
+{{- $authentication := $cozystack.authentication | default dict }}
+{{- $oidc := $authentication.oidc | default dict }}
+{{- $dashboard := $oidc.dashboard | default dict }}
+{{- $host := $publishing.host | default "" }}
+{{- $extraRedirectUris := $dashboard.extraRedirectUris | default list }}
+{{- if not $host }}
+{{- fail "ERROR: cozystack.publishing.host is required" }}
+{{- end }}
 
 {{- $existingK8sSecret := lookup "v1" "Secret" .Release.Namespace "k8s-client" }}
 {{- $existingDashboardSecret := lookup "v1" "Secret" .Release.Namespace "dashboard-client" }}
@@ -70,7 +77,7 @@ spec:
     - kubernetes-client
   redirectUris:
     - "https://dashboard.{{ $host }}/oauth2/callback/*"
-    {{- range $i, $v := $extraRedirectUris }}
-    - "{{ $v }}"
+    {{- range $extraRedirectUris }}
+    - {{ . | quote }}
     {{- end }}
 {{- end }}

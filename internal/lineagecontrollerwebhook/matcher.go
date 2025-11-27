@@ -42,7 +42,7 @@ func matchName(ctx context.Context, name string, templateContext map[string]stri
 	return false
 }
 
-func matchResourceToSelector(ctx context.Context, name string, templateContext, l map[string]string, s *cozyv1alpha1.CozystackResourceDefinitionResourceSelector) bool {
+func matchResourceToSelector(ctx context.Context, name string, templateContext, l map[string]string, s *cozyv1alpha1.ApplicationDefinitionResourceSelector) bool {
 	sel, err := metav1.LabelSelectorAsSelector(&s.LabelSelector)
 	if err != nil {
 		log.FromContext(ctx).Error(err, "failed to convert label selector to selector")
@@ -53,7 +53,7 @@ func matchResourceToSelector(ctx context.Context, name string, templateContext, 
 	return labelMatches && nameMatches
 }
 
-func matchResourceToSelectorArray(ctx context.Context, name string, templateContext, l map[string]string, ss []*cozyv1alpha1.CozystackResourceDefinitionResourceSelector) bool {
+func matchResourceToSelectorArray(ctx context.Context, name string, templateContext, l map[string]string, ss []*cozyv1alpha1.ApplicationDefinitionResourceSelector) bool {
 	for _, s := range ss {
 		if matchResourceToSelector(ctx, name, templateContext, l, s) {
 			return true
@@ -62,7 +62,7 @@ func matchResourceToSelectorArray(ctx context.Context, name string, templateCont
 	return false
 }
 
-func matchResourceToExcludeInclude(ctx context.Context, name string, templateContext, l map[string]string, resources *cozyv1alpha1.CozystackResourceDefinitionResources) bool {
+func matchResourceToExcludeInclude(ctx context.Context, name string, templateContext, l map[string]string, resources *cozyv1alpha1.ApplicationDefinitionResources) bool {
 	if resources == nil {
 		return false
 	}

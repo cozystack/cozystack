@@ -28,12 +28,12 @@ import (
 //   - Categories are ordered strictly as:
 //     Marketplace, IaaS, PaaS, NaaS, <others A→Z>, Resources, Administration
 //   - Items within each category: sort by Weight (desc), then Label (A→Z).
-func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
 	// Build the full menu once.
 
 	// 1) Fetch all CRDs
-	var all []cozyv1alpha1.CozystackResourceDefinition
-	var crdList cozyv1alpha1.CozystackResourceDefinitionList
+	var all []cozyv1alpha1.ApplicationDefinition
+	var crdList cozyv1alpha1.ApplicationDefinitionList
 	if err := m.List(ctx, &crdList, &client.ListOptions{}); err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 // upsertMultipleSidebars creates/updates several Sidebar resources with the same menu spec.
 func (m *Manager) upsertMultipleSidebars(
 	ctx context.Context,
-	crd *cozyv1alpha1.CozystackResourceDefinition,
+	crd *cozyv1alpha1.ApplicationDefinition,
 	ids []string,
 	keysAndTags map[string]any,
 	menuItems []any,
@@ -335,7 +335,7 @@ func orderCategoryLabels[T any](cats map[string][]T) []string {
 }
 
 // safeCategory returns spec.dashboard.category or "Resources" if not set.
-func safeCategory(def *cozyv1alpha1.CozystackResourceDefinition) string {
+func safeCategory(def *cozyv1alpha1.ApplicationDefinition) string {
 	if def == nil || def.Spec.Dashboard == nil {
 		return "Resources"
 	}

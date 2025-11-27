@@ -43,7 +43,7 @@ spec:
         {{- if $dv }}
         pvc:
           name: vm-image-{{ .Values.systemDisk.image }}
-          namespace: cozy-public
+          namespace: cozy-system
         {{- else }}
         http:
           {{- if eq .Values.systemDisk.image "cirros" }}

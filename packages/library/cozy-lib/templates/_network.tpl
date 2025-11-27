@@ -17,7 +17,9 @@ in use and returns `true`.
 {{-   if not $cozyConfig }}
 {{-     include "cozy-lib.network.defaultDisableLoadBalancerNodePorts" . }}
 {{-   else }}
-{{-     $enabledComponents := splitList "," ((index $cozyConfig.data "bundle-enable") | default "") }}
-{{-     not (has "robotlb" $enabledComponents) }}
+{{-     $components := $cozyConfig.components | default dict }}
+{{-     $robotlb := index $components "hetzner-robotlb" | default dict }}
+{{-     $robotlbEnabled := $robotlb.enabled | default false }}
+{{-     not $robotlbEnabled }}
 {{-   end }}
 {{- end }}

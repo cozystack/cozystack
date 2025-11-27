@@ -1,8 +1,8 @@
 NAME=cozystack-api
 NAMESPACE=cozy-system
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 run-local:
 	openssl req -nodes -new -x509 -keyout /tmp/ca.key -out /tmp/ca.crt -subj "/CN=kube-ca"

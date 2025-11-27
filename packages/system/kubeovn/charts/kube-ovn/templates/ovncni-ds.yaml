@@ -83,14 +83,17 @@ spec:
           - bash
           - /kube-ovn/start-cniserver.sh
         args:
-          {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
           - --enable-mirror={{- .Values.debug.ENABLE_MIRROR }}
           - --mirror-iface={{- .Values.debug.MIRROR_IFACE }}
           - --node-switch={{ .Values.networking.NODE_SUBNET }}
           - --encap-checksum=true
-          - --service-cluster-ip-range={{ index $cozyConfig.data "ipv4-svc-cidr" }}
-          {{- if .Values.global.logVerbosity }}
-          - --v={{ .Values.global.logVerbosity }}
+          - --service-cluster-ip-range=
+          {{- if eq .Values.networking.NET_STACK "dual_stack" -}}
+          {{ .Values.dual_stack.SVC_CIDR }}
+          {{- else if eq .Values.networking.NET_STACK "ipv4" -}}
+          {{ .Values.ipv4.SVC_CIDR }}
+          {{- else if eq .Values.networking.NET_STACK "ipv6" -}}
+          {{ .Values.ipv6.SVC_CIDR }}
           {{- end }}
           {{- if eq .Values.networking.NETWORK_TYPE "vlan" }}
           - --iface=

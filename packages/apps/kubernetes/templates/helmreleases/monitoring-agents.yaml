@@ -1,5 +1,6 @@
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
+{{- $cozystack := .Values._cozystack | default dict }}
+{{- $namespace := .Values._namespace | default dict }}
+{{- $targetTenant := dig "monitoring" "" $namespace }}
 {{- if .Values.addons.monitoringAgents.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -10,15 +11,10 @@ metadata:
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
   releaseName: cozy-monitoring-agents
-  chart:
-    spec:
-      chart: cozy-monitoring-agents
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-iaas-kubernetes-monitoring-agents
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

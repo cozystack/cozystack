@@ -6,15 +6,17 @@ spec:
   instances: 2
   storage:
     size: 20Gi
-  {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-  {{- if $configMap }}
-  {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
-  {{- if $rawConstraints }}
-  {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
+  {{- $cozystack := .Values.cozystack | default dict }}
+  {{- $scheduling := $cozystack.scheduling | default dict }}
+  {{- $topologySpreadConstraints := $scheduling.topologySpreadConstraints | default list }}
+  {{- if $topologySpreadConstraints }}
+  topologySpreadConstraints:
+    {{- range $topologySpreadConstraints }}
+    - {{ . | toYaml | nindent 6 | trim }}
+    {{- end }}
     labelSelector:
       matchLabels:
         cnpg.io/cluster: keycloak-db
-  {{- end }}
   {{- end }}
   monitoring:
     enablePodMonitor: true

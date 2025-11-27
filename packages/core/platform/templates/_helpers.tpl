@@ -17,62 +17,147 @@ Get IP-addresses of master nodes
 {{ join "," $ips }}
 {{- end -}}
 
-{{- define "cozystack.defaultDashboardValues" -}}
-kubeapps:
-{{- if .Capabilities.APIVersions.Has "source.toolkit.fluxcd.io/v1" }}
-{{- with (lookup "source.toolkit.fluxcd.io/v1" "HelmRepository" "cozy-public" "").items }}
-  redis:
-    master:
-      podAnnotations:
-        {{- range $index, $repo := . }}
-        {{- with (($repo.status).artifact).revision }}
-        repository.cozystack.io/{{ $repo.metadata.name }}: {{ quote . }}
-        {{- end }}
-        {{- end }}
-{{- end }}
-{{- end }}
-  frontend:
-    resourcesPreset: "none"
-  dashboard:
-    resourcesPreset: "none"
-    {{- $cozystackBranding:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
-    {{- $branding := dig "data" "branding" "" $cozystackBranding }}
-    {{- if $branding }}
-    customLocale:
-      "Kubeapps": {{ $branding }}
+{{/*
+Apply component overrides to a package and return modified package as YAML
+Usage: {{ include "cozystack.apply-package-overrides" (list . $package) }}
+*/}}
+{{- define "cozystack.apply-package-overrides" -}}
+{{- $ := index . 0 }}
+{{- $package := index . 1 }}
+{{- $packageCopy := deepCopy $package }}
+{{- $componentName := $packageCopy.name }}
+{{- $component := index $.Values.components $componentName }}
+{{- if $component }}
+  {{- /* Apply enabled/disabled */}}
+  {{- if hasKey $component "enabled" }}
+    {{- if not $component.enabled }}
+      {{- $_ := set $packageCopy "disabled" true }}
+    {{- else if hasKey $packageCopy "disabled" }}
+      {{- $_ := unset $packageCopy "disabled" }}
     {{- end }}
-    customStyle: |
-      {{- $logoImage := dig "data" "logo" "" $cozystackBranding }}
-      {{- if $logoImage }}
-      .kubeapps-logo {
-        background-image: {{ $logoImage }}
-      }
-      {{- end }}
-      #serviceaccount-selector {
-        display: none;
-      }
-      .login-moreinfo {
-        display: none;
-      }
-      a[href="#/docs"] {
-        display: none;
-      }
-      .login-group .clr-form-control .clr-control-label {
-        display: none;
-      }
-      .appview-separator div.appview-first-row div.center {
-        display: none;
-      }
-      .appview-separator div.appview-first-row section[aria-labelledby="app-secrets"] {
-        display: none;
-      }
-      .appview-first-row section[aria-labelledby="access-urls-title"] {
-        width: 100%;
-      }
-      .header-version {
-        display: none;
-      }
-      .label.label-info-secondary {
-        display: none;
-      }
+  {{- end }}
+  {{- /* Apply values override */}}
+  {{- if $component.values }}
+    {{- if hasKey $packageCopy "values" }}
+      {{- $_ := set $packageCopy "values" (deepCopy $packageCopy.values | mergeOverwrite (deepCopy $component.values)) }}
+    {{- else }}
+      {{- $_ := set $packageCopy "values" (deepCopy $component.values) }}
+    {{- end }}
+  {{- end }}
 {{- end }}
+{{- $packageCopy | toYaml }}
+{{- end -}}
+
+{{/*
+Render a template file with tpl and trim, applying component overrides
+Usage: {{ include "cozystack.render-file" (list . "bundles/system/bundle-full.yaml") }}
+*/}}
+{{- define "cozystack.render-file" -}}
+{{- $ := index . 0 }}
+{{- $filePath := index . 1 }}
+{{- $rendered := trim (tpl ($.Files.Get $filePath) $) }}
+{{- $bundle := $rendered | fromYaml }}
+{{- if and $bundle $bundle.spec $bundle.spec.packages }}
+{{- $modifiedPackages := list }}
+{{- range $package := $bundle.spec.packages }}
+  {{- $modifiedPackageYaml := include "cozystack.apply-package-overrides" (list $ $package) }}
+  {{- $modifiedPackage := $modifiedPackageYaml | fromYaml }}
+  {{- $modifiedPackages = append $modifiedPackages $modifiedPackage }}
+{{- end }}
+{{- $bundleCopy := deepCopy $bundle }}
+{{- $_ := set $bundleCopy.spec "packages" $modifiedPackages }}
+---
+{{ $bundleCopy | toYaml }}
+{{- else }}
+---
+{{ $rendered }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Render all files matching a glob pattern with template processing
+Usage: {{ include "cozystack.render-glob" (list . "bundles/system/applicationdefinitions/*.yaml") }}
+*/}}
+{{- define "cozystack.render-glob" -}}
+{{- $ := index . 0 }}
+{{- $pattern := index . 1 }}
+{{- range $path, $_ := $.Files.Glob $pattern }}
+---
+{{ trim (tpl ($.Files.Get $path) $) }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Check if a component is enabled
+Usage: {{ include "cozystack.component-enabled" (list . "metallb") }}
+Returns: true if component is enabled, false otherwise
+*/}}
+{{- define "cozystack.component-enabled" -}}
+{{- $ := index . 0 }}
+{{- $componentName := index . 1 }}
+{{- $component := index $.Values.components $componentName }}
+{{- if $component }}
+  {{- if hasKey $component "enabled" }}
+    {{- $component.enabled }}
+  {{- else }}
+    {{- true }}
+  {{- end }}
+{{- else }}
+  {{- true }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Get component values override
+Usage: {{ include "cozystack.component-values" (list . "cilium") }}
+Returns: YAML string with component values or empty string
+*/}}
+{{- define "cozystack.component-values" -}}
+{{- $ := index . 0 }}
+{{- $componentName := index . 1 }}
+{{- $component := index $.Values.components $componentName }}
+{{- if $component }}
+  {{- if $component.values }}
+    {{- toYaml $component.values | nindent 2 }}
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Merge component values into existing values
+Usage: {{ include "cozystack.merge-component-values" (list . "cilium" (dict "key" "value")) }}
+Returns: Merged values dictionary
+*/}}
+{{- define "cozystack.merge-component-values" -}}
+{{- $ := index . 0 }}
+{{- $componentName := index . 1 }}
+{{- $defaultValues := index . 2 }}
+{{- $component := index $.Values.components $componentName }}
+{{- if $component }}
+  {{- if $component.values }}
+    {{- mergeOverwrite $defaultValues $component.values }}
+  {{- else }}
+    {{- $defaultValues }}
+  {{- end }}
+{{- else }}
+  {{- $defaultValues }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Build cozystack values structure from root values
+Usage: {{ include "cozystack.build-values" . | nindent 8 }}
+Returns: YAML string with cozystack values structure
+*/}}
+{{- define "cozystack.build-values" -}}
+{{- $cozystack := dict }}
+{{- if .Values.networking }}{{ $_ := set $cozystack "networking" .Values.networking }}{{ end }}
+{{- if .Values.publishing }}{{ $_ := set $cozystack "publishing" .Values.publishing }}{{ end }}
+{{- if .Values.scheduling }}{{ $_ := set $cozystack "scheduling" .Values.scheduling }}{{ end }}
+{{- if .Values.authentication }}{{ $_ := set $cozystack "authentication" .Values.authentication }}{{ end }}
+{{- if .Values.branding }}{{ $_ := set $cozystack "branding" .Values.branding }}{{ end }}
+{{- if .Values.registries }}{{ $_ := set $cozystack "registries" .Values.registries }}{{ end }}
+{{- if .Values.resources }}{{ $_ := set $cozystack "resources" .Values.resources }}{{ end }}
+{{- if .Values.components }}{{ $_ := set $cozystack "components" .Values.components }}{{ end }}
+{{- $cozystack | toYaml | trim }}
+{{- end -}}

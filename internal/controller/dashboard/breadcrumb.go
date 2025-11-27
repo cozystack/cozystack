@@ -14,7 +14,7 @@ import (
 )
 
 // ensureBreadcrumb creates or updates a Breadcrumb resource for the given CRD
-func (m *Manager) ensureBreadcrumb(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+func (m *Manager) ensureBreadcrumb(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
 	group, version, kind := pickGVK(crd)
 
 	lowerKind := strings.ToLower(kind)

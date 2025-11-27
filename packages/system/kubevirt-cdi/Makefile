@@ -1,7 +1,7 @@
 export NAME=kubevirt-cdi
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf templates
