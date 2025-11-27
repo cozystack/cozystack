@@ -1,5 +1,4 @@
 {{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumClusterwideNetworkPolicy" }}
----
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
 metadata:

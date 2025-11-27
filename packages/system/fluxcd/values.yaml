@@ -5,7 +5,7 @@ flux-instance:
       domain: cozy.local # -- default value is overriden in patches
     distribution:
       artifact: ""
-      version: 2.6.x
+      version: 2.7.x
       registry: ghcr.io/fluxcd
     components:
       - source-controller
