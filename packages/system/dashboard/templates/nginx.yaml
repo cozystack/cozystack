@@ -16,7 +16,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/configmap-configurationnginxfile: 258c66b019c8c7f4a5d0a78dfd7bf297ce486b213346fbd2879c466abfc377e0
+        checksum/config: {{ include (print $.Template.BasePath "/nginx-config.yaml") . | sha256sum }}
       labels:
         app.kubernetes.io/instance: incloud-web
         app.kubernetes.io/name: nginx
