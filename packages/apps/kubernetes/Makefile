@@ -6,8 +6,11 @@ include ../../../scripts/package.mk
 
 generate:
 	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
-	yq -o=json -i '.properties.version.enum = (load("files/versions.yaml") | keys)' values.schema.json
 	../../../hack/update-crd.sh
+
+update:
+	hack/update-versions.sh
+	make generate
 
 image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
 
