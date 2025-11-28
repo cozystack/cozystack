@@ -34,6 +34,17 @@ storageClass: ""
 external: false
 
 ##
+## @enum {string} Version
+## @value v18
+## @value v17
+## @value v16
+## @value v15
+## @value v14
+## @value v13
+
+## @param {Version} version
+version: v18
+
 ## @section Application-specific parameters
 ##
 

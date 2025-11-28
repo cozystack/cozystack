@@ -1,3 +1,4 @@
 .helmignore
 /logos
 /Makefile
+/hack
