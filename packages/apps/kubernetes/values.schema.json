@@ -492,7 +492,7 @@
       }
     },
     "host": {
-      "description": "External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.",
+      "description": "External hostname for Kubernetes cluster. Defaults to `\u003ccluster-name\u003e.\u003ctenant-host\u003e` if empty.",
       "type": "string",
       "default": ""
     },
@@ -617,15 +617,7 @@
     "version": {
       "description": "Kubernetes version (vMAJOR.MINOR). Supported: 1.28–1.33.",
       "type": "string",
-      "default": "v1.33",
-      "enum": [
-        "v1.28",
-        "v1.29",
-        "v1.30",
-        "v1.31",
-        "v1.32",
-        "v1.33"
-      ]
+      "default": "v1.33"
     }
   }
 }
