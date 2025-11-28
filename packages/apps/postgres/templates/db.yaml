@@ -44,6 +44,7 @@ spec:
 
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
 
+  imageName: ghcr.io/cloudnative-pg/postgresql:{{ include "postgres.versionMap" $ | trimPrefix "v" }}
   enableSuperuserAccess: true
   {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
   {{- if $configMap }}
