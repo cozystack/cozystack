@@ -28,7 +28,6 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	fields "k8s.io/apimachinery/pkg/fields"
 	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -142,17 +141,9 @@ func (r *REST) GetSingularName() string {
 // Create handles the creation of a new Application by converting it to a HelmRelease
 func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
 	// Assert the object is of type Application
-	us, ok := obj.(*unstructured.Unstructured)
+	app, ok := obj.(*appsv1alpha1.Application)
 	if !ok {
-		return nil, fmt.Errorf("expected unstructured.Unstructured object, got %T", obj)
-	}
-
-	app := &appsv1alpha1.Application{}
-
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(us.Object, app); err != nil {
-		errMsg := fmt.Sprintf("returned unstructured.Unstructured object was not an Application")
-		klog.Errorf(errMsg)
-		return nil, fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
 	}
 
 	// Convert Application to HelmRelease
@@ -186,15 +177,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	klog.V(6).Infof("Successfully created and converted HelmRelease %s to Application", helmRelease.GetName())
 
-	// Convert Application to unstructured format
-	unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&convertedApp)
-	if err != nil {
-		klog.Errorf("Failed to convert Application to unstructured for resource %s: %v", convertedApp.GetName(), err)
-		return nil, fmt.Errorf("failed to convert Application to unstructured: %v", err)
-	}
-
-	klog.V(6).Infof("Successfully retrieved and converted resource %s of type %s to unstructured", convertedApp.GetName(), r.gvr.Resource)
-	return &unstructured.Unstructured{Object: unstructuredApp}, nil
+	klog.V(6).Infof("Successfully retrieved and converted resource %s of type %s", convertedApp.GetName(), r.gvr.Resource)
+	return &convertedApp, nil
 }
 
 // Get retrieves an Application by converting the corresponding HelmRelease
@@ -238,25 +222,8 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 		return nil, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Explicitly set apiVersion and kind for Application
-	convertedApp.TypeMeta = metav1.TypeMeta{
-		APIVersion: "apps.cozystack.io/v1alpha1",
-		Kind:       r.kindName,
-	}
-
-	// Convert Application to unstructured format
-	unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&convertedApp)
-	if err != nil {
-		klog.Errorf("Failed to convert Application to unstructured for resource %s: %v", name, err)
-		return nil, fmt.Errorf("failed to convert Application to unstructured: %v", err)
-	}
-
-	// Explicitly set apiVersion and kind in unstructured object
-	unstructuredApp["apiVersion"] = "apps.cozystack.io/v1alpha1"
-	unstructuredApp["kind"] = r.kindName
-
-	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s to unstructured", name, r.gvr.Resource)
-	return &unstructured.Unstructured{Object: unstructuredApp}, nil
+	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s", name, r.gvr.Resource)
+	return &convertedApp, nil
 }
 
 // List retrieves a list of Applications by converting HelmReleases
@@ -339,8 +306,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
-	// Initialize unstructured items array
-	items := make([]unstructured.Unstructured, 0)
+	// Initialize Application items array
+	items := make([]appsv1alpha1.Application, 0, len(hrList.Items))
 
 	// Iterate over HelmReleases and convert to Applications
 	for i := range hrList.Items {
@@ -387,17 +354,11 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			}
 		}
 
-		// Convert Application to unstructured
-		unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&app)
-		if err != nil {
-			klog.Errorf("Error converting Application %s to unstructured: %v", app.Name, err)
-			continue
-		}
-		items = append(items, unstructured.Unstructured{Object: unstructuredApp})
+		items = append(items, app)
 	}
 
-	// Explicitly set apiVersion and kind in unstructured object
-	appList := r.NewList().(*unstructured.UnstructuredList)
+	// Create ApplicationList with proper kind
+	appList := r.NewList().(*appsv1alpha1.ApplicationList)
 	appList.SetResourceVersion(hrList.GetResourceVersion())
 	appList.Items = items
 
@@ -447,16 +408,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 
 	// Assert the new object is of type Application
-	us, ok := newObj.(*unstructured.Unstructured)
+	app, ok := newObj.(*appsv1alpha1.Application)
 	if !ok {
-		errMsg := fmt.Sprintf("expected unstructured.Unstructured object, got %T", newObj)
-		klog.Errorf(errMsg)
-		return nil, false, fmt.Errorf(errMsg)
-	}
-	app := &appsv1alpha1.Application{}
-
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(us.Object, app); err != nil {
-		errMsg := fmt.Sprintf("returned unstructured.Unstructured object was not an Application")
+		errMsg := fmt.Sprintf("expected *appsv1alpha1.Application object, got %T", newObj)
 		klog.Errorf(errMsg)
 		return nil, false, fmt.Errorf(errMsg)
 	}
@@ -517,24 +471,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	klog.V(6).Infof("Successfully updated and converted HelmRelease %s to Application", helmRelease.GetName())
 
-	// Explicitly set apiVersion and kind for Application
-	convertedApp.TypeMeta = metav1.TypeMeta{
-		APIVersion: "apps.cozystack.io/v1alpha1",
-		Kind:       r.kindName,
-	}
+	klog.V(6).Infof("Returning updated Application object: %+v", convertedApp)
 
-	// Convert Application to unstructured format
-	unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&convertedApp)
-	if err != nil {
-		klog.Errorf("Failed to convert Application to unstructured for resource %s: %v", convertedApp.GetName(), err)
-		return nil, false, fmt.Errorf("failed to convert Application to unstructured: %v", err)
-	}
-	obj := &unstructured.Unstructured{Object: unstructuredApp}
-	obj.SetGroupVersionKind(r.gvk)
-
-	klog.V(6).Infof("Returning patched Application object: %+v", unstructuredApp)
-
-	return obj, false, nil
+	return &convertedApp, false, nil
 }
 
 // Delete removes an Application by deleting the corresponding HelmRelease
@@ -728,19 +667,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					}
 				}
 
-				// Convert Application to unstructured
-				unstructuredApp, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&app)
-				if err != nil {
-					klog.Errorf("Failed to convert Application to unstructured: %v", err)
-					continue
-				}
-				obj := &unstructured.Unstructured{Object: unstructuredApp}
-				obj.SetGroupVersionKind(r.gvk)
-
 				// Create watch event with Application object
 				appEvent := watch.Event{
 					Type:   event.Type,
-					Object: obj,
+					Object: &app,
 				}
 
 				// Send event to custom watcher
@@ -766,8 +696,8 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 
 // Helper function to get HelmRelease name from object
 func helmReleaseName(obj runtime.Object) string {
-	if u, ok := obj.(*unstructured.Unstructured); ok {
-		return u.GetName()
+	if app, ok := obj.(*appsv1alpha1.Application); ok {
+		return app.GetName()
 	}
 	return "<unknown>"
 }
@@ -1059,56 +989,6 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	case *appsv1alpha1.Application:
 		table = r.buildTableFromApplication(*obj)
 		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
-	case *unstructured.UnstructuredList:
-		apps := make([]appsv1alpha1.Application, 0, len(obj.Items))
-		for _, u := range obj.Items {
-			var a appsv1alpha1.Application
-			err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &a)
-			if err != nil {
-				klog.Errorf("Failed to convert Unstructured to Application: %v", err)
-				continue
-			}
-			apps = append(apps, a)
-		}
-		table = r.buildTableFromApplications(apps)
-		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
-	case *unstructured.Unstructured:
-		var apps []appsv1alpha1.Application
-		for {
-			var items interface{}
-			var ok bool
-			var objects []unstructured.Unstructured
-			if items, ok = obj.Object["items"]; !ok {
-				break
-			}
-			if objects, ok = items.([]unstructured.Unstructured); !ok {
-				break
-			}
-			apps = make([]appsv1alpha1.Application, 0, len(objects))
-			var a appsv1alpha1.Application
-			for i := range objects {
-				err := runtime.DefaultUnstructuredConverter.FromUnstructured(objects[i].Object, &a)
-				if err != nil {
-					klog.Errorf("Failed to convert Unstructured to Application: %v", err)
-					continue
-				}
-				apps = append(apps, a)
-			}
-			break
-		}
-		if apps != nil {
-			table = r.buildTableFromApplications(apps)
-			table.ListMeta.ResourceVersion = obj.GetResourceVersion()
-			break
-		}
-		var app appsv1alpha1.Application
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &app)
-		if err != nil {
-			klog.Errorf("Failed to convert Unstructured to Application: %v", err)
-			return nil, fmt.Errorf("failed to convert Unstructured to Application: %v", err)
-		}
-		table = r.buildTableFromApplication(app)
-		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
 	default:
 		resource := schema.GroupResource{}
 		if info, ok := request.RequestInfoFrom(ctx); ok {
@@ -1147,10 +1027,11 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 	}
 	now := time.Now()
 
-	for _, app := range apps {
+	for i := range apps {
+		app := &apps[i]
 		row := metav1.TableRow{
 			Cells:  []interface{}{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
-			Object: runtime.RawExtension{Object: &app},
+			Object: runtime.RawExtension{Object: app},
 		}
 		table.Rows = append(table.Rows, row)
 	}
@@ -1171,9 +1052,10 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 	}
 	now := time.Now()
 
+	a := app
 	row := metav1.TableRow{
 		Cells:  []interface{}{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
-		Object: runtime.RawExtension{Object: &app},
+		Object: runtime.RawExtension{Object: &a},
 	}
 	table.Rows = append(table.Rows, row)
 
@@ -1237,15 +1119,21 @@ func (r *REST) Destroy() {
 
 // New creates a new instance of Application
 func (r *REST) New() runtime.Object {
-	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(r.gvk)
+	obj := &appsv1alpha1.Application{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName,
+	}
 	return obj
 }
 
 // NewList returns an empty list of Application objects
 func (r *REST) NewList() runtime.Object {
-	obj := &unstructured.UnstructuredList{}
-	obj.SetGroupVersionKind(r.gvk.GroupVersion().WithKind(r.kindName + "List"))
+	obj := &appsv1alpha1.ApplicationList{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName + "List",
+	}
 	return obj
 }
 
