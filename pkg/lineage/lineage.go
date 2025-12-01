@@ -134,12 +134,16 @@ func WalkOwnershipGraph(
 	labels := obj.GetLabels()
 	name, ok := labels[HRLabel]
 	if !ok {
+		l.V(1).Info("object does not have helm.toolkit.fluxcd.io/name label", "labels", labels)
 		return
 	}
+	l.V(1).Info("found helm.toolkit.fluxcd.io/name label", "name", name, "namespace", obj.GetNamespace())
 	ownerObj, err := getUnstructuredObject(ctx, client, mapper, HRAPIVersion, HRKind, obj.GetNamespace(), name)
 	if err != nil {
+		l.Error(err, "failed to get HelmRelease", "name", name, "namespace", obj.GetNamespace())
 		return
 	}
+	l.V(1).Info("found HelmRelease owner", "name", name, "namespace", obj.GetNamespace())
 	out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, visited)...)
 
 	return

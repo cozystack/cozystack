@@ -5,6 +5,9 @@ metadata:
     helm.sh/resource-policy: keep
   labels:
     cozystack.io/ui: "true"
+    apps.cozystack.io/application.kind: BootBox
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: bootbox
   name: bootbox
   namespace: tenant-root
 spec:
@@ -13,9 +16,9 @@ spec:
       chart: bootbox
       reconcileStrategy: Revision
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
+        kind: ExternalArtifact
+        name: cozystack-system-bootbox
+        namespace: cozy-system
       version: '>= 0.0.0-0'
   interval: 1m0s
   timeout: 5m0s

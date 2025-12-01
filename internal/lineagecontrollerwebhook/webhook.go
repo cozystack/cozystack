@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -33,8 +32,8 @@ const (
 	ManagerNameKey   = "apps.cozystack.io/application.name"
 )
 
-// getResourceSelectors returns the appropriate CozystackResourceDefinitionResources for a given GroupKind
-func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.CozystackResourceDefinition) *cozyv1alpha1.CozystackResourceDefinitionResources {
+// getResourceSelectors returns the appropriate ApplicationDefinitionResources for a given GroupKind
+func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.ApplicationDefinition) *cozyv1alpha1.ApplicationDefinitionResources {
 	switch {
 	case gk.Group == "" && gk.Kind == "Secret":
 		return &crd.Spec.Secrets
@@ -88,13 +87,16 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 		"name", req.Name,
 		"operation", req.Operation,
 	)
+	logger.Info("webhook called", "gvk", req.Kind.String(), "namespace", req.Namespace, "name", req.Name, "operation", req.Operation)
 	warn := make(admission.Warnings, 0)
 
 	obj := &unstructured.Unstructured{}
 	if err := h.decodeUnstructured(req, obj); err != nil {
+		logger.Error(err, "failed to decode object")
 		return admission.Errored(400, fmt.Errorf("decode object: %w", err))
 	}
 
+	logger.V(1).Info("decoded object", "labels", obj.GetLabels(), "ownerReferences", obj.GetOwnerReferences())
 	labels, err := h.computeLabels(ctx, obj)
 	for {
 		if err != nil && errors.Is(err, NoAncestors) {
@@ -117,9 +119,10 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 
 	mutated, err := json.Marshal(obj)
 	if err != nil {
-		return admission.Errored(500, fmt.Errorf("marshal mutated pod: %w", err))
+		logger.Error(err, "failed to marshal mutated object")
+		return admission.Errored(500, fmt.Errorf("marshal mutated object: %w", err))
 	}
-	logger.V(1).Info("mutated pod", "namespace", obj.GetNamespace(), "name", obj.GetName())
+	logger.Info("mutated object", "namespace", obj.GetNamespace(), "name", obj.GetName(), "labels", labels)
 	return admission.PatchResponseFromRaw(req.Object.Raw, mutated).WithWarnings(warn...)
 }
 
@@ -156,21 +159,9 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 		ManagerKindKey: obj.GetKind(),
 		ManagerNameKey: obj.GetName(),
 	}
-	templateLabels := map[string]string{
-		"kind":      strings.ToLower(obj.GetKind()),
-		"name":      obj.GetName(),
-		"namespace": o.GetNamespace(),
-	}
-	cfg := h.config.Load().(*runtimeConfig)
-	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
-	resourceSelectors := h.getResourceSelectors(o.GroupVersionKind().GroupKind(), crd)
-
-	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
-		if b {
-			return corev1alpha1.TenantResourceLabelValue
-		}
-		return "false"
-	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), resourceSelectors))
+	// Resource selectors are no longer needed since we don't use ApplicationDefinitions
+	// Set tenant resource label to false by default (can be overridden by other logic if needed)
+	labels[corev1alpha1.TenantResourceLabelKey] = "false"
 	return labels, err
 }
 

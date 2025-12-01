@@ -14,7 +14,7 @@
 {{-   if not $cozyConfig }}
 {{-     include "cozy-lib.resources.defaultCpuAllocationRatio" . }}
 {{-   else }}
-{{-     dig "data" "cpu-allocation-ratio" (include "cozy-lib.resources.defaultCpuAllocationRatio" dict) $cozyConfig }}
+{{-     dig "resources" "cpuAllocationRatio" (include "cozy-lib.resources.defaultCpuAllocationRatio" dict) $cozyConfig }}
 {{-   end }}
 {{- end }}
 
@@ -24,7 +24,7 @@
 {{-   if not $cozyConfig }}
 {{-     include "cozy-lib.resources.defaultMemoryAllocationRatio" . }}
 {{-   else }}
-{{-     dig "data" "memory-allocation-ratio" (include "cozy-lib.resources.defaultMemoryAllocationRatio" dict) $cozyConfig }}
+{{-     dig "resources" "memoryAllocationRatio" (include "cozy-lib.resources.defaultMemoryAllocationRatio" dict) $cozyConfig }}
 {{-   end }}
 {{- end }}
 
@@ -34,7 +34,7 @@
 {{-   if not $cozyConfig }}
 {{-     include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" . }}
 {{-   else }}
-{{-     dig "data" "ephemeral-storage-allocation-ratio" (include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" dict) $cozyConfig }}
+{{-     dig "resources" "ephemeralStorageAllocationRatio" (include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" dict) $cozyConfig }}
 {{-   end }}
 {{- end }}
 
@@ -85,9 +85,21 @@
     devices.com/nvidia: "1"   # = limit
 */}}
 {{- define "cozy-lib.resources.sanitize" }}
-{{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
-{{-   $memoryAllocationRatio := include "cozy-lib.resources.memoryAllocationRatio" . | float64 }}
-{{-   $ephemeralStorageAllocationRatio := include "cozy-lib.resources.ephemeralStorageAllocationRatio" . | float64 }}
+{{-   $cpuAllocationRatioRaw := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
+{{-   $cpuAllocationRatio := $cpuAllocationRatioRaw }}
+{{-   if eq $cpuAllocationRatio 0.0 }}
+{{-     $cpuAllocationRatio = 10.0 }}
+{{-   end }}
+{{-   $memoryAllocationRatioRaw := include "cozy-lib.resources.memoryAllocationRatio" . | float64 }}
+{{-   $memoryAllocationRatio := $memoryAllocationRatioRaw }}
+{{-   if eq $memoryAllocationRatio 0.0 }}
+{{-     $memoryAllocationRatio = 1.0 }}
+{{-   end }}
+{{-   $ephemeralStorageAllocationRatioRaw := include "cozy-lib.resources.ephemeralStorageAllocationRatio" . | float64 }}
+{{-   $ephemeralStorageAllocationRatio := $ephemeralStorageAllocationRatioRaw }}
+{{-   if eq $ephemeralStorageAllocationRatio 0.0 }}
+{{-     $ephemeralStorageAllocationRatio = 40.0 }}
+{{-   end }}
 {{-   $args := index . 0 }}
 {{-   $output := dict "requests" dict "limits" dict }}
 {{-   if or (hasKey $args "limits") (hasKey $args "requests") }}

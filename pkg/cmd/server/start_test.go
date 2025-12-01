@@ -17,16 +17,20 @@ limitations under the License.
 package server
 
 import (
+	"fmt"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/version"
-	utilversion "k8s.io/apiserver/pkg/util/version"
+	baseversion "k8s.io/component-base/version"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCozyEmulationVersionToKubeEmulationVersion(t *testing.T) {
-	defaultKubeEffectiveVersion := utilversion.DefaultKubeEffectiveVersion()
+	kubeVer, err := version.ParseSemantic(baseversion.DefaultKubeBinaryVersion)
+	if err != nil {
+		t.Fatalf("Failed to parse kube version: %v", err)
+	}
 
 	testCases := []struct {
 		desc                     string
@@ -36,22 +40,22 @@ func TestCozyEmulationVersionToKubeEmulationVersion(t *testing.T) {
 		{
 			desc:                     "same version as than kube binary",
 			appsEmulationVer:         version.MajorMinor(1, 2),
-			expectedKubeEmulationVer: defaultKubeEffectiveVersion.BinaryVersion(),
+			expectedKubeEmulationVer: kubeVer,
 		},
 		{
 			desc:                     "1 version lower than kube binary",
 			appsEmulationVer:         version.MajorMinor(1, 1),
-			expectedKubeEmulationVer: defaultKubeEffectiveVersion.BinaryVersion().OffsetMinor(-1),
+			expectedKubeEmulationVer: mustParseVersion(t, kubeVer.Major(), kubeVer.Minor()-1),
 		},
 		{
 			desc:                     "2 versions lower than kube binary",
 			appsEmulationVer:         version.MajorMinor(1, 0),
-			expectedKubeEmulationVer: defaultKubeEffectiveVersion.BinaryVersion().OffsetMinor(-2),
+			expectedKubeEmulationVer: mustParseVersion(t, kubeVer.Major(), kubeVer.Minor()-2),
 		},
 		{
 			desc:                     "capped at kube binary",
 			appsEmulationVer:         version.MajorMinor(1, 3),
-			expectedKubeEmulationVer: defaultKubeEffectiveVersion.BinaryVersion(),
+			expectedKubeEmulationVer: kubeVer,
 		},
 		{
 			desc:             "no mapping",
@@ -62,7 +66,19 @@ func TestCozyEmulationVersionToKubeEmulationVersion(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			mappedKubeEmulationVer := CozyVersionToKubeVersion(tc.appsEmulationVer)
-			assert.True(t, mappedKubeEmulationVer.EqualTo(tc.expectedKubeEmulationVer))
+			if tc.expectedKubeEmulationVer == nil {
+				assert.Nil(t, mappedKubeEmulationVer)
+			} else {
+				assert.True(t, mappedKubeEmulationVer.EqualTo(tc.expectedKubeEmulationVer))
+			}
 		})
 	}
+}
+
+func mustParseVersion(t *testing.T, major, minor uint) *version.Version {
+	v, err := version.ParseSemantic(fmt.Sprintf("%d.%d.0", major, minor))
+	if err != nil {
+		t.Fatalf("Failed to parse version: %v", err)
+	}
+	return v
 }

@@ -26,21 +26,18 @@ build: build-deps
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
 	make -C packages/core/testing image
-	make -C packages/core/installer image
+	make -C packages/core/installer image-operator
+	make -C packages/core/talos image
+	make -C packages/core/platform image
+	make -C packages/core/installer image-packages
 	make manifests
-
-repos:
-	rm -rf _out
-	make -C packages/system repo
-	make -C packages/apps repo
-	make -C packages/extra repo
 
 manifests:
 	mkdir -p _out/assets
-	(cd packages/core/installer/; helm template -n cozy-installer installer .) > _out/assets/cozystack-installer.yaml
+	(cd packages/core/installer/; helm template -n cozy-system cozystack-operator . | sed '/^WARNING/d') > _out/assets/cozystack-installer.yaml
 
 assets:
-	make -C packages/core/installer assets
+	make -C packages/core/talos assets
 
 test:
 	make -C packages/core/testing apply

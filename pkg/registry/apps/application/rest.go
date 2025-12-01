@@ -33,6 +33,7 @@ import (
 	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -40,13 +41,17 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/cozylib"
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 
 	// Importing API errors package to construct appropriate error responses
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -166,6 +171,13 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
 	// Merge user labels with prefix
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if helmRelease.Labels == nil {
+		helmRelease.Labels = make(map[string]string)
+	}
+	helmRelease.Labels["apps.cozystack.io/application.kind"] = r.kindName
+	helmRelease.Labels["apps.cozystack.io/application.group"] = r.gvk.Group
+	helmRelease.Labels["apps.cozystack.io/application.name"] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
@@ -224,9 +236,10 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 		return nil, err
 	}
 
-	// Check if HelmRelease meets the required chartName and sourceRef criteria
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmReleaseName)
+	// Check if HelmRelease has required labels
+	if helmRelease.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+		helmRelease.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return a NotFound error for the Application resource
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
@@ -299,6 +312,19 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// Process label.selector
+	// Always add application metadata label requirements
+	appKindReq, err := labels.NewRequirement("apps.cozystack.io/application.kind", selection.Equals, []string{r.kindName})
+	if err != nil {
+		klog.Errorf("Error creating application kind label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application kind label requirement: %v", err)
+	}
+	appGroupReq, err := labels.NewRequirement("apps.cozystack.io/application.group", selection.Equals, []string{r.gvk.Group})
+	if err != nil {
+		klog.Errorf("Error creating application group label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application group label requirement: %v", err)
+	}
+	labelRequirements := []labels.Requirement{*appKindReq, *appGroupReq}
+
 	if options.LabelSelector != nil {
 		ls := options.LabelSelector.String()
 		parsedLabels, err := labels.Parse(ls)
@@ -318,9 +344,12 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 				}
 				prefixedReqs = append(prefixedReqs, *prefixedReq)
 			}
-			helmLabelSelector = labels.NewSelector().Add(prefixedReqs...).String()
+			labelRequirements = append(labelRequirements, prefixedReqs...)
 		}
 	}
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
+
+	klog.V(6).Infof("Using label selector: %s for kind: %s, group: %s", helmLabelSelector, r.kindName, r.gvk.Group)
 
 	// Set ListOptions for HelmRelease with selector mapping
 	metaOptions := metav1.ListOptions{
@@ -339,18 +368,30 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
+	klog.V(6).Infof("Found %d HelmReleases with label selector, filtering by labels...", len(hrList.Items))
+
 	// Initialize unstructured items array
 	items := make([]unstructured.Unstructured, 0)
 
 	// Iterate over HelmReleases and convert to Applications
+	// Filter by labels to ensure only relevant HelmReleases are included
+	// This is a safety check in case label selectors don't work perfectly or HelmReleases were created without labels
 	for i := range hrList.Items {
-		if !r.shouldIncludeHelmRelease(&hrList.Items[i]) {
+		hr := &hrList.Items[i]
+
+		// Verify that HelmRelease has the required labels
+		if hr.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+			hr.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+			klog.V(6).Infof("Skipping HelmRelease %s - missing or incorrect application labels (kind: %s, expected: %s, group: %s, expected: %s)",
+				hr.GetName(),
+				hr.Labels["apps.cozystack.io/application.kind"], r.kindName,
+				hr.Labels["apps.cozystack.io/application.group"], r.gvk.Group)
 			continue
 		}
 
-		app, err := r.ConvertHelmReleaseToApplication(&hrList.Items[i])
+		app, err := r.ConvertHelmReleaseToApplication(hr)
 		if err != nil {
-			klog.Errorf("Error converting HelmRelease %s to Application: %v", hrList.Items[i].GetName(), err)
+			klog.Errorf("Error converting HelmRelease %s to Application: %v", hr.GetName(), err)
 			continue
 		}
 
@@ -482,14 +523,22 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
 	// Merge user labels with prefix
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if helmRelease.Labels == nil {
+		helmRelease.Labels = make(map[string]string)
+	}
+	helmRelease.Labels["apps.cozystack.io/application.kind"] = r.kindName
+	helmRelease.Labels["apps.cozystack.io/application.group"] = r.gvk.Group
+	helmRelease.Labels["apps.cozystack.io/application.name"] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
-	// Before updating, ensure the HelmRelease meets the inclusion criteria
+	// Before updating, ensure the HelmRelease has required labels
 	// This prevents updating HelmReleases that should not be managed as Applications
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.Name)
+	if helmRelease.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+		helmRelease.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmRelease.Name)
 		// Return a NotFound error for the Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
@@ -501,9 +550,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
 	}
 
-	// After updating, ensure the updated HelmRelease still meets the inclusion criteria
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("Updated HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.GetName())
+	// After updating, ensure the updated HelmRelease still has required labels
+	if helmRelease.Labels["apps.cozystack.io/application.kind"] != r.kindName ||
+		helmRelease.Labels["apps.cozystack.io/application.group"] != r.gvk.Group {
+		klog.Errorf("Updated HelmRelease %s does not match the required application labels", helmRelease.GetName())
 		// Return a NotFound error for the Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
@@ -797,28 +847,38 @@ func (cw *customWatcher) ResultChan() <-chan watch.Event {
 
 // shouldIncludeHelmRelease determines if a HelmRelease should be included based on filtering criteria
 func (r *REST) shouldIncludeHelmRelease(hr *helmv2.HelmRelease) bool {
-	// Nil check for Chart field
-	if hr.Spec.Chart == nil {
-		klog.V(6).Infof("HelmRelease %s has nil spec.chart field", hr.GetName())
+	// Check if using chart (HelmRepository) or chartRef (ExternalArtifact)
+	if hr.Spec.Chart != nil {
+		// Using chart (HelmRepository)
+		if r.releaseConfig.Chart == nil {
+			return false
+		}
+		// Filter by Chart Name
+		chartName := hr.Spec.Chart.Spec.Chart
+		if chartName == "" {
+			klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.chart field", hr.GetName())
+			return false
+		}
+		if chartName != r.releaseConfig.Chart.Name {
+			klog.V(6).Infof("HelmRelease %s chart name %s does not match expected %s", hr.GetName(), chartName, r.releaseConfig.Chart.Name)
+			return false
+		}
+		// Filter by SourceRefConfig and Prefix
+		return r.matchesSourceRefAndPrefix(hr)
+	} else if hr.Spec.ChartRef != nil {
+		// Using chartRef (ExternalArtifact)
+		if r.releaseConfig.ChartRef == nil {
+			return false
+		}
+		// Filter by ChartRef SourceRef and Prefix
+		return r.matchesChartRefAndPrefix(hr)
+	} else {
+		klog.V(6).Infof("HelmRelease %s has neither spec.chart nor spec.chartRef field", hr.GetName())
 		return false
 	}
-
-	// Filter by Chart Name
-	chartName := hr.Spec.Chart.Spec.Chart
-	if chartName == "" {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.chart field", hr.GetName())
-		return false
-	}
-	if chartName != r.releaseConfig.Chart.Name {
-		klog.V(6).Infof("HelmRelease %s chart name %s does not match expected %s", hr.GetName(), chartName, r.releaseConfig.Chart.Name)
-		return false
-	}
-
-	// Filter by SourceRefConfig and Prefix
-	return r.matchesSourceRefAndPrefix(hr)
 }
 
-// matchesSourceRefAndPrefix checks both SourceRefConfig and Prefix criteria
+// matchesSourceRefAndPrefix checks both SourceRefConfig and Prefix criteria for chart (HelmRepository)
 func (r *REST) matchesSourceRefAndPrefix(hr *helmv2.HelmRelease) bool {
 	// Nil check for Chart field (defensive)
 	if hr.Spec.Chart == nil {
@@ -850,6 +910,51 @@ func (r *REST) matchesSourceRefAndPrefix(hr *helmv2.HelmRelease) bool {
 		sourceRefName != r.releaseConfig.Chart.SourceRef.Name ||
 		sourceRefNamespace != r.releaseConfig.Chart.SourceRef.Namespace {
 		klog.V(6).Infof("HelmRelease %s sourceRef does not match expected values", hr.GetName())
+		return false
+	}
+
+	// Additional filtering by Prefix
+	name := hr.GetName()
+	if !strings.HasPrefix(name, r.releaseConfig.Prefix) {
+		klog.V(6).Infof("HelmRelease %s does not have the expected prefix %s", name, r.releaseConfig.Prefix)
+		return false
+	}
+
+	return true
+}
+
+// matchesChartRefAndPrefix checks both ChartRef SourceRef and Prefix criteria for chartRef (ExternalArtifact)
+func (r *REST) matchesChartRefAndPrefix(hr *helmv2.HelmRelease) bool {
+	// Nil check for ChartRef field (defensive)
+	if hr.Spec.ChartRef == nil {
+		klog.V(6).Infof("HelmRelease %s has nil spec.chartRef field", hr.GetName())
+		return false
+	}
+
+	// Extract SourceRef fields
+	sourceRef := hr.Spec.ChartRef
+	sourceRefKind := sourceRef.Kind
+	sourceRefName := sourceRef.Name
+	sourceRefNamespace := sourceRef.Namespace
+
+	if sourceRefKind == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chartRef.kind field", hr.GetName())
+		return false
+	}
+	if sourceRefName == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chartRef.name field", hr.GetName())
+		return false
+	}
+	if sourceRefNamespace == "" {
+		klog.V(6).Infof("HelmRelease %s missing spec.chartRef.namespace field", hr.GetName())
+		return false
+	}
+
+	// Check if SourceRef matches the configuration
+	if sourceRefKind != r.releaseConfig.ChartRef.SourceRef.Kind ||
+		sourceRefName != r.releaseConfig.ChartRef.SourceRef.Name ||
+		sourceRefNamespace != r.releaseConfig.ChartRef.SourceRef.Namespace {
+		klog.V(6).Infof("HelmRelease %s chartRef sourceRef does not match expected values", hr.GetName())
 		return false
 	}
 
@@ -931,6 +1036,23 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	return processed
 }
 
+// getApplicationDefinition retrieves the ApplicationDefinition for this resource kind
+func (r *REST) getApplicationDefinition(ctx context.Context) (*cozyv1alpha1.ApplicationDefinition, error) {
+	crdList := &cozyv1alpha1.ApplicationDefinitionList{}
+	if err := r.c.List(ctx, crdList); err != nil {
+		return nil, fmt.Errorf("failed to list ApplicationDefinitions: %w", err)
+	}
+
+	for i := range crdList.Items {
+		crd := &crdList.Items[i]
+		if crd.Spec.Application.Kind == r.kindName {
+			return crd, nil
+		}
+	}
+
+	return nil, fmt.Errorf("ApplicationDefinition not found for kind %s", r.kindName)
+}
+
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
 func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
 	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
@@ -946,6 +1068,39 @@ func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 		return app, fmt.Errorf("defaulting error: %w", err)
 	}
 
+	// Remove all fields starting with "_" after applying defaults to ensure they're not shown to user
+	// This must be done after applySpecDefaults because defaults might add them back
+	if app.Spec != nil && len(app.Spec.Raw) > 0 {
+		cleanedValues, err := cozylib.RemoveUnderscoreFields(app.Spec)
+		if err != nil {
+			return app, fmt.Errorf("failed to remove underscore fields from values: %w", err)
+		}
+		app.Spec = cleanedValues
+
+		// Double-check that underscore fields were removed
+		if app.Spec != nil && len(app.Spec.Raw) > 0 {
+			var verifyMap map[string]interface{}
+			if err := json.Unmarshal(app.Spec.Raw, &verifyMap); err == nil {
+				// Check for any remaining underscore fields
+				for k := range verifyMap {
+					if strings.HasPrefix(k, "_") {
+						klog.Errorf("CRITICAL: Field %s still exists after removal! Removing forcefully...", k)
+						delete(verifyMap, k)
+					}
+				}
+				// Re-marshal if we removed anything
+				if len(verifyMap) == 0 {
+					app.Spec = &apiextensionsv1.JSON{Raw: []byte("{}")}
+				} else {
+					forceCleanedJSON, err := json.Marshal(verifyMap)
+					if err == nil {
+						app.Spec = &apiextensionsv1.JSON{Raw: forceCleanedJSON}
+					}
+				}
+			}
+		}
+	}
+
 	klog.V(6).Infof("Successfully converted HelmRelease %s to Application", hr.GetName())
 	return app, nil
 }
@@ -957,6 +1112,13 @@ func (r *REST) ConvertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 
 // convertHelmReleaseToApplication implements the actual conversion logic
 func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+	// Remove all fields starting with "_" from values before setting spec to ensure they never appear in spec
+	cleanedValues, err := cozylib.RemoveUnderscoreFields(hr.Spec.Values)
+	if err != nil {
+		// If removal fails, use original values (shouldn't happen, but be safe)
+		cleanedValues = hr.Spec.Values
+	}
+
 	app := appsv1alpha1.Application{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps.cozystack.io/v1alpha1",
@@ -972,9 +1134,9 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 			Labels:            filterPrefixedMap(hr.Labels, LabelPrefix),
 			Annotations:       filterPrefixedMap(hr.Annotations, AnnotationPrefix),
 		},
-		Spec: hr.Spec.Values,
+		Spec: cleanedValues,
 		Status: appsv1alpha1.ApplicationStatus{
-			Version: hr.Status.LastAttemptedRevision,
+			Version: extractRevision(hr.Status.LastAttemptedRevision),
 		},
 	}
 
@@ -1002,6 +1164,50 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 
 // convertApplicationToHelmRelease implements the actual conversion logic
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	ctx := context.Background()
+
+	// Check if user specified any field starting with "_" in values
+	if err := cozylib.CheckUnderscoreFields(app.Spec); err != nil {
+		return nil, err
+	}
+
+	// Get ApplicationDefinition to extract default values
+	crd, err := r.getApplicationDefinition(ctx)
+	if err != nil {
+		klog.V(6).Infof("Could not find ApplicationDefinition for kind %s: %v", r.kindName, err)
+		// Continue without default values if CRD not found
+		crd = nil
+	}
+
+	// Start with default values from CRD (if any)
+	var mergedValues *apiextensionsv1.JSON
+	if crd != nil && crd.Spec.Release.Values != nil {
+		mergedValues, err = cozylib.MergeValues(crd.Spec.Release.Values, app.Spec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to merge default values with user values: %w", err)
+		}
+	} else {
+		// No default values, use user values as-is
+		mergedValues = app.Spec
+	}
+
+	// Get namespace to extract namespace.cozystack.io/* labels
+	namespace := &corev1.Namespace{}
+	if err := r.c.Get(ctx, client.ObjectKey{Name: app.Namespace}, namespace); err != nil {
+		klog.V(6).Infof("Could not get namespace %s: %v", app.Namespace, err)
+		// Continue without namespace labels if namespace not found
+		namespace = nil
+	}
+
+	// Extract namespace annotations and add to _namespace (top-level)
+	if namespace != nil {
+		var err error
+		mergedValues, err = cozylib.InjectNamespaceAnnotationsIntoValues(mergedValues, namespace)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inject namespace annotations: %w", err)
+		}
+	}
+
 	helmRelease := &helmv2.HelmRelease{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "helm.toolkit.fluxcd.io/v2",
@@ -1016,18 +1222,6 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			UID:             app.ObjectMeta.UID,
 		},
 		Spec: helmv2.HelmReleaseSpec{
-			Chart: &helmv2.HelmChartTemplate{
-				Spec: helmv2.HelmChartTemplateSpec{
-					Chart:             r.releaseConfig.Chart.Name,
-					Version:           ">= 0.0.0-0",
-					ReconcileStrategy: "Revision",
-					SourceRef: helmv2.CrossNamespaceObjectReference{
-						Kind:      r.releaseConfig.Chart.SourceRef.Kind,
-						Name:      r.releaseConfig.Chart.SourceRef.Name,
-						Namespace: r.releaseConfig.Chart.SourceRef.Namespace,
-					},
-				},
-			},
 			Interval: metav1.Duration{Duration: 5 * time.Minute},
 			Install: &helmv2.Install{
 				Remediation: &helmv2.InstallRemediation{
@@ -1039,8 +1233,34 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 					Retries: -1,
 				},
 			},
-			Values: app.Spec,
+			Values: mergedValues,
 		},
+	}
+
+	// Set Chart or ChartRef based on configuration
+	if r.releaseConfig.Chart != nil {
+		// Using chart (HelmRepository)
+		helmRelease.Spec.Chart = &helmv2.HelmChartTemplate{
+			Spec: helmv2.HelmChartTemplateSpec{
+				Chart:             r.releaseConfig.Chart.Name,
+				Version:           ">= 0.0.0-0",
+				ReconcileStrategy: "Revision",
+				SourceRef: helmv2.CrossNamespaceObjectReference{
+					Kind:      r.releaseConfig.Chart.SourceRef.Kind,
+					Name:      r.releaseConfig.Chart.SourceRef.Name,
+					Namespace: r.releaseConfig.Chart.SourceRef.Namespace,
+				},
+			},
+		}
+	} else if r.releaseConfig.ChartRef != nil {
+		// Using chartRef (ExternalArtifact)
+		helmRelease.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{
+			Kind:      r.releaseConfig.ChartRef.SourceRef.Kind,
+			Name:      r.releaseConfig.ChartRef.SourceRef.Name,
+			Namespace: r.releaseConfig.ChartRef.SourceRef.Namespace,
+		}
+	} else {
+		return nil, fmt.Errorf("either chart or chartRef must be specified in release config")
 	}
 
 	return helmRelease, nil
@@ -1178,6 +1398,22 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 	table.Rows = append(table.Rows, row)
 
 	return table
+}
+
+// extractRevision extracts only the revision part from a version string
+// If version is in format "0.1.4+abcdef", returns "abcdef"
+// Otherwise returns the original string
+func extractRevision(version string) string {
+	if version == "" {
+		return ""
+	}
+	// Check if version contains "+" separator
+	if idx := strings.LastIndex(version, "+"); idx >= 0 && idx < len(version)-1 {
+		// Return only the part after "+"
+		return version[idx+1:]
+	}
+	// If no "+" found, return original version
+	return version
 }
 
 // getVersion returns the application version or a placeholder if unknown

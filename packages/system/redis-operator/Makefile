@@ -2,8 +2,8 @@ REDIS_OPERATOR_TAG=$(shell grep -F 'ARG VERSION=' images/redis-operator/Dockerfi
 export NAME=redis-operator
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

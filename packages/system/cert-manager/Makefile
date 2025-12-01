@@ -1,7 +1,7 @@
 export NAME=cert-manager
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

@@ -1,8 +1,8 @@
 export NAME=kubeovn-webhook
 export NAMESPACE=cozy-kubeovn
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 image:
 	docker buildx build images/kubeovn-webhook \

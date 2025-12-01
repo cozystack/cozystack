@@ -11,13 +11,13 @@ import (
 
 type Memory struct {
 	mu        sync.RWMutex
-	data      map[string]cozyv1alpha1.CozystackResourceDefinition
+	data      map[string]cozyv1alpha1.ApplicationDefinition
 	primed    bool
 	primeOnce sync.Once
 }
 
 func New() *Memory {
-	return &Memory{data: make(map[string]cozyv1alpha1.CozystackResourceDefinition)}
+	return &Memory{data: make(map[string]cozyv1alpha1.ApplicationDefinition)}
 }
 
 var (
@@ -30,7 +30,7 @@ func Global() *Memory {
 	return global
 }
 
-func (m *Memory) Upsert(obj *cozyv1alpha1.CozystackResourceDefinition) {
+func (m *Memory) Upsert(obj *cozyv1alpha1.ApplicationDefinition) {
 	if obj == nil {
 		return
 	}
@@ -45,10 +45,10 @@ func (m *Memory) Delete(name string) {
 	m.mu.Unlock()
 }
 
-func (m *Memory) Snapshot() []cozyv1alpha1.CozystackResourceDefinition {
+func (m *Memory) Snapshot() []cozyv1alpha1.ApplicationDefinition {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]cozyv1alpha1.CozystackResourceDefinition, 0, len(m.data))
+	out := make([]cozyv1alpha1.ApplicationDefinition, 0, len(m.data))
 	for _, v := range m.data {
 		out = append(out, v)
 	}
@@ -72,7 +72,7 @@ func (m *Memory) EnsurePrimingWithManager(mgr ctrl.Manager) error {
 			if ok := mgr.GetCache().WaitForCacheSync(ctx); !ok {
 				return nil
 			}
-			var list cozyv1alpha1.CozystackResourceDefinitionList
+			var list cozyv1alpha1.ApplicationDefinitionList
 			if err := mgr.GetClient().List(ctx, &list); err == nil {
 				for i := range list.Items {
 					m.Upsert(&list.Items[i])
@@ -87,11 +87,11 @@ func (m *Memory) EnsurePrimingWithManager(mgr ctrl.Manager) error {
 	return errOut
 }
 
-func (m *Memory) ListFromCacheOrAPI(ctx context.Context, c client.Client) ([]cozyv1alpha1.CozystackResourceDefinition, error) {
+func (m *Memory) ListFromCacheOrAPI(ctx context.Context, c client.Client) ([]cozyv1alpha1.ApplicationDefinition, error) {
 	if m.IsPrimed() {
 		return m.Snapshot(), nil
 	}
-	var list cozyv1alpha1.CozystackResourceDefinitionList
+	var list cozyv1alpha1.ApplicationDefinitionList
 	if err := c.List(ctx, &list); err != nil {
 		return nil, err
 	}

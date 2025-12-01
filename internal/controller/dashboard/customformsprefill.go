@@ -16,7 +16,7 @@ import (
 )
 
 // ensureCustomFormsPrefill creates or updates a CustomFormsPrefill resource for the given CRD
-func (m *Manager) ensureCustomFormsPrefill(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) (reconcile.Result, error) {
+func (m *Manager) ensureCustomFormsPrefill(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	app := crd.Spec.Application

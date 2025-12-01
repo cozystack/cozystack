@@ -385,7 +385,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "tenant.name" . }}
-  namespace: cozy-public
+  namespace: cozy-system
 rules:
 - apiGroups: ["source.toolkit.fluxcd.io"]
   resources: ["helmrepositories"]
@@ -398,7 +398,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "tenant.name" . }}
-  namespace: cozy-public
+  namespace: cozy-system
 subjects:
 - kind: Group
   name: {{ include "tenant.name" . }}-super-admin

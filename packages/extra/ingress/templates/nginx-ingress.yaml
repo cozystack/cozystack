@@ -1,20 +1,15 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
-{{- $exposeExternalIPs := (index $cozyConfig.data "expose-external-ips") | default "" | nospace }}
+{{- $cozystack := .Values._cozystack | default dict }}
+{{- $exposeIngress := dig "namespaces" "ingress" "tenant-root" $cozystack }}
+{{- $exposeExternalIPs := dig "publishing" "externalIPs" (list) $cozystack }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: ingress-nginx-system
 spec:
-  chart:
-    spec:
-      chart: cozy-ingress-nginx
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-system-ingress-system
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:
@@ -42,9 +37,9 @@ spec:
           enabled: false
         {{- end }}
         service:
-          {{- if and (eq $exposeIngress .Release.Namespace) $exposeExternalIPs }}
+          {{- if and (eq $exposeIngress .Release.Namespace) (gt (len $exposeExternalIPs) 0) }}
           externalIPs:
-            {{- toYaml (splitList "," $exposeExternalIPs) | nindent 12 }}
+            {{- toYaml $exposeExternalIPs | nindent 12 }}
           type: ClusterIP
           externalTrafficPolicy: Cluster
           {{- else }}

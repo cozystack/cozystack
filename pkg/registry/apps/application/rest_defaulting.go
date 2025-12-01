@@ -19,10 +19,13 @@ package application
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+
+	"github.com/cozystack/cozystack/pkg/cozylib"
 )
 
 // applySpecDefaults applies default values to the Application spec based on the schema
@@ -39,16 +42,31 @@ func (r *REST) applySpecDefaults(app *appsv1alpha1.Application) error {
 	if m == nil {
 		m = map[string]any{}
 	}
+	// Remove all fields starting with "_" BEFORE applying defaults to prevent them from being processed
+	cozylib.RemoveUnderscoreFieldsFromMap(m)
+	
 	if err := defaultLikeKubernetes(&m, r.specSchema); err != nil {
 		return err
 	}
+	
+	// Remove all fields starting with "_" AFTER applying defaults to ensure they're never in the output
+	// This is a safety measure in case defaults added them back
+	cozylib.RemoveUnderscoreFieldsFromMap(m)
+	
+	// Always return at least an empty JSON object, never nil
+	if len(m) == 0 {
+		app.Spec = &apiextensionsv1.JSON{Raw: []byte("{}")}
+		return nil
+	}
+	
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	app.Spec = &apiextv1.JSON{Raw: raw}
+	app.Spec = &apiextensionsv1.JSON{Raw: raw}
 	return nil
 }
+
 
 func defaultLikeKubernetes(root *map[string]any, s *structuralschema.Structural) error {
 	v := any(*root)
@@ -116,6 +134,10 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 		if s.AdditionalProperties != nil && s.AdditionalProperties.Structural != nil {
 			ap := s.AdditionalProperties.Structural
 			for k, cur := range mv {
+				// Skip fields starting with "_" - they are internal and should not be processed
+				if strings.HasPrefix(k, "_") {
+					continue
+				}
 				if _, isKnown := s.Properties[k]; isKnown {
 					continue
 				}
