@@ -438,9 +438,9 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// Explicitly set apiVersion and kind in unstructured object
-	appList := r.NewList().(*unstructured.Unstructured)
+	appList := r.NewList().(*unstructured.UnstructuredList)
 	appList.SetResourceVersion(hrList.GetResourceVersion())
-	appList.Object["items"] = items
+	appList.Items = items
 
 	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(items), namespace)
 	return appList, nil
@@ -1480,9 +1480,8 @@ func (r *REST) New() runtime.Object {
 
 // NewList returns an empty list of Application objects
 func (r *REST) NewList() runtime.Object {
-	obj := &unstructured.Unstructured{}
+	obj := &unstructured.UnstructuredList{}
 	obj.SetGroupVersionKind(r.gvk.GroupVersion().WithKind(r.kindName + "List"))
-	obj.Object["items"] = make([]interface{}, 0)
 	return obj
 }
 

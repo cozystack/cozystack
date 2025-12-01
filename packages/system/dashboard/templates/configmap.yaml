@@ -2,7 +2,7 @@
 {{- $branding := $cozystack.branding | default dict }}
 {{- $dashboard := $branding.dashboard | default dict }}
 
-{{- $tenantText := "v0.38.0" }}
+{{- $tenantText := "v0.38.2" }}
 {{- $footerText := "Cozystack" }}
 {{- $titleText := "Cozystack Dashboard" }}
 {{- $logoText := "" }}

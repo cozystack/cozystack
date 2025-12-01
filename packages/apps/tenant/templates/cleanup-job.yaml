@@ -1,0 +1,85 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "tenant.name" . }}-cleanup
+  namespace: {{ include "tenant.name" . }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-weight: "-5"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "tenant.name" . }}-cleanup
+  namespace: {{ include "tenant.name" . }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-weight: "-5"
+rules:
+- apiGroups: ["helm.toolkit.fluxcd.io"]
+  resources: ["helmreleases"]
+  verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "tenant.name" . }}-cleanup
+  namespace: {{ include "tenant.name" . }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-weight: "-5"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "tenant.name" . }}-cleanup
+subjects:
+- kind: ServiceAccount
+  name: {{ include "tenant.name" . }}-cleanup
+  namespace: {{ include "tenant.name" . }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tenant.name" . }}-cleanup
+  namespace: {{ include "tenant.name" . }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-weight: "0"
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      name: {{ include "tenant.name" . }}-cleanup
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ include "tenant.name" . }}-cleanup
+      restartPolicy: OnFailure
+      containers:
+      - name: cleanup
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          NAMESPACE="{{ include "tenant.name" . }}"
+          
+          echo "Cleaning up HelmReleases in namespace: $NAMESPACE"
+          
+          echo "Deleting Applications"
+          kubectl delete helmreleases.helm.toolkit.fluxcd.io -n "$NAMESPACE" \
+            -l 'cozystack.io/ui=true,internal.cozystack.io/tenantmodule!=true' \
+            --ignore-not-found=true --wait=true
+          
+          echo "Deleting Tenant Modules"
+          kubectl delete helmreleases.helm.toolkit.fluxcd.io -n "$NAMESPACE" \
+            -l 'cozystack.io/ui=true,internal.cozystack.io/tenantmodule=true' \
+            --ignore-not-found=true --wait=true
+          
+          echo "Cleanup completed successfully"

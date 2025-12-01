@@ -1,0 +1,13 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/cert/ca-cert.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/cert/ca-cert.yaml
+index 0fd6615e..f2572558 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/cert/ca-cert.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/cert/ca-cert.yaml
+@@ -13,6 +13,8 @@ spec:
+   secretName: {{ template "seaweedfs.name" . }}-ca-cert
+   commonName: "{{ template "seaweedfs.name" . }}-root-ca"
+   isCA: true
++  duration: 87600h
++  renewBefore: 720h
+   issuerRef:
+     name: {{ template "seaweedfs.name" . }}-issuer
+     kind: Issuer

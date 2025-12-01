@@ -1,6 +1,6 @@
 cozystackController:
-  image: ghcr.io/cozystack/cozystack/cozystack-controller:latest@sha256:0197fd991c3f9372f26a86ef517dc43ccda88bb4018e38d82693adc807d2b74f
+  image: ghcr.io/cozystack/cozystack/cozystack-controller:v0.38.2@sha256:468b2eccbc0aa00bd3d72d56624a46e6ba178fa279cdd19248af74d32ea7d319
   debug: false
   disableTelemetry: false
-  cozystackVersion: "v0.38.0"
+  cozystackVersion: "v0.38.2"
   cozystackAPIKind: "DaemonSet"
