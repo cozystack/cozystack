@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Cozystack Authors.
+Copyright 2025 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package fuzzer
+// +k8s:openapi-gen=true
+// +k8s:deepcopy-gen=package
+// +k8s:conversion-gen=github.com/cozystack/cozystack/pkg/apis/sdn
+// +k8s:conversion-gen=k8s.io/apiextensions-apiserver/pkg/apis/apiextensions
+// +k8s:defaulter-gen=TypeMeta
+// +groupName=sdn.cozystack.io
 
-import (
-	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
-)
-
-// Funcs returns the fuzzer functions for the apps api group.
-var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
-	return []interface{}{}
-}
+// Package v1alpha1 is the v1alpha1 version of the API.
+package v1alpha1 // import "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"

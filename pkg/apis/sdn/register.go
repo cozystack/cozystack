@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Cozystack Authors.
+Copyright 2025 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,13 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package fuzzer
+package sdn
 
-import (
-	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+// GroupName is the group name used in this package
+const (
+	GroupName = "sdn.cozystack.io"
 )
-
-// Funcs returns the fuzzer functions for the apps api group.
-var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
-	return []interface{}{}
-}
