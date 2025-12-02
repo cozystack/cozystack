@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: coredns
+  name: coredns-metrics
   namespace: kube-system
   labels:
     app: coredns
@@ -19,7 +19,7 @@ spec:
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMServiceScrape
 metadata:
-  name: coredns
+  name: coredns-metrics
   namespace: cozy-monitoring
 spec:
   selector:
