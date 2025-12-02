@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine as k8s-await-election-builder
+FROM golang:1.24-alpine AS k8s-await-election-builder
 
 ARG K8S_AWAIT_ELECTION_GITREPO=https://github.com/LINBIT/k8s-await-election
 ARG K8S_AWAIT_ELECTION_VERSION=0.4.1
@@ -13,7 +13,7 @@ RUN git clone ${K8S_AWAIT_ELECTION_GITREPO} /usr/local/go/k8s-await-election/ \
  && make \
  && mv ./out/k8s-await-election-${TARGETARCH} /k8s-await-election
 
-FROM golang:1.24-alpine as builder
+FROM golang:1.24-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
