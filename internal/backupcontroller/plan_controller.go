@@ -61,6 +61,20 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		return ctrl.Result{}, nil
 	}
+
+	// Clear error condition if cron parsing succeeds
+	if condition := meta.FindStatusCondition(p.Status.Conditions, backupsv1alpha1.PlanConditionError); condition != nil && condition.Status == metav1.ConditionTrue {
+		meta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{
+			Type:    backupsv1alpha1.PlanConditionError,
+			Status:  metav1.ConditionFalse,
+			Reason:  "Cron spec is valid",
+			Message: "The cron schedule has been successfully parsed",
+		})
+		if err := r.Status().Update(ctx, p); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	tNext := sch.Next(tCheck)
 
 	if time.Now().Before(tNext) {

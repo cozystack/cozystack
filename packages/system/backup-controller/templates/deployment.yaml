@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-controller
+  labels:
+    app: backup-controller
+spec:
+  replicas: {{ .Values.backupController.replicas }}
+  selector:
+    matchLabels:
+      app: backup-controller
+  template:
+    metadata:
+      labels:
+        app: backup-controller
+    spec:
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      serviceAccountName: backup-controller
+      containers:
+      - name: backup-controller
+        image: "{{ .Values.backupController.image }}"
+        args:
+        - --leader-elect
+        {{- if .Values.backupController.metrics.enable }}
+        - --metrics-bind-address={{ .Values.backupController.metrics.bindAddress }}
+        {{- end }}
+        {{- if .Values.backupController.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        ports:
+        - name: metrics
+          containerPort: {{ split ":" .Values.backupController.metrics.bindAddress | mustLast }}
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        {{- with .Values.backupController.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
+        {{- end }}
