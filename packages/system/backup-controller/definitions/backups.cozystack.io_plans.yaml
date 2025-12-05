@@ -1,0 +1,135 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: plans.backups.cozystack.io
+spec:
+  group: backups.cozystack.io
+  names:
+    kind: Plan
+    listKind: PlanList
+    plural: plans
+    singular: plan
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Plan describes the schedule, method and storage location for the
+          backup of a given target application.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              PlanSpec references the storage, the strategy, the application to be
+              backed up and specifies the timetable on which the backups will run.
+            properties:
+              applicationRef:
+                description: |-
+                  ApplicationRef holds a reference to the managed application,
+                  whose state and configuration must be backed up.
+                properties:
+                  apiGroup:
+                    description: |-
+                      APIGroup is the group for the resource being referenced.
+                      If APIGroup is not specified, the specified Kind must be in the core API group.
+                      For any other third-party types, APIGroup is required.
+                    type: string
+                  kind:
+                    description: Kind is the type of resource being referenced
+                    type: string
+                  name:
+                    description: Name is the name of resource being referenced
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+                x-kubernetes-map-type: atomic
+              schedule:
+                description: Schedule specifies when backup copies are created.
+                properties:
+                  cron:
+                    description: |-
+                      Cron contains the cron spec for scheduling backups. Must be
+                      specified if the schedule type is `cron`. Since only `cron` is
+                      supported, omitting this field is not allowed.
+                    type: string
+                  type:
+                    description: |-
+                      Type is the type of schedule specification. Supported values are
+                      [`cron`]. If omitted, defaults to `cron`.
+                    type: string
+                type: object
+              storageRef:
+                description: |-
+                  StorageRef holds a reference to the Storage object that
+                  describes the location where the backup will be stored.
+                properties:
+                  apiGroup:
+                    description: |-
+                      APIGroup is the group for the resource being referenced.
+                      If APIGroup is not specified, the specified Kind must be in the core API group.
+                      For any other third-party types, APIGroup is required.
+                    type: string
+                  kind:
+                    description: Kind is the type of resource being referenced
+                    type: string
+                  name:
+                    description: Name is the name of resource being referenced
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+                x-kubernetes-map-type: atomic
+              strategyRef:
+                description: |-
+                  StrategyRef holds a reference to the Strategy object that
+                  describes, how a backup copy is to be created.
+                properties:
+                  apiGroup:
+                    description: |-
+                      APIGroup is the group for the resource being referenced.
+                      If APIGroup is not specified, the specified Kind must be in the core API group.
+                      For any other third-party types, APIGroup is required.
+                    type: string
+                  kind:
+                    description: Kind is the type of resource being referenced
+                    type: string
+                  name:
+                    description: Name is the name of resource being referenced
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+                x-kubernetes-map-type: atomic
+            required:
+            - applicationRef
+            - schedule
+            - storageRef
+            - strategyRef
+            type: object
+        type: object
+    served: true
+    storage: true
