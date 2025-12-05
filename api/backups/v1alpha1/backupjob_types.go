@@ -72,6 +72,9 @@ type BackupJobStatus struct {
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:selectablefield:JSONPath=`.spec.strategyRef.apiGroup`
+// +kubebuilder:selectablefield:JSONPath=`.spec.strategyRef.kind`
+// +kubebuilder:selectablefield:JSONPath=`.spec.strategyRef.name`
 
 // BackupJob represents a single execution of a backup.
 // It is typically created by a Plan controller when a schedule fires.
