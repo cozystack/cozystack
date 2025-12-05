@@ -18,6 +18,8 @@ github.com/coreos/go-semver v0.3.1 h1:yi21YpKnrx1gt5R+la8n5WgS0kCrsPp33dmEyHReZr
 github.com/coreos/go-semver v0.3.1/go.mod h1:irMmmIw/7yzSRPWryHsK7EYSg09caPQL03VsM8rvUec=
 github.com/coreos/go-systemd/v22 v22.5.0 h1:RrqgGjYQKalulkV8NGVIfkXQf6YYmOyiJKk8iXXhfZs=
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
+github.com/cozystack/apimachinery v0.0.0-20251201201312-18e522a87614 h1:jH9elECUvhiIs3IMv3oS5k1JgCLVsSK6oU4dmq5gyW8=
+github.com/cozystack/apimachinery v0.0.0-20251201201312-18e522a87614/go.mod h1:rsPdaZJfTfLsNJSQzNHQvYoTmxhoOEofxtOsF3rtsMo=
 github.com/cpuguy83/go-md2man/v2 v2.0.4/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -291,8 +293,6 @@ k8s.io/api v0.31.2 h1:3wLBbL5Uom/8Zy98GRPXpJ254nEFpl+hwndmk9RwmL0=
 k8s.io/api v0.31.2/go.mod h1:bWmGvrGPssSK1ljmLzd3pwCQ9MgoTsRCuK35u6SygUk=
 k8s.io/apiextensions-apiserver v0.31.2 h1:W8EwUb8+WXBLu56ser5IudT2cOho0gAKeTOnywBLxd0=
 k8s.io/apiextensions-apiserver v0.31.2/go.mod h1:i+Geh+nGCJEGiCGR3MlBDkS7koHIIKWVfWeRFiOsUcM=
-k8s.io/apimachinery v0.31.2 h1:i4vUt2hPK56W6mlT7Ry+AO8eEsyxMD1U44NR22CLTYw=
-k8s.io/apimachinery v0.31.2/go.mod h1:rsPdaZJfTfLsNJSQzNHQvYoTmxhoOEofxtOsF3rtsMo=
 k8s.io/apiserver v0.31.2 h1:VUzOEUGRCDi6kX1OyQ801m4A7AUPglpsmGvdsekmcI4=
 k8s.io/apiserver v0.31.2/go.mod h1:o3nKZR7lPlJqkU5I3Ove+Zx3JuoFjQobGX1Gctw6XuE=
 k8s.io/client-go v0.31.2 h1:Y2F4dxU5d3AQj+ybwSMqQnpZH9F30//1ObxOKlTI9yc=
