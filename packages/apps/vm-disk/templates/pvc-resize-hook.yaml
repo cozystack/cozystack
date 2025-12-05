@@ -1,5 +1,17 @@
 {{- $existingPVC := lookup "v1" "PersistentVolumeClaim" .Release.Namespace .Release.Name }}
-{{- if and $existingPVC (ne ($existingPVC.spec.resources.requests.storage | toString) .Values.storage) -}}
+{{- $shouldResize := false -}}
+{{- if and $existingPVC .Values.storage -}}
+  {{- $currentStorage := $existingPVC.spec.resources.requests.storage | toString -}}
+  {{- if ne $currentStorage .Values.storage -}}
+    {{- $oldSize := (include "cozy-lib.resources.toFloat" $currentStorage) | float64 -}}
+    {{- $newSize := (include "cozy-lib.resources.toFloat" .Values.storage) | float64 -}}
+    {{- if gt $newSize $oldSize -}}
+      {{- $shouldResize = true -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if $shouldResize -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -23,6 +35,7 @@ spec:
           command: ["sh", "-xec"]
           args:
             - |
+              echo "Resizing PVC to {{ .Values.storage }}..."
               kubectl patch pvc {{ .Release.Name }} -p '{"spec":{"resources":{"requests":{"storage":"{{ .Values.storage }}"}}}}'
 ---
 apiVersion: v1

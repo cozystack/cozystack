@@ -27,7 +27,11 @@
 {{- if and $existingPVC $desiredStorage -}}
   {{- $currentStorage := $existingPVC.spec.resources.requests.storage | toString -}}
   {{- if not (eq $currentStorage $desiredStorage) -}}
-    {{- $needResizePVC = true -}}
+    {{- $oldSize := (include "cozy-lib.resources.toFloat" $currentStorage) | float64 -}}
+    {{- $newSize := (include "cozy-lib.resources.toFloat" $desiredStorage) | float64 -}}
+    {{- if gt $newSize $oldSize -}}
+      {{- $needResizePVC = true -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 
