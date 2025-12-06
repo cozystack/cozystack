@@ -993,6 +993,24 @@ spec:
                 - Retain
                 - Delete
                 type: string
+              evacuationStrategy:
+                description: EvacuationStrategy configures the evacuation of volumes
+                  from a Satellite when DeletionPolicy "Evacuate" is used.
+                nullable: true
+                properties:
+                  attachedVolumeReattachTimeout:
+                    default: 5m
+                    description: |-
+                      AttachedVolumeReattachTimeout configures how long evacuation waits for attached volumes to reattach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                  unattachedVolumeAttachTimeout:
+                    default: 5m
+                    description: |-
+                      UnattachedVolumeAttachTimeout configures how long evacuation waits for unattached volumes to attach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                type: object
               internalTLS:
                 description: |-
                   InternalTLS configures secure communication for the LINSTOR Satellite.
@@ -1683,6 +1701,23 @@ spec:
                 - Retain
                 - Delete
                 type: string
+              evacuationStrategy:
+                description: EvacuationStrategy configures the evacuation of volumes
+                  from a Satellite when DeletionPolicy "Evacuate" is used.
+                properties:
+                  attachedVolumeReattachTimeout:
+                    default: 5m
+                    description: |-
+                      AttachedVolumeReattachTimeout configures how long evacuation waits for attached volumes to reattach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                  unattachedVolumeAttachTimeout:
+                    default: 5m
+                    description: |-
+                      UnattachedVolumeAttachTimeout configures how long evacuation waits for unattached volumes to attach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                type: object
               internalTLS:
                 description: |-
                   InternalTLS configures secure communication for the LINSTOR Satellite.
