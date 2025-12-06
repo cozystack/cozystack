@@ -74,6 +74,18 @@ releases:
   namespace: cozy-system
   dependsOn: [cozystack-controller,cilium,cert-manager]
 
+- name: cozystack-resource-definition-crd
+  releaseName: cozystack-resource-definition-crd
+  chart: cozystack-resource-definition-crd
+  namespace: cozy-system
+  dependsOn: [cilium]
+
+- name: cozystack-resource-definitions
+  releaseName: cozystack-resource-definitions
+  chart: cozystack-resource-definitions
+  namespace: cozy-system
+  dependsOn: [cilium,cozystack-controller,cozystack-resource-definition-crd]
+
 - name: cert-manager
   releaseName: cert-manager
   chart: cozy-cert-manager
@@ -84,7 +96,6 @@ releases:
   releaseName: cert-manager-issuers
   chart: cozy-cert-manager-issuers
   namespace: cozy-cert-manager
-  optional: true
   dependsOn: [cilium,cert-manager]
 
 - name: prometheus-operator-crds
@@ -204,7 +215,7 @@ releases:
   releaseName: snapshot-controller
   chart: cozy-snapshot-controller
   namespace: cozy-snapshot-controller
-  dependsOn: [cilium]
+  dependsOn: [cilium,cert-manager-issuers]
 
 - name: objectstorage-controller
   releaseName: objectstorage-controller
