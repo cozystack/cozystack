@@ -56,6 +56,28 @@
 {{- end -}}
 
 {{- /*
+Convert Kubernetes resource quantity to float for comparison.
+Supports both base-2 (Ki, Mi, Gi, Ti, Pi, Ei) and base-10 (k, M, G, T, P, E) units.
+Returns a float value suitable for numeric comparison (e.g., with gt, lt operators).
+Example: {{ include "cozy-lib.resources.quantity" "10Gi" }}
+*/}}
+{{- define "cozy-lib.resources.quantity" -}}
+    {{- $value := . -}}
+    {{- $unit := 1.0 -}}
+    {{- if typeIs "string" . -}}
+        {{- $base2 := dict "Ki" 0x1p10 "Mi" 0x1p20 "Gi" 0x1p30 "Ti" 0x1p40 "Pi" 0x1p50 "Ei" 0x1p60 -}}
+        {{- $base10 := dict "m" 1e-3 "k" 1e3 "M" 1e6 "G" 1e9 "T" 1e12 "P" 1e15 "E" 1e18 -}}
+        {{- range $k, $v := merge $base2 $base10 -}}
+            {{- if hasSuffix $k $ -}}
+                {{- $value = trimSuffix $k $ -}}
+                {{- $unit = $v -}}
+            {{- end -}}
+        {{- end -}}
+    {{- end -}}
+    {{- mulf (float64 $value) $unit -}}
+{{- end -}}
+
+{{- /*
   A sanitized resource map is a dict with resource-name to resource-quantity.
   All resources are returned with equal **requests** and **limits**, except for
   **cpu**, whose *request* is reduced by the CPU-allocation ratio obtained from
