@@ -112,6 +112,12 @@ releases:
       disableTelemetry: true
   {{- end }}
 
+- name: backup-controller
+  releaseName: backup-controller
+  chart: cozy-backup-controller
+  namespace: cozy-backup-controller
+  dependsOn: [cilium,kubeovn]
+
 - name: lineage-controller-webhook
   releaseName: lineage-controller-webhook
   chart: cozy-lineage-controller-webhook
