@@ -1,0 +1,15 @@
+#!/bin/sh
+# Migration 21 --> 22
+
+set -euo pipefail
+
+# force upgrade multus due to https://github.com/k8snetworkplumbingwg/multus-cni/pull/1445
+kubectl -n cozy-multus get hr multus && {
+	flux -n cozy-multus reconcile hr multus --with-source && \
+	kubectl -n cozy-multus rollout status ds/cozy-multus --timeout=5m || \
+	true
+} || true
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=22 --dry-run=client -o yaml | kubectl apply -f-
