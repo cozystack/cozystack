@@ -9,41 +9,46 @@ func TestBuildMultilineStringSchema(t *testing.T) {
 	// Test OpenAPI schema with various field types
 	openAPISchema := `{
 		"properties": {
-			"simpleString": {
-				"type": "string",
-				"description": "A simple string field"
-			},
-			"stringWithEnum": {
-				"type": "string",
-				"enum": ["option1", "option2"],
-				"description": "String with enum should be skipped"
-			},
-			"numberField": {
-				"type": "number",
-				"description": "Number field should be skipped"
-			},
-			"nestedObject": {
+			"spec": {
 				"type": "object",
 				"properties": {
-					"nestedString": {
+					"simpleString": {
 						"type": "string",
-						"description": "Nested string should get multilineString"
+						"description": "A simple string field"
 					},
-					"nestedStringWithEnum": {
+					"stringWithEnum": {
 						"type": "string",
-						"enum": ["a", "b"],
-						"description": "Nested string with enum should be skipped"
-					}
-				}
-			},
-			"arrayOfObjects": {
-				"type": "array",
-				"items": {
-					"type": "object",
-					"properties": {
-						"itemString": {
-							"type": "string",
-							"description": "String in array item"
+						"enum": ["option1", "option2"],
+						"description": "String with enum should be skipped"
+					},
+					"numberField": {
+						"type": "number",
+						"description": "Number field should be skipped"
+					},
+					"nestedObject": {
+						"type": "object",
+						"properties": {
+							"nestedString": {
+								"type": "string",
+								"description": "Nested string should get multilineString"
+							},
+							"nestedStringWithEnum": {
+								"type": "string",
+								"enum": ["a", "b"],
+								"description": "Nested string with enum should be skipped"
+							}
+						}
+					},
+					"arrayOfObjects": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"properties": {
+								"itemString": {
+									"type": "string",
+									"description": "String in array item"
+								}
+							}
 						}
 					}
 				}
@@ -70,33 +75,44 @@ func TestBuildMultilineStringSchema(t *testing.T) {
 		t.Fatal("schema.properties is not a map")
 	}
 
-	// Check simpleString
-	simpleString, ok := props["simpleString"].(map[string]any)
+	// Check spec property exists
+	spec, ok := props["spec"].(map[string]any)
 	if !ok {
-		t.Fatal("simpleString not found in properties")
+		t.Fatal("spec not found in properties")
+	}
+
+	specProps, ok := spec["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("spec.properties is not a map")
+	}
+
+	// Check simpleString
+	simpleString, ok := specProps["simpleString"].(map[string]any)
+	if !ok {
+		t.Fatal("simpleString not found in spec.properties")
 	}
 	if simpleString["type"] != "multilineString" {
 		t.Errorf("simpleString should have type multilineString, got %v", simpleString["type"])
 	}
 
 	// Check stringWithEnum should not be present (or should not have multilineString)
-	if stringWithEnum, ok := props["stringWithEnum"].(map[string]any); ok {
+	if stringWithEnum, ok := specProps["stringWithEnum"].(map[string]any); ok {
 		if stringWithEnum["type"] == "multilineString" {
 			t.Error("stringWithEnum should not have multilineString type")
 		}
 	}
 
 	// Check numberField should not be present
-	if numberField, ok := props["numberField"].(map[string]any); ok {
+	if numberField, ok := specProps["numberField"].(map[string]any); ok {
 		if numberField["type"] != nil {
 			t.Error("numberField should not have any type override")
 		}
 	}
 
 	// Check nested object
-	nestedObject, ok := props["nestedObject"].(map[string]any)
+	nestedObject, ok := specProps["nestedObject"].(map[string]any)
 	if !ok {
-		t.Fatal("nestedObject not found in properties")
+		t.Fatal("nestedObject not found in spec.properties")
 	}
 	nestedProps, ok := nestedObject["properties"].(map[string]any)
 	if !ok {
@@ -113,9 +129,9 @@ func TestBuildMultilineStringSchema(t *testing.T) {
 	}
 
 	// Check array of objects
-	arrayOfObjects, ok := props["arrayOfObjects"].(map[string]any)
+	arrayOfObjects, ok := specProps["arrayOfObjects"].(map[string]any)
 	if !ok {
-		t.Fatal("arrayOfObjects not found in properties")
+		t.Fatal("arrayOfObjects not found in spec.properties")
 	}
 	items, ok := arrayOfObjects["items"].(map[string]any)
 	if !ok {
