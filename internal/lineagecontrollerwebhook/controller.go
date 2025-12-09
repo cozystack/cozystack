@@ -24,25 +24,15 @@ func (c *LineageControllerWebhook) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	cfg := &runtimeConfig{
-		chartAppMap: make(map[chartRef]*cozyv1alpha1.CozystackResourceDefinition),
-		appCRDMap:   make(map[appRef]*cozyv1alpha1.CozystackResourceDefinition),
+		appCRDMap: make(map[appRef]*cozyv1alpha1.CozystackResourceDefinition),
 	}
 	for _, crd := range crds.Items {
-		chRef := chartRef{
-			crd.Spec.Release.Chart.SourceRef.Name,
-			crd.Spec.Release.Chart.Name,
-		}
 		appRef := appRef{
 			"apps.cozystack.io",
 			crd.Spec.Application.Kind,
 		}
 
 		newRef := crd
-		if _, exists := cfg.chartAppMap[chRef]; exists {
-			l.Info("duplicate chart mapping detected; ignoring subsequent entry", "key", chRef)
-		} else {
-			cfg.chartAppMap[chRef] = &newRef
-		}
 		if _, exists := cfg.appCRDMap[appRef]; exists {
 			l.Info("duplicate app mapping detected; ignoring subsequent entry", "key", appRef)
 		} else {
