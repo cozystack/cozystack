@@ -120,7 +120,7 @@ jobs:
       - name: Create back‑port PR
         id: backport
         if: steps.target.outcome == 'success'
-        uses: korthout/backport-action@v3
+        uses: korthout/backport-action@v3.2.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           label_pattern: '' # don't read labels for targets
