@@ -23,10 +23,10 @@ data:
         tag: v1.32.3
         image: piraeus-server
       linstor-csi:
-        tag: v1.10.2
+        tag: v1.10.3
         image: piraeus-csi
       nfs-server:
-        tag: v1.10.2
+        tag: v1.10.3
         image: piraeus-csi-nfs-server
       drbd-reactor:
         tag: v1.10.0
@@ -44,7 +44,7 @@ data:
         tag: v1.3.0
         image: linstor-affinity-controller
       drbd-module-loader:
-        tag: v9.2.15
+        tag: v9.2.16
         # The special "match" attribute is used to select an image based on the node's reported OS.
         # The operator will first check the k8s node's ".status.nodeInfo.osImage" field, and compare it against the list
         # here. If one matches, that specific image name will be used instead of the fallback image.
@@ -99,7 +99,7 @@ data:
         tag: v2.17.0
         image: livenessprobe
       csi-provisioner:
-        tag: v6.0.0
+        tag: v6.1.0
         image: csi-provisioner
       csi-snapshotter:
         tag: v8.4.0
