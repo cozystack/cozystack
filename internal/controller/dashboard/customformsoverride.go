@@ -105,8 +105,26 @@ func buildMultilineStringSchema(openAPISchema string) (map[string]any, error) {
 		"properties": map[string]any{},
 	}
 
+	// Check if there's a spec property
+	specProp, ok := props["spec"].(map[string]any)
+	if !ok {
+		return map[string]any{}, nil
+	}
+
+	specProps, ok := specProp["properties"].(map[string]any)
+	if !ok {
+		return map[string]any{}, nil
+	}
+
+	// Create spec.properties structure in schema
+	schemaProps := schema["properties"].(map[string]any)
+	specSchema := map[string]any{
+		"properties": map[string]any{},
+	}
+	schemaProps["spec"] = specSchema
+
 	// Process spec properties recursively
-	processSpecProperties(props, schema["properties"].(map[string]any))
+	processSpecProperties(specProps, specSchema["properties"].(map[string]any))
 
 	return schema, nil
 }
