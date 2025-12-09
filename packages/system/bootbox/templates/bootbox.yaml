@@ -5,6 +5,9 @@ metadata:
     helm.sh/resource-policy: keep
   labels:
     cozystack.io/ui: "true"
+    apps.cozystack.io/application.kind: BootBox
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: bootbox
   name: bootbox
   namespace: tenant-root
 spec:
