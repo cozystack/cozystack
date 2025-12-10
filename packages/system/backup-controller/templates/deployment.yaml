@@ -37,7 +37,7 @@ spec:
         {{- end }}
         ports:
         - name: metrics
-          containerPort: {{ split ":" .Values.backupController.metrics.bindAddress | mustLast }}
+          containerPort: {{ splitList ":" .Values.backupController.metrics.bindAddress | mustLast }}
         - name: health
           containerPort: 8081
         readinessProbe:
