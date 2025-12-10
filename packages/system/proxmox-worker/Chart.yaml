@@ -1,0 +1,19 @@
+apiVersion: v2
+name: proxmox-worker
+description: A Helm chart for adding Proxmox server as Kubernetes worker node via kubeadm
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/your-org/cozystack
+sources:
+  - https://github.com/your-org/cozystack
+maintainers:
+  - name: CozyStack Team
+    email: team@cozystack.io
+keywords:
+  - proxmox
+  - kubernetes
+  - kubeadm
+  - worker
+  - node
+dependencies: []
