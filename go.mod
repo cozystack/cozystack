@@ -119,3 +119,6 @@ require (
 	sigs.k8s.io/json v0.0.0-20241010143419-9aa6b5e7a4b3 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
+
+// See: issues.k8s.io/135537
+replace k8s.io/apimachinery => github.com/cozystack/apimachinery v0.0.0-20251201201312-18e522a87614
