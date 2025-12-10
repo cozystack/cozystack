@@ -26,7 +26,6 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	fields "k8s.io/apimachinery/pkg/fields"
 	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -147,25 +146,8 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 		return nil, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Explicitly set apiVersion and kind for TenantModule
-	convertedModule.TypeMeta = metav1.TypeMeta{
-		APIVersion: "core.cozystack.io/v1alpha1",
-		Kind:       r.kindName,
-	}
-
-	// Convert TenantModule to unstructured format
-	unstructuredModule, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&convertedModule)
-	if err != nil {
-		klog.Errorf("Failed to convert TenantModule to unstructured for resource %s: %v", name, err)
-		return nil, fmt.Errorf("failed to convert TenantModule to unstructured: %v", err)
-	}
-
-	// Explicitly set apiVersion and kind in unstructured object
-	unstructuredModule["apiVersion"] = "core.cozystack.io/v1alpha1"
-	unstructuredModule["kind"] = r.kindName
-
-	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s to unstructured", name, r.gvr.Resource)
-	return &unstructured.Unstructured{Object: unstructuredModule}, nil
+	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s", name, r.gvr.Resource)
+	return &convertedModule, nil
 }
 
 // List retrieves a list of TenantModules by converting HelmReleases
@@ -245,8 +227,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
-	// Initialize unstructured items array
-	items := make([]unstructured.Unstructured, 0)
+	// Initialize TenantModule items array
+	items := make([]corev1alpha1.TenantModule, 0, len(hrList.Items))
 
 	// Iterate over HelmReleases and convert to TenantModules
 	for i := range hrList.Items {
@@ -294,19 +276,15 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			}
 		}
 
-		// Convert TenantModule to unstructured
-		unstructuredModule, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&module)
-		if err != nil {
-			klog.Errorf("Error converting TenantModule %s to unstructured: %v", module.Name, err)
-			continue
-		}
-		items = append(items, unstructured.Unstructured{Object: unstructuredModule})
+		items = append(items, module)
 	}
 
-	// Explicitly set apiVersion and kind in unstructured object
-	moduleList := &unstructured.UnstructuredList{}
-	moduleList.SetAPIVersion("core.cozystack.io/v1alpha1")
-	moduleList.SetKind(r.kindName + "List")
+	// Create TenantModuleList with proper kind
+	moduleList := &corev1alpha1.TenantModuleList{}
+	moduleList.TypeMeta = metav1.TypeMeta{
+		APIVersion: "core.cozystack.io/v1alpha1",
+		Kind:       r.kindName + "List",
+	}
 	moduleList.SetResourceVersion(hrList.GetResourceVersion())
 	moduleList.Items = items
 
@@ -455,17 +433,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					}
 				}
 
-				// Convert TenantModule to unstructured
-				unstructuredModule, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&module)
-				if err != nil {
-					klog.Errorf("Failed to convert TenantModule to unstructured: %v", err)
-					continue
-				}
-
 				// Create watch event with TenantModule object
 				moduleEvent := watch.Event{
 					Type:   event.Type,
-					Object: &unstructured.Unstructured{Object: unstructuredModule},
+					Object: &module,
 				}
 
 				// Send event to custom watcher
@@ -620,27 +591,11 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	var table metav1.Table
 
 	switch obj := object.(type) {
-	case *unstructured.UnstructuredList:
-		modules := make([]corev1alpha1.TenantModule, 0, len(obj.Items))
-		for _, u := range obj.Items {
-			var m corev1alpha1.TenantModule
-			err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &m)
-			if err != nil {
-				klog.Errorf("Failed to convert Unstructured to TenantModule: %v", err)
-				continue
-			}
-			modules = append(modules, m)
-		}
-		table = r.buildTableFromTenantModules(modules)
-		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
-	case *unstructured.Unstructured:
-		var module corev1alpha1.TenantModule
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &module)
-		if err != nil {
-			klog.Errorf("Failed to convert Unstructured to TenantModule: %v", err)
-			return nil, fmt.Errorf("failed to convert Unstructured to TenantModule: %v", err)
-		}
-		table = r.buildTableFromTenantModule(module)
+	case *corev1alpha1.TenantModuleList:
+		table = r.buildTableFromTenantModules(obj.Items)
+		table.ListMeta.ResourceVersion = obj.ListMeta.ResourceVersion
+	case *corev1alpha1.TenantModule:
+		table = r.buildTableFromTenantModule(*obj)
 		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
 	default:
 		resource := schema.GroupResource{}
@@ -680,10 +635,11 @@ func (r *REST) buildTableFromTenantModules(modules []corev1alpha1.TenantModule) 
 	}
 	now := time.Now()
 
-	for _, module := range modules {
+	for i := range modules {
+		module := &modules[i]
 		row := metav1.TableRow{
 			Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
-			Object: runtime.RawExtension{Object: &module},
+			Object: runtime.RawExtension{Object: module},
 		}
 		table.Rows = append(table.Rows, row)
 	}
@@ -704,9 +660,10 @@ func (r *REST) buildTableFromTenantModule(module corev1alpha1.TenantModule) meta
 	}
 	now := time.Now()
 
+	m := module
 	row := metav1.TableRow{
 		Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
-		Object: runtime.RawExtension{Object: &module},
+		Object: runtime.RawExtension{Object: &m},
 	}
 	table.Rows = append(table.Rows, row)
 
@@ -751,12 +708,22 @@ func (r *REST) Destroy() {
 
 // New creates a new instance of TenantModule
 func (r *REST) New() runtime.Object {
-	return &corev1alpha1.TenantModule{}
+	obj := &corev1alpha1.TenantModule{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName,
+	}
+	return obj
 }
 
 // NewList returns an empty list of TenantModule objects
 func (r *REST) NewList() runtime.Object {
-	return &corev1alpha1.TenantModuleList{}
+	obj := &corev1alpha1.TenantModuleList{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName + "List",
+	}
+	return obj
 }
 
 // Kind returns the resource kind used for API discovery
