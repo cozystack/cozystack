@@ -69,3 +69,36 @@ Generate a stable UUID for cloud-init re-initialization upon upgrade.
 {{- end }}
 {{- $uuid }}
 {{- end }}
+
+{{/*
+Node Affinity for Windows VMs
+*/}}
+{{- define "virtual-machine.nodeAffinity" -}}
+{{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" -}}
+{{- if $configMap -}}
+{{- $dedicatedNodesForWindowsVMs := get $configMap.data "dedicatedNodesForWindowsVMs" -}}
+{{- if eq $dedicatedNodesForWindowsVMs "true" -}}
+{{- $isWindows := hasPrefix "windows" (toString .Values.instanceProfile) -}}
+affinity:
+  nodeAffinity:
+    {{- if $isWindows }}
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: scheduling.cozystack.io/vm-windows
+          operator: In
+          values:
+          - "true"
+    {{- else }}
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      preference:
+        matchExpressions:
+        - key: scheduling.cozystack.io/vm-windows
+          operator: NotIn
+          values:
+          - "true"
+    {{- end }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
