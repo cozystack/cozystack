@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cozystack-assets
+  namespace: cozy-system
+  labels:
+    app: cozystack-assets
+spec:
+  serviceName: cozystack-assets
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cozystack-assets
+  template:
+    metadata:
+      labels:
+        app: cozystack-assets
+    spec:
+      hostNetwork: true
+      containers:
+      - name: assets-server
+        image: "{{ .Values.assets.image }}"
+        args:
+        - "-dir=/cozystack/assets"
+        - "-address=:8123"
+        ports:
+        - name: http
+          containerPort: 8123
+          hostPort: 8123
+      tolerations:
+      - operator: Exists
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-assets-reader
+  namespace: cozy-system
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods/proxy
+    resourceNames:
+      - cozystack-assets-0
+    verbs:
+      - get
+      - create
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-assets-reader
+  namespace: cozy-system
+subjects:
+  - kind: User
+    name: cozystack-assets-reader
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: cozystack-assets-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozystack-assets
+  namespace: cozy-system
+spec:
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8123
+  selector:
+    app: cozystack-assets
+  type: ClusterIP

@@ -1,6 +1,8 @@
 NAME=platform
 NAMESPACE=cozy-system
 
+include ../../../scripts/common-envs.mk
+
 show:
 	cozypkg show -n $(NAMESPACE) $(NAME) --plain
 
@@ -18,3 +20,15 @@ namespaces-apply:
 
 diff:
 	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f-
+
+image: image-assets
+image-assets:
+	docker buildx build -f images/cozystack-assets/Dockerfile ../../.. \
+		--tag $(REGISTRY)/cozystack-assets:$(call settag,$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/cozystack-assets:latest \
+		--cache-to type=inline \
+		--metadata-file images/cozystack-assets.json \
+		$(BUILDX_ARGS)
+	IMAGE="$(REGISTRY)/cozystack-assets:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/cozystack-assets.json -o json -r)" \
+		yq -i '.assets.image = strenv(IMAGE)' values.yaml
+	rm -f images/cozystack-assets.json

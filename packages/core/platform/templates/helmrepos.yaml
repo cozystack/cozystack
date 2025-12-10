@@ -8,7 +8,7 @@ metadata:
     cozystack.io/repository: system
 spec:
   interval: 5m0s
-  url: http://cozystack.cozy-system.svc/repos/system
+  url: http://cozystack-assets.cozy-system.svc/repos/system
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: HelmRepository
@@ -20,7 +20,7 @@ metadata:
     cozystack.io/repository: apps
 spec:
   interval: 5m0s
-  url: http://cozystack.cozy-system.svc/repos/apps
+  url: http://cozystack-assets.cozy-system.svc/repos/apps
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: HelmRepository
@@ -31,4 +31,4 @@ metadata:
     cozystack.io/repository: extra
 spec:
   interval: 5m0s
-  url: http://cozystack.cozy-system.svc/repos/extra
+  url: http://cozystack-assets.cozy-system.svc/repos/extra
