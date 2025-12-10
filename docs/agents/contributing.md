@@ -155,6 +155,91 @@ git diff
 
 The user will commit and push when ready.
 
+## Code Review Comments
+
+When asked to fix code review comments, **always work only with unresolved (open) comments**. Resolved comments should be ignored as they have already been addressed.
+
+### Getting Unresolved Review Comments
+
+Use GitHub GraphQL API to fetch only unresolved review comments from a pull request:
+
+```bash
+gh api graphql -F owner=cozystack -F repo=cozystack -F pr=<PR_NUMBER> -f query='
+query($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          comments(first: 100) {
+            nodes {
+              id
+              path
+              line
+              author { login }
+              bodyText
+              url
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[]'
+```
+
+### Filtering for Unresolved Comments
+
+The key filter is `select(.isResolved == false)` which ensures only unresolved review threads are processed. Each thread can contain multiple comments, but if the thread is resolved, all its comments should be ignored.
+
+### Working with Review Comments
+
+1. **Fetch unresolved comments** using the GraphQL query above
+2. **Parse the results** to identify:
+   - File path (`path`)
+   - Line number (`line` or `originalLine`)
+   - Comment text (`bodyText`)
+   - Author (`author.login`)
+3. **Address each unresolved comment** by:
+   - Locating the relevant code section
+   - Making the requested changes
+   - Ensuring the fix addresses the concern raised
+4. **Do NOT process resolved comments** - they have already been handled
+
+### Example: Compact List of Unresolved Comments
+
+For a quick overview of unresolved comments:
+
+```bash
+gh api graphql -F owner=cozystack -F repo=cozystack -F pr=<PR_NUMBER> -f query='
+query($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          comments(first: 100) {
+            nodes {
+              path
+              line
+              author { login }
+              bodyText
+            }
+          }
+        }
+      }
+    }
+  }
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | "\(.path):\(.line // "N/A") - \(.author.login): \(.bodyText[:150])"'
+```
+
+### Important Notes
+
+- **REST API limitation**: The REST endpoint `/pulls/{pr}/reviews` returns review summaries, not individual review comments. Use GraphQL API for accessing `reviewThreads` with `isResolved` status.
+- **Thread-based resolution**: Comments are organized in threads. If a thread is resolved (`isResolved: true`), ignore all comments in that thread.
+- **Always filter**: Never process comments from resolved threads, even if they appear in the results.
+
 ### Example Workflow
 
 ```bash
