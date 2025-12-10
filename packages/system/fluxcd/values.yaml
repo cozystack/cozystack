@@ -9,6 +9,7 @@ flux-instance:
       registry: ghcr.io/fluxcd
     components:
       - source-controller
+      - source-watcher
       - kustomize-controller
       - helm-controller
       - notification-controller
@@ -38,12 +39,16 @@ flux-instance:
             - op: add
               path: /spec/template/spec/containers/0/args/-
               value: --storage-adv-addr=source-controller.cozy-fluxcd.svc
-            - op: add
-              path: /spec/template/spec/containers/0/args/-
-              value: --events-addr=http://notification-controller.cozy-fluxcd.svc/
         - target:
             kind: Deployment
-            name: (kustomize-controller|helm-controller|image-reflector-controller|image-automation-controller)
+            name: source-watcher
+          patch: |
+            - op: add
+              path: /spec/template/spec/containers/0/args/-
+              value: --storage-adv-addr=source-watcher.cozy-fluxcd.svc
+        - target:
+            kind: Deployment
+            name: (kustomize-controller|helm-controller|image-reflector-controller|image-automation-controller|source-controller|source-watcher)
           patch: |
             - op: add
               path: /spec/template/spec/containers/0/args/-
