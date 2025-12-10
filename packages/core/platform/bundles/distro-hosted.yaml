@@ -2,24 +2,6 @@
 {{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
 
 releases:
-- name: fluxcd-operator
-  releaseName: fluxcd-operator
-  chart: cozy-fluxcd-operator
-  namespace: cozy-fluxcd
-  privileged: true
-  dependsOn: []
-
-- name: fluxcd
-  releaseName: fluxcd
-  chart: cozy-fluxcd
-  namespace: cozy-fluxcd
-  dependsOn: [fluxcd-operator]
-  values:
-    flux-instance:
-      instance:
-        cluster:
-          domain: {{ $clusterDomain }}
-
 - name: cert-manager-crds
   releaseName: cert-manager-crds
   chart: cozy-cert-manager-crds

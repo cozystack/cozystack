@@ -1,0 +1,10 @@
+#!/bin/sh
+# Migration 21 --> 22
+
+set -euo pipefail
+
+kubectl delete hr -n cozy-fluxcd fluxcd --ignore-not-found
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=22 --dry-run=client -o yaml | kubectl apply -f-

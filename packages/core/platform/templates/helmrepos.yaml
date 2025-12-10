@@ -8,7 +8,9 @@ metadata:
     cozystack.io/repository: system
 spec:
   interval: 5m0s
-  url: http://cozystack-assets.cozy-system.svc/repos/system
+  url: https://{{ include "cozystack.kubernetesAPIEndpoint" . }}/api/v1/namespaces/cozy-system/pods/cozystack-assets-0/proxy/repos/system
+  certSecretRef:
+    name: cozystack-assets-tls
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: HelmRepository
@@ -20,7 +22,9 @@ metadata:
     cozystack.io/repository: apps
 spec:
   interval: 5m0s
-  url: http://cozystack-assets.cozy-system.svc/repos/apps
+  url: https://{{ include "cozystack.kubernetesAPIEndpoint" . }}/api/v1/namespaces/cozy-system/pods/cozystack-assets-0/proxy/repos/apps
+  certSecretRef:
+    name: cozystack-assets-tls
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: HelmRepository
@@ -31,4 +35,6 @@ metadata:
     cozystack.io/repository: extra
 spec:
   interval: 5m0s
-  url: http://cozystack-assets.cozy-system.svc/repos/extra
+  url: https://{{ include "cozystack.kubernetesAPIEndpoint" . }}/api/v1/namespaces/cozy-system/pods/cozystack-assets-0/proxy/repos/extra
+  certSecretRef:
+    name: cozystack-assets-tls

@@ -17,6 +17,36 @@ Get IP-addresses of master nodes
 {{ join "," $ips }}
 {{- end -}}
 
+{{/*
+Get Kubernetes API Endpoint from cozystack deployment
+Returns host:port format
+*/}}
+{{- define "cozystack.kubernetesAPIEndpoint" -}}
+{{- $cozyDeployment := lookup "apps/v1" "Deployment" "cozy-system" "cozystack" }}
+{{- $cozyContainers := dig "spec" "template" "spec" "containers" list $cozyDeployment }}
+{{- $kubernetesServiceHost := "" }}
+{{- $kubernetesServicePort := "" }}
+{{- range $cozyContainers }}
+{{- if eq .name "cozystack" }}
+{{- range .env }}
+{{- if eq .name "KUBERNETES_SERVICE_HOST" }}
+{{- $kubernetesServiceHost = .value }}
+{{- end }}
+{{- if eq .name "KUBERNETES_SERVICE_PORT" }}
+{{- $kubernetesServicePort = .value }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if eq $kubernetesServiceHost "" }}
+{{- $kubernetesServiceHost = "kubernetes.default.svc" }}
+{{- end }}
+{{- if eq $kubernetesServicePort "" }}
+{{- $kubernetesServicePort = "443" }}
+{{- end }}
+{{- printf "%s:%s" $kubernetesServiceHost $kubernetesServicePort }}
+{{- end -}}
+
 {{- define "cozystack.defaultDashboardValues" -}}
 kubeapps:
 {{- if .Capabilities.APIVersions.Has "source.toolkit.fluxcd.io/v1" }}

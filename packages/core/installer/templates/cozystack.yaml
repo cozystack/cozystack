@@ -54,6 +54,8 @@ spec:
         env:
         - name: KUBERNETES_SERVICE_HOST
           value: localhost
+        - name: INSTALL_FLUX
+          value: "true"
         - name: KUBERNETES_SERVICE_PORT
           value: "7445"
         - name: K8S_AWAIT_ELECTION_ENABLED
