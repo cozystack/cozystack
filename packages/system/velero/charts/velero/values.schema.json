@@ -293,8 +293,6 @@
             },
             "required": [
                 "enabled",
-                "scrapeInterval",
-                "scrapeTimeout",
                 "service",
                 "podAnnotations",
                 "serviceMonitor",
