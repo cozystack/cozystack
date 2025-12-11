@@ -136,6 +136,8 @@ spec:
             {{- if .Values.alerta.alerts.slack.url }}
             - name: "SLACK_WEBHOOK_URL"
               value: "{{ .Values.alerta.alerts.slack.url }}"
+            - name: SLACK_SEVERITY_FILTER
+              value: "{{ .Values.alerta.alerts.slack.severityFilter }}"
             {{- end }}
 
           ports:
