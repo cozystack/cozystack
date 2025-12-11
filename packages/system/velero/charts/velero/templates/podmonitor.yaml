@@ -32,13 +32,22 @@ spec:
     {{- end }}
   podMetricsEndpoints:
   - port: http-monitoring
-    interval: {{ .Values.metrics.scrapeInterval }}
-    scrapeTimeout: {{ .Values.metrics.scrapeTimeout }}
-    {{- if .Values.metrics.nodeAgentPodMonitor.scheme }}
-    scheme: {{ .Values.metrics.nodeAgentPodMonitor.scheme }}
+    {{- with .Values.metrics.scrapeInterval }}
+    interval: {{ . }}
     {{- end }}
-    {{- if .Values.metrics.nodeAgentPodMonitor.tlsConfig }}
-    tlsConfig:
-      {{- toYaml .Values.metrics.nodeAgentPodMonitor.tlsConfig | nindent 6 }}
+    {{- with .Values.metrics.scrapeTimeout }}
+    scrapeTimeout: {{ . }}
+    {{- end }}
+    {{- with .Values.metrics.nodeAgentPodMonitor.scheme }}
+    scheme: {{ . }}
+    {{- end }}
+    {{- with .Values.metrics.nodeAgentPodMonitor.metricRelabelings }}
+    metricRelabelings: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.metrics.nodeAgentPodMonitor.relabelings }}
+    relabelings: {{ toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.metrics.nodeAgentPodMonitor.tlsConfig }}
+    tlsConfig: {{ toYaml . | nindent 6 }}
     {{- end }}
 {{- end }}
