@@ -24,6 +24,11 @@
                   "description": "Configuration uri for Slack alerts.",
                   "type": "string",
                   "default": ""
+                },
+                "severityFilter": {
+                  "description": "List of severities to filter for Slack alerts (e.g. \"critical,major\").",
+                  "type": "string",
+                  "default": ""
                 }
               }
             },

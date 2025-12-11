@@ -103,6 +103,7 @@ logsStorages:
 
 ## @typedef {struct} SlackAlerts - Slack alert configuration.
 ## @field {string} url - Configuration uri for Slack alerts.
+## @field {string} [severityFilter] - List of severities to filter for Slack alerts (e.g. "critical,major").
 
 ## @typedef {struct} Alerts - Alert routing configuration.
 ## @field {TelegramAlerts} [telegram] - Configuration for Telegram alerts.
@@ -132,6 +133,7 @@ alerta:
       disabledSeverity: ""
     slack:
       url: ""
+      severityFilter: ""
 ##
 ## @section Grafana configuration
 ##
