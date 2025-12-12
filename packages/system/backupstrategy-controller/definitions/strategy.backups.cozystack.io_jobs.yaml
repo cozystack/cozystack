@@ -41,12 +41,18 @@ spec:
             properties:
               template:
                 description: |-
-                  Template holds a PodTemplateSpec with the right shape to
-                  run a single pod to completion and create a tarball with
-                  a given apps data. Helm-like Go templates are supported.
-                  The values of the source application are available under
-                  `.Values`. `.Release.Name` and `.Release.Namespace` are
-                  also exported.
+                  Template holds a PodTemplateSpec with the right shape to run a single
+                  pod to completion and create (or restore) a backup of a given app's
+                  data. Helm-like Go templates are supported in every string field and
+                  are rendered against the following context:
+                    - `.Application` — the live application object (e.g.
+                      `.Application.spec.replicas`).
+                    - `.Release.Name` and `.Release.Namespace` — the application's name
+                      and namespace.
+                    - `.Mode` — `"backup"` or `"restore"`, identifying the run.
+                    - `.Parameters` — the resolved BackupClass strategy parameters.
+                    - `.Backup` — only on restore runs: `.Backup.Name`, `.Backup.Namespace`
+                      and `.Backup.ApplicationRef` describing the source backup.
                 properties:
                   metadata:
                     description: |-
