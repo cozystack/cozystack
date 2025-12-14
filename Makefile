@@ -26,6 +26,7 @@ build: build-deps
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
 	make -C packages/core/testing image
+	make -C packages/core/talos image
 	make -C packages/core/platform image
 	make -C packages/core/installer image
 	make manifests
@@ -41,7 +42,7 @@ manifests:
 	(cd packages/core/installer/; helm template -n cozy-installer installer .) > _out/assets/cozystack-installer.yaml
 
 assets:
-	make -C packages/core/installer assets
+	make -C packages/core/talos assets
 
 test:
 	make -C packages/core/testing apply
