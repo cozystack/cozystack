@@ -8,7 +8,18 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
+
+func init() {
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion,
+			&Plan{},
+			&PlanList{},
+		)
+		return nil
+	})
+}
 
 type PlanScheduleType string
 
@@ -22,8 +33,13 @@ const (
 	PlanConditionError = "Error"
 )
 
+// The field indexing on applicationRef will be needed later to display per-app backup resources.
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
 
 // Plan describes the schedule, method and storage location for the
 // backup of a given target application.

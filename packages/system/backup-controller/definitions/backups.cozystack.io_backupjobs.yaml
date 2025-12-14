@@ -227,5 +227,9 @@ spec:
                 type: string
             type: object
         type: object
+    selectableFields:
+    - jsonPath: .spec.applicationRef.apiGroup
+    - jsonPath: .spec.applicationRef.kind
+    - jsonPath: .spec.applicationRef.name
     served: true
     storage: true

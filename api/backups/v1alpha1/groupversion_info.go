@@ -26,28 +26,12 @@ import (
 )
 
 var (
-	// GroupVersion is group version used to register these objects.
-	GroupVersion = schema.GroupVersion{Group: "backups.cozystack.io", Version: "v1alpha1"}
-
-	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.
-	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
-
-	// AddToScheme adds the types in this group-version to the given scheme.
-	AddToScheme = SchemeBuilder.AddToScheme
+	GroupVersion  = schema.GroupVersion{Group: "backups.cozystack.io", Version: "v1alpha1"}
+	SchemeBuilder = runtime.NewSchemeBuilder(addGroupVersion)
+	AddToScheme   = SchemeBuilder.AddToScheme
 )
 
-func addKnownTypes(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(
-		GroupVersion,
-		&Plan{},
-		&PlanList{},
-		&BackupJob{},
-		&BackupJobList{},
-		&Backup{},
-		&BackupList{},
-		&RestoreJob{},
-		&RestoreJobList{},
-	)
+func addGroupVersion(scheme *runtime.Scheme) error {
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil
 }
