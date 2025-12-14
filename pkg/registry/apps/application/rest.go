@@ -32,6 +32,7 @@ import (
 	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -64,6 +65,13 @@ var (
 const (
 	LabelPrefix      = "apps.cozystack.io-"
 	AnnotationPrefix = "apps.cozystack.io-"
+)
+
+// Application label keys
+const (
+	ApplicationKindLabel  = "apps.cozystack.io/application.kind"
+	ApplicationGroupLabel = "apps.cozystack.io/application.group"
+	ApplicationNameLabel  = "apps.cozystack.io/application.name"
 )
 
 // Define the GroupVersionResource for HelmRelease
@@ -157,6 +165,13 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
 	// Merge user labels with prefix
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if helmRelease.Labels == nil {
+		helmRelease.Labels = make(map[string]string)
+	}
+	helmRelease.Labels[ApplicationKindLabel] = r.kindName
+	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
+	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
@@ -208,9 +223,10 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 		return nil, err
 	}
 
-	// Check if HelmRelease meets the required chartName and sourceRef criteria
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmReleaseName)
+	// Check if HelmRelease has required labels
+	if helmRelease.Labels == nil || helmRelease.Labels[ApplicationKindLabel] != r.kindName ||
+		helmRelease.Labels[ApplicationGroupLabel] != r.gvk.Group {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return a NotFound error for the Application resource
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
@@ -266,6 +282,19 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// Process label.selector
+	// Always add application metadata label requirements
+	appKindReq, err := labels.NewRequirement(ApplicationKindLabel, selection.Equals, []string{r.kindName})
+	if err != nil {
+		klog.Errorf("Error creating application kind label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application kind label requirement: %v", err)
+	}
+	appGroupReq, err := labels.NewRequirement(ApplicationGroupLabel, selection.Equals, []string{r.gvk.Group})
+	if err != nil {
+		klog.Errorf("Error creating application group label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application group label requirement: %v", err)
+	}
+	labelRequirements := []labels.Requirement{*appKindReq, *appGroupReq}
+
 	if options.LabelSelector != nil {
 		ls := options.LabelSelector.String()
 		parsedLabels, err := labels.Parse(ls)
@@ -285,9 +314,12 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 				}
 				prefixedReqs = append(prefixedReqs, *prefixedReq)
 			}
-			helmLabelSelector = labels.NewSelector().Add(prefixedReqs...).String()
+			labelRequirements = append(labelRequirements, prefixedReqs...)
 		}
 	}
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
+
+	klog.V(6).Infof("Using label selector: %s for kind: %s, group: %s", helmLabelSelector, r.kindName, r.gvk.Group)
 
 	// Set ListOptions for HelmRelease with selector mapping
 	metaOptions := metav1.ListOptions{
@@ -306,18 +338,30 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
+	klog.V(6).Infof("Found %d HelmReleases with label selector, filtering by labels...", len(hrList.Items))
+
 	// Initialize Application items array
 	items := make([]appsv1alpha1.Application, 0, len(hrList.Items))
 
 	// Iterate over HelmReleases and convert to Applications
+	// Filter by labels to ensure only relevant HelmReleases are included
+	// This is a safety check in case label selectors don't work perfectly or HelmReleases were created without labels
 	for i := range hrList.Items {
-		if !r.shouldIncludeHelmRelease(&hrList.Items[i]) {
+		hr := &hrList.Items[i]
+
+		// Verify that HelmRelease has the required labels
+		if hr.Labels == nil || hr.Labels[ApplicationKindLabel] != r.kindName ||
+			hr.Labels[ApplicationGroupLabel] != r.gvk.Group {
+			klog.V(6).Infof("Skipping HelmRelease %s - missing or incorrect application labels (kind: %s, expected: %s, group: %s, expected: %s)",
+				hr.GetName(),
+				getLabelValue(hr.Labels, ApplicationKindLabel), r.kindName,
+				getLabelValue(hr.Labels, ApplicationGroupLabel), r.gvk.Group)
 			continue
 		}
 
-		app, err := r.ConvertHelmReleaseToApplication(&hrList.Items[i])
+		app, err := r.ConvertHelmReleaseToApplication(hr)
 		if err != nil {
-			klog.Errorf("Error converting HelmRelease %s to Application: %v", hrList.Items[i].GetName(), err)
+			klog.Errorf("Error converting HelmRelease %s to Application: %v", hr.GetName(), err)
 			continue
 		}
 
@@ -436,30 +480,22 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
 	// Merge user labels with prefix
 	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if helmRelease.Labels == nil {
+		helmRelease.Labels = make(map[string]string)
+	}
+	helmRelease.Labels[ApplicationKindLabel] = r.kindName
+	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
+	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
-
-	// Before updating, ensure the HelmRelease meets the inclusion criteria
-	// This prevents updating HelmReleases that should not be managed as Applications
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.Name)
-		// Return a NotFound error for the Application resource
-		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-	}
 
 	// Update the HelmRelease in Kubernetes
 	err = r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
-	}
-
-	// After updating, ensure the updated HelmRelease still meets the inclusion criteria
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("Updated HelmRelease %s does not match the required chartName and sourceRef criteria", helmRelease.GetName())
-		// Return a NotFound error for the Application resource
-		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -503,9 +539,10 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		return nil, false, err
 	}
 
-	// Validate that the HelmRelease meets the inclusion criteria
-	if !r.shouldIncludeHelmRelease(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required chartName and sourceRef criteria", helmReleaseName)
+	// Validate that the HelmRelease has required labels
+	if helmRelease.Labels == nil || helmRelease.Labels[ApplicationKindLabel] != r.kindName ||
+		helmRelease.Labels[ApplicationGroupLabel] != r.gvk.Group {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
@@ -523,7 +560,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	return nil, true, nil
 }
 
-// Watch sets up a watch on HelmReleases, filters them based on sourceRef and prefix, and converts events to Applications
+// Watch sets up a watch on HelmReleases, filters them based on application labels, and converts events to Applications
 func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
 	namespace, err := r.getNamespace(ctx)
 	if err != nil {
@@ -639,7 +676,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue
 				}
 
-				if !r.shouldIncludeHelmRelease(hr) {
+				// Verify that HelmRelease has the required labels
+				if hr.Labels == nil || hr.Labels[ApplicationKindLabel] != r.kindName ||
+					hr.Labels[ApplicationGroupLabel] != r.gvk.Group {
+					klog.V(6).Infof("Skipping HelmRelease %s in watch - missing or incorrect application labels", hr.GetName())
 					continue
 				}
 
@@ -694,14 +734,6 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	return customW, nil
 }
 
-// Helper function to get HelmRelease name from object
-func helmReleaseName(obj runtime.Object) string {
-	if app, ok := obj.(*appsv1alpha1.Application); ok {
-		return app.GetName()
-	}
-	return "<unknown>"
-}
-
 // customWatcher wraps the original watcher and filters/converts events
 type customWatcher struct {
 	resultChan chan watch.Event
@@ -725,74 +757,6 @@ func (cw *customWatcher) ResultChan() <-chan watch.Event {
 	return cw.resultChan
 }
 
-// shouldIncludeHelmRelease determines if a HelmRelease should be included based on filtering criteria
-func (r *REST) shouldIncludeHelmRelease(hr *helmv2.HelmRelease) bool {
-	// Nil check for Chart field
-	if hr.Spec.Chart == nil {
-		klog.V(6).Infof("HelmRelease %s has nil spec.chart field", hr.GetName())
-		return false
-	}
-
-	// Filter by Chart Name
-	chartName := hr.Spec.Chart.Spec.Chart
-	if chartName == "" {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.chart field", hr.GetName())
-		return false
-	}
-	if chartName != r.releaseConfig.Chart.Name {
-		klog.V(6).Infof("HelmRelease %s chart name %s does not match expected %s", hr.GetName(), chartName, r.releaseConfig.Chart.Name)
-		return false
-	}
-
-	// Filter by SourceRefConfig and Prefix
-	return r.matchesSourceRefAndPrefix(hr)
-}
-
-// matchesSourceRefAndPrefix checks both SourceRefConfig and Prefix criteria
-func (r *REST) matchesSourceRefAndPrefix(hr *helmv2.HelmRelease) bool {
-	// Nil check for Chart field (defensive)
-	if hr.Spec.Chart == nil {
-		klog.V(6).Infof("HelmRelease %s has nil spec.chart field", hr.GetName())
-		return false
-	}
-
-	// Extract SourceRef fields
-	sourceRef := hr.Spec.Chart.Spec.SourceRef
-	sourceRefKind := sourceRef.Kind
-	sourceRefName := sourceRef.Name
-	sourceRefNamespace := sourceRef.Namespace
-
-	if sourceRefKind == "" {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.kind field", hr.GetName())
-		return false
-	}
-	if sourceRefName == "" {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.name field", hr.GetName())
-		return false
-	}
-	if sourceRefNamespace == "" {
-		klog.V(6).Infof("HelmRelease %s missing spec.chart.spec.sourceRef.namespace field", hr.GetName())
-		return false
-	}
-
-	// Check if SourceRef matches the configuration
-	if sourceRefKind != r.releaseConfig.Chart.SourceRef.Kind ||
-		sourceRefName != r.releaseConfig.Chart.SourceRef.Name ||
-		sourceRefNamespace != r.releaseConfig.Chart.SourceRef.Namespace {
-		klog.V(6).Infof("HelmRelease %s sourceRef does not match expected values", hr.GetName())
-		return false
-	}
-
-	// Additional filtering by Prefix
-	name := hr.GetName()
-	if !strings.HasPrefix(name, r.releaseConfig.Prefix) {
-		klog.V(6).Infof("HelmRelease %s does not have the expected prefix %s", name, r.releaseConfig.Prefix)
-		return false
-	}
-
-	return true
-}
-
 // getNamespace extracts the namespace from the context
 func (r *REST) getNamespace(ctx context.Context) (string, error) {
 	namespace, ok := request.NamespaceFrom(ctx)
@@ -802,15 +766,6 @@ func (r *REST) getNamespace(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return namespace, nil
-}
-
-// buildLabelSelector constructs a label selector string from a map of labels
-func buildLabelSelector(labels map[string]string) string {
-	var selectors []string
-	for k, v := range labels {
-		selectors = append(selectors, fmt.Sprintf("%s=%s", k, v))
-	}
-	return strings.Join(selectors, ",")
 }
 
 // mergeMaps combines two maps of labels or annotations
@@ -859,6 +814,14 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 		}
 	}
 	return processed
+}
+
+// getLabelValue safely gets a label value, returning empty string if labels is nil or key doesn't exist
+func getLabelValue(labels map[string]string, key string) string {
+	if labels == nil {
+		return ""
+	}
+	return labels[key]
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
