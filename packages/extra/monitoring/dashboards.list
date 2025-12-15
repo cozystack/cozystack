@@ -39,3 +39,5 @@ goldpinger/goldpinger
 clickhouse/altinity-clickhouse-operator-dashboard
 storage/linstor
 seaweedfs/seaweedfs
+nats/nats-jetstream
+nats/nats-server
