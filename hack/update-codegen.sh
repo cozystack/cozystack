@@ -27,6 +27,8 @@ TMPDIR=$(mktemp -d)
 COZY_CONTROLLER_CRDDIR=packages/system/cozystack-controller/crds
 COZY_RD_CRDDIR=packages/system/cozystack-resource-definition-crd/definition
 BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
+BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
+
 trap 'rm -rf ${TMPDIR}' EXIT
 
 source "${CODEGEN_PKG}/kube_codegen.sh"
@@ -64,5 +66,6 @@ mv ${TMPDIR}/cozystack.io_cozystackresourcedefinitions.yaml \
         ${COZY_RD_CRDDIR}/cozystack.io_cozystackresourcedefinitions.yaml
 
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
+mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
 
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
