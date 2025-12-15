@@ -1,0 +1,303 @@
+diff --git a/changelogs/unreleased/9447-kvaps b/changelogs/unreleased/9447-kvaps
+new file mode 100644
+index 0000000000..869e43baaf
+--- /dev/null
++++ b/changelogs/unreleased/9447-kvaps
+@@ -0,0 +1 @@
++Fix race condition: check concurrent limit before GetExposed
+diff --git a/pkg/controller/data_download_controller.go b/pkg/controller/data_download_controller.go
+index b3f2044d9b..e05c9db141 100644
+--- a/pkg/controller/data_download_controller.go
++++ b/pkg/controller/data_download_controller.go
+@@ -315,10 +315,23 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
+ 			return ctrl.Result{}, nil
+ 		}
+ 
++		// Reserve a slot atomically BEFORE doing expensive GetExposed operation
++		// This prevents race condition where multiple tasks waste time on GetExposed
++		// when the concurrent limit is already reached
++		if err := r.dataPathMgr.ReserveSlot(dd.Name); err != nil {
++			if err == datapath.ConcurrentLimitExceed {
++				log.Debug("Data path concurrent limit reached, requeue later")
++				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
++			}
++			return r.errorOut(ctx, dd, err, "error reserving data path slot", log)
++		}
++
+ 		result, err := r.restoreExposer.GetExposed(ctx, getDataDownloadOwnerObject(dd), r.client, r.nodeName, dd.Spec.OperationTimeout.Duration)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(dd.Name)
+ 			return r.errorOut(ctx, dd, err, "restore exposer is not ready", log)
+ 		} else if result == nil {
++			r.dataPathMgr.ReleaseReservation(dd.Name)
+ 			return r.errorOut(ctx, dd, errors.New("no expose result is available for the current node"), "exposed snapshot is not ready", log)
+ 		}
+ 
+@@ -335,6 +348,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
+ 		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore,
+ 			dd.Name, dd.Namespace, result.ByPod.HostingPod.Name, result.ByPod.HostingContainer, dd.Name, callbacks, false, log)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(dd.Name)
+ 			if err == datapath.ConcurrentLimitExceed {
+ 				log.Debug("Data path instance is concurrent limited requeue later")
+ 				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+@@ -343,6 +357,8 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
+ 			}
+ 		}
+ 
++		// Reservation is automatically completed in CreateMicroServiceBRWatcher
++
+ 		if err := r.initCancelableDataPath(ctx, asyncBR, result, log); err != nil {
+ 			log.WithError(err).Errorf("Failed to init cancelable data path for %s", dd.Name)
+ 
+diff --git a/pkg/controller/data_upload_controller.go b/pkg/controller/data_upload_controller.go
+index e2f8787ed9..9e94502ce8 100644
+--- a/pkg/controller/data_upload_controller.go
++++ b/pkg/controller/data_upload_controller.go
+@@ -319,15 +319,30 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request)
+ 			log.Info("Cancellable data path is already started")
+ 			return ctrl.Result{}, nil
+ 		}
++
++		// Reserve a slot atomically BEFORE doing expensive GetExposed operation
++		// This prevents race condition where multiple tasks waste time on GetExposed
++		// when the concurrent limit is already reached
++		if err := r.dataPathMgr.ReserveSlot(du.Name); err != nil {
++			if err == datapath.ConcurrentLimitExceed {
++				log.Debug("Data path concurrent limit reached, requeue later")
++				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
++			}
++			return r.errorOut(ctx, du, err, "error reserving data path slot", log)
++		}
++
+ 		waitExposePara := r.setupWaitExposePara(du)
+ 		res, err := ep.GetExposed(ctx, getOwnerObject(du), du.Spec.OperationTimeout.Duration, waitExposePara)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(du.Name)
+ 			return r.errorOut(ctx, du, err, "exposed snapshot is not ready", log)
+ 		} else if res == nil {
++			r.dataPathMgr.ReleaseReservation(du.Name)
+ 			return r.errorOut(ctx, du, errors.New("no expose result is available for the current node"), "exposed snapshot is not ready", log)
+ 		}
+ 
+ 		if res.ByPod.NodeOS == nil {
++			r.dataPathMgr.ReleaseReservation(du.Name)
+ 			return r.errorOut(ctx, du, errors.New("unsupported ambiguous node OS"), "invalid expose result", log)
+ 		}
+ 
+@@ -344,6 +359,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request)
+ 		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup,
+ 			du.Name, du.Namespace, res.ByPod.HostingPod.Name, res.ByPod.HostingContainer, du.Name, callbacks, false, log)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(du.Name)
+ 			if err == datapath.ConcurrentLimitExceed {
+ 				log.Debug("Data path instance is concurrent limited requeue later")
+ 				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+@@ -352,6 +368,8 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request)
+ 			}
+ 		}
+ 
++		// Reservation is automatically completed in CreateMicroServiceBRWatcher
++
+ 		if err := r.initCancelableDataPath(ctx, asyncBR, res, log); err != nil {
+ 			log.WithError(err).Errorf("Failed to init cancelable data path for %s", du.Name)
+ 
+diff --git a/pkg/controller/pod_volume_backup_controller.go b/pkg/controller/pod_volume_backup_controller.go
+index aceaab7805..1efdadc557 100644
+--- a/pkg/controller/pod_volume_backup_controller.go
++++ b/pkg/controller/pod_volume_backup_controller.go
+@@ -269,10 +269,23 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
+ 			return ctrl.Result{}, nil
+ 		}
+ 
++		// Reserve a slot atomically BEFORE doing expensive GetExposed operation
++		// This prevents race condition where multiple tasks waste time on GetExposed
++		// when the concurrent limit is already reached
++		if err := r.dataPathMgr.ReserveSlot(pvb.Name); err != nil {
++			if err == datapath.ConcurrentLimitExceed {
++				log.Debug("Data path concurrent limit reached, requeue later")
++				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
++			}
++			return r.errorOut(ctx, pvb, err, "error reserving data path slot", log)
++		}
++
+ 		res, err := r.exposer.GetExposed(ctx, getPVBOwnerObject(pvb), r.client, r.nodeName, r.resourceTimeout)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(pvb.Name)
+ 			return r.errorOut(ctx, pvb, err, "exposed PVB is not ready", log)
+ 		} else if res == nil {
++			r.dataPathMgr.ReleaseReservation(pvb.Name)
+ 			return r.errorOut(ctx, pvb, errors.New("no expose result is available for the current node"), "exposed PVB is not ready", log)
+ 		}
+ 
+@@ -288,6 +301,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
+ 		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup,
+ 			pvb.Name, pvb.Namespace, res.ByPod.HostingPod.Name, res.ByPod.HostingContainer, pvb.Name, callbacks, false, log)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(pvb.Name)
+ 			if err == datapath.ConcurrentLimitExceed {
+ 				log.Debug("Data path instance is concurrent limited requeue later")
+ 				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+@@ -296,6 +310,8 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
+ 			}
+ 		}
+ 
++		// Reservation is automatically completed in CreateMicroServiceBRWatcher
++
+ 		r.metrics.RegisterPodVolumeBackupEnqueue(r.nodeName)
+ 
+ 		if err := r.initCancelableDataPath(ctx, asyncBR, res, log); err != nil {
+diff --git a/pkg/controller/pod_volume_restore_controller.go b/pkg/controller/pod_volume_restore_controller.go
+index 87b2353f52..dda2ba22f8 100644
+--- a/pkg/controller/pod_volume_restore_controller.go
++++ b/pkg/controller/pod_volume_restore_controller.go
+@@ -282,10 +282,23 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
+ 			return ctrl.Result{}, nil
+ 		}
+ 
++		// Reserve a slot atomically BEFORE doing expensive GetExposed operation
++		// This prevents race condition where multiple tasks waste time on GetExposed
++		// when the concurrent limit is already reached
++		if err := r.dataPathMgr.ReserveSlot(pvr.Name); err != nil {
++			if err == datapath.ConcurrentLimitExceed {
++				log.Debug("Data path concurrent limit reached, requeue later")
++				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
++			}
++			return r.errorOut(ctx, pvr, err, "error reserving data path slot", log)
++		}
++
+ 		res, err := r.exposer.GetExposed(ctx, getPVROwnerObject(pvr), r.client, r.nodeName, r.resourceTimeout)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(pvr.Name)
+ 			return r.errorOut(ctx, pvr, err, "exposed PVR is not ready", log)
+ 		} else if res == nil {
++			r.dataPathMgr.ReleaseReservation(pvr.Name)
+ 			return r.errorOut(ctx, pvr, errors.New("no expose result is available for the current node"), "exposed PVR is not ready", log)
+ 		}
+ 
+@@ -301,6 +314,7 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
+ 		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore,
+ 			pvr.Name, pvr.Namespace, res.ByPod.HostingPod.Name, res.ByPod.HostingContainer, pvr.Name, callbacks, false, log)
+ 		if err != nil {
++			r.dataPathMgr.ReleaseReservation(pvr.Name)
+ 			if err == datapath.ConcurrentLimitExceed {
+ 				log.Debug("Data path instance is concurrent limited requeue later")
+ 				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+@@ -309,6 +323,8 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
+ 			}
+ 		}
+ 
++		// Reservation is automatically completed in CreateMicroServiceBRWatcher
++
+ 		if err := r.initCancelableDataPath(ctx, asyncBR, res, log); err != nil {
+ 			log.WithError(err).Errorf("Failed to init cancelable data path for %s", pvr.Name)
+ 
+diff --git a/pkg/datapath/manager.go b/pkg/datapath/manager.go
+index 0b790a5cc9..c0db04001c 100644
+--- a/pkg/datapath/manager.go
++++ b/pkg/datapath/manager.go
+@@ -32,9 +32,10 @@ var FSBRCreator = newFileSystemBR
+ var MicroServiceBRWatcherCreator = newMicroServiceBRWatcher
+ 
+ type Manager struct {
+-	cocurrentNum int
+-	trackerLock  sync.Mutex
+-	tracker      map[string]AsyncBR
++	cocurrentNum   int
++	trackerLock    sync.Mutex
++	tracker        map[string]AsyncBR
++	reservations   map[string]bool // Track reserved slots before GetExposed completes
+ }
+ 
+ // NewManager creates the data path manager to manage concurrent data path instances
+@@ -42,6 +43,7 @@ func NewManager(cocurrentNum int) *Manager {
+ 	return &Manager{
+ 		cocurrentNum: cocurrentNum,
+ 		tracker:      map[string]AsyncBR{},
++		reservations: map[string]bool{},
+ 	}
+ }
+ 
+@@ -66,13 +68,21 @@ func (m *Manager) CreateMicroServiceBRWatcher(ctx context.Context, client client
+ 	defer m.trackerLock.Unlock()
+ 
+ 	if !resume {
+-		if len(m.tracker) >= m.cocurrentNum {
+-			return nil, ConcurrentLimitExceed
++		// For resume, we skip the limit check
++		// For new tasks, check if we have space (either already reserved or have available slots)
++		_, alreadyReserved := m.reservations[taskName]
++		if !alreadyReserved {
++			if (len(m.tracker) + len(m.reservations)) >= m.cocurrentNum {
++				return nil, ConcurrentLimitExceed
++			}
+ 		}
+ 	}
+ 
+ 	m.tracker[taskName] = MicroServiceBRWatcherCreator(client, kubeClient, mgr, taskType, taskName, namespace, podName, containerName, associatedObject, callbacks, log)
+ 
++	// Release reservation if it exists (it will be replaced by actual AsyncBR in tracker)
++	delete(m.reservations, taskName)
++
+ 	return m.tracker[taskName], nil
+ }
+ 
+@@ -95,3 +105,58 @@ func (m *Manager) GetAsyncBR(jobName string) AsyncBR {
+ 		return nil
+ 	}
+ }
++
++// CanAcceptNewTask checks if a new task can be accepted based on the concurrent limit.
++// This is a lightweight check that doesn't create any resources.
++func (m *Manager) CanAcceptNewTask(resume bool) bool {
++	m.trackerLock.Lock()
++	defer m.trackerLock.Unlock()
++
++	if resume {
++		return true
++	}
++
++	// Count both active tasks and reserved slots
++	return (len(m.tracker) + len(m.reservations)) < m.cocurrentNum
++}
++
++// ReserveSlot reserves a slot in the tracker before expensive operations (like GetExposed).
++// Returns ConcurrentLimitExceed if no slots are available.
++// Must be paired with either CompleteReservation or ReleaseReservation.
++func (m *Manager) ReserveSlot(taskName string) error {
++	m.trackerLock.Lock()
++	defer m.trackerLock.Unlock()
++
++	// Check if already reserved or in tracker
++	if _, exists := m.tracker[taskName]; exists {
++		return nil // Already active
++	}
++	if m.reservations[taskName] {
++		return nil // Already reserved
++	}
++
++	// Check if we can accept a new reservation
++	if (len(m.tracker) + len(m.reservations)) >= m.cocurrentNum {
++		return ConcurrentLimitExceed
++	}
++
++	m.reservations[taskName] = true
++	return nil
++}
++
++// CompleteReservation completes a reservation by replacing it with the actual AsyncBR.
++// Should be called after successful GetExposed and CreateMicroServiceBRWatcher.
++func (m *Manager) CompleteReservation(taskName string) {
++	m.trackerLock.Lock()
++	defer m.trackerLock.Unlock()
++
++	delete(m.reservations, taskName)
++}
++
++// ReleaseReservation releases a reserved slot if GetExposed or subsequent operations fail.
++func (m *Manager) ReleaseReservation(taskName string) {
++	m.trackerLock.Lock()
++	defer m.trackerLock.Unlock()
++
++	delete(m.reservations, taskName)
++}
