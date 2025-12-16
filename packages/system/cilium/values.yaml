@@ -18,3 +18,6 @@ cilium:
     digest: "sha256:81262986a41487bfa3d0465091d3a386def5bd1ab476350bd4af2fdee5846fe6"
   envoy:
     enabled: false
+  rollOutCiliumPods: true
+  operator:
+    rollOutPods: true
