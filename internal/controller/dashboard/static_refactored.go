@@ -371,6 +371,13 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createCustomColumnWithJsonPath("Name", ".metadata.name", "TenantNamespace", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.name']['-']}/factory/marketplace"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
+
+		// Stock namespace backups cozystack io v1alpha1 plans
+		createCustomColumnsOverride("stock-namespace-/backups.cozystack.io/v1alpha1/plans", []any{
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Plan", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/plan-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createApplicationRefColumn("Application"),
+			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+		}),
 	}
 }
 
@@ -1433,6 +1440,122 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 	}
 	workloadmonitorSpec := createFactorySpec("workloadmonitor-details", []any{"workloadmonitor-sidebar"}, []any{"/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors/{6}"}, workloadmonitorHeader, workloadmonitorTabs)
 
+	// Plan details factory using unified approach
+	planConfig := UnifiedResourceConfig{
+		Name:         "plan-details",
+		ResourceType: "factory",
+		Kind:         "Plan",
+		Plural:       "plans",
+		Title:        "plan",
+	}
+	planTabs := []any{
+		map[string]any{
+			"key":   "details",
+			"label": "Details",
+			"children": []any{
+				contentCard("details-card", map[string]any{
+					"marginBottom": "24px",
+				}, []any{
+					antdText("details-title", true, "Plan details", map[string]any{
+						"fontSize":     20,
+						"marginBottom": "12px",
+					}),
+					spacer("details-spacer", 16),
+					antdRow("details-grid", []any{48, 12}, []any{
+						antdCol("col-left", 12, []any{
+							antdFlexVertical("col-left-stack", 24, []any{
+								antdFlexVertical("meta-name-block", 4, []any{
+									antdText("meta-name-label", true, "Name", nil),
+									parsedText("meta-name-value", "{reqsJsonPath[0]['.metadata.name']['-']}", nil),
+								}),
+								antdFlexVertical("meta-namespace-block", 8, []any{
+									antdText("meta-namespace-label", true, "Namespace", nil),
+									antdFlex("header-row", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":    "header-badge",
+												"text":  "NS",
+												"title": "namespace",
+												"style": map[string]any{
+													"backgroundColor": "#a25792ff",
+													"borderRadius":    "20px",
+													"color":           "#fff",
+													"display":         "inline-block",
+													"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
+													"fontSize":        "15px",
+													"fontWeight":      400,
+													"lineHeight":      "24px",
+													"minWidth":        24,
+													"padding":         "0 9px",
+													"textAlign":       "center",
+													"whiteSpace":      "nowrap",
+												},
+											},
+										},
+										map[string]any{
+											"type": "antdLink",
+											"data": map[string]any{
+												"id":   "namespace-link",
+												"text": "{reqsJsonPath[0]['.metadata.namespace']['-']}",
+												"href": "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("meta-created-block", 4, []any{
+									antdText("time-label", true, "Created", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.metadata.creationTimestamp']['-']}",
+											},
+										},
+									}),
+								}),
+							}),
+						}),
+						antdCol("col-right", 12, []any{
+							antdFlexVertical("col-right-stack", 24, []any{
+								antdFlexVertical("spec-application-ref-block", 4, []any{
+									antdText("application-ref-label", true, "Application", nil),
+									parsedText("application-ref-value", "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-storage-ref-block", 4, []any{
+									antdText("storage-ref-label", true, "Storage", nil),
+									parsedText("storage-ref-value", "{reqsJsonPath[0]['.spec.storageRef.kind']['-']}.{reqsJsonPath[0]['.spec.storageRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.storageRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-strategy-ref-block", 4, []any{
+									antdText("strategy-ref-label", true, "Strategy", nil),
+									parsedText("strategy-ref-value", "{reqsJsonPath[0]['.spec.strategyRef.kind']['-']}.{reqsJsonPath[0]['.spec.strategyRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.strategyRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-schedule-type-block", 4, []any{
+									antdText("schedule-type-label", true, "Schedule Type", nil),
+									parsedText("schedule-type-value", "{reqsJsonPath[0]['.spec.schedule.type']['-']}", nil),
+								}),
+								antdFlexVertical("spec-schedule-cron-block", 4, []any{
+									antdText("schedule-cron-label", true, "Schedule Cron", nil),
+									parsedText("schedule-cron-value", "{reqsJsonPath[0]['.spec.schedule.cron']['-']}", nil),
+								}),
+							}),
+						}),
+					}),
+				}),
+			},
+		},
+	}
+	planSpec := createUnifiedFactory(planConfig, planTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/plans/{6}"})
+
 	return []*dashboardv1alpha1.Factory{
 		createFactory("marketplace", marketplaceSpec),
 		createFactory("namespace-details", namespaceSpec),
@@ -1442,6 +1565,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 		createFactory("kube-service-details", serviceSpec),
 		createFactory("kube-ingress-details", ingressSpec),
 		createFactory("workloadmonitor-details", workloadmonitorSpec),
+		createFactory("plan-details", planSpec),
 	}
 }
 
