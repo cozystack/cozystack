@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.tenant-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,16 +13,23 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        - cozystack.ingress-application
+        - cozystack.seaweedfs-application
+        - cozystack.info-application
+        - cozystack.monitoring-application
+        - cozystack.bootbox-application
+        - cozystack.etcd-application
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: tenant-application
+          path: system/tenant-application
+          releaseName: tenant-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: tenant
+          path: apps/tenant
           libraries:
             - cozy-lib
+

@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.virtualprivatecloud-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -10,19 +10,21 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
+    - name: kubevirt
       dependsOn:
         - cozystack.networking
+        - cozystack.multus
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: virtualprivatecloud-application
+          path: system/virtualprivatecloud-application
+          releaseName: virtualprivatecloud-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: virtualprivatecloud
+          path: apps/vpc
           libraries:
             - cozy-lib
+

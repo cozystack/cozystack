@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.virtual-machine-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -10,19 +10,22 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
+    - name: kubevirt
       dependsOn:
         - cozystack.networking
+        - cozystack.kubevirt
+        - cozystack.kubevirt-cdi
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: virtual-machine-application
+          path: system/virtual-machine-application
+          releaseName: virtual-machine-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: virtual-machine
+          path: apps/virtual-machine
           libraries:
             - cozy-lib
+

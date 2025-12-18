@@ -6,6 +6,8 @@ metadata:
 spec:
   variants:
     - name: default
+      dependsOn:
+        - cozystack.keycloak-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
@@ -60,8 +62,3 @@ spec:
           path: system/keycloak
           namespace: cozy-keycloak
           dependsOn: [postgres-operator]
-        - name: keycloak-operator
-          releaseName: keycloak-operator
-          path: system/keycloak-operator
-          namespace: cozy-keycloak
-          dependsOn: [keycloak]

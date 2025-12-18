@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.vertical-pod-autoscaler
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.monitoring-agents
+      packages:
+        - name: vertical-pod-autoscaler-crds
+          path: system/vertical-pod-autoscaler-crds
+          releaseName: vertical-pod-autoscaler-crds
+          namespace: cozy-vertical-pod-autoscaler
+          privileged: true
+        - name: vertical-pod-autoscaler
+          path: system/vertical-pod-autoscaler
+          releaseName: vertical-pod-autoscaler
+          namespace: cozy-vertical-pod-autoscaler
+          privileged: true
+          dependsOn:
+            - vertical-pod-autoscaler-crds

@@ -1,0 +1,25 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.goldpinger
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.monitoring-agents
+      packages:
+        - name: goldpinger
+          path: system/goldpinger
+          releaseName: goldpinger
+          namespace: cozy-goldpinger
+          privileged: true
+          dependsOn:
+            - monitoring-agents
+

@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.postgres
+  name: cozystack.postgres-application
 spec:
   sourceRef:
     kind: OCIRepository

@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.ingress-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,12 +17,15 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: ingress-application
+          path: system/ingress-application
+          releaseName: ingress-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: ingress
+          path: extra/ingress
           libraries:
             - cozy-lib
+        - name: ingress-system
+          path: system/ingress-nginx
+

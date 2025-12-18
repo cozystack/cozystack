@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.monitoring-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,12 +17,13 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: monitoring-application
+          path: system/monitoring-application
+          releaseName: monitoring-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: monitoring
+          path: extra/monitoring
           libraries:
             - cozy-lib
+

@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.seaweedfs-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,12 +17,15 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: seaweedfs-application
+          path: system/seaweedfs-application
+          releaseName: seaweedfs-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: seaweedfs
+          path: extra/seaweedfs
           libraries:
             - cozy-lib
+        - name: seaweedfs-system
+          path: system/seaweedfs
+

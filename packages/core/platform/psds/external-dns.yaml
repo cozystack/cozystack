@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.external-dns
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      packages:
+        - name: external-dns
+          path: system/external-dns
+          releaseName: external-dns
+          namespace: cozy-external-dns
+          disabled: true
+

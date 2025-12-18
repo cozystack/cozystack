@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.redis
+  name: cozystack.redis-application
 spec:
   sourceRef:
     kind: OCIRepository

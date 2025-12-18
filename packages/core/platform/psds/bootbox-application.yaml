@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.bootbox-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,12 +17,13 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: bootbox-application
+          path: system/bootbox-application
+          releaseName: bootbox-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: bootbox
+          path: extra/bootbox
           libraries:
             - cozy-lib
+

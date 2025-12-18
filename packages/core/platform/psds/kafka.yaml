@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.kafka
+  name: cozystack.kafka-application
 spec:
   sourceRef:
     kind: OCIRepository

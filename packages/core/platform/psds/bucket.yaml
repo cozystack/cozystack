@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.ferretdb-application
+  name: cozystack.bucket-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,16 +13,22 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        - cozystack.objectstorage-controller
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       packages:
-        - name: ferretdb-application
-          path: system/ferretdb-application
-          releaseName: ferretdb-application
+        - name: bucket-application
+          path: system/bucket-application
+          releaseName: bucket-application
           namespace: cozy-system
       sources:
-        - name: ferretdb
-          path: apps/ferretdb
+        - name: bucket
+          path: apps/bucket
           libraries:
             - cozy-lib
+        - name: bucket-system
+          path: apps/bucket
+          libraries:
+            - cozy-lib
+

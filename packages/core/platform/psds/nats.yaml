@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSetDefinition
 metadata:
-  name: cozystack.nats
+  name: cozystack.nats-application
 spec:
   sourceRef:
     kind: OCIRepository
