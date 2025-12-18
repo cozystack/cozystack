@@ -67,11 +67,11 @@ const (
 	AnnotationPrefix = "apps.cozystack.io-"
 )
 
-// Application label keys
+// Application label keys - use constants from API package
 const (
-	ApplicationKindLabel  = "apps.cozystack.io/application.kind"
-	ApplicationGroupLabel = "apps.cozystack.io/application.group"
-	ApplicationNameLabel  = "apps.cozystack.io/application.name"
+	ApplicationKindLabel  = appsv1alpha1.ApplicationKindLabel
+	ApplicationGroupLabel = appsv1alpha1.ApplicationGroupLabel
+	ApplicationNameLabel  = appsv1alpha1.ApplicationNameLabel
 )
 
 // Define the GroupVersionResource for HelmRelease
@@ -224,8 +224,7 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 	}
 
 	// Check if HelmRelease has required labels
-	if helmRelease.Labels == nil || helmRelease.Labels[ApplicationKindLabel] != r.kindName ||
-		helmRelease.Labels[ApplicationGroupLabel] != r.gvk.Group {
+	if !r.hasRequiredApplicationLabels(helmRelease) {
 		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return a NotFound error for the Application resource
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
@@ -338,26 +337,15 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
-	klog.V(6).Infof("Found %d HelmReleases with label selector, filtering by labels...", len(hrList.Items))
+	klog.V(6).Infof("Found %d HelmReleases with label selector", len(hrList.Items))
 
 	// Initialize Application items array
 	items := make([]appsv1alpha1.Application, 0, len(hrList.Items))
 
 	// Iterate over HelmReleases and convert to Applications
-	// Filter by labels to ensure only relevant HelmReleases are included
-	// This is a safety check in case label selectors don't work perfectly or HelmReleases were created without labels
+	// Note: All HelmReleases already match the required labels due to server-side label selector filtering
 	for i := range hrList.Items {
 		hr := &hrList.Items[i]
-
-		// Verify that HelmRelease has the required labels
-		if hr.Labels == nil || hr.Labels[ApplicationKindLabel] != r.kindName ||
-			hr.Labels[ApplicationGroupLabel] != r.gvk.Group {
-			klog.V(6).Infof("Skipping HelmRelease %s - missing or incorrect application labels (kind: %s, expected: %s, group: %s, expected: %s)",
-				hr.GetName(),
-				getLabelValue(hr.Labels, ApplicationKindLabel), r.kindName,
-				getLabelValue(hr.Labels, ApplicationGroupLabel), r.gvk.Group)
-			continue
-		}
 
 		app, err := r.ConvertHelmReleaseToApplication(hr)
 		if err != nil {
@@ -540,8 +528,7 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	}
 
 	// Validate that the HelmRelease has required labels
-	if helmRelease.Labels == nil || helmRelease.Labels[ApplicationKindLabel] != r.kindName ||
-		helmRelease.Labels[ApplicationGroupLabel] != r.gvk.Group {
+	if !r.hasRequiredApplicationLabelsWithName(helmRelease, name) {
 		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
@@ -601,6 +588,19 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 
 	// Process label.selector
+	// Always add application metadata label requirements
+	appKindReq, err := labels.NewRequirement(ApplicationKindLabel, selection.Equals, []string{r.kindName})
+	if err != nil {
+		klog.Errorf("Error creating application kind label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application kind label requirement: %v", err)
+	}
+	appGroupReq, err := labels.NewRequirement(ApplicationGroupLabel, selection.Equals, []string{r.gvk.Group})
+	if err != nil {
+		klog.Errorf("Error creating application group label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application group label requirement: %v", err)
+	}
+	labelRequirements := []labels.Requirement{*appKindReq, *appGroupReq}
+
 	if options.LabelSelector != nil {
 		ls := options.LabelSelector.String()
 		parsedLabels, err := labels.Parse(ls)
@@ -620,9 +620,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				}
 				prefixedReqs = append(prefixedReqs, *prefixedReq)
 			}
-			helmLabelSelector = labels.NewSelector().Add(prefixedReqs...).String()
+			labelRequirements = append(labelRequirements, prefixedReqs...)
 		}
 	}
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
 
 	// Set ListOptions for HelmRelease with selector mapping
 	metaOptions := metav1.ListOptions{
@@ -676,13 +677,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue
 				}
 
-				// Verify that HelmRelease has the required labels
-				if hr.Labels == nil || hr.Labels[ApplicationKindLabel] != r.kindName ||
-					hr.Labels[ApplicationGroupLabel] != r.gvk.Group {
-					klog.V(6).Infof("Skipping HelmRelease %s in watch - missing or incorrect application labels", hr.GetName())
-					continue
-				}
-
+				// Note: All HelmReleases already match the required labels due to server-side label selector filtering
 				// Convert HelmRelease to Application
 				app, err := r.ConvertHelmReleaseToApplication(hr)
 				if err != nil {
@@ -768,6 +763,27 @@ func (r *REST) getNamespace(ctx context.Context) (string, error) {
 	return namespace, nil
 }
 
+// hasRequiredApplicationLabels checks if a HelmRelease has the required application labels
+// matching the REST instance's kind and group
+func (r *REST) hasRequiredApplicationLabels(hr *helmv2.HelmRelease) bool {
+	if hr.Labels == nil {
+		return false
+	}
+	return hr.Labels[ApplicationKindLabel] == r.kindName &&
+		hr.Labels[ApplicationGroupLabel] == r.gvk.Group
+}
+
+// hasRequiredApplicationLabelsWithName checks if a HelmRelease has the required application labels
+// matching the REST instance's kind, group, and the specified application name
+func (r *REST) hasRequiredApplicationLabelsWithName(hr *helmv2.HelmRelease, appName string) bool {
+	if hr.Labels == nil {
+		return false
+	}
+	return hr.Labels[ApplicationKindLabel] == r.kindName &&
+		hr.Labels[ApplicationGroupLabel] == r.gvk.Group &&
+		hr.Labels[ApplicationNameLabel] == appName
+}
+
 // mergeMaps combines two maps of labels or annotations
 func mergeMaps(a, b map[string]string) map[string]string {
 	if a == nil && b == nil {
@@ -814,14 +830,6 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 		}
 	}
 	return processed
-}
-
-// getLabelValue safely gets a label value, returning empty string if labels is nil or key doesn't exist
-func getLabelValue(labels map[string]string, key string) string {
-	if labels == nil {
-		return ""
-	}
-	return labels[key]
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application

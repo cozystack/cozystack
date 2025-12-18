@@ -39,22 +39,8 @@ type CozystackResourceDefinitionReconciler struct {
 }
 
 func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	// List all CozystackResourceDefinitions
-	crdList := &cozyv1alpha1.CozystackResourceDefinitionList{}
-	if err := r.List(ctx, crdList); err != nil {
-		logger.Error(err, "failed to list CozystackResourceDefinitions")
+	if err := r.reconcileCozyRDAndUpdateHelmReleases(ctx); err != nil {
 		return ctrl.Result{}, err
-	}
-
-	// Update HelmReleases for each CRD
-	for i := range crdList.Items {
-		crd := &crdList.Items[i]
-		if err := r.updateHelmReleasesForCRD(ctx, crd); err != nil {
-			logger.Error(err, "failed to update HelmReleases for CRD", "crd", crd.Name)
-			// Continue with other CRDs even if one fails
-		}
 	}
 
 	// Continue with debounced restart logic
@@ -71,29 +57,6 @@ func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manage
 		Watches(
 			&cozyv1alpha1.CozystackResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				r.mu.Lock()
-				r.lastEvent = time.Now()
-				r.mu.Unlock()
-				return []reconcile.Request{{
-					NamespacedName: types.NamespacedName{
-						Namespace: "cozy-system",
-						Name:      "cozystack-api",
-					},
-				}}
-			}),
-		).
-		Watches(
-			&helmv2.HelmRelease{},
-			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				hr, ok := obj.(*helmv2.HelmRelease)
-				if !ok {
-					return nil
-				}
-				// Only watch HelmReleases with cozystack.io/ui=true label
-				if hr.Labels == nil || hr.Labels["cozystack.io/ui"] != "true" {
-					return nil
-				}
-				// Trigger reconciliation of all CRDs when a HelmRelease with the label is created/updated
 				r.mu.Lock()
 				r.lastEvent = time.Now()
 				r.mu.Unlock()
@@ -228,6 +191,29 @@ func sortCozyRDs(a, b cozyv1alpha1.CozystackResourceDefinition) int {
 		return -1
 	}
 	return 1
+}
+
+// reconcileCozyRDAndUpdateHelmReleases reconciles all CozystackResourceDefinitions and updates HelmReleases from them
+func (r *CozystackResourceDefinitionReconciler) reconcileCozyRDAndUpdateHelmReleases(ctx context.Context) error {
+	logger := log.FromContext(ctx)
+
+	// List all CozystackResourceDefinitions
+	crdList := &cozyv1alpha1.CozystackResourceDefinitionList{}
+	if err := r.List(ctx, crdList); err != nil {
+		logger.Error(err, "failed to list CozystackResourceDefinitions")
+		return err
+	}
+
+	// Update HelmReleases for each CRD
+	for i := range crdList.Items {
+		crd := &crdList.Items[i]
+		if err := r.updateHelmReleasesForCRD(ctx, crd); err != nil {
+			logger.Error(err, "failed to update HelmReleases for CRD", "crd", crd.Name)
+			// Continue with other CRDs even if one fails
+		}
+	}
+
+	return nil
 }
 
 // updateHelmReleasesForCRD updates all HelmReleases that match the application labels from CozystackResourceDefinition
