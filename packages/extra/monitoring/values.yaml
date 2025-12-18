@@ -99,10 +99,11 @@ logsStorages:
 ## @typedef {struct} TelegramAlerts - Telegram alert configuration.
 ## @field {string} token - Telegram bot token.
 ## @field {string} chatID - Telegram chat ID(s), separated by commas.
-## @field {string} [disabledSeverity] - List of severities without alerts (e.g. "informational,warning").
+## @field {[]string} [disabledSeverity] - List of severities without alerts (e.g. ["informational","warning"]).
 
 ## @typedef {struct} SlackAlerts - Slack alert configuration.
 ## @field {string} url - Configuration uri for Slack alerts.
+## @field {[]string} [disabledSeverity] - List of severities without alerts (e.g. ["informational","warning"]).
 
 ## @typedef {struct} Alerts - Alert routing configuration.
 ## @field {TelegramAlerts} [telegram] - Configuration for Telegram alerts.
@@ -129,9 +130,10 @@ alerta:
     telegram:
       token: ""
       chatID: ""
-      disabledSeverity: ""
+      disabledSeverity: []
     slack:
       url: ""
+      disabledSeverity: []
 ##
 ## @section Grafana configuration
 ##

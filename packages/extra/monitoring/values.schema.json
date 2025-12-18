@@ -20,6 +20,14 @@
                 "url"
               ],
               "properties": {
+                "disabledSeverity": {
+                  "description": "List of severities without alerts (e.g. [\"informational\",\"warning\"]).",
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "url": {
                   "description": "Configuration uri for Slack alerts.",
                   "type": "string",
@@ -42,9 +50,12 @@
                   "default": ""
                 },
                 "disabledSeverity": {
-                  "description": "List of severities without alerts (e.g. \"informational,warning\").",
-                  "type": "string",
-                  "default": ""
+                  "description": "List of severities without alerts (e.g. [\"informational\",\"warning\"]).",
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "token": {
                   "description": "Telegram bot token.",
