@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.kubevirt-cdi
 spec:
@@ -10,18 +10,19 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: kubevirt-cdi-operator
-          path: system/kubevirt-cdi-operator
-          releaseName: kubevirt-cdi-operator
-          namespace: cozy-kubevirt-cdi
-        - name: kubevirt-cdi
-          path: system/kubevirt-cdi
-          releaseName: kubevirt-cdi
-          namespace: cozy-kubevirt-cdi
-          dependsOn:
-            - kubevirt-cdi-operator
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: kubevirt-cdi-operator
+      path: system/kubevirt-cdi-operator
+      install:
+        namespace: cozy-kubevirt-cdi
+        releaseName: kubevirt-cdi-operator
+    - name: kubevirt-cdi
+      path: system/kubevirt-cdi
+      install:
+        namespace: cozy-kubevirt-cdi
+        releaseName: kubevirt-cdi
+        dependsOn:
+        - kubevirt-cdi-operator

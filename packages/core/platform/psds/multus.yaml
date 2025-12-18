@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.multus
 spec:
@@ -10,12 +10,13 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: multus
-          path: system/multus
-          releaseName: multus
-          namespace: cozy-multus
-          privileged: true
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: multus
+      path: system/multus
+      install:
+        privileged: true
+        namespace: cozy-multus
+        releaseName: multus

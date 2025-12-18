@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.velero
 spec:
@@ -10,17 +10,17 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.monitoring-agents
-      packages:
-        - name: velero
-          path: system/velero
-          releaseName: velero
-          namespace: cozy-velero
-          privileged: true
-          disabled: true
-          dependsOn:
-            - monitoring-agents
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.monitoring-agents
+    components:
+    - name: velero
+      path: system/velero
+      disabled: true
+      install:
+        privileged: true
+        namespace: cozy-velero
+        releaseName: velero
+        dependsOn:
+        - monitoring-agents

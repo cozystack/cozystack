@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.foundationdb-operator
 spec:
@@ -10,15 +10,15 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.cert-manager
-      packages:
-        - name: foundationdb-operator
-          path: system/foundationdb-operator
-          releaseName: foundationdb-operator
-          namespace: cozy-foundationdb-operator
-          dependsOn:
-            - cert-manager
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.cert-manager
+    components:
+    - name: foundationdb-operator
+      path: system/foundationdb-operator
+      install:
+        namespace: cozy-foundationdb-operator
+        releaseName: foundationdb-operator
+        dependsOn:
+        - cert-manager

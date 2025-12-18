@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.hetzner-robotlb
 spec:
@@ -10,13 +10,13 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: hetzner-robotlb
-          path: system/hetzner-robotlb
-          releaseName: robotlb
-          namespace: cozy-hetzner-robotlb
-          disabled: true
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: hetzner-robotlb
+      path: system/hetzner-robotlb
+      disabled: true
+      install:
+        namespace: cozy-hetzner-robotlb
+        releaseName: robotlb

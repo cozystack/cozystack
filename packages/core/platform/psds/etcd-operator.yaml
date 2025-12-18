@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.etcd-operator
 spec:
@@ -10,15 +10,15 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.cert-manager
-      packages:
-        - name: etcd-operator
-          path: system/etcd-operator
-          releaseName: etcd-operator
-          namespace: cozy-etcd-operator
-          dependsOn:
-            - cert-manager
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.cert-manager
+    components:
+    - name: etcd-operator
+      path: system/etcd-operator
+      install:
+        namespace: cozy-etcd-operator
+        releaseName: etcd-operator
+        dependsOn:
+        - cert-manager

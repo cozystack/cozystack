@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.metallb
 spec:
@@ -10,12 +10,13 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: metallb
-          path: system/metallb
-          releaseName: metallb
-          namespace: cozy-metallb
-          privileged: true
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: metallb
+      path: system/metallb
+      install:
+        privileged: true
+        namespace: cozy-metallb
+        releaseName: metallb

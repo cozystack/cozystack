@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.linstor
 spec:
@@ -10,27 +10,28 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.cert-manager
-        - cozystack.monitoring
-        - cozystack.reloader
-      packages:
-        - name: piraeus-operator
-          path: system/piraeus-operator
-          releaseName: piraeus-operator
-          namespace: cozy-linstor
-          dependsOn:
-            - cert-manager
-            - victoria-metrics-operator
-        - name: linstor
-          path: system/linstor
-          releaseName: linstor
-          namespace: cozy-linstor
-          privileged: true
-          dependsOn:
-            - piraeus-operator
-            - cert-manager
-            - snapshot-controller
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.cert-manager
+    - cozystack.monitoring
+    - cozystack.reloader
+    components:
+    - name: piraeus-operator
+      path: system/piraeus-operator
+      install:
+        namespace: cozy-linstor
+        releaseName: piraeus-operator
+        dependsOn:
+        - cert-manager
+        - victoria-metrics-operator
+    - name: linstor
+      path: system/linstor
+      install:
+        privileged: true
+        namespace: cozy-linstor
+        releaseName: linstor
+        dependsOn:
+        - piraeus-operator
+        - cert-manager
+        - snapshot-controller

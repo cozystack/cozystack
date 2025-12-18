@@ -1,65 +1,79 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.networking
 spec:
   variants:
-    - name: noop
-      packages: []
+  - name: noop
+    components: []
+  - name: cilium
+    dependsOn:
+    - cozystack.cert-manager
+    components:
     - name: cilium
-      dependsOn:
-        - cozystack.cert-manager
-      packages:
-        - name: cilium
-          releaseName: cilium
-          path: system/cilium
-          namespace: cozy-cilium
-          privileged: true
-          dependsOn: []
-          valuesFiles:
-          - values.yaml
-          - values-talos.yaml
-        - name: cilium-networkpolicy
-          releaseName: cilium-networkpolicy
-          path: system/cilium-networkpolicy
-          namespace: cozy-cilium
-          privileged: true
-          dependsOn: [cilium]
-    - name: kubeovn-cilium
-      dependsOn:
-        - cozystack.cert-manager
-      packages:
-        - name: cilium
-          releaseName: cilium
-          path: system/cilium
-          namespace: cozy-cilium
-          privileged: true
-          dependsOn: []
-          valuesFiles:
-          - values.yaml
-          - values-talos.yaml
-          - values-kubeovn.yaml
-        - name: cilium-networkpolicy
-          releaseName: cilium-networkpolicy
-          path: system/cilium-networkpolicy
-          namespace: cozy-cilium
-          privileged: true
-          dependsOn: [cilium]
-        - name: kubeovn
-          releaseName: kubeovn
-          path: system/kubeovn
-          namespace: cozy-kubeovn
-          privileged: true
-          dependsOn: [cilium]
-        - name: kubeovn-plunger
-          releaseName: kubeovn-plunger
-          path: system/kubeovn-plunger
-          namespace: cozy-kubeovn
-          dependsOn: [cilium,kubeovn]
-        - name: kubeovn-webhook
-          releaseName: kubeovn-webhook
-          path: system/kubeovn-webhook
-          namespace: cozy-kubeovn
-          privileged: true
-          dependsOn: [cilium,kubeovn]
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+  - name: kubeovn-cilium
+    dependsOn:
+    - cozystack.cert-manager
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-kubeovn.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+    - name: kubeovn
+      path: system/kubeovn
+      install:
+        privileged: true
+        namespace: cozy-kubeovn
+        releaseName: kubeovn
+        dependsOn:
+        - cilium
+    - name: kubeovn-plunger
+      path: system/kubeovn-plunger
+      install:
+        namespace: cozy-kubeovn
+        releaseName: kubeovn-plunger
+        dependsOn:
+        - cilium
+        - kubeovn
+    - name: kubeovn-webhook
+      path: system/kubeovn-webhook
+      install:
+        privileged: true
+        namespace: cozy-kubeovn
+        releaseName: kubeovn-webhook
+        dependsOn:
+        - cilium
+        - kubeovn

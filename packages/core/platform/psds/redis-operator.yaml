@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.redis-operator
 spec:
@@ -10,12 +10,12 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: redis-operator
-          path: system/redis-operator
-          releaseName: redis-operator
-          namespace: cozy-redis-operator
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: redis-operator
+      path: system/redis-operator
+      install:
+        namespace: cozy-redis-operator
+        releaseName: redis-operator

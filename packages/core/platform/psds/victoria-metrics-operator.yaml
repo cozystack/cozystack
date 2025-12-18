@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.victoria-metrics-operator
 spec:
@@ -10,12 +10,13 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.cert-manager
-      packages:
-        - name: victoria-metrics-operator
-          path: system/victoria-metrics-operator
-          releaseName: victoria-metrics-operator
-          namespace: cozy-victoria-metrics-operator
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.cert-manager
+    components:
+    - name: victoria-metrics-operator
+      path: system/victoria-metrics-operator
+      install:
+        namespace: cozy-victoria-metrics-operator
+        releaseName: victoria-metrics-operator

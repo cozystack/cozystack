@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.reloader
 spec:
@@ -10,12 +10,12 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: reloader
-          path: system/reloader
-          releaseName: reloader
-          namespace: cozy-reloader
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: reloader
+      path: system/reloader
+      install:
+        namespace: cozy-reloader
+        releaseName: reloader

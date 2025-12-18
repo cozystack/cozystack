@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.objectstorage-controller
 spec:
@@ -10,12 +10,12 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: objectstorage-controller
-          path: system/objectstorage-controller
-          releaseName: objectstorage-controller
-          namespace: cozy-objectstorage-controller
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: objectstorage-controller
+      path: system/objectstorage-controller
+      install:
+        namespace: cozy-objectstorage-controller
+        releaseName: objectstorage-controller

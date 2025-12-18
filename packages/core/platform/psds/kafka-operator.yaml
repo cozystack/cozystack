@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.kafka-operator
 spec:
@@ -10,15 +10,15 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.monitoring
-      packages:
-        - name: kafka-operator
-          path: system/kafka-operator
-          releaseName: kafka-operator
-          namespace: cozy-kafka-operator
-          dependsOn:
-            - victoria-metrics-operator
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.monitoring
+    components:
+    - name: kafka-operator
+      path: system/kafka-operator
+      install:
+        namespace: cozy-kafka-operator
+        releaseName: kafka-operator
+        dependsOn:
+        - victoria-metrics-operator

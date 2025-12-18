@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.monitoring-agents
 spec:
@@ -14,13 +14,13 @@ spec:
       dependsOn:
         - cozystack.networking
         - cozystack.monitoring
-      packages:
+        - cozystack.goldpinger
+        - cozystack.victoria-metrics-operator
+        - cozystack.vertical-pod-autoscaler
+      components:
         - name: monitoring-agents
           path: system/monitoring-agents
-          releaseName: monitoring-agents
-          namespace: cozy-monitoring
-          privileged: true
-          dependsOn:
-            - victoria-metrics-operator
-            - vertical-pod-autoscaler-crds
-
+          install:
+            releaseName: monitoring-agents
+            namespace: cozy-monitoring
+            privileged: true

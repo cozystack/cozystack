@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.kubevirt
 spec:
@@ -10,29 +10,31 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.monitoring
-      packages:
-        - name: kubevirt-operator
-          path: system/kubevirt-operator
-          releaseName: kubevirt-operator
-          namespace: cozy-kubevirt
-          dependsOn:
-            - victoria-metrics-operator
-        - name: kubevirt
-          path: system/kubevirt
-          releaseName: kubevirt
-          namespace: cozy-kubevirt
-          privileged: true
-          dependsOn:
-            - kubevirt-operator
-        - name: kubevirt-instancetypes
-          path: system/kubevirt-instancetypes
-          releaseName: kubevirt-instancetypes
-          namespace: cozy-kubevirt
-          dependsOn:
-            - kubevirt-operator
-            - kubevirt
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.monitoring
+    components:
+    - name: kubevirt-operator
+      path: system/kubevirt-operator
+      install:
+        namespace: cozy-kubevirt
+        releaseName: kubevirt-operator
+        dependsOn:
+        - victoria-metrics-operator
+    - name: kubevirt
+      path: system/kubevirt
+      install:
+        privileged: true
+        namespace: cozy-kubevirt
+        releaseName: kubevirt
+        dependsOn:
+        - kubevirt-operator
+    - name: kubevirt-instancetypes
+      path: system/kubevirt-instancetypes
+      install:
+        namespace: cozy-kubevirt
+        releaseName: kubevirt-instancetypes
+        dependsOn:
+        - kubevirt-operator
+        - kubevirt

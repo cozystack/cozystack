@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.kamaji
 spec:
@@ -10,11 +10,12 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: kamaji
-          path: system/kamaji
-          releaseName: kamaji
-          namespace: cozy-kamaji
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: kamaji
+      path: system/kamaji
+      install:
+        namespace: cozy-kamaji
+        releaseName: kamaji

@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.capi-operator
 spec:
@@ -10,12 +10,13 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: capi-operator
-          path: system/capi-operator
-          releaseName: capi-operator
-          namespace: cozy-cluster-api
-          privileged: true
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: capi-operator
+      path: system/capi-operator
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-operator

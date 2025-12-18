@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.cozy-proxy
 spec:
@@ -10,12 +10,12 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: cozy-proxy
-          path: system/cozy-proxy
-          releaseName: cozystack
-          namespace: cozy-system
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: cozy-proxy
+      path: system/cozy-proxy
+      install:
+        namespace: cozy-system
+        releaseName: cozystack

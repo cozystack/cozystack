@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.bucket-application
 spec:
@@ -17,18 +17,46 @@ spec:
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
-      packages:
-        - name: bucket-application
-          path: system/bucket-application
-          releaseName: bucket-application
-          namespace: cozy-system
-      sources:
-        - name: bucket
-          path: apps/bucket
-          libraries:
-            - cozy-lib
+      components:
         - name: bucket-system
           path: apps/bucket
           libraries:
             - cozy-lib
-
+      applications:
+        - name: bucket
+          path: apps/bucket
+          libraries:
+            - cozy-lib
+          template:
+            spec:
+              application:
+                kind: Bucket
+                plural: buckets
+                singular: bucket
+                openAPISchema: |-
+                  {"title":"Chart Values","type":"object","properties":{}}
+              release:
+                prefix: bucket-
+                labels:
+                  cozystack.io/ui: "true"
+              dashboard:
+                singular: Bucket
+                plural: Buckets
+                category: IaaS
+                weight: 80
+                description: S3 compatible storage
+                tags:
+                  - storage
+                icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl82ODNfMzA5MSkiLz4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik03MiAzMC4xNjQxTDExNy45ODMgMzYuNzc4OVY0MC42NzM5QzExNy45ODMgNDYuNDY1MyA5Ny4zODYyIDUxLjEzMzIgNzEuOTgyNyA1MS4xMzMyQzQ2LjU3OTIgNTEuMTMzMiAyNiA0Ni40NjUzIDI2IDQwLjY3MzlWMzYuNDQzMUw3MiAzMC4xNjQxWk03MiA1OC4yNjc4QzkxLjIwODQgNTguMjY3OCAxMDcuNjU4IDU1LjU5ODYgMTE0LjU0NyA1MS44MDQ4TDExNi44MDMgNDguMTExTDExNy43MjMgNDQuNzUzVjQ4LjkxNzFMMTAyLjY3OSAxMTEuMDMzQzEwMi42NzkgMTE0Ljg5NSA4OC45NTMzIDExOCA3Mi4wMTcyIDExOEM1NS4wODEyIDExOCA0MS4zNzQzIDExNC44OTUgNDEuMzc0MyAxMTEuMDMzTDI2LjMzIDQ4LjkxNzFWNDQuODM2OUwyOS44MDA3IDUxLjkzODJDMzYuNzA2NSA1NS42NjUzIDUyLjk5OTcgNTguMjY3OCA3MiA1OC4yNjc4WiIgZmlsbD0iIzhDMzEyMyIvPgo8cGF0aCBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGNsaXAtcnVsZT0iZXZlbm9kZCIgZD0iTTcyLjAwMDMgMjZDOTcuNDAzOCAyNiAxMTggMzAuNjgzOSAxMTggMzYuNDQyQzExOCA0Mi4yIDk3LjM4NjYgNDYuODUwNyA3Mi4wMDAzIDQ2Ljg1MDdDNDYuNjE0MSA0Ni44NTA3IDI2LjAxNzYgNDIuMjM0NSAyNi4wMTc2IDM2LjQ0MkMyNi4wMTc2IDMwLjY0OTQgNDYuNTk2OCAyNiA3Mi4wMDAzIDI2Wk03Mi4wMDAzIDU0LjEwMzdDOTUuNjg1NyA1NC4xMDM3IDExNS4xNzIgNTAuMDU4IDExNy43MDYgNDQuODE5N0wxMDIuNjYyIDEwNi45MzdDMTAyLjY2MiAxMTAuNzk5IDg4LjkzNjQgMTEzLjkwNSA3Mi4wMDAzIDExMy45MDVDNTUuMDY0MyAxMTMuOTA1IDQxLjMzOSAxMTAuODE2IDQxLjMzOSAxMDYuOTU0TDI2LjI5NTkgNDQuODM3QzI4Ljg0NjYgNTAuMDU4IDQ4LjMzMzMgNTQuMTAzNyA3Mi4wMDAzIDU0LjEwMzdaIiBmaWxsPSIjRTA1MjQzIi8+CjxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIiBkPSJNNjEuMTcyNSA2MC4wMjkzSDgxLjA5MjhWNzkuMTY3Nkg2MS4xNzI1VjYwLjAyOTNaTTQ1LjMzMDEgOTUuMzY4OEM0NS4zMzAxIDkwLjE0MiA0OS43MTA0IDg1LjkzNDIgNTUuMTUxMSA4NS45MzQyQzYwLjU5MTcgODUuOTM0MiA2NC45NzIxIDkwLjE0MiA2NC45NzIxIDk1LjM2ODhDNjQuOTcyMSAxMDAuNTk2IDYwLjU5MTcgMTA0LjgwMyA1NS4xNTExIDEwNC44MDNDNDkuNzEwNCAxMDQuODAzIDQ1LjMzMDEgMTAwLjU5NiA0NS4zMzAxIDk1LjM2ODhaTTk2LjQ0ODcgMTA0LjM2OEg3Ni43NzIyTDg2LjYxMDUgODYuNzczN0w5Ni40NDg3IDEwNC4zNjhaIiBmaWxsPSJ3aGl0ZSIvPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzY4M18zMDkxIiB4MT0iMCIgeTE9IjAiIHgyPSIxNTEiIHkyPSIxODAiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KPHN0b3Agc3RvcC1jb2xvcj0iI0ZGRjBFRSIvPgo8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNFQzg4N0QiLz4KPC9saW5lYXJHcmFkaWVudD4KPC9kZWZzPgo8L3N2Zz4K
+                keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"]]
+              secrets:
+                exclude: []
+                include:
+                  - resourceNames:
+                      - "{{`bucket-{{ .name }}`}}"
+                      - "{{`bucket-{{ .name }}-credentials`}}"
+              ingresses:
+                exclude: []
+                include:
+                  - resourceNames:
+                      - "{{`bucket-{{ .name }}-ui`}}"

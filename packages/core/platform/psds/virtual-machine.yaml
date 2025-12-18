@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.virtual-machine-application
 spec:
@@ -18,14 +18,39 @@ spec:
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
-      packages:
-        - name: virtual-machine-application
-          path: system/virtual-machine-application
-          releaseName: virtual-machine-application
-          namespace: cozy-system
-      sources:
+      components: []
+      applications:
         - name: virtual-machine
           path: apps/virtual-machine
           libraries:
             - cozy-lib
-
+          template:
+            spec:
+              application:
+                kind: VirtualMachine
+                plural: virtualmachines
+                singular: virtualmachine
+                openAPISchema: |-
+                  {"title":"Chart Values","type":"object","properties":{"cloudInit":{"description":"Cloud-init user data.","type":"string","default":""},"cloudInitSeed":{"description":"Seed string to generate SMBIOS UUID for the VM.","type":"string","default":""},"external":{"description":"Enable external access from outside the cluster.","type":"boolean","default":false},"externalMethod":{"description":"Method to pass through traffic to the VM.","type":"string","default":"PortList","enum":["PortList","WholeIP"]},"externalPorts":{"description":"Ports to forward from outside the cluster.","type":"array","default":[22],"items":{"type":"integer"}},"gpus":{"description":"List of GPUs to attach.","type":"array","default":[],"items":{"type":"object","required":["name"],"properties":{"name":{"description":"The name of the GPU resource to attach.","type":"string"}}}},"instanceProfile":{"description":"Virtual Machine preferences profile.","type":"string","default":"ubuntu","enum":["alpine","centos.7","centos.7.desktop","centos.stream10","centos.stream10.desktop","centos.stream8","centos.stream8.desktop","centos.stream8.dpdk","centos.stream9","centos.stream9.desktop","centos.stream9.dpdk","cirros","fedora","fedora.arm64","opensuse.leap","opensuse.tumbleweed","rhel.10","rhel.10.arm64","rhel.7","rhel.7.desktop","rhel.8","rhel.8.desktop","rhel.8.dpdk","rhel.9","rhel.9.arm64","rhel.9.desktop","rhel.9.dpdk","rhel.9.realtime","sles","ubuntu","windows.10","windows.10.virtio","windows.11","windows.11.virtio","windows.2k16","windows.2k16.virtio","windows.2k19","windows.2k19.virtio","windows.2k22","windows.2k22.virtio","windows.2k25","windows.2k25.virtio",""]},"instanceType":{"description":"Virtual Machine instance type.","type":"string","default":"u1.medium"},"resources":{"description":"Resource configuration for the virtual machine.","type":"object","default":{},"properties":{"cpu":{"description":"Number of CPU cores allocated.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"memory":{"description":"Amount of memory allocated.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"sockets":{"description":"Number of CPU sockets (vCPU topology).","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}},"running":{"description":"Whether the virtual machine should be running.","type":"boolean","default":true},"sshKeys":{"description":"List of SSH public keys for authentication.","type":"array","default":[],"items":{"type":"string"}},"subnets":{"description":"Additional subnets","type":"array","default":[],"items":{"type":"object","properties":{"name":{"description":"Subnet name","type":"string"}}}},"systemDisk":{"description":"System disk configuration.","type":"object","default":{},"required":["image","storage"],"properties":{"image":{"description":"The base image for the virtual machine.","type":"string","default":"ubuntu","enum":["ubuntu","cirros","alpine","fedora","talos"]},"storage":{"description":"The size of the disk allocated for the virtual machine.","type":"string","default":"5Gi"},"storageClass":{"description":"StorageClass used to store the data.","type":"string","default":"replicated"}}}}}
+              release:
+                prefix: virtual-machine-
+                labels:
+                  cozystack.io/ui: "true"
+              dashboard:
+                category: IaaS
+                singular: Virtual Machine
+                plural: Virtual Machines
+                description: Virtual Machine (simple)
+                weight: 10
+                tags:
+                  - compute
+                icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl82ODdfMzQ1NCkiLz4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzY4N18zNDU0KSI+CjxwYXRoIGQ9Ik04OS41MDM5IDExMS43MDdINTQuNDk3QzU0LjE3MjcgMTExLjcwNyA1NC4wMTA4IDExMS4yMjEgNTQuMzM0OSAxMTEuMDU5TDU3LjI1MjIgMTA4Ljk1MkM2MC4zMzE0IDEwNi42ODMgNjEuOTUyMiAxMDIuNjMxIDYwLjk3OTcgOTguNzQxMkg4My4wMjFDODIuMDQ4NSAxMDIuNjMxIDgzLjY2OTMgMTA2LjY4MyA4Ni43NDg1IDEwOC45NTJMODkuNjY1OCAxMTEuMDU5Qzg5Ljk5IDExMS4yMjEgODkuODI3OSAxMTEuNzA3IDg5LjUwMzkgMTExLjcwN1oiIGZpbGw9IiNCMEI2QkIiLz4KPHBhdGggZD0iTTExMy4zMjggOTguNzQxSDMwLjY3MjVDMjcuNTkzMSA5OC43NDEgMjUgOTYuMTQ4IDI1IDkzLjA2ODdWMzMuMTAzMkMyNSAzMC4wMjM5IDI3LjU5MzEgMjcuNDMwNyAzMC42NzI1IDI3LjQzMDdIMTEzLjMyOEMxMTYuNDA3IDI3LjQzMDcgMTE5IDMwLjAyMzcgMTE5IDMzLjEwMzJWOTMuMDY4N0MxMTkgOTYuMTQ4IDExNi40MDcgOTguNzQxIDExMy4zMjggOTguNzQxWiIgZmlsbD0iI0U4RURFRSIvPgo8cGF0aCBkPSJNMTE5IDg0LjE1NDlIMjVWMzMuMTAzMkMyNSAzMC4wMjM5IDI3LjU5MzEgMjcuNDMwNyAzMC42NzI1IDI3LjQzMDdIMTEzLjMyOEMxMTYuNDA3IDI3LjQzMDcgMTE5IDMwLjAyMzcgMTE5IDMzLjEwMzJMMTE5IDg0LjE1NDlaIiBmaWxsPSIjMDBCM0ZGIi8+CjxwYXRoIGQ9Ik05MC42Mzc0IDExNi41NjlINTMuMzYxNkM1Mi4wNjUxIDExNi41NjkgNTAuOTMwNyAxMTUuNDM1IDUwLjkzMDcgMTE0LjEzOEM1MC45MzA3IDExMi44NDEgNTIuMDY1MSAxMTEuNzA3IDUzLjM2MTYgMTExLjcwN0g5MC42Mzc0QzkxLjkzMzkgMTExLjcwNyA5My4wNjg0IDExMi44NDEgOTMuMDY4NCAxMTQuMTM4QzkzLjA2ODQgMTE1LjQzNSA5MS45MzM5IDExNi41NjkgOTAuNjM3NCAxMTYuNTY5WiIgZmlsbD0iI0U4RURFRSIvPgo8L2c+CjxwYXRoIGQ9Ik03Mi41Mjc1IDUzLjgzNjdDNzIuNDQzMSA1My44MzUxIDcyLjM2MDUgNTMuODEyMiA3Mi4yODczIDUzLjc3MDFMNTYuNDY5OSA0NC43OTM0QzU2LjM5ODMgNDQuNzUxOSA1Ni4zMzg4IDQ0LjY5MjMgNTYuMjk3MyA0NC42MjA3QzU2LjI1NTkgNDQuNTQ5IDU2LjIzMzggNDQuNDY3OCA1Ni4yMzM0IDQ0LjM4NUM1Ni4yMzM0IDQ0LjIxNjkgNTYuMzI1OCA0NC4wNjE3IDU2LjQ2OTkgNDMuOTc4NUw3Mi4xOTEyIDM1LjA2MDlDNzIuMjYzNyAzNS4wMjEgNzIuMzQ1IDM1IDcyLjQyNzcgMzVDNzIuNTEwNSAzNSA3Mi41OTE4IDM1LjAyMSA3Mi42NjQzIDM1LjA2MDlMODguNDg3MiA0NC4wMzk1Qzg4LjU1OTEgNDQuMDgwMSA4OC42MTg4IDQ0LjEzOTIgODguNjYgNDQuMjEwN0M4OC43MDEzIDQ0LjI4MjIgODguNzIyNyA0NC4zNjM1IDg4LjcyMTkgNDQuNDQ2Qzg4LjcyMjUgNDQuNTI4NSA4OC43MDEgNDQuNjA5NyA4OC42NTk4IDQ0LjY4MTJDODguNjE4NSA0NC43NTI2IDg4LjU1ODkgNDQuODExOCA4OC40ODcyIDQ0Ljg1MjVMNzIuNzcxNCA1My43NjgzQzcyLjY5NzIgNTMuODExNCA3Mi42MTMzIDUzLjgzNDkgNzIuNTI3NSA1My44MzY3IiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBvcGFjaXR5PSIwLjciIGQ9Ik03MC4yNTUzIDc1LjY1MTdDNzAuMTcxIDc1LjY1MzUgNzAuMDg3OCA3NS42MzE3IDcwLjAxNTEgNzUuNTg4OEw1NC4yNDU4IDY2LjY0MTdDNTQuMTcxNSA2Ni42MDI0IDU0LjEwOTUgNjYuNTQzNiA1NC4wNjYxIDY2LjQ3MTZDNTQuMDIyOCA2Ni4zOTk3IDU0IDY2LjMxNzMgNTQgNjYuMjMzM1Y0OC4yNzhDNTQgNDguMTA4IDU0LjA5MjQgNDcuOTU0NiA1NC4yNDM5IDQ3Ljg2OTZDNTQuMzE3MiA0Ny44MjcxIDU0LjQwMDQgNDcuODA0NyA1NC40ODUxIDQ3LjgwNDdDNTQuNTY5NyA0Ny44MDQ3IDU0LjY1MjkgNDcuODI3MSA1NC43MjYyIDQ3Ljg2OTZMNzAuNDkzNyA1Ni44MTMxQzcwLjU2NDIgNTYuODU2NSA3MC42MjI1IDU2LjkxNyA3MC42NjMyIDU2Ljk4OTFDNzAuNzAzOSA1Ny4wNjEyIDcwLjcyNTcgNTcuMTQyNCA3MC43MjY1IDU3LjIyNTFWNzUuMTgwNUM3MC43MjU5IDc1LjI2MjggNzAuNzA0MiA3NS4zNDM2IDcwLjY2MzUgNzUuNDE1MUM3MC42MjI3IDc1LjQ4NjYgNzAuNTY0MiA3NS41NDY0IDcwLjQ5MzcgNzUuNTg4OEM3MC40MjA2IDc1LjYyOTEgNzAuMzM4NyA3NS42NTA3IDcwLjI1NTMgNzUuNjUxNyIgZmlsbD0id2hpdGUiLz4KPHBhdGggb3BhY2l0eT0iMC40IiBkPSJNNzQuNzE5OCA3NS42NTExQzc0LjYzMzMgNzUuNjUxMiA3NC41NDgyIDc1LjYyOTYgNzQuNDcyMiA3NS41ODgzQzc0LjQwMTYgNzUuNTQ2MSA3NC4zNDMyIDc1LjQ4NjIgNzQuMzAyNyA3NS40MTQ3Qzc0LjI2MjMgNzUuMzQzMSA3NC4yNDExIDc1LjI2MjIgNzQuMjQxMiA3NS4xOFY1Ny4zMzczQzc0LjI0MTIgNTcuMTcxIDc0LjMzMzYgNTcuMDE1OCA3NC40NzIyIDU2LjkyOUw5MC4yMzk3IDQ3Ljk4NTVDOTAuMzExOSA0Ny45NDM4IDkwLjM5MzggNDcuOTIxOSA5MC40NzcxIDQ3LjkyMTlDOTAuNTYwNSA0Ny45MjE5IDkwLjY0MjQgNDcuOTQzOCA5MC43MTQ2IDQ3Ljk4NTVDOTAuNzg3NiA0OC4wMjU1IDkwLjg0ODUgNDguMDg0MiA5MC44OTExIDQ4LjE1NTdDOTAuOTMzNyA0OC4yMjcyIDkwLjk1NjMgNDguMzA4OCA5MC45NTY2IDQ4LjM5MlY2Ni4yMzI4QzkwLjk1NyA2Ni4zMTY0IDkwLjkzNDcgNjYuMzk4NSA5MC44OTIxIDY2LjQ3MDRDOTAuODQ5NSA2Ni41NDI0IDkwLjc4ODEgNjYuNjAxNCA5MC43MTQ2IDY2LjY0MTFMNzQuOTUyNiA3NS41ODgzQzc0Ljg4MjUgNzUuNjMwNyA3NC44MDE4IDc1LjY1MjUgNzQuNzE5OCA3NS42NTExIiBmaWxsPSJ3aGl0ZSIvPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzY4N18zNDU0IiB4MT0iMTYxIiB5MT0iMTgwIiB4Mj0iMy41OTI4NGUtMDciIHkyPSI0Ljk5OTk4IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CjxzdG9wLz4KPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjNTk1NjU2Ii8+CjwvbGluZWFyR3JhZGllbnQ+CjxjbGlwUGF0aCBpZD0iY2xpcDBfNjg3XzM0NTQiPgo8cmVjdCB3aWR0aD0iOTQiIGhlaWdodD0iOTQiIGZpbGw9IndoaXRlIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyNSAyNSkiLz4KPC9jbGlwUGF0aD4KPC9kZWZzPgo8L3N2Zz4K
+                keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "external"], ["spec", "externalMethod"], ["spec", "externalPorts"], ["spec", "running"], ["spec", "instanceType"], ["spec", "instanceProfile"], ["spec", "systemDisk"], ["spec", "systemDisk", "image"], ["spec", "systemDisk", "storage"], ["spec", "systemDisk", "storageClass"], ["spec", "subnets"], ["spec", "gpus"], ["spec", "resources"], ["spec", "sshKeys"], ["spec", "cloudInit"], ["spec", "cloudInitSeed"]]
+              secrets:
+                exclude: []
+                include: []
+              services:
+                exclude: []
+                include:
+                  - resourceNames:
+                      - "{{`virtual-machine-{{ .name }}`}}"

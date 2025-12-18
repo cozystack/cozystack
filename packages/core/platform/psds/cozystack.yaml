@@ -1,64 +1,85 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
-  name: cozystack.cozystack-core
+  name: cozystack.cozystack
 spec:
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.keycloak-operator
-      libraries:
-        - name: cozy-lib
-          path: library/cozy-lib
-      packages:
-        - name: cozystack-controller
-          releaseName: cozystack-controller
-          path: system/cozystack-controller
-          namespace: cozy-system
-          dependsOn: []
-        - name: cozystack-api
-          releaseName: cozystack-api
-          path: system/cozystack-api
-          namespace: cozy-system
-          dependsOn: [cozystack-controller]
-        - name: lineage-controller-webhook
-          releaseName: lineage-controller-webhook
-          path: system/lineage-controller-webhook
-          namespace: cozy-system
-          dependsOn: [cozystack-controller]
-        - name: dashboard
-          releaseName: dashboard
-          path: system/dashboard
-          namespace: cozy-dashboard
-          dependsOn: [cozystack-api,cozystack-controller]
-        - name: cozystack-controller
-          releaseName: cozystack-controller
-          path: system/cozystack-controller
-          namespace: cozy-system
-          dependsOn: []
-        - name: cozystack-api
-          releaseName: cozystack-api
-          path: system/cozystack-api
-          namespace: cozy-system
-          dependsOn: [cozystack-controller]
-        - name: lineage-controller-webhook
-          releaseName: lineage-controller-webhook
-          path: system/lineage-controller-webhook
-          namespace: cozy-system
-          dependsOn: [cozystack-controller]
-        - name: dashboard
-          releaseName: dashboard
-          path: system/dashboard
-          namespace: cozy-dashboard
-          dependsOn: [cozystack-api,cozystack-controller,keycloak-configure]
-        - name: keycloak-configure
-          releaseName: keycloak-configure
-          path: system/keycloak-configure
-          namespace: cozy-keycloak
-          dependsOn: [keycloak-operator]
-        - name: keycloak
-          releaseName: keycloak
-          path: system/keycloak
-          namespace: cozy-keycloak
-          dependsOn: [postgres-operator]
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+    components:
+    - name: cozystack-controller
+      path: system/cozystack-controller
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-controller
+        dependsOn: []
+    - name: cozystack-api
+      path: system/cozystack-api
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-api
+        dependsOn:
+        - cozystack-controller
+    - name: lineage-controller-webhook
+      path: system/lineage-controller-webhook
+      install:
+        namespace: cozy-system
+        releaseName: lineage-controller-webhook
+        dependsOn:
+        - cozystack-controller
+    - name: dashboard
+      path: system/dashboard
+      install:
+        namespace: cozy-dashboard
+        releaseName: dashboard
+        dependsOn:
+        - cozystack-api
+        - cozystack-controller
+  - name: oidc
+    dependsOn:
+    - cozystack.networking
+    - cozystack.keycloak
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+    components:
+    - name: cozystack-controller
+      path: system/cozystack-controller
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-controller
+        dependsOn: []
+    - name: cozystack-api
+      path: system/cozystack-api
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-api
+        dependsOn:
+        - cozystack-controller
+    - name: lineage-controller-webhook
+      path: system/lineage-controller-webhook
+      install:
+        namespace: cozy-system
+        releaseName: lineage-controller-webhook
+        dependsOn:
+        - cozystack-controller
+    - name: dashboard
+      path: system/dashboard
+      install:
+        namespace: cozy-dashboard
+        releaseName: dashboard
+        dependsOn:
+        - cozystack-api
+        - cozystack-controller
+        - keycloak-configure
+    - name: keycloak-configure
+      path: system/keycloak-configure
+      install:
+        namespace: cozy-keycloak
+        releaseName: keycloak-configure
+        dependsOn: []

@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.nfs-driver
 spec:
@@ -10,14 +10,14 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: nfs-driver
-          path: system/nfs-driver
-          releaseName: nfs-driver
-          namespace: cozy-nfs-driver
-          privileged: true
-          disabled: true
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: nfs-driver
+      path: system/nfs-driver
+      disabled: true
+      install:
+        privileged: true
+        namespace: cozy-nfs-driver
+        releaseName: nfs-driver

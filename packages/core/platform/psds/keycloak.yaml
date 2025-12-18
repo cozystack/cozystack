@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.bootbox
+  name: cozystack.keycloak
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,12 +13,10 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.bootbox-application
+    - cozystack.postgres-operator
     components:
-    - name: bootbox
-      path: system/bootbox
-      disabled: true
+    - name: keycloak
+      path: system/keycloak
       install:
-        privileged: true
-        namespace: cozy-bootbox
-        releaseName: bootbox
+        namespace: cozy-keycloak
+        releaseName: keycloak

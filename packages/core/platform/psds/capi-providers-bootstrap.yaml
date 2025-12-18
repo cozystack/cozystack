@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.capi-providers-bootstrap
 spec:
@@ -10,16 +10,16 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: kubevirt
-      dependsOn:
-        - cozystack.networking
-        - cozystack.capi-operator
-      packages:
-        - name: capi-providers-bootstrap
-          path: system/capi-providers-bootstrap
-          releaseName: capi-providers-bootstrap
-          namespace: cozy-cluster-api
-          privileged: true
-          dependsOn:
-            - capi-operator
-
+  - name: kubevirt
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-operator
+    components:
+    - name: capi-providers-bootstrap
+      path: system/capi-providers-bootstrap
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-bootstrap
+        dependsOn:
+        - capi-operator

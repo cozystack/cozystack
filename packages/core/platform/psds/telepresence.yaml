@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.telepresence
 spec:
@@ -10,13 +10,13 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-      packages:
-        - name: telepresence
-          path: system/telepresence
-          releaseName: traffic-manager
-          namespace: cozy-telepresence
-          disabled: true
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: telepresence
+      path: system/telepresence
+      disabled: true
+      install:
+        namespace: cozy-telepresence
+        releaseName: traffic-manager

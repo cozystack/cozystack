@@ -1,6 +1,6 @@
 ---
 apiVersion: cozystack.io/v1alpha1
-kind: PackageSetDefinition
+kind: PackageSource
 metadata:
   name: cozystack.snapshot-controller
 spec:
@@ -10,15 +10,15 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.cert-manager
-      packages:
-        - name: snapshot-controller
-          path: system/snapshot-controller
-          releaseName: snapshot-controller
-          namespace: cozy-snapshot-controller
-          dependsOn:
-            - cert-manager-issuers
-
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.cert-manager
+    components:
+    - name: snapshot-controller
+      path: system/snapshot-controller
+      install:
+        namespace: cozy-snapshot-controller
+        releaseName: snapshot-controller
+        dependsOn:
+        - cert-manager-issuers
