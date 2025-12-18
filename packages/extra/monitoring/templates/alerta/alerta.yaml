@@ -129,13 +129,19 @@ spec:
               value: "{{ .Values.alerta.alerts.telegram.token }}"
             - name: TELEGRAM_WEBHOOK_URL
               value: "https://{{ printf "alerta.%s" (.Values.host | default $host) }}/api/webhooks/telegram?api-key={{ $apiKey }}"
+            {{- if .Values.alerta.alerts.telegram.disabledSeverity }}
             - name: TELEGRAM_DISABLE_NOTIFICATION_SEVERITY
-              value: "{{ .Values.alerta.alerts.telegram.disabledSeverity }}"
+              value: {{ .Values.alerta.alerts.telegram.disabledSeverity | toJson | quote }}
+            {{- end }}
             {{- end }}
 
             {{- if .Values.alerta.alerts.slack.url }}
             - name: "SLACK_WEBHOOK_URL"
               value: "{{ .Values.alerta.alerts.slack.url }}"
+            {{- if .Values.alerta.alerts.slack.disabledSeverity }}
+            - name: SLACK_SEVERITY_FILTER
+              value: {{ .Values.alerta.alerts.slack.disabledSeverity | toJson | quote }}
+            {{- end }}
             {{- end }}
 
           ports:
