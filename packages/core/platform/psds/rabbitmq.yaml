@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.rabbitmq
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.rabbitmq-operator
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: rabbitmq-application
+          path: system/rabbitmq-application
+          releaseName: rabbitmq-application
+          namespace: cozy-system
+      sources:
+        - name: rabbitmq
+          path: apps/rabbitmq
+          libraries:
+            - cozy-lib
+

@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.redis
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.redis-operator
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: redis-application
+          path: system/redis-application
+          releaseName: redis-application
+          namespace: cozy-system
+      sources:
+        - name: redis
+          path: apps/redis
+          libraries:
+            - cozy-lib
+

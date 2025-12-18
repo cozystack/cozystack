@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.tcp-balancer-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: tcp-balancer-application
+          path: system/tcp-balancer-application
+          releaseName: tcp-balancer
+          namespace: cozy-system
+      sources:
+        - name: tcp-balancer
+          path: apps/tcp-balancer
+          libraries:
+            - cozy-lib
+

@@ -1,0 +1,67 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.cozystack-core
+spec:
+  variants:
+    - name: default
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: cozystack-controller
+          releaseName: cozystack-controller
+          path: system/cozystack-controller
+          namespace: cozy-system
+          dependsOn: []
+        - name: cozystack-api
+          releaseName: cozystack-api
+          path: system/cozystack-api
+          namespace: cozy-system
+          dependsOn: [cozystack-controller]
+        - name: lineage-controller-webhook
+          releaseName: lineage-controller-webhook
+          path: system/lineage-controller-webhook
+          namespace: cozy-system
+          dependsOn: [cozystack-controller]
+        - name: dashboard
+          releaseName: dashboard
+          path: system/dashboard
+          namespace: cozy-dashboard
+          dependsOn: [cozystack-api,cozystack-controller]
+        - name: cozystack-controller
+          releaseName: cozystack-controller
+          path: system/cozystack-controller
+          namespace: cozy-system
+          dependsOn: []
+        - name: cozystack-api
+          releaseName: cozystack-api
+          path: system/cozystack-api
+          namespace: cozy-system
+          dependsOn: [cozystack-controller]
+        - name: lineage-controller-webhook
+          releaseName: lineage-controller-webhook
+          path: system/lineage-controller-webhook
+          namespace: cozy-system
+          dependsOn: [cozystack-controller]
+        - name: dashboard
+          releaseName: dashboard
+          path: system/dashboard
+          namespace: cozy-dashboard
+          dependsOn: [cozystack-api,cozystack-controller,keycloak-configure]
+        - name: keycloak-configure
+          releaseName: keycloak-configure
+          path: system/keycloak-configure
+          namespace: cozy-keycloak
+          dependsOn: [keycloak-operator]
+        - name: keycloak
+          releaseName: keycloak
+          path: system/keycloak
+          namespace: cozy-keycloak
+          dependsOn: [postgres-operator]
+        - name: keycloak-operator
+          releaseName: keycloak-operator
+          path: system/keycloak-operator
+          namespace: cozy-keycloak
+          dependsOn: [keycloak]

@@ -1,0 +1,52 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.clickhouse-operator
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.monitoring
+        - cozystack.cozystack-core
+      packages:
+        - name: clickhouse-operator
+          path: system/clickhouse-operator
+          releaseName: clickhouse-operator
+          namespace: cozy-clickhouse-operator
+          dependsOn:
+            - victoria-metrics-operator
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.clickhouse-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.clickhouse-operator
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: clickhouse-application
+          path: system/clickhouse-application
+          releaseName: clickhouse-application
+          namespace: cozy-system
+      sources:
+        - name: clickhouse
+          path: apps/clickhouse
+          libraries:
+          - cozy-lib

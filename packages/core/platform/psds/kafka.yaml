@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.kafka
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.kafka-operator
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: kafka-application
+          path: system/kafka-application
+          releaseName: kafka-application
+          namespace: cozy-system
+      sources:
+        - name: kafka
+          path: apps/kafka
+          libraries:
+            - cozy-lib
+

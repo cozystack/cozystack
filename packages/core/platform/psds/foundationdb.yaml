@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.foundationdb
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.foundationdb-operator
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: foundationdb-application
+          path: system/foundationdb-application
+          releaseName: foundationdb-application
+          namespace: cozy-system
+      sources:
+        - name: foundationdb
+          path: apps/foundationdb
+          libraries:
+            - cozy-lib
+

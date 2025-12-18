@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSetDefinition
+metadata:
+  name: cozystack.postgres
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      packages:
+        - name: postgres-application
+          path: system/postgres-application
+          releaseName: postgres-application
+          namespace: cozy-system
+      sources:
+        - name: postgres
+          path: apps/postgres
+          libraries:
+            - cozy-lib
+
