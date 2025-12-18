@@ -12,7 +12,6 @@ update:
 	sed -i.bak "/ARG VERSION/ s|=.*|=$${version}|g" images/seaweedfs/Dockerfile && \
 	rm -f images/seaweedfs/Dockerfile.bak
 	patch --no-backup-if-mismatch -p4 < patches/resize-api-server-annotation.diff
-	patch --no-backup-if-mismatch -p4 < patches/long-term-ca.diff
 	#patch --no-backup-if-mismatch -p4 < patches/retention-policy-delete.yaml
 
 image:

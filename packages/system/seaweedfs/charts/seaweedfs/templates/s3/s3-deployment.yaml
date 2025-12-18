@@ -143,9 +143,6 @@ spec:
               {{- if .Values.s3.domainName }}
               -domainName={{ .Values.s3.domainName }} \
               {{- end }}
-              {{- if eq (typeOf .Values.s3.allowEmptyFolder) "bool" }}
-              -allowEmptyFolder={{ .Values.s3.allowEmptyFolder }} \
-              {{- end }}
               {{- if .Values.s3.enableAuth }}
               -config=/etc/sw/seaweedfs_s3_config \
               {{- end }}
@@ -204,7 +201,7 @@ spec:
             httpGet:
               path: {{ .Values.s3.readinessProbe.httpGet.path }}
               port: {{ .Values.s3.port }}
-              scheme: {{ .Values.s3.readinessProbe.scheme }}
+              scheme: {{ .Values.s3.readinessProbe.httpGet.scheme }}
             initialDelaySeconds: {{ .Values.s3.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.s3.readinessProbe.periodSeconds }}
             successThreshold: {{ .Values.s3.readinessProbe.successThreshold }}
@@ -216,7 +213,7 @@ spec:
             httpGet:
               path: {{ .Values.s3.livenessProbe.httpGet.path }}
               port: {{ .Values.s3.port }}
-              scheme: {{ .Values.s3.livenessProbe.scheme }}
+              scheme: {{ .Values.s3.livenessProbe.httpGet.scheme }}
             initialDelaySeconds: {{ .Values.s3.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.s3.livenessProbe.periodSeconds }}
             successThreshold: {{ .Values.s3.livenessProbe.successThreshold }}
