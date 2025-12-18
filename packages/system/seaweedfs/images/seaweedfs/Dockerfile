@@ -1,2 +1,2 @@
-ARG VERSION=3.99
+ARG VERSION=4.02
 FROM chrislusf/seaweedfs:${VERSION}

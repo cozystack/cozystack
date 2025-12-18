@@ -213,9 +213,6 @@ spec:
               -s3.cert.file=/usr/local/share/ca-certificates/client/tls.crt \
               -s3.key.file=/usr/local/share/ca-certificates/client/tls.key \
               {{- end }}
-              {{- if eq (typeOf .Values.filer.s3.allowEmptyFolder) "bool" }}
-              -s3.allowEmptyFolder={{ .Values.filer.s3.allowEmptyFolder }} \
-              {{- end }}
               {{- if .Values.filer.s3.enableAuth }}
               -s3.config=/etc/sw/seaweedfs_s3_config \
               {{- end }}
@@ -289,7 +286,7 @@ spec:
             httpGet:
               path: {{ .Values.filer.readinessProbe.httpGet.path }}
               port: {{ .Values.filer.port }}
-              scheme: {{ .Values.filer.readinessProbe.scheme }}
+              scheme: {{ .Values.filer.readinessProbe.httpGet.scheme }}
             initialDelaySeconds: {{ .Values.filer.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.filer.readinessProbe.periodSeconds }}
             successThreshold: {{ .Values.filer.readinessProbe.successThreshold }}
@@ -301,7 +298,7 @@ spec:
             httpGet:
               path: {{ .Values.filer.livenessProbe.httpGet.path }}
               port: {{ .Values.filer.port }}
-              scheme: {{ .Values.filer.livenessProbe.scheme }}
+              scheme: {{ .Values.filer.livenessProbe.httpGet.scheme }}
             initialDelaySeconds: {{ .Values.filer.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.filer.livenessProbe.periodSeconds }}
             successThreshold: {{ .Values.filer.livenessProbe.successThreshold }}
@@ -392,10 +389,12 @@ spec:
       nodeSelector:
         {{ tpl .Values.filer.nodeSelector . | indent 8 | trim }}
       {{- end }}
-  {{- if and (.Values.filer.enablePVC) (eq .Values.filer.data.type "persistentVolumeClaim") }}
+  {{- if and (.Values.filer.enablePVC) (not .Values.filer.data) }}
   # DEPRECATION: Deprecate in favor of filer.data section below
   volumeClaimTemplates:
-  - metadata:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
       name: data-filer
     spec:
       accessModes:
@@ -411,7 +410,9 @@ spec:
   {{- if $pvc_exists }}
   volumeClaimTemplates:
     {{- if eq .Values.filer.data.type "persistentVolumeClaim" }}
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data-filer
         {{- with .Values.filer.data.annotations }}
         annotations:
@@ -425,7 +426,9 @@ spec:
             storage: {{ .Values.filer.data.size }}
     {{- end }}
     {{- if eq .Values.filer.logs.type "persistentVolumeClaim" }}
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: seaweedfs-filer-log-volume
         {{- with .Values.filer.logs.annotations }}
         annotations:
