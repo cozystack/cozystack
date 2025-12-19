@@ -20,9 +20,9 @@ diff:
 update:
 	hack/gen-profiles.sh
 
-image: pre-checks image-matchbox image-cozystack image-talos
+image: pre-checks image-matchbox image-cozystack image-talos image-packages
 
-image-cozystack:
+image-cozystack: update-version
 	docker buildx build -f images/cozystack/Dockerfile ../../.. \
 		--tag $(REGISTRY)/installer:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/installer:latest \
@@ -58,3 +58,19 @@ talos-initramfs talos-kernel talos-installer talos-iso talos-nocloud talos-metal
 	cat images/talos/profiles/$(subst talos-,,$@).yaml | \
 		docker run --rm -i -v /dev:/dev --privileged "ghcr.io/siderolabs/imager:$(TALOS_VERSION)" --tar-to-stdout - | \
 		tar -C ../../../_out/assets -xzf-
+
+update-version:
+	TAG="$(call settag,$(TAG))" \
+			yq -i '.cozystackOperator.cozystackVersion = strenv(TAG)' values.yaml
+
+image-packages: update-version
+	mkdir -p ../../../_out/assets images
+	flux push artifact \
+		oci://$(REGISTRY)/platform-packages:$(call settag,$(TAG)) \
+		--path=../../../packages \
+		--source=https://github.com/cozystack/cozystack \
+		--revision="$$(git describe --tags):$$(git rev-parse HEAD)" \
+		2>&1 | tee images/cozystack-packages.log
+	export REPO="oci://$(REGISTRY)/platform-packages"; \
+	export DIGEST=$$(awk -F@ '/artifact successfully pushed/ {print $$2}' images/cozystack-packages.log; rm -f images/cozystack-packages.log); \
+		test -n "$$DIGEST" && yq -i '.cozystackOperator.platformSource = (strenv(REPO) + "@" + strenv(DIGEST))' values.yaml

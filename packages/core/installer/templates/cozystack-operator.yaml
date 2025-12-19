@@ -1,0 +1,76 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cozy-system
+  labels:
+    cozystack.io/system: "true"
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozystack
+  namespace: cozy-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozystack
+subjects:
+- kind: ServiceAccount
+  name: cozystack
+  namespace: cozy-system
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cozystack-operator
+  namespace: cozy-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cozystack-operator
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: cozystack-operator
+    spec:
+      serviceAccountName: cozystack
+      containers:
+      - name: cozystack-operator
+        image: "{{ .Values.cozystackOperator.image }}"
+        args:
+        - --leader-elect=true
+        - --install-flux=true
+        - --metrics-bind-address=0
+        - --health-probe-bind-address=
+        - --cozystack-version={{ .Values.cozystackOperator.cozystackVersion }}
+        {{- if .Values.cozystackOperator.disableTelemetry }}
+        - --disable-telemetry
+        {{- end }}
+        - --platform-name="cozystack-platform"
+        - --platform-source="{{ .Values.cozystackOperator.platformSource }}"
+        env:
+        - name: KUBERNETES_SERVICE_HOST
+          value: localhost
+        - name: KUBERNETES_SERVICE_PORT
+          value: "7445"
+      hostNetwork: true
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node.cilium.io/agent-not-ready"
+        operator: "Exists"
+        effect: "NoSchedule"
