@@ -48,6 +48,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/cozystack/cozystack/internal/fluxinstall"
+	"github.com/cozystack/cozystack/internal/operator"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -88,7 +89,7 @@ func main() {
 	var cozystackVersion string
 	var installFluxResources stringSliceFlag
 	var platformSource string
-	var platformName string
+	var platformSourceName string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -104,7 +105,7 @@ func main() {
 	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
 		"Version of Cozystack")
 	flag.StringVar(&platformSource, "platform-source", "", "Platform source URL (oci:// or git://). If specified, generates OCIRepository or GitRepository resource.")
-	flag.StringVar(&platformName, "platform-name", "cozystack-packages", "Name for the generated platform source resource (default: cozystack-packages)")
+	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-packages", "Name for the generated platform source resource (default: cozystack-packages)")
 
 	opts := zap.Options{
 		Development: true,
@@ -178,16 +179,25 @@ func main() {
 
 	// Generate and install platform source resource if specified
 	if platformSource != "" {
-		setupLog.Info("Generating platform source resource", "source", platformSource, "name", platformName)
+		setupLog.Info("Generating platform source resource", "source", platformSource, "name", platformSourceName)
 		installCtx, installCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer installCancel()
 
-		if err := installPlatformSourceResource(installCtx, mgr.GetClient(), platformSource, platformName); err != nil {
+		if err := installPlatformSourceResource(installCtx, mgr.GetClient(), platformSource, platformSourceName); err != nil {
 			setupLog.Error(err, "failed to install platform source resource")
 			os.Exit(1)
 		} else {
 			setupLog.Info("Platform source resource installation completed successfully")
 		}
+	}
+
+	// Setup PackageSource reconciler
+	if err := (&operator.PackageSourceReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PackageSource")
+		os.Exit(1)
 	}
 
 	// +kubebuilder:scaffold:builder
@@ -348,12 +358,12 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 func parsePlatformSource(sourceURL string) (sourceType, repoURL, ref string, err error) {
 	// Normalize the URL by trimming whitespace
 	sourceURL = strings.TrimSpace(sourceURL)
-	
+
 	// Check for oci:// prefix
 	if strings.HasPrefix(sourceURL, "oci://") {
 		// Remove oci:// prefix
 		rest := strings.TrimPrefix(sourceURL, "oci://")
-		
+
 		// Check for @sha256: digest (look for @ followed by sha256:)
 		// We need to find the last @ before sha256: to handle paths with @ symbols
 		sha256Idx := strings.Index(rest, "@sha256:")

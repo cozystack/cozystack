@@ -4,6 +4,11 @@ kind: PackageSource
 metadata:
   name: cozystack.networking
 spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
   variants:
   - name: noop
     components: []
