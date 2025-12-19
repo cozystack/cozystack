@@ -11623,7 +11623,6 @@ spec:
               value: /tmp/.sigstore
             - name: NO_PROXY
               value: .svc
-            {{- include "cozy.kubernetes_envs" . | nindent 12 }}
           image: ghcr.io/fluxcd/source-controller:v1.7.3
           imagePullPolicy: IfNotPresent
           livenessProbe:
@@ -11694,7 +11693,6 @@ spec:
               value: /tmp/.sigstore
             - name: NO_PROXY
               value: .svc
-            {{- include "cozy.kubernetes_envs" . | nindent 12 }}
           image: ghcr.io/fluxcd/kustomize-controller:v1.7.2
           imagePullPolicy: IfNotPresent
           livenessProbe:
@@ -11760,7 +11758,6 @@ spec:
               value: /tmp/.sigstore
             - name: NO_PROXY
               value: .svc
-            {{- include "cozy.kubernetes_envs" . | nindent 12 }}
           image: ghcr.io/fluxcd/helm-controller:v1.4.3
           imagePullPolicy: IfNotPresent
           livenessProbe:
@@ -11823,7 +11820,6 @@ spec:
               value: /tmp/.sigstore
             - name: NO_PROXY
               value: .svc
-            {{- include "cozy.kubernetes_envs" . | nindent 12 }}
           image: ghcr.io/fluxcd/notification-controller:v1.7.4
           imagePullPolicy: IfNotPresent
           livenessProbe:
@@ -11894,7 +11890,6 @@ spec:
               value: /tmp/.sigstore
             - name: NO_PROXY
               value: .svc
-            {{- include "cozy.kubernetes_envs" . | nindent 12 }}
           image: ghcr.io/fluxcd/source-watcher:v2.0.2
           imagePullPolicy: IfNotPresent
           livenessProbe:
@@ -11936,7 +11931,6 @@ spec:
               name: data
             - mountPath: /tmp
               name: tmp
-      dnsPolicy: ClusterFirstWithHostNet
       hostNetwork: true
       priorityClassName: system-cluster-critical
       securityContext:

@@ -20,18 +20,7 @@ diff:
 update:
 	hack/gen-profiles.sh
 
-image: pre-checks image-matchbox image-cozystack image-talos image-packages
-
-image-cozystack: update-version
-	docker buildx build -f images/cozystack/Dockerfile ../../.. \
-		--tag $(REGISTRY)/installer:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/installer:latest \
-		--cache-to type=inline \
-		--metadata-file images/installer.json \
-		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/installer:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/installer.json -o json -r)" \
-		yq -i '.cozystack.image = strenv(IMAGE)' values.yaml
-	rm -f images/installer.json
+image: pre-checks image-matchbox image-talos image-operator image-packages
 
 image-talos:
 	test -f ../../../_out/assets/installer-amd64.tar || make talos-installer
@@ -62,6 +51,18 @@ talos-initramfs talos-kernel talos-installer talos-iso talos-nocloud talos-metal
 update-version:
 	TAG="$(call settag,$(TAG))" \
 			yq -i '.cozystackOperator.cozystackVersion = strenv(TAG)' values.yaml
+
+image-operator:
+	docker buildx build -f images/cozystack-operator/Dockerfile ../../.. \
+		--tag $(REGISTRY)/cozystack-operator:$(call settag,$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/cozystack-operator:latest \
+		--cache-to type=inline \
+		--metadata-file images/cozystack-operator.json \
+		$(BUILDX_ARGS)
+	IMAGE="$(REGISTRY)/cozystack-operator:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/cozystack-operator.json -o json -r)" \
+		yq -i '.cozystackOperator.image = strenv(IMAGE)' values.yaml
+	rm -f images/cozystack-operator.json
+
 
 image-packages: update-version
 	mkdir -p ../../../_out/assets images

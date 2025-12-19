@@ -59,8 +59,8 @@ spec:
         {{- if .Values.cozystackOperator.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
-        - --platform-name="cozystack-platform"
-        - --platform-source="{{ .Values.cozystackOperator.platformSource }}"
+        - --platform-name=cozystack-platform
+        - --platform-source={{ .Values.cozystackOperator.platformSource }}
         env:
         - name: KUBERNETES_SERVICE_HOST
           value: localhost
@@ -74,3 +74,22 @@ spec:
       - key: "node.cilium.io/agent-not-ready"
         operator: "Exists"
         effect: "NoSchedule"
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cozystack-platform
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: cozystack-platform
+      path: core/platform
