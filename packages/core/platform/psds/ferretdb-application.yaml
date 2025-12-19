@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.ferretdb-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,11 +17,11 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
-          libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: ferretdb
+          path: apps/ferretdb
+          libraries: [cozy-lib]
+        - name: ferretdb-rd
+          path: system/ferretdb-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: ferretdb-rd

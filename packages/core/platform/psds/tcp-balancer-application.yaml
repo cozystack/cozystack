@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.tcp-balancer-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,11 +17,11 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: tcp-balancer
+          path: apps/tcp-balancer
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: tcp-balancer-rd
+          path: system/tcp-balancer-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: tcp-balancer-rd

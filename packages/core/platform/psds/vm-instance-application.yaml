@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.vm-instance-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -10,18 +10,19 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
+    - name: kubevirt
       dependsOn:
         - cozystack.networking
+        - cozystack.kubevirt
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: vm-instance
+          path: apps/vm-instance
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: vm-instance-rd
+          path: system/vm-instance-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: vm-instance-rd

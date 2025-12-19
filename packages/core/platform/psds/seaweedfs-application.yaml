@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.seaweedfs-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,11 +17,13 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: seaweedfs-system
+          path: system/seaweedfs
+        - name: seaweedfs
+          path: extra/seaweedfs
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: seaweedfs-rd
+          path: system/seaweedfs-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: seaweedfs-rd

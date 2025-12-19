@@ -93,3 +93,21 @@ spec:
         releaseName: cozystack-platform
       name: cozystack-platform
       path: core/platform
+  - name: paas-full
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: cozystack-platform
+      path: core/platform
+      valuesFiles:
+      - paas-full.yaml
+  - name: paas-hosted
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: cozystack-platform
+      path: core/platform
+      valuesFiles:
+      - paas-hosted.yaml

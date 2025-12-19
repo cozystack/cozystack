@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.bucket-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,15 +13,18 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        - cozystack.objectstorage-controller
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: bucket-system
+          path: system/bucket
+        - name: bucket
+          path: apps/bucket
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: bucket-rd
+          path: system/bucket-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: bucket-rd

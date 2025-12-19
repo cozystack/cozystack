@@ -16,7 +16,6 @@ spec:
     components:
     - name: external-dns
       path: system/external-dns
-      disabled: true
       install:
         namespace: cozy-external-dns
         releaseName: external-dns

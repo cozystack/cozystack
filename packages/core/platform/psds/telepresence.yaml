@@ -16,7 +16,6 @@ spec:
     components:
     - name: telepresence
       path: system/telepresence
-      disabled: true
       install:
         namespace: cozy-telepresence
         releaseName: traffic-manager

@@ -79,10 +79,6 @@ type Variant struct {
 	// Components is a list of Helm releases to be installed as part of this variant
 	// +optional
 	Components []Component `json:"components,omitempty"`
-
-	// Applications is a list of application releases to be installed as part of this variant
-	// +optional
-	Applications []Application `json:"applications,omitempty"`
 }
 
 // DependencyTarget defines a named group of packages that can be referenced
@@ -165,10 +161,6 @@ type Component struct {
 	// +optional
 	Install *ComponentInstall `json:"install,omitempty"`
 
-	// Disabled indicates whether this component is disabled (should not be installed)
-	// +optional
-	Disabled bool `json:"disabled,omitempty"`
-
 	// Libraries is a list of library names that this component depends on
 	// These libraries must be defined at the variant level
 	// +optional
@@ -177,26 +169,6 @@ type Component struct {
 	// ValuesFiles is a list of values file names to use
 	// +optional
 	ValuesFiles []string `json:"valuesFiles,omitempty"`
-}
-
-// Application defines a single application release within a package source
-type Application struct {
-	// Name is the unique identifier for this application within the package source
-	// +required
-	Name string `json:"name"`
-
-	// Path is the path to the Helm chart directory
-	// +required
-	Path string `json:"path"`
-
-	// Libraries is a list of library names that this application depends on
-	// These libraries must be defined at the variant level
-	// +optional
-	Libraries []string `json:"libraries,omitempty"`
-
-	// Template describes the applications that will be created.
-	// +required
-	Template CozystackResourceDefinition `json:"template"`
 }
 
 // PackageSourceStatus defines the observed state of PackageSource

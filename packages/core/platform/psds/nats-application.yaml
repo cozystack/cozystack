@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.nats-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -17,11 +17,13 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: nats-system
+          path: system/nats
+        - name: nats
+          path: apps/nats
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: nats-rd
+          path: system/nats-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: nats-rd

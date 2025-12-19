@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.virtualprivatecloud-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -10,18 +10,19 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
+    - name: kubevirt
       dependsOn:
         - cozystack.networking
+        - cozystack.multus
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
-          libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: virtualprivatecloud
+          path: apps/vpc
+          libraries: [cozy-lib]
+        - name: virtualprivatecloud-rd
+          path: system/virtualprivatecloud-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: virtualprivatecloud-rd

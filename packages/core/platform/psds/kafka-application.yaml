@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.kafka-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,15 +13,16 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        - cozystack.kafka-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: kafka
+          path: apps/kafka
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: kafka-rd
+          path: system/kafka-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: kafka-rd

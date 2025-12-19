@@ -17,7 +17,6 @@ spec:
     components:
     - name: bootbox
       path: system/bootbox
-      disabled: true
       install:
         privileged: true
         namespace: cozy-bootbox

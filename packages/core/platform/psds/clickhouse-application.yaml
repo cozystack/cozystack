@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.clickhouse-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -12,16 +12,16 @@ spec:
   variants:
     - name: default
       dependsOn:
-        - cozystack.networking
+        - cozystack.clickhouse-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: clickhouse
+          path: apps/clickhouse
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: clickhouse-rd
+          path: system/clickhouse-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: clickhouse-rd

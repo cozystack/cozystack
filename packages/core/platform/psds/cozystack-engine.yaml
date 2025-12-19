@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.cozystack
+  name: cozystack.cozystack-engine
 spec:
   variants:
   - name: default

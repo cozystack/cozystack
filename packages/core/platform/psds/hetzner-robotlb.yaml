@@ -16,7 +16,6 @@ spec:
     components:
     - name: hetzner-robotlb
       path: system/hetzner-robotlb
-      disabled: true
       install:
         namespace: cozy-hetzner-robotlb
         releaseName: robotlb

@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.etcd-application
+  name: cozystack.redis-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,15 +13,16 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        - cozystack.redis-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: etcd
-          path: extra/etcd
+        - name: redis
+          path: apps/redis
           libraries: ["cozy-lib"]
-        - name: etcd-rd
-          path: system/etcd-rd
+        - name: redis-rd
+          path: system/redis-rd
           install:
             namespace: cozy-system
-            releaseName: etcd-rd
+            releaseName: redis-rd

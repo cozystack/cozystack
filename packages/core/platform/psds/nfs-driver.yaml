@@ -16,7 +16,6 @@ spec:
     components:
     - name: nfs-driver
       path: system/nfs-driver
-      disabled: true
       install:
         privileged: true
         namespace: cozy-nfs-driver
