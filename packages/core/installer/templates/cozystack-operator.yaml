@@ -59,7 +59,7 @@ spec:
         {{- if .Values.cozystackOperator.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
-        - --platform-source-name=cozystack-packages
+        - --platform-source-name=cozystack-platform
         - --platform-source={{ .Values.cozystackOperator.platformSource }}
         env:
         - name: KUBERNETES_SERVICE_HOST
@@ -93,21 +93,25 @@ spec:
         releaseName: cozystack-platform
       name: cozystack-platform
       path: core/platform
-  - name: paas-full
+      valuesFiles:
+      - values.yaml
+  - name: isp-full
     components:
     - install:
         namespace: cozy-system
         releaseName: cozystack-platform
       name: cozystack-platform
       path: core/platform
-      #valuesFiles:
-      #- paas-full.yaml
-  - name: paas-hosted
+      valuesFiles:
+      - values.yaml
+      - values-isp-full.yaml
+  - name: isp-hosted
     components:
     - install:
         namespace: cozy-system
         releaseName: cozystack-platform
       name: cozystack-platform
       path: core/platform
-      #valuesFiles:
-      #- paas-hosted.yaml
+      valuesFiles:
+      - values.yaml
+      - values-isp-hosted.yaml

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Migration 7 --> 8
+
+host=$(kubectl get hr tenant-root -n tenant-root -o yaml | grep 'host:' | awk '{print $2}')
+kubectl patch configmap -n cozy-system cozystack --type merge -p "{\"data\":{\"root-host\":\"$host\"}}"
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=8 --dry-run=client -o yaml | kubectl apply -f-

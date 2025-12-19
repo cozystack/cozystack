@@ -1,0 +1,10 @@
+#!/bin/sh
+# Migration 14 --> 15
+
+# Delete the `capi-providers` HelmRelease in the `cozy-cluster-api` namespace if present
+if kubectl get hr -n cozy-cluster-api capi-providers >/dev/null 2>&1; then
+  kubectl delete hr -n cozy-cluster-api capi-providers
+fi
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=15 --dry-run=client -o yaml | kubectl apply -f-

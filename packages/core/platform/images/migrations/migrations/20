@@ -1,0 +1,56 @@
+#!/bin/sh
+# Migration 20 --> 21
+
+set -euo pipefail
+
+kubectl -n cozy-system delete helmrelease cozystack-api \
+        || kubectl -n cozy-system delete deployment cozystack-api --ignore-not-found # fallback to help migration progress if it failed first time
+while [ $( kubectl -n cozy-system get po -l app=cozystack-api --no-headers | wc -l ) != 0 ] ; 
+do 
+  echo "Waiting for Cozystack API pods to be deleted"; 
+  sleep 1
+done
+
+kubectl -n cozy-system delete helmrelease cozystack-controller \
+        || kubectl -n cozy-system delete deployment cozystack-controller --ignore-not-found # same fallback
+kubectl delete customresourcedefinitions.apiextensions.k8s.io cozystackresourcedefinitions.cozystack.io --ignore-not-found
+while [ $( kubectl -n cozy-system get po -l app=cozystack-controller --no-headers | wc -l ) != 0 ] ; 
+do 
+  echo "Waiting for Cozystack controller pods to be deleted"; 
+  sleep 1
+done
+
+kubectl delete helmrelease -n cozy-dashboard dashboard --ignore-not-found
+sleep 5
+if [ -d "packages/system" ]; then
+  cozypkg -n cozy-system -C packages/system/cozystack-resource-definition-crd apply cozystack-resource-definition-crd --plain
+  cozypkg -n cozy-system -C packages/system/cozystack-resource-definitions apply cozystack-resource-definitions --plain
+  cozypkg -n cozy-system -C packages/system/cozystack-api apply cozystack-api --plain
+  cozypkg -n cozy-system -C packages/system/cozystack-controller/ apply cozystack-api --plain --take-ownership
+  cozypkg -n cozy-system -C packages/system/lineage-controller-webhook/ apply cozystack-api --plain --take-ownership
+fi
+
+sleep 5
+echo "Running lineage-webhook test"
+kubectl delete ns cozy-lineage-webhook-test --ignore-not-found && kubectl create ns cozy-lineage-webhook-test
+cleanup_test_ns() {
+  kubectl delete ns cozy-lineage-webhook-test --ignore-not-found
+}
+trap cleanup_test_ns ERR
+timeout 60 sh -c 'until kubectl -n cozy-lineage-webhook-test create service clusterip lineage-webhook-test --clusterip="None" --dry-run=server; do sleep 1; done'
+cleanup_test_ns
+
+timestamp=$(date --rfc-3339=ns || date)
+kubectl get namespace -o custom-columns=NAME:.metadata.name --no-headers |
+  grep '^tenant-' |
+  while read namespace ; do
+    (set -x; \
+    kubectl annotate \
+      pods,services,pvc,secrets,ingresses.networking.k8s.io,workloadmonitors.cozystack.io \
+      -n "$namespace" --all \
+      migration.cozystack.io="$timestamp" --overwrite || true)
+  done
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=21 --dry-run=client -o yaml | kubectl apply -f-

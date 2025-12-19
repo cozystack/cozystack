@@ -1,0 +1,20 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.prometheus-operator-crds
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn: []
+    components:
+    - name: prometheus-operator-crds
+      path: system/prometheus-operator-crds
+      install:
+        namespace: cozy-victoria-metrics-operator
+        releaseName: prometheus-operator-crds

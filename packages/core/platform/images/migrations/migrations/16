@@ -1,0 +1,95 @@
+#!/bin/sh
+# Migration 16 --> 17
+#
+# fix-nested-resources-map.sh – prints kubectl patch commands.
+#   * Replaces each resources section with {cpu,memory} merged from requests + limits
+#   * Adds/Replaces .appVersion with "*"
+
+set -e
+
+CRDS='
+clickhouses.apps.cozystack.io
+etcds.apps.cozystack.io
+ferretdb.apps.cozystack.io
+httpcaches.apps.cozystack.io
+kafkas.apps.cozystack.io
+kuberneteses.apps.cozystack.io
+monitorings.apps.cozystack.io
+mysqls.apps.cozystack.io
+natses.apps.cozystack.io
+postgreses.apps.cozystack.io
+rabbitmqs.apps.cozystack.io
+redises.apps.cozystack.io
+seaweedfses.apps.cozystack.io
+tcpbalancers.apps.cozystack.io
+virtualmachines.apps.cozystack.io
+vminstances.apps.cozystack.io
+vpns.apps.cozystack.io
+'
+
+for KIND in $CRDS; do
+  kubectl get "$KIND" -A -o json | jq -r --arg kind "$KIND" '
+    .items[]
+    | . as $obj
+    | ($obj.metadata.namespace // "") as $ns          # namespace (empty string for cluster-scoped)
+    | $obj.metadata.name               as $name       # object name
+
+    # -------------------------------------------------------------------------
+    # Build an array with every JSON path ending with "resources"
+    # -------------------------------------------------------------------------
+    | [ $obj
+        | paths
+        | select(.[-1] == "resources")
+      ] as $rpaths
+
+    # -------------------------------------------------------------------------
+    # Iterate through each resources path
+    # -------------------------------------------------------------------------
+    | foreach $rpaths[] as $rpath (null;
+        # Current resources object
+        ($obj | getpath($rpath))       as $res
+
+        # requests + limits merged; requests override limits on key collision
+        | ($res.requests? // {})       as $req
+        | ($res.limits?   // {})       as $lim
+        | ($req + $lim)                as $flat
+
+        # Keep cpu & memory only
+        | ($flat
+            | with_entries(select(.key|test("^(cpu|memory)$")))
+          )                            as $value
+        | select(($value|length) > 0)  # skip if nothing to patch
+
+        # ---------------------------------------------------------------------
+        # RFC6901-encoded JSON Pointer to the resources section
+        # ---------------------------------------------------------------------
+        | ("/" + ($rpath
+              | map(
+                  tostring
+                  | gsub("~";"~0")
+                  | gsub("/";"~1")
+                )
+              | join("/")
+            )
+          )                            as $pointer
+
+        # ---------------------------------------------------------------------
+        # Compose JSON Patch: 1) add/replace appVersion, 2) replace resources
+        # ---------------------------------------------------------------------
+        | [
+            { op:"add",     path:"/appVersion", value:"*" },
+            { op:"replace", path:$pointer,           value:$value }
+          ]                             as $patch
+
+        # ---------------------------------------------------------------------
+        # Print one ready-to-run kubectl patch command
+        # ---------------------------------------------------------------------
+        | "kubectl " +
+          (if $ns != "" then "-n \($ns) " else "" end) +
+          "patch \($kind) \($name) --type=json -p '\''\($patch|tojson)'\''"
+      )
+  ' | sh -ex
+done
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=17 --dry-run=client -o yaml | kubectl apply -f-

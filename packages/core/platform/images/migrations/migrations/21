@@ -1,0 +1,21 @@
+#!/bin/sh
+# Migration 21 --> 22
+
+set -euo pipefail
+
+# Delete old cozystack deployment
+kubectl -n cozy-system delete deployment cozystack --ignore-not-found
+while [ $( kubectl -n cozy-system get po -l app=cozystack --no-headers 2>/dev/null | wc -l ) != 0 ] ; 
+do 
+  echo "Waiting for old cozystack deployment pods to be deleted"; 
+  sleep 1
+done
+
+kubectl delete hr -n cozy-system cozystack-resource-definitions --ignore-not-found
+kubectl delete hr -n cozy-system cozystack-resource-definition-crd --ignore-not-found
+kubectl delete crd cozystackresourcedefinitions.cozycloud.io --ignore-not-found
+kubectl delete hr -n cozy-fluxcd fluxcd --ignore-not-found
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=22 --dry-run=client -o yaml | kubectl apply -f-

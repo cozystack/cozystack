@@ -1,0 +1,21 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cozystack-basics
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.tenant-application
+    components:
+    - name: cozystack-basics
+      path: system/cozystack-basics
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-basics
