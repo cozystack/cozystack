@@ -24,6 +24,8 @@ API_KNOWN_VIOLATIONS_DIR="${API_KNOWN_VIOLATIONS_DIR:-"${SCRIPT_ROOT}/api/api-ru
 UPDATE_API_KNOWN_VIOLATIONS="${UPDATE_API_KNOWN_VIOLATIONS:-true}"
 CONTROLLER_GEN="go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4"
 TMPDIR=$(mktemp -d)
+OPERATOR_CRDDIR=packages/core/installer/crds
+BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
 COZY_CONTROLLER_CRDDIR=packages/system/cozystack-controller/crds
 COZY_RD_CRDDIR=packages/system/cozystack-resource-definition-crd/definition
 BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
@@ -61,6 +63,9 @@ kube::codegen::gen_openapi \
 
 $CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 $CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/..." output:crd:artifacts:config=${TMPDIR} 
+
+mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
+mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml
 
 mv ${TMPDIR}/cozystack.io_cozystackresourcedefinitions.yaml \
         ${COZY_RD_CRDDIR}/cozystack.io_cozystackresourcedefinitions.yaml
