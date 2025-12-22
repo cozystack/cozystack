@@ -13,15 +13,10 @@ metadata:
     apps.cozystack.io/application.group: apps.cozystack.io
     apps.cozystack.io/application.name: etcd
 spec:
-  chart:
-    spec:
-      chart: etcd
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-etcd-application-default-etcd
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:

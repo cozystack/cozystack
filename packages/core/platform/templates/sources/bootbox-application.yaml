@@ -17,12 +17,12 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: bootbox
+        - name: bootbox-system
           path: system/bootbox
           install:
             releaseName: bootbox-application
             namespace: cozy-system
-        - name: bootbox-app
+        - name: bootbox
           path: extra/bootbox
           libraries: ["cozy-lib"]
         - name: bootbox-rd

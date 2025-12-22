@@ -11,14 +11,9 @@ metadata:
   name: bootbox
   namespace: tenant-root
 spec:
-  chart:
-    spec:
-      chart: bootbox
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-bootbox-application-default-bootbox
+    namespace: cozy-system
   interval: 1m0s
   timeout: 5m0s

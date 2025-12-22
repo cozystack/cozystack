@@ -54,6 +54,10 @@ spec:
           path: system/gpu-operator
         - name: kubernetes-vertical-pod-autoscaler
           path: system/vertical-pod-autoscaler
+        - name: kubernetes-prometheus-operator-crds
+          path: system/prometheus-operator-crds
+        - name: kubernetes-metrics-server
+          path: system/metrics-server
         - name: kubernetes
           path: apps/kubernetes
           libraries: ["cozy-lib"]
