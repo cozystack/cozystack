@@ -19,7 +19,7 @@ package main
 import (
 	"os"
 
-	"github.com/cozystack/cozystack/cmd/cozyctl/cmd"
+	"github.com/cozystack/cozystack/cmd/cozypkg/cmd"
 )
 
 func main() {

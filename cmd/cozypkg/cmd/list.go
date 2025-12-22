@@ -36,6 +36,7 @@ import (
 
 var listCmdFlags struct {
 	installed   bool
+	components  bool
 	kubeconfig  string
 }
 
@@ -44,7 +45,8 @@ var listCmd = &cobra.Command{
 	Short: "List PackageSource or Package resources",
 	Long: `List PackageSource or Package resources in table format.
 
-By default, lists PackageSource resources. Use -i flag to list installed Package resources.`,
+By default, lists PackageSource resources. Use --installed flag to list installed Package resources.
+Use --components flag to show components on separate lines.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
@@ -75,13 +77,13 @@ By default, lists PackageSource resources. Use -i flag to list installed Package
 		}
 
 		if listCmdFlags.installed {
-			return listPackages(ctx, k8sClient)
+			return listPackages(ctx, k8sClient, listCmdFlags.components)
 		}
-		return listPackageSources(ctx, k8sClient)
+		return listPackageSources(ctx, k8sClient, listCmdFlags.components)
 	},
 }
 
-func listPackageSources(ctx context.Context, k8sClient client.Client) error {
+func listPackageSources(ctx context.Context, k8sClient client.Client, showComponents bool) error {
 	var psList cozyv1alpha1.PackageSourceList
 	if err := k8sClient.List(ctx, &psList); err != nil {
 		return fmt.Errorf("failed to list PackageSources: %w", err)
@@ -91,39 +93,50 @@ func listPackageSources(ctx context.Context, k8sClient client.Client) error {
 	fmt.Fprintf(os.Stdout, "%-50s %-30s %-10s %s\n", "NAME", "VARIANTS", "READY", "STATUS")
 	fmt.Fprintf(os.Stdout, "%-50s %-30s %-10s %s\n", strings.Repeat("-", 50), strings.Repeat("-", 30), strings.Repeat("-", 10), strings.Repeat("-", 50))
 
-	// Print rows
-	for _, ps := range psList.Items {
-		// Get variants
-		var variants []string
-		for _, variant := range ps.Spec.Variants {
-			variants = append(variants, variant.Name)
-		}
-		variantsStr := strings.Join(variants, ",")
-		if len(variantsStr) > 28 {
-			variantsStr = variantsStr[:25] + "..."
-		}
+		// Print rows
+		for _, ps := range psList.Items {
+			// Get variants
+			var variants []string
+			for _, variant := range ps.Spec.Variants {
+				variants = append(variants, variant.Name)
+			}
+			variantsStr := strings.Join(variants, ",")
+			if len(variantsStr) > 28 {
+				variantsStr = variantsStr[:25] + "..."
+			}
 
-		// Get Ready condition
-		ready := "Unknown"
-		status := ""
-		for _, condition := range ps.Status.Conditions {
-			if condition.Type == "Ready" {
-				ready = string(condition.Status)
-				status = condition.Message
-				if len(status) > 48 {
-					status = status[:45] + "..."
+			// Get Ready condition
+			ready := "Unknown"
+			status := ""
+			for _, condition := range ps.Status.Conditions {
+				if condition.Type == "Ready" {
+					ready = string(condition.Status)
+					status = condition.Message
+					if len(status) > 48 {
+						status = status[:45] + "..."
+					}
+					break
 				}
-				break
+			}
+
+			fmt.Fprintf(os.Stdout, "%-50s %-30s %-10s %s\n", ps.Name, variantsStr, ready, status)
+
+			// Show components if requested
+			if showComponents {
+				for _, variant := range ps.Spec.Variants {
+					for _, component := range variant.Components {
+						fmt.Fprintf(os.Stdout, "  %-48s %-30s %-10s %s\n", 
+							fmt.Sprintf("%s.%s", ps.Name, component.Name), 
+							variant.Name, "", "")
+					}
+				}
 			}
 		}
-
-		fmt.Fprintf(os.Stdout, "%-50s %-30s %-10s %s\n", ps.Name, variantsStr, ready, status)
-	}
 
 	return nil
 }
 
-func listPackages(ctx context.Context, k8sClient client.Client) error {
+func listPackages(ctx context.Context, k8sClient client.Client, showComponents bool) error {
 	var pkgList cozyv1alpha1.PackageList
 	if err := k8sClient.List(ctx, &pkgList); err != nil {
 		return fmt.Errorf("failed to list Packages: %w", err)
@@ -155,13 +168,34 @@ func listPackages(ctx context.Context, k8sClient client.Client) error {
 		}
 
 		fmt.Fprintf(os.Stdout, "%-50s %-20s %-10s %s\n", pkg.Name, variant, ready, status)
+
+		// Show components if requested
+		if showComponents {
+			// Get PackageSource to show components
+			ps := &cozyv1alpha1.PackageSource{}
+			if err := k8sClient.Get(ctx, client.ObjectKey{Name: pkg.Name}, ps); err == nil {
+				// Find the variant
+				for _, v := range ps.Spec.Variants {
+					if v.Name == variant {
+						for _, component := range v.Components {
+							fmt.Fprintf(os.Stdout, "  %-48s %-20s %-10s %s\n", 
+								fmt.Sprintf("%s.%s", pkg.Name, component.Name), 
+								variant, "", "")
+						}
+						break
+					}
+				}
+			}
+		}
 	}
 
 	return nil
 }
 
 func init() {
+	rootCmd.AddCommand(listCmd)
 	listCmd.Flags().BoolVarP(&listCmdFlags.installed, "installed", "i", false, "list installed Package resources instead of PackageSource resources")
+	listCmd.Flags().BoolVar(&listCmdFlags.components, "components", false, "show components on separate lines")
 	listCmd.Flags().StringVar(&listCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file (defaults to ~/.kube/config or KUBECONFIG env var)")
 }
 

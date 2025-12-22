@@ -35,36 +35,67 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
-var dependenciesCmdFlags struct {
+var dotCmdFlags struct {
 	installed  bool
 	components bool
+	files      []string
 	kubeconfig string
 }
 
-var dependenciesCmd = &cobra.Command{
-	Use:   "dependencies [PACKAGE]",
-	Short: "Inspect PackageSource dependencies as graphviz graph.",
-	Long: `Inspect PackageSource dependencies as graphviz graph.
+var dotCmd = &cobra.Command{
+	Use:   "dot [package]...",
+	Short: "Generate dependency graph as graphviz DOT format",
+	Long: `Generate dependency graph as graphviz DOT format.
 
-Pipe the output of the command through the "dot" program (part of graphviz package)
-to render the graph:
+Pipe the output through the "dot" program (part of graphviz package) to render the graph:
 
-    cozyctl dependencies | dot -Tpng > graph.png
+    cozypkg dot | dot -Tpng > graph.png
 
-If PACKAGE is specified, shows dependencies only for that PackageSource.
-If -i flag is set, shows dependencies only for installed Package resources.`,
-	Args: cobra.MaximumNArgs(1),
+By default, shows dependencies for all PackageSource resources.
+Use --installed to show only installed Package resources.
+Specify packages as arguments or use -f flag to read from files.`,
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 
+		// Collect package names from arguments and files
+		packageNames := make(map[string]bool)
+		for _, arg := range args {
+			packageNames[arg] = true
+		}
+
+		// Read packages from files (reuse function from add.go)
+		for _, filePath := range dotCmdFlags.files {
+			packages, err := readPackagesFromFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read packages from %s: %w", filePath, err)
+			}
+			for _, pkg := range packages {
+				packageNames[pkg] = true
+			}
+		}
+
+		// Convert to slice, empty means all packages
+		var selectedPackages []string
+		if len(packageNames) > 0 {
+			for pkg := range packageNames {
+				selectedPackages = append(selectedPackages, pkg)
+			}
+		}
+
+		// If multiple packages specified, show graph for all of them
+		// If single package, use packageName for backward compatibility
 		var packageName string
-		if len(args) > 0 {
-			packageName = args[0]
+		if len(selectedPackages) == 1 {
+			packageName = selectedPackages[0]
+		} else if len(selectedPackages) > 1 {
+			// Multiple packages - pass empty string to packageName, use selectedPackages
+			packageName = ""
 		}
 
 		// packagesOnly is inverse of components flag (if components=false, then packagesOnly=true)
-		packagesOnly := !dependenciesCmdFlags.components
-		graph, allNodes, err := buildGraphFromCluster(ctx, dependenciesCmdFlags.kubeconfig, packagesOnly, dependenciesCmdFlags.installed, packageName)
+		packagesOnly := !dotCmdFlags.components
+		graph, allNodes, err := buildGraphFromCluster(ctx, dotCmdFlags.kubeconfig, packagesOnly, dotCmdFlags.installed, packageName, selectedPackages)
 		if err != nil {
 			return fmt.Errorf("error getting PackageSource dependencies: %w", err)
 		}
@@ -77,10 +108,11 @@ If -i flag is set, shows dependencies only for installed Package resources.`,
 }
 
 func init() {
-	rootCmd.AddCommand(dependenciesCmd)
-	dependenciesCmd.Flags().BoolVarP(&dependenciesCmdFlags.installed, "installed", "i", false, "show dependencies only for installed Package resources")
-	dependenciesCmd.Flags().BoolVar(&dependenciesCmdFlags.components, "components", true, "show component-level dependencies (default: true)")
-	dependenciesCmd.Flags().StringVar(&dependenciesCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file (defaults to ~/.kube/config or KUBECONFIG env var)")
+	rootCmd.AddCommand(dotCmd)
+	dotCmd.Flags().BoolVarP(&dotCmdFlags.installed, "installed", "i", false, "show dependencies only for installed Package resources")
+	dotCmd.Flags().BoolVar(&dotCmdFlags.components, "components", true, "show component-level dependencies (default: true)")
+	dotCmd.Flags().StringArrayVarP(&dotCmdFlags.files, "file", "f", []string{}, "Read packages from file or directory (can be specified multiple times)")
+	dotCmd.Flags().StringVar(&dotCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file (defaults to ~/.kube/config or KUBECONFIG env var)")
 }
 
 var (
@@ -93,7 +125,7 @@ func init() {
 }
 
 // buildGraphFromCluster builds a dependency graph from PackageSource resources in the cluster.
-func buildGraphFromCluster(ctx context.Context, kubeconfig string, packagesOnly bool, installedOnly bool, packageName string) (map[string][]string, map[string]bool, error) {
+func buildGraphFromCluster(ctx context.Context, kubeconfig string, packagesOnly bool, installedOnly bool, packageName string, selectedPackages []string) (map[string][]string, map[string]bool, error) {
 	// Create Kubernetes client config
 	var config *rest.Config
 	var err error
@@ -148,6 +180,20 @@ func buildGraphFromCluster(ctx context.Context, kubeconfig string, packagesOnly 
 		// Filter by package name if specified
 		if packageName != "" && psName != packageName {
 			continue
+		}
+
+		// Filter by selected packages if specified
+		if len(selectedPackages) > 0 {
+			found := false
+			for _, selected := range selectedPackages {
+				if psName == selected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
 		}
 
 		// Filter by installed packages if flag is set

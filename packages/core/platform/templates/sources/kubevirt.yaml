@@ -13,7 +13,7 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.monitoring
+    - cozystack.victoria-metrics-operator
     components:
     - name: kubevirt-operator
       path: system/kubevirt-operator
