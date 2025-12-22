@@ -1,0 +1,26 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.mariadb-operator
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.monitoring
+    - cozystack.cert-manager
+    components:
+    - name: mariadb-operator
+      path: system/mariadb-operator
+      install:
+        namespace: cozy-mariadb-operator
+        releaseName: mariadb-operator
+        dependsOn:
+        - cert-manager
+        - victoria-metrics-operator

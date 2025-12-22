@@ -1,34 +1,30 @@
-NAME=platform
+NAME=cozystack-platform
 NAMESPACE=cozy-system
 
 include ../../../scripts/common-envs.mk
+include ../../../scripts/package.mk
 
-show:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain
+image: image-migrations
 
-apply:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f-
-	kubectl delete helmreleases.helm.toolkit.fluxcd.io -l cozystack.io/marked-for-deletion=true -A
-
-reconcile: apply
-
-namespaces-show:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain -s templates/namespaces.yaml
-
-namespaces-apply:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain -s templates/namespaces.yaml | kubectl apply -f-
-
-diff:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f-
-
-image: image-assets
-image-assets:
-	docker buildx build -f images/cozystack-assets/Dockerfile ../../.. \
-		--tag $(REGISTRY)/cozystack-assets:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-assets:latest \
+image-migrations:
+	docker buildx build images/migrations \
+		--tag $(REGISTRY)/platform-migrations:$(call settag,$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/platform-migrations:latest \
 		--cache-to type=inline \
-		--metadata-file images/cozystack-assets.json \
+		--metadata-file images/migrations.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/cozystack-assets:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/cozystack-assets.json -o json -r)" \
-		yq -i '.assets.image = strenv(IMAGE)' values.yaml
-	rm -f images/cozystack-assets.json
+	IMAGE="$(REGISTRY)/platform-migrations:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/migrations.json -o json -r)" \
+		yq -i '.migrations.image = strenv(IMAGE)' values.yaml
+	rm -f images/migrations.json
+
+generate:
+	@echo "Generating target version from migrations..."
+	@LAST_MIGRATION=$$(ls -1 images/migrations/migrations/ 2>/dev/null | grep -E '^[0-9]+$$' | sort -n | tail -1); \
+	if [ -z "$$LAST_MIGRATION" ]; then \
+		echo "Error: No migration files found" >&2; \
+		exit 1; \
+	fi; \
+	TARGET_VERSION=$$((LAST_MIGRATION + 1)); \
+	echo "Last migration: $$LAST_MIGRATION, Target version: $$TARGET_VERSION"; \
+	yq -i '.migrations.targetVersion = $$TARGET_VERSION' values.yaml; \
+	echo "Updated targetVersion to $$TARGET_VERSION in values.yaml"

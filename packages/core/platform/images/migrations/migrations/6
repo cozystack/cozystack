@@ -1,0 +1,16 @@
+#!/bin/sh
+# Migration 6 --> 7
+
+# Delete cert-manager crds labels and annotations
+kubectl patch hr -n cozy-cert-manager cert-manager -p '{"spec": {"suspend": true}}' --type=merge --field-manager=flux-client-side-apply
+certmanager_crds=$(kubectl get crd -o name | grep '\.cert-manager\.io$')
+if [ -n "$certmanager_crds" ]; then
+  kubectl annotate $certmanager_crds meta.helm.sh/release-namespace=cozy-cert-manager meta.helm.sh/release-name=cert-manager-crds
+  kubectl label $certmanager_crds app.kubernetes.io/managed-by=Helm
+fi
+
+# Remove monitoring, because it is renamed to monitoring-agents
+kubectl get hr -n cozy-monitoring monitoring && kubectl delete hr -n cozy-monitoring monitoring --wait=0
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=7 --dry-run=client -o yaml | kubectl apply -f-

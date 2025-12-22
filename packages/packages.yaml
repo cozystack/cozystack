@@ -1,0 +1,24 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.networking
+spec:
+  variant: cilium-kubeovn
+  #ignoreDependencies:
+  #- cozystack.networking
+  components:
+    cilium:
+      enabled: false
+      values:
+        kubeProxyReplacement: strict
+        k8sServiceHost: api.example.org
+        k8sServicePort: 6443
+    kubeovn:
+      values:
+        kube-ovn:
+          ipv4:
+            POD_CIDR: "10.244.0.0/16"
+            POD_GATEWAY: "10.244.0.1"
+            SVC_CIDR: "10.96.0.0/16"
+            JOIN_CIDR: "100.64.0.0/16"

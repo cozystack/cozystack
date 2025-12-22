@@ -7,15 +7,10 @@ metadata:
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
   releaseName: metrics-server
-  chart:
-    spec:
-      chart: cozy-metrics-server
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-metrics-server
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

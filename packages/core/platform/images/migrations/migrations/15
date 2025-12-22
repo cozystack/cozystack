@@ -1,0 +1,28 @@
+#!/bin/sh
+# Migration 15 --> 16
+
+if kubectl get validatingwebhookconfigurations.admissionregistration.k8s.io kamaji-validating-webhook-configuration; then
+  kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io kamaji-validating-webhook-configuration
+fi
+kubectl get kamajicontrolplane -A -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,VERSION:.spec.version,VERSION:.status.version --no-headers |
+    while read namespace name version status; do
+      if [ "$status" = "v1.32.4" ]; then
+        continue
+      fi
+      (set -x; kubectl patch kamajicontrolplane "$name" -n "$namespace" --type merge -p '{"spec":{"version":"1.32.4"}}')
+      (set -x; kubectl patch kamajicontrolplane "$name" -n "$namespace" --type merge -p '{"status":{"version":"v1.32.4"}}' --subresource status)
+      (set -x; kubectl patch tcp "$name" -n "$namespace" --type merge -p '{"spec":{"kubernetes":{"version":"1.32.4"}}}')
+      (set -x; kubectl patch tcp "$name" -n "$namespace" --type merge -p '{"status":{"kubernetesResources":{"version":{"version":"v1.32.4"}}}} ' --subresource status)
+    done
+
+# Upgrade kubernetes.apps to new chart version
+kubectl get kuberneteses.apps.cozystack.io -A --no-headers --output=custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | while read NAMESPACE NAME; do
+  kubectl patch kuberneteses.apps.cozystack.io -n "$NAMESPACE" "$NAME" --type merge -p '{"appVersion":"0.24.0"}'
+done
+
+if kubectl get helmrelease kamaji -n cozy-kamaji; then
+  cozypkg reconcile kamaji -n cozy-kamaji --force
+fi
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=16 --dry-run=client -o yaml | kubectl apply -f-

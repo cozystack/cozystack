@@ -1,0 +1,10 @@
+#!/bin/sh
+# Migration 13 --> 14
+
+# Upgrade tenants.apps to new chart version
+kubectl get tenants.apps.cozystack.io -A --no-headers --output=custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | while read NAMESPACE NAME; do
+  kubectl patch tenants.apps.cozystack.io -n "$NAMESPACE" "$NAME" --type merge -p '{"appVersion":"1.10.0"}'
+done
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=14 --dry-run=client -o yaml | kubectl apply -f-

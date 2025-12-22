@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.kubeovn-webhook
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.cert-manager
+    components:
+    - name: kubeovn-webhook
+      path: system/kubeovn-webhook
+      install:
+        privileged: true
+        namespace: cozy-kubeovn
+        releaseName: kubeovn-webhook

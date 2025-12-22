@@ -22,15 +22,10 @@ metadata:
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
   releaseName: cilium
-  chart:
-    spec:
-      chart: cozy-cilium
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-cilium
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack
+  namespace: cozy-system
+data:
+  root-host: {{ .Values.publishing.host | quote }}
+  api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
+  expose-services: {{ (join "," .Values.publishing.exposedServices) | quote }}
+  expose-ingress: {{ .Values.publishing.ingressName | quote }}
+  expose-external-ips: {{ (join "," .Values.publishing.externalIPs) | quote }}
+  cluster-domain: {{ .Values.networking.clusterDomain | quote }}
+  ipv4-pod-cidr: {{ .Values.networking.podCIDR | quote }}
+  ipv4-pod-gateway: {{ .Values.networking.podGateway | quote }}
+  ipv4-svc-cidr: {{ .Values.networking.serviceCIDR | quote }}
+  ipv4-join-cidr: {{ .Values.networking.joinCIDR | quote }}
+  clusterissuer: {{ .Values.publishing.certificates.issuerType | quote }}
+  oidc-enabled: {{ .Values.authentication.oidc.enabled | toString | quote }}
+  extra-keycloak-redirect-uri-for-dashboard: {{ (join "," .Values.authentication.oidc.dashboard.extraRedirectUris) | quote }}
+  cpu-allocation-ratio: {{ .Values.resources.cpuAllocationRatio | toString | quote }}
+  memory-allocation-ratio: {{ .Values.resources.memoryAllocationRatio | toString | quote }}
+  ephemeral-storage-allocation-ratio: {{ .Values.resources.ephemeralStorageAllocationRatio | toString | quote }}
+  management-kubeconfig-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}

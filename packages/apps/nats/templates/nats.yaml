@@ -35,15 +35,10 @@ kind: HelmRelease
 metadata:
   name: {{ .Release.Name }}-system
 spec:
-  chart:
-    spec:
-      chart: cozy-nats
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-nats-application-default-nats-system
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:

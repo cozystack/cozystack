@@ -1,0 +1,163 @@
+#!/bin/sh
+# Migration 22 --> 23
+
+set -euo pipefail
+
+echo "Migrating HelmReleases: adding application labels for tenant-* namespaces"
+
+# Function to determine application type from HelmRelease name
+determine_app_type() {
+  local name="$1"
+  local app_kind=""
+  local app_name=""
+  
+  # Try to match by prefix (longest match first)
+  case "$name" in
+    virtual-machine-*)
+      app_kind="VirtualMachine"
+      app_name="${name#virtual-machine-}"
+      ;;
+    vm-instance-*)
+      app_kind="VMInstance"
+      app_name="${name#vm-instance-}"
+      ;;
+    vm-disk-*)
+      app_kind="VMDisk"
+      app_name="${name#vm-disk-}"
+      ;;
+    virtualprivatecloud-*)
+      app_kind="VirtualPrivateCloud"
+      app_name="${name#virtualprivatecloud-}"
+      ;;
+    http-cache-*)
+      app_kind="HTTPCache"
+      app_name="${name#http-cache-}"
+      ;;
+    tcp-balancer-*)
+      app_kind="TCPBalancer"
+      app_name="${name#tcp-balancer-}"
+      ;;
+    clickhouse-*)
+      app_kind="ClickHouse"
+      app_name="${name#clickhouse-}"
+      ;;
+    foundationdb-*)
+      app_kind="FoundationDB"
+      app_name="${name#foundationdb-}"
+      ;;
+    ferretdb-*)
+      app_kind="FerretDB"
+      app_name="${name#ferretdb-}"
+      ;;
+    rabbitmq-*)
+      app_kind="RabbitMQ"
+      app_name="${name#rabbitmq-}"
+      ;;
+    kubernetes-*)
+      app_kind="Kubernetes"
+      app_name="${name#kubernetes-}"
+      ;;
+    bucket-*)
+      app_kind="Bucket"
+      app_name="${name#bucket-}"
+      ;;
+    kafka-*)
+      app_kind="Kafka"
+      app_name="${name#kafka-}"
+      ;;
+    mysql-*)
+      app_kind="MySQL"
+      app_name="${name#mysql-}"
+      ;;
+    nats-*)
+      app_kind="NATS"
+      app_name="${name#nats-}"
+      ;;
+    postgres-*)
+      app_kind="PostgreSQL"
+      app_name="${name#postgres-}"
+      ;;
+    redis-*)
+      app_kind="Redis"
+      app_name="${name#redis-}"
+      ;;
+    tenant-*)
+      app_kind="Tenant"
+      app_name="${name#tenant-}"
+      ;;
+    vpn-*)
+      app_kind="VPN"
+      app_name="${name#vpn-}"
+      ;;
+    bootbox)
+      app_kind="BootBox"
+      app_name="bootbox"
+      ;;
+    etcd)
+      app_kind="Etcd"
+      app_name="etcd"
+      ;;
+    info)
+      app_kind="Info"
+      app_name="info"
+      ;;
+    ingress|ingress-*)
+      app_kind="Ingress"
+      if [ "$name" = "ingress" ]; then
+        app_name="ingress"
+      else
+        app_name="${name#ingress-}"
+      fi
+      ;;
+    monitoring)
+      app_kind="Monitoring"
+      app_name="monitoring"
+      ;;
+    seaweedfs)
+      app_kind="SeaweedFS"
+      app_name="seaweedfs"
+      ;;
+    *)
+      # Unknown type
+      return 1
+      ;;
+  esac
+  
+  echo "$app_kind|$app_name"
+  return 0
+}
+
+# Process all HelmReleases in tenant-* namespaces with cozystack.io/ui=true label
+kubectl get helmreleases --all-namespaces -l cozystack.io/ui=true -o json | \
+  jq -r '.items[] | select(.metadata.namespace | startswith("tenant-")) | "\(.metadata.namespace)|\(.metadata.name)"' | \
+  while IFS='|' read -r namespace name; do
+    echo "Processing HelmRelease $namespace/$name"
+    
+    # Determine application type
+    app_type=$(determine_app_type "$name")
+    status=$?
+    if [ $status -ne 0 ] || [ -z "$app_type" ]; then
+      echo "Warning: Could not determine application type for $namespace/$name, skipping"
+      continue
+    fi
+    
+    app_kind=$(echo "$app_type" | cut -d'|' -f1)
+    app_name=$(echo "$app_type" | cut -d'|' -f2)
+    app_group="apps.cozystack.io"
+    
+    # Build labels string
+    labels="apps.cozystack.io/application.kind=$app_kind"
+    labels="$labels apps.cozystack.io/application.group=$app_group"
+    labels="$labels apps.cozystack.io/application.name=$app_name"
+    
+    # Apply labels using kubectl label --overwrite
+    kubectl label helmrelease -n "$namespace" "$name" --overwrite $labels
+    echo "Added application labels to $namespace/$name: $labels"
+  done
+
+echo "Migration completed"
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=23 --dry-run=client -o yaml | kubectl apply -f-
+

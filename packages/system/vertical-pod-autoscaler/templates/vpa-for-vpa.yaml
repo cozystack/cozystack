@@ -16,15 +16,10 @@ metadata:
   name: vpa-for-vpa
   namespace: cozy-vpa-for-vpa
 spec:
-  chart:
-    spec:
-      chart: cozy-vertical-pod-autoscaler
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-vertical-pod-autoscaler-default-vpa-for-vpa
+    namespace: cozy-system
   dependsOn:
   - name: monitoring-agents
     namespace: cozy-monitoring

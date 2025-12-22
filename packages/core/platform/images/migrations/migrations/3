@@ -1,0 +1,12 @@
+#!/bin/sh
+# Migration 3 --> 4
+
+# Fix kubeovn crds
+kubeovn_crds=$(kubectl get crd -o name | grep '\.kubeovn\.io$')
+if [ -n "$kubeovn_crds" ]; then
+  kubectl annotate $kubeovn_crds meta.helm.sh/release-namespace=cozy-kubeovn meta.helm.sh/release-name=kubeovn
+  kubectl label $kubeovn_crds app.kubernetes.io/managed-by=Helm
+fi
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=4 --dry-run=client -o yaml | kubectl apply -f-

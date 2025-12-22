@@ -1,0 +1,10 @@
+#!/bin/sh
+# Migration 9 --> 10
+
+# Upgrade kubernetes.apps to new chart version
+kubectl get kuberneteses.apps.cozystack.io -A --no-headers --output=custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | while read NAMESPACE NAME; do
+  kubectl patch kuberneteses.apps.cozystack.io -n "$NAMESPACE" "$NAME" --type merge -p '{"appVersion":"0.15.1"}'
+done
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=10 --dry-run=client -o yaml | kubectl apply -f-

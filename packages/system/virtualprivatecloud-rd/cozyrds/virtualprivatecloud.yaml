@@ -1,0 +1,34 @@
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackResourceDefinition
+metadata:
+  name: virtualprivatecloud
+spec:
+  application:
+    kind: VirtualPrivateCloud
+    plural: virtualprivateclouds
+    singular: virtualprivatecloud
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{"subnets":{"description":"Subnets of a VPC","type":"object","default":{},"additionalProperties":{"type":"object","properties":{"cidr":{"description":"IP address range","type":"string"}}}}}}
+  release:
+    prefix: "virtualprivatecloud-"
+    labels:
+      cozystack.io/ui: "true"
+    chart:
+      name: virtualprivatecloud
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
+  dashboard:
+    category: IaaS
+    singular: VPC
+    plural: VPCs
+    description: "Isolated networks"
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8xMDI1XzMpIi8+CjxwYXRoIGQ9Ik0xMDkuNiA4Ni4xSDExNC4zQzExNi44ODUgODYuMSAxMTkgODguMjE1IDExOSA5MC44NDdWMTA0Ljg1M0MxMTkgMTA3LjQ4NSAxMTYuODg1IDEwOS42IDExNC4zIDEwOS42SDk1LjVDOTIuOTE1IDEwOS42IDkwLjggMTA3LjQ4NSA5MC44IDEwNC44NTNWOTAuODQ3QzkwLjggODguMjE1IDkyLjkxNSA4Ni4xIDk1LjUgODYuMUgxMDAuMlY3Ni43SDc2LjdWODYuMUg4MS40QzgzLjk4NSA4Ni4xIDg2LjEgODguMjE1IDg2LjEgOTAuODQ3VjEwNC44NTNDODYuMSAxMDcuNDg1IDgzLjk4NSAxMDkuNiA4MS40IDEwOS42SDYyLjZDNjAuMDE1IDEwOS42IDU3LjkgMTA3LjQ4NSA1Ny45IDEwNC44NTNWOTAuODQ3QzU3LjkgODguMjE1IDYwLjAxNSA4Ni4xIDYyLjYgODYuMUg2Ny4zVjc2LjdINDMuOFY4Ni4xSDQ4LjVDNTEuMDg1IDg2LjEgNTMuMiA4OC4yMTUgNTMuMiA5MC44NDdWMTA0Ljg1M0M1My4yIDEwNy40ODUgNTEuMDg1IDEwOS42IDQ4LjUgMTA5LjZIMjkuN0MyNy4xMTUgMTA5LjYgMjUgMTA3LjQ4NSAyNSAxMDQuODUzVjkwLjg0N0MyNSA4OC4yMTUgMjcuMTE1IDg2LjEgMjkuNyA4Ni4xSDM0LjRWNzYuN0MzNC40IDcxLjUzIDM4LjYzIDY3LjMgNDMuOCA2Ny4zSDY3LjNWNTcuOUg2Mi42QzYwLjAxNSA1Ny45IDU3LjkgNTUuNzg1IDU3LjkgNTMuMTUzVjM5LjE0N0M1Ny45IDM2LjUxNSA2MC4wMTUgMzQuNCA2Mi42IDM0LjRIODEuNEM4My45ODUgMzQuNCA4Ni4xIDM2LjUxNSA4Ni4xIDM5LjE0N1Y1My4xNTNDODYuMSA1NS43ODUgODMuOTg1IDU3LjkgODEuNCA1Ny45SDc2LjdWNjcuM0gxMDAuMkMxMDUuMzcgNjcuMyAxMDkuNiA3MS41MyAxMDkuNiA3Ni43Vjg2LjFaIiBmaWxsPSJ3aGl0ZSIvPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzEwMjVfMyIgeDE9IjE0Mi41IiB5MT0iMTQzIiB4Mj0iMy45OTk5OSIgeTI9IjkuNDk5OTkiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KPHN0b3Agc3RvcC1jb2xvcj0iIzAwMDgyRSIvPgo8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMyRTMwNjciLz4KPC9saW5lYXJHcmFkaWVudD4KPC9kZWZzPgo8L3N2Zz4K
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "subnets"]]
+  secrets:
+    exclude: []
+    include: []
+  services:
+    exclude: []
+    include: []

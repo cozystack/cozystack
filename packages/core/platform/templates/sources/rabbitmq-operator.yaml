@@ -1,0 +1,21 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.rabbitmq-operator
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: rabbitmq-operator
+      path: system/rabbitmq-operator
+      install:
+        namespace: cozy-rabbitmq-operator
+        releaseName: rabbitmq-operator

@@ -7,15 +7,10 @@ metadata:
     cozystack.io/target-cluster-name: {{ .Release.Name }}
 spec:
   releaseName: prometheus-operator-crds
-  chart:
-    spec:
-      chart: cozy-prometheus-operator-crds
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-prometheus-operator-crds
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

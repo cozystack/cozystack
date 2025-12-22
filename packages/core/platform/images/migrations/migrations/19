@@ -1,0 +1,53 @@
+#!/bin/sh
+# Migration 19 --> 20
+
+set -euo pipefail
+
+kubectl get helmreleases.helm.toolkit.fluxcd.io -A \
+  --field-selector=metadata.name=seaweedfs -o json | jq -r '
+  .items[] as $o
+  | ($o.metadata.namespace // "") as $ns
+  | $o.metadata.name as $name
+  | $o.spec as $s
+  | $o.spec.values as $v
+
+  | (
+      ($s.chart.spec.version? // "") != "0.7.0"
+      or ($v.size? != null)
+      or ($v.storageClass? != null)
+      or ($v.replicas? != null)
+      or ($v.zones? != null)
+    ) as $needsChange
+  | select($needsChange)
+
+  # JSON Patch
+  | [
+      (if $s.chart.spec.version? then
+         {op:"replace", path:"/spec/chart/spec/version", value:"0.7.0"}
+       else
+         {op:"add",     path:"/spec/chart/spec/version", value:"0.7.0"}
+       end),
+
+      (if ($v|type) != "object" then {op:"add", path:"/spec/values", value:{}} else empty end),
+
+      (if ($v.volume?|type) != "object" then {op:"add", path:"/spec/values/volume", value:{}} else empty end),
+
+      (if $v.size?          then {op:"add", path:"/spec/values/volume/size",         value:$v.size}          else empty end),
+      (if $v.storageClass?  then {op:"add", path:"/spec/values/volume/storageClass", value:$v.storageClass}  else empty end),
+      (if $v.replicas?      then {op:"add", path:"/spec/values/volume/replicas",     value:$v.replicas}      else empty end),
+      (if $v.zones?         then {op:"add", path:"/spec/values/volume/zones",        value:$v.zones}         else empty end),
+
+      (if $v.size?          then {op:"remove", path:"/spec/values/size"}          else empty end),
+      (if $v.storageClass?  then {op:"remove", path:"/spec/values/storageClass"}  else empty end),
+      (if $v.replicas?      then {op:"remove", path:"/spec/values/replicas"}      else empty end),
+      (if $v.zones?         then {op:"remove", path:"/spec/values/zones"}         else empty end)
+    ] as $patch
+
+  | "kubectl " +
+    (if $ns != "" then "-n \($ns) " else "" end) +
+    "patch helmreleases.helm.toolkit.fluxcd.io \($name) --type=json -p '\''\($patch|tojson)'\''"
+' | sh -ex
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=20 --dry-run=client -o yaml | kubectl apply -f-

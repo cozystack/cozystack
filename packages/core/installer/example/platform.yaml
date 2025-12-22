@@ -1,0 +1,20 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cozystack-platform
+spec:
+  variant: isp-full
+  components:
+    platform:
+      values:
+        publishing:
+          host: "dev5.infra.aenix.org"
+          apiServerEndpoint: "https://api.dev5.infra.aenix.org"
+          externalIPs:
+          - 10.4.0.94
+          - 10.4.0.179
+          - 10.4.0.26
+        authentication:
+          oidc:
+            enabled: true

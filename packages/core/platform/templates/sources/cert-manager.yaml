@@ -1,0 +1,35 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cert-manager
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: cert-manager-crds
+      path: system/cert-manager-crds
+      install:
+        namespace: cozy-cert-manager
+        releaseName: cert-manager-crds
+    - name: cert-manager
+      path: system/cert-manager
+      install:
+        namespace: cozy-cert-manager
+        releaseName: cert-manager
+        dependsOn:
+        - cert-manager-crds
+    - name: cert-manager-issuers
+      path: system/cert-manager-issuers
+      install:
+        namespace: cozy-cert-manager
+        releaseName: cert-manager-issuers
+        dependsOn:
+        - cert-manager

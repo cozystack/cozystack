@@ -1,0 +1,215 @@
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.networking
+spec:
+  variant: kubeovn-cilium
+  components:
+    kubeovn:
+      values:
+        kube-ovn:
+          ipv4:
+            POD_CIDR: "{{ .Values.networking.podCIDR }}"
+            POD_GATEWAY: "{{ .Values.networking.podGateway }}"
+            SVC_CIDR: "{{ .Values.networking.serviceCIDR }}"
+            JOIN_CIDR: "{{ .Values.networking.joinCIDR }}"
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cozystack-engine
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cert-manager
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.kubeovn-webhook
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.kubeovn-plunger
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.victoria-metrics-operator
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cozy-proxy
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.multus
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.tenant-application
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.ingress-application
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.seaweedfs-application
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.info-application
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.monitoring-application
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.etcd-application
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cozystack-basics
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.backup-controller
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.velero
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.vertical-pod-autoscaler
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.metallb
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.gpu-operator
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.reloader
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.linstor
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.monitoring-agents
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.goldpinger
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.snapshot-controller
+spec:
+  variant: default
+  components: {}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.prometheus-operator-crds
+spec:
+  variant: default
+  components: {}

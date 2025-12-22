@@ -1,0 +1,68 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.kubernetes-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: kubevirt
+      dependsOn:
+        - cozystack.networking
+        - cozystack.capi-operator
+        - cozystack.capi-providers-bootstrap
+        - cozystack.capi-providers-core
+        - cozystack.capi-providers-cpprovider
+        - cozystack.capi-providers-infraprovider
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: kubernetes-ingress-nginx
+          path: system/ingress-nginx
+        - name: kubernetes-cert-manager-crds
+          path: system/cert-manager-crds
+        - name: kubernetes-volumesnapshot-crd
+          path: system/vsnap-crd
+        - name: kubernetes-velero
+          path: system/velero
+        - name: kubernetes-gateway-api-crds
+          path: system/gateway-api-crds
+        - name: kubernetes-victoria-metrics-operator
+          path: system/victoria-metrics-operator
+        - name: kubernetes-kubevirt-csi-node
+          path: system/kubevirt-csi-node
+        - name: kubernetes-vertical-pod-autoscaler-crds
+          path: system/vertical-pod-autoscaler-crds
+        - name: kubernetes-coredns
+          path: system/coredns
+        - name: kubernetes-cert-manager
+          path: system/cert-manager
+        - name: kubernetes-fluxcd-operator
+          path: system/fluxcd-operator
+        - name: kubernetes-fluxcd
+          path: system/fluxcd
+        - name: kubernetes-monitoring-agents
+          path: system/monitoring-agents
+        - name: kubernetes-cilium
+          path: system/cilium
+        - name: kubernetes-gpu-operator
+          path: system/gpu-operator
+        - name: kubernetes-vertical-pod-autoscaler
+          path: system/vertical-pod-autoscaler
+        - name: kubernetes-prometheus-operator-crds
+          path: system/prometheus-operator-crds
+        - name: kubernetes-metrics-server
+          path: system/metrics-server
+        - name: kubernetes
+          path: apps/kubernetes
+          libraries: ["cozy-lib"]
+        - name: kubernetes-rd
+          path: system/kubernetes-rd
+          install:
+            namespace: cozy-system
+            releaseName: kubernetes-rd

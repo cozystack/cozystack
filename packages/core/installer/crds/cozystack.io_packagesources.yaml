@@ -1,0 +1,251 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: packagesources.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: PackageSource
+    listKind: PackageSourceList
+    plural: packagesources
+    shortNames:
+    - pkgsrc
+    - pkgsrcs
+    singular: packagesource
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: Package variants (comma-separated)
+      jsonPath: .status.variants
+      name: Variants
+      type: string
+    - description: Ready status
+      jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - description: Ready message
+      jsonPath: .status.conditions[?(@.type=='Ready')].message
+      name: Status
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: PackageSource is the Schema for the packagesources API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PackageSourceSpec defines the desired state of PackageSource
+            properties:
+              sourceRef:
+                description: SourceRef is the source reference for the package source
+                  charts
+                properties:
+                  kind:
+                    description: Kind of the source reference
+                    enum:
+                    - GitRepository
+                    - OCIRepository
+                    type: string
+                  name:
+                    description: Name of the source reference
+                    type: string
+                  namespace:
+                    description: Namespace of the source reference
+                    type: string
+                  path:
+                    description: |-
+                      Path is the base path where packages are located in the source.
+                      For GitRepository, defaults to "packages" if not specified.
+                      For OCIRepository, defaults to empty string (root) if not specified.
+                    type: string
+                required:
+                - kind
+                - name
+                - namespace
+                type: object
+              variants:
+                description: |-
+                  Variants is a list of package source variants
+                  Each variant defines components, applications, dependencies, and libraries for a specific configuration
+                items:
+                  description: Variant defines a single variant configuration
+                  properties:
+                    components:
+                      description: Components is a list of Helm releases to be installed
+                        as part of this variant
+                      items:
+                        description: Component defines a single Helm release component
+                          within a package source
+                        properties:
+                          install:
+                            description: Install defines installation parameters for
+                              this component
+                            properties:
+                              dependsOn:
+                                description: DependsOn is a list of component names
+                                  that must be installed before this component
+                                items:
+                                  type: string
+                                type: array
+                              namespace:
+                                description: Namespace is the Kubernetes namespace
+                                  where the release will be installed
+                                type: string
+                              privileged:
+                                description: Privileged indicates whether this release
+                                  requires privileged access
+                                type: boolean
+                              releaseName:
+                                description: |-
+                                  ReleaseName is the name of the HelmRelease resource that will be created
+                                  If not specified, defaults to the component Name field
+                                type: string
+                            type: object
+                          libraries:
+                            description: |-
+                              Libraries is a list of library names that this component depends on
+                              These libraries must be defined at the variant level
+                            items:
+                              type: string
+                            type: array
+                          name:
+                            description: Name is the unique identifier for this component
+                              within the package source
+                            type: string
+                          path:
+                            description: Path is the path to the Helm chart directory
+                            type: string
+                          valuesFiles:
+                            description: ValuesFiles is a list of values file names
+                              to use
+                            items:
+                              type: string
+                            type: array
+                        required:
+                        - name
+                        - path
+                        type: object
+                      type: array
+                    dependsOn:
+                      description: |-
+                        DependsOn is a list of package source dependencies
+                        For example: "cozystack.networking"
+                      items:
+                        type: string
+                      type: array
+                    libraries:
+                      description: Libraries is a list of Helm library charts used
+                        by components in this variant
+                      items:
+                        description: Library defines a Helm library chart
+                        properties:
+                          name:
+                            description: Name is the optional name for library placed
+                              in charts
+                            type: string
+                          path:
+                            description: Path is the path to the library chart directory
+                            type: string
+                        required:
+                        - path
+                        type: object
+                      type: array
+                    name:
+                      description: Name is the unique identifier for this variant
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            type: object
+          status:
+            description: PackageSourceStatus defines the observed state of PackageSource
+            properties:
+              conditions:
+                description: Conditions represents the latest available observations
+                  of a PackageSource's state
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              variants:
+                description: |-
+                  Variants is a comma-separated list of package variant names
+                  This field is populated by the controller based on spec.variants keys
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

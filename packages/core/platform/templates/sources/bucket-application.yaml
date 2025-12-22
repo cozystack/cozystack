@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.bucket-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.objectstorage-controller
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: bucket-system
+          path: system/bucket
+        - name: bucket
+          path: apps/bucket
+          libraries: ["cozy-lib"]
+        - name: bucket-rd
+          path: system/bucket-rd
+          install:
+            namespace: cozy-system
+            releaseName: bucket-rd

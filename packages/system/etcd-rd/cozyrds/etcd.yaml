@@ -1,0 +1,39 @@
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackResourceDefinition
+metadata:
+  name: etcd
+spec:
+  application:
+    kind: Etcd
+    plural: etcds
+    singular: etcd
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{"replicas":{"description":"Number of etcd replicas.","type":"integer","default":3},"resources":{"description":"Resource configuration for etcd.","type":"object","default":{},"properties":{"cpu":{"description":"Number of CPU cores allocated.","default":"1000m","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"memory":{"description":"Amount of memory allocated.","default":"512Mi","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}},"size":{"description":"Persistent Volume size.","default":"4Gi","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"storageClass":{"description":"StorageClass used to store the data.","type":"string","default":""}}}
+  release:
+    prefix: ""
+    labels:
+      cozystack.io/ui: "true"
+      internal.cozystack.io/tenantmodule: "true"
+    chart:
+      name: etcd
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-extra
+        namespace: cozy-public
+  dashboard:
+    category: Administration
+    singular: Etcd
+    plural: Etcd
+    name: etcd
+    description: Storage for Kubernetes clusters
+    module: true
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHg9Ii0wLjAwMTk1MzEyIiB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgcng9IjI0IiBmaWxsPSJ1cmwoI3BhaW50MF9saW5lYXJfNjgzXzI5NjMpIi8+CjxwYXRoIGQ9Ik0xMjIuNDQyIDczLjQ3MjlDMTIxLjk1OSA3My41MTM0IDEyMS40NzQgNzMuNTMyMiAxMjAuOTU4IDczLjUzMjJDMTE3Ljk2NSA3My41MzIyIDExNS4wNjEgNzIuODMwNCAxMTIuNDQyIDcxLjU0NTFDMTEzLjMxNCA2Ni41NDIxIDExMy42ODUgNjEuNTAxOSAxMTMuNTg4IDU2LjQ4MDJDMTEwLjc0OCA1Mi4zNzIzIDEwNy41MDIgNDguNDk2NSAxMDMuODM4IDQ0LjkyNTdDMTA1LjQyOCA0MS45NDU0IDEwNy43NzggMzkuMzgxMSAxMTAuNzExIDM3LjU2MjhMMTExLjk3MSAzNi43ODQyTDExMC45ODkgMzUuNjc3NEMxMDUuOTMyIDI5Ljk4MzIgOTkuODk3MSAyNS41ODA5IDkzLjA1NDcgMjIuNTkzN0w5MS42OTAyIDIyTDkxLjM0MzcgMjMuNDQyM0M5MC41Mjc3IDI2LjgwMzYgODguODIyMiAyOS44MzYgODYuNDgwNyAzMi4yNjk1QzgxLjk4MDMgMjkuODc3NCA3Ny4yNzg4IDI3Ljk0NCA3Mi40MzA1IDI2LjQ3OTdDNjcuNTkzNyAyNy45NDA4IDYyLjkwMDUgMjkuODY4NiA1OC40MDIgMzIuMjU3MUM1Ni4wNzAxIDI5LjgyNjggNTQuMzY4OCAyNi44MDE4IDUzLjU1NiAyMy40NTAxTDUzLjIwNzIgMjIuMDA4M0w1MS44NDc3IDIyLjU5OTJDNDUuMDkxNCAyNS41NDMxIDM4Ljg5MDEgMzAuMDY0NyAzMy45MTYyIDM1LjY3NDJMMzIuOTMxOCAzNi43ODMzTDM0LjE5IDM3LjU2MTlDMzcuMTE0MiAzOS4zNzMzIDM5LjQ1NzYgNDEuOTIyNCA0MS4wNDQ0IDQ0Ljg4NjZDMzcuMzkxNyA0OC40NDM1IDM0LjE0OTUgNTIuMzA3IDMxLjMxMTkgNTYuMzk1OUMzMS4yMDE0IDYxLjQxNTQgMzEuNTUzNSA2Ni40OTI0IDMyLjQyOTcgNzEuNTY0NEMyOS44MjMxIDcyLjgzNzggMjYuOTM1OCA3My41MzE4IDIzLjk2MjggNzMuNTMxOEMyMy40NDA5IDczLjUzMTggMjIuOTUyNyA3My41MTI5IDIyLjQ3ODIgNzMuNDczM0wyMSA3My4zNjA2TDIxLjEzODUgNzQuODM2NUMyMS44NjI5IDgyLjMwMzMgMjQuMTgxNCA4OS40MDUzIDI4LjAzMzQgOTUuOTQ3MUwyOC43ODUzIDk3LjIyMzdMMjkuOTE0MiA5Ni4yNjU2QzMyLjUzMDUgOTQuMDQ2NSAzNS42OTE3IDkyLjU3NyAzOS4wNTMgOTEuOTg0N0M0MS4yNjg5IDk2LjUxNTUgNDMuODk1MyAxMDAuNzcyIDQ2Ljg3NDcgMTA0LjcyNUM1MS42Mjg3IDEwNi4zODcgNTYuNTgxOSAxMDcuNjI5IDYxLjY5NzEgMTA4LjM2N0M2Mi4xODc3IDExMS43NSA2MS43OTcgMTE1LjI0OSA2MC40NjI0IDExOC40ODRMNTkuODk5NSAxMTkuODU1TDYxLjM0NjkgMTIwLjE3NEM2NS4wNTI5IDEyMC45ODkgNjguNzkxNyAxMjEuNDA0IDcyLjQ1MjYgMTIxLjQwNEw4My41NTUxIDEyMC4xNzRMODUuMDAzOSAxMTkuODU1TDg0LjQzOTcgMTE4LjQ4MkM4My4xMDg3IDExNS4yNDYgODIuNzE4IDExMS43NDMgODMuMjA4NiAxMDguMzZDODguMzAzNiAxMDcuNjIxIDkzLjIzODQgMTA2LjM4MiA5Ny45NzQ4IDEwNC43MjVDMTAwLjk1NyAxMDAuNzY5IDEwMy41ODYgOTYuNTA5NSAxMDUuODA1IDkxLjk3MjhDMTA5LjE3NyA5Mi41NjE0IDExMi4zNTYgOTQuMDMxNyAxMTQuOTg5IDk2LjI1NzNMMTE2LjExOCA5Ny4yMTQxTDExNi44NjYgOTUuOTQwN0MxMjAuNzI1IDg5LjM5MDUgMTIzLjA0MyA4Mi4yODkxIDEyMy43NTYgNzQuODM0MkwxMjMuODk1IDczLjM2MUwxMjIuNDQyIDczLjQ3MjlaTTg4LjMxOTcgOTEuNTE4MUM4My4wNjczIDkyLjk0NjYgNzcuNzMzIDkzLjY2NzcgNzIuNDMwNSA5My42Njc3QzY3LjExMzcgOTMuNjY3NyA2MS43ODU5IDkyLjk0NyA1Ni41MjkgOTEuNTE4MUM1My42NDQ4IDg3LjAzNjYgNTEuMzY0NSA4Mi4yMzU3IDQ5LjcyMzQgNzcuMTgxMkM0OC4wODkyIDcyLjE1MDIgNDcuMTMyOSA2Ni44Nzk1IDQ2Ljg1NTQgNjEuNDUyMkM1MC4yNTA0IDU3LjI1NDcgNTQuMTExIDUzLjU3NzYgNTguMzc2NyA1MC40ODIzQzYyLjcxMTQgNDcuMzI5NCA2Ny40MjcxIDQ0Ljc2NzkgNzIuNDMwNSA0Mi44NDFDNzcuNDI1NiA0NC43NjgzIDgyLjEzMjYgNDcuMzI2MiA4Ni40NTcyIDUwLjQ2NTdDOTAuNzM5NCA1My41Nzc2IDk0LjYxNzEgNTcuMjgzMiA5OC4wMjg3IDYxLjUwN0M5Ny43Mzc4IDY2LjkwMzQgOTYuNzcgNzIuMTQzOCA5NS4xMzMgNzcuMTY2NUM5My40OTYxIDgyLjIyIDkxLjIwODQgODcuMDM2MSA4OC4zMTk3IDkxLjUxODFaTTc2Ljc2ODQgNjYuMTk3NEM3Ni43Njg0IDY5LjkwODEgNzkuNzc1NCA3Mi45MDk2IDgzLjQ4MSA3Mi45MDk2Qzg3LjE4NTcgNzIuOTA5NiA5MC4xODk1IDY5LjkwODYgOTAuMTg5NSA2Ni4xOTc0QzkwLjE4OTUgNjIuNTAxIDg3LjE4NTcgNTkuNDg4MSA4My40ODEgNTkuNDg4MUM3OS43NzU0IDU5LjQ4ODEgNzYuNzY4NCA2Mi41MDEgNzYuNzY4NCA2Ni4xOTc0Wk02OC4wOTU0IDY2LjE5NzRDNjguMDk1NCA2OS45MDgxIDY1LjA4ODggNzIuOTA5NiA2MS4zODMyIDcyLjkwOTZDNTcuNjc0OSA3Mi45MDk2IDU0LjY3NjYgNjkuOTA4NiA1NC42NzY2IDY2LjE5NzRDNTQuNjc2NiA2Mi41MDI0IDU3LjY3NTMgNTkuNDg5NCA2MS4zODMyIDU5LjQ4OTRDNjUuMDg4OCA1OS40ODk0IDY4LjA5NTQgNjIuNTAyNCA2OC4wOTU0IDY2LjE5NzRaIiBmaWxsPSJ3aGl0ZSIvPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzY4M18yOTYzIiB4MT0iNS41IiB5MT0iMTEiIHgyPSIxNDEiIHkyPSIxMjQuNSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjNTNCMkYwIi8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzQxOUVEQSIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM+Cjwvc3ZnPgo=
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "size"], ["spec", "storageClass"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resources", "cpu"], ["spec", "resources", "memory"]]
+  secrets:
+    exclude: []
+    include: []
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - etcd

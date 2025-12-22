@@ -13,10 +13,10 @@ diff:
 	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f-
 
 update:
-	timoni bundle build -f flux-aio.cue > templates/fluxcd.yaml
-	yq eval '(select(.kind == "Namespace") | .metadata.labels."pod-security.kubernetes.io/enforce") = "privileged"' -i templates/fluxcd.yaml
-	sed -i templates/fluxcd.yaml \
+	timoni bundle build -f flux-aio.cue > manifests/fluxcd.yaml
+	yq eval '(select(.kind == "Namespace") | .metadata.labels."pod-security.kubernetes.io/enforce") = "privileged"' -i manifests/fluxcd.yaml
+	sed -i manifests/fluxcd.yaml \
 		-e '/timoni/d' \
-		-e 's|\.cluster\.local\.,||g' -e 's|\.cluster\.local\,||g' -e 's|\.cluster\.local\.||g' \
-		-e '/value: .svc/a \            {{- include "cozy.kubernetes_envs" . | nindent 12 }}' \
-		-e '/hostNetwork: true/i \      dnsPolicy: ClusterFirstWithHostNet'
+		-e 's|\.cluster\.local\.,||g' -e 's|\.cluster\.local\,||g' -e 's|\.cluster\.local\.||g'
+	# TODO: solve dns issue with hostNetwork for installing helmreleases in tenant k8s clusters
+	#-e '/hostNetwork: true/i \      dnsPolicy: ClusterFirstWithHostNet' 

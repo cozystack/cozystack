@@ -1,0 +1,15 @@
+#!/bin/sh
+# Migration 10 --> 11
+
+# Force reconcile hr keycloak-configure
+if kubectl get helmrelease keycloak-configure -n cozy-keycloak; then
+  kubectl delete po -l app=source-controller -n cozy-fluxcd
+  timestamp=$(date --rfc-3339=ns)
+  kubectl annotate helmrelease keycloak-configure -n cozy-keycloak \
+    reconcile.fluxcd.io/forceAt="$timestamp" \
+    reconcile.fluxcd.io/requestedAt="$timestamp" \
+    --overwrite
+fi
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=11 --dry-run=client -o yaml | kubectl apply -f-

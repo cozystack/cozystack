@@ -1,0 +1,42 @@
+apiVersion: cozystack.io/v1alpha1
+kind: CozystackResourceDefinition
+metadata:
+  name: rabbitmq
+spec:
+  application:
+    kind: RabbitMQ
+    plural: rabbitmqs
+    singular: rabbitmq
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{"external":{"description":"Enable external access from outside the cluster.","type":"boolean","default":false},"replicas":{"description":"Number of RabbitMQ replicas.","type":"integer","default":3},"resources":{"description":"Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.","type":"object","default":{},"properties":{"cpu":{"description":"CPU available to each replica.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"memory":{"description":"Memory (RAM) available to each replica.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}},"resourcesPreset":{"description":"Default sizing preset used when `resources` is omitted.","type":"string","default":"nano","enum":["nano","micro","small","medium","large","xlarge","2xlarge"]},"size":{"description":"Persistent Volume Claim size available for application data.","default":"10Gi","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"storageClass":{"description":"StorageClass used to store the data.","type":"string","default":""},"users":{"description":"Users configuration map.","type":"object","default":{},"additionalProperties":{"type":"object","properties":{"password":{"description":"Password for the user.","type":"string"}}}},"vhosts":{"description":"Virtual hosts configuration map.","type":"object","default":{},"additionalProperties":{"type":"object","required":["roles"],"properties":{"roles":{"description":"Virtual host roles list.","type":"object","properties":{"admin":{"description":"List of admin users.","type":"array","items":{"type":"string"}},"readonly":{"description":"List of readonly users.","type":"array","items":{"type":"string"}}}}}}}}}
+  release:
+    prefix: rabbitmq-
+    labels:
+      cozystack.io/ui: "true"
+    chart:
+      name: rabbitmq
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
+  dashboard:
+    category: PaaS
+    singular: RabbitMQ
+    plural: RabbitMQ
+    description: Managed RabbitMQ service
+    tags:
+      - messaging
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHg9Ii0wLjAwMTk1MzEyIiB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgcng9IjI0IiBmaWxsPSJ1cmwoI3BhaW50MF9saW5lYXJfNjgzXzI5NzIpIi8+CjxwYXRoIGQ9Ik0xMTEuNDExIDYyLjhIODIuNDkzOUM4MS43OTY5IDYyLjc5OTcgODEuMTI4NSA2Mi41MjI4IDgwLjYzNTYgNjIuMDMwMUM4MC4xNDI3IDYxLjUzNzMgNzkuODY1NiA2MC44NjkxIDc5Ljg2NTMgNjAuMTcyMlYzMC4wNDEyQzc5Ljg2NTMgMjcuODEgNzguMDU1NiAyNiA3NS44MjQ5IDI2SDY1LjUwMjFDNjMuMjcgMjYgNjEuNDYxNCAyNy44MSA2MS40NjE0IDMwLjA0MTJWNTkuOTg5OEM2MS40NjE0IDYxLjU0MzUgNjAuMjA1IDYyLjgwNjUgNTguNjUwOCA2Mi44MTMzTDQ5LjE3NDMgNjIuODU4NEM0Ny42MDY5IDYyLjg2NjkgNDYuMzMzNiA2MS41OTU1IDQ2LjMzNjYgNjAuMDI5OEw0Ni4zOTU0IDMwLjA0OEM0Ni40MDA1IDI3LjgxMzQgNDQuNTkwMiAyNiA0Mi4zNTUgMjZIMzIuMDQwN0MyOS44MDgzIDI2IDI4IDI3LjgxIDI4IDMwLjA0MTJWMTE0LjQxMkMyOCAxMTYuMzk0IDI5LjYwNjEgMTE4IDMxLjU4NzEgMTE4SDExMS40MTFDMTEzLjM5NCAxMTggMTE1IDExNi4zOTQgMTE1IDExNC40MTJWNjYuMzg4QzExNSA2NC40MDU4IDExMy4zOTQgNjIuOCAxMTEuNDExIDYyLjhaTTk3Ljg1MDggOTQuNDc3OUM5Ny44NTA4IDk3LjA3NTUgOTUuNzQ0NSA5OS4xODE3IDkzLjE0NjQgOTkuMTgxN0g4NC45ODg0QzgyLjM5IDk5LjE4MTcgODAuMjgzNiA5Ny4wNzU1IDgwLjI4MzYgOTQuNDc3OVY4Ni4zMjE3QzgwLjI4MzYgODMuNzIzOCA4Mi4zOSA4MS42MTc5IDg0Ljk4ODQgODEuNjE3OUg5My4xNDY0Qzk1Ljc0NDUgODEuNjE3OSA5Ny44NTA4IDgzLjcyMzggOTcuODUwOCA4Ni4zMjE3Vjk0LjQ3NzlaIiBmaWxsPSJ3aGl0ZSIvPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzY4M18yOTcyIiB4MT0iNSIgeTE9Ii03LjUiIHgyPSIxNDEiIHkyPSIxMjQuNSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjRkY4MjJGIi8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI0ZGNjYwMCIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM+Cjwvc3ZnPgo=
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "users"], ["spec", "vhosts"]]
+  secrets:
+    exclude: []
+    include:
+      - resourceNames:
+          - rabbitmq-{{ .name }}-default-user
+      - matchLabels:
+          apps.cozystack.io/user-secret: "true"
+  services:
+    exclude: []
+    include:
+      - resourceNames:
+          - rabbitmq-{{ .name }}

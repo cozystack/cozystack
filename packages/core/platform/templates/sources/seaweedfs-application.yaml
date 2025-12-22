@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.seaweedfs-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: seaweedfs-system
+          path: system/seaweedfs
+        - name: seaweedfs
+          path: extra/seaweedfs
+          libraries: ["cozy-lib"]
+        - name: seaweedfs-rd
+          path: system/seaweedfs-rd
+          install:
+            namespace: cozy-system
+            releaseName: seaweedfs-rd
