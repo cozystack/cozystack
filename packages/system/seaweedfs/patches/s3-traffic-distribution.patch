@@ -1,0 +1,12 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml
+index 8afd4865..86e0424e 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml
+@@ -14,6 +14,7 @@ metadata:
+     {{- toYaml .Values.s3.annotations | nindent 4 }}
+ {{- end }}
+ spec:
++  trafficDistribution: PreferClose
+   internalTrafficPolicy: {{ .Values.s3.internalTrafficPolicy | default "Cluster" }}
+   ports:
+   - name: "swfs-s3"

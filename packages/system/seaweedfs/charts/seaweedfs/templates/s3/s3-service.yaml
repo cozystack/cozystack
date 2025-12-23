@@ -14,6 +14,7 @@ metadata:
     {{- toYaml .Values.s3.annotations | nindent 4 }}
 {{- end }}
 spec:
+  trafficDistribution: PreferClose
   internalTrafficPolicy: {{ .Values.s3.internalTrafficPolicy | default "Cluster" }}
   ports:
   - name: "swfs-s3"
