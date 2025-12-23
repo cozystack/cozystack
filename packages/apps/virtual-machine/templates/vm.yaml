@@ -124,6 +124,8 @@ spec:
 
       terminationGracePeriodSeconds: 30
 
+      {{- include "virtual-machine.nodeAffinity" . | nindent 6 }}
+
       volumes:
         - name: systemdisk
           dataVolume:
