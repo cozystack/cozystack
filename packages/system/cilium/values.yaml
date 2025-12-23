@@ -10,6 +10,7 @@ cilium:
     enabled: true
   loadBalancer:
     algorithm: maglev
+    serviceTopology: true
   ipam:
     mode: "kubernetes"
   image:
