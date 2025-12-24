@@ -229,6 +229,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controller.CozystackResourceDefinitionHelmReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionHelmReconciler")
+		os.Exit(1)
+	}
+
 	dashboardManager := &dashboard.Manager{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

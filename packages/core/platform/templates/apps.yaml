@@ -36,6 +36,9 @@ metadata:
   namespace: tenant-root
   labels:
     cozystack.io/ui: "true"
+    apps.cozystack.io/application.kind: Tenant
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: tenant-root
 spec:
   interval: 0s
   releaseName: tenant-root
