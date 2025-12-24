@@ -31,6 +31,8 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -45,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/cozystack/cozystack/internal/fluxinstall"
+	"github.com/cozystack/cozystack/internal/operator"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -58,6 +61,8 @@ func init() {
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	utilruntime.Must(cozyv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(helmv2.AddToScheme(scheme))
+	utilruntime.Must(sourcev1.AddToScheme(scheme))
+	utilruntime.Must(sourcewatcherv1beta1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -153,6 +158,24 @@ func main() {
 		} else {
 			setupLog.Info("Platform source resource installation completed successfully")
 		}
+	}
+
+	// Setup PackageSource reconciler
+	if err := (&operator.PackageSourceReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PackageSource")
+		os.Exit(1)
+	}
+
+	// Setup Package reconciler
+	if err := (&operator.PackageReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Package")
+		os.Exit(1)
 	}
 
 	// +kubebuilder:scaffold:builder

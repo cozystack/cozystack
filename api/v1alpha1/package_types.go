@@ -86,4 +86,15 @@ type PackageStatus struct {
 	// Conditions represents the latest available observations of a Package's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Dependencies tracks the readiness status of each dependency
+	// Key is the dependency package name, value indicates if the dependency is ready
+	// +optional
+	Dependencies map[string]DependencyStatus `json:"dependencies,omitempty"`
+}
+
+// DependencyStatus represents the readiness status of a dependency
+type DependencyStatus struct {
+	// Ready indicates whether the dependency is ready
+	Ready bool `json:"ready"`
 }
