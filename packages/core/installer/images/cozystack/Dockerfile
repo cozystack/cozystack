@@ -13,7 +13,7 @@ RUN git clone ${K8S_AWAIT_ELECTION_GITREPO} /usr/local/go/k8s-await-election/ \
  && make \
  && mv ./out/k8s-await-election-${TARGETARCH} /k8s-await-election
 
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
