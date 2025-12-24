@@ -1,0 +1,161 @@
+name: Auto Patch Release
+
+on:
+  schedule:
+    # Run daily at 2:00 AM CET (1:00 UTC in winter, 0:00 UTC in summer)
+    # Using 1:00 UTC to approximate 2:00 AM CET
+    - cron: '0 1 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+concurrency:
+  group: auto-release-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  auto-release:
+    name: Auto Patch Release
+    runs-on: [self-hosted]
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name  "cozystack-bot"
+          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
+          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+
+      - name: Process release branches
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const { execSync } = require('child_process');
+            
+            // Get all release-X.Y branches
+            const branches = execSync('git branch -r | grep -E "origin/release-[0-9]+\\.[0-9]+$" | sed "s|origin/||" | tr -d " "', { encoding: 'utf8' })
+              .split('\n')
+              .filter(b => b.trim())
+              .filter(b => /^release-\d+\.\d+$/.test(b));
+            
+            console.log(`Found ${branches.length} release branches: ${branches.join(', ')}`);
+            
+            // Get all published releases (not draft)
+            const allReleases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            // Filter to only published releases (not draft) with tags matching vX.Y.Z (no suffixes)
+            const publishedReleases = allReleases.data
+              .filter(r => !r.draft)
+              .filter(r => /^v\d+\.\d+\.\d+$/.test(r.tag_name));
+            
+            console.log(`Found ${publishedReleases.length} published releases without suffixes`);
+            
+            for (const branch of branches) {
+              console.log(`\n=== Processing branch: ${branch} ===`);
+              
+              // Extract X.Y from branch name (release-X.Y)
+              const match = branch.match(/^release-(\d+\.\d+)$/);
+              if (!match) {
+                console.log(`  ⚠️  Branch ${branch} doesn't match pattern, skipping`);
+                continue;
+              }
+              
+              const [major, minor] = match[1].split('.');
+              const versionPrefix = `v${major}.${minor}.`;
+              
+              console.log(`  Looking for releases with prefix: ${versionPrefix}`);
+              
+              // Find the latest published release for this branch (vX.Y.Z without suffixes)
+              const branchReleases = publishedReleases
+                .filter(r => r.tag_name.startsWith(versionPrefix))
+                .filter(r => /^v\d+\.\d+\.\d+$/.test(r.tag_name)); // Ensure no suffixes
+              
+              if (branchReleases.length === 0) {
+                console.log(`  ⚠️  No published releases found for ${branch}, skipping`);
+                continue;
+              }
+              
+              // Sort by version (descending) to get the latest
+              branchReleases.sort((a, b) => {
+                const aVersion = a.tag_name.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+                const bVersion = b.tag_name.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+                if (!aVersion || !bVersion) return 0;
+                
+                const aNum = parseInt(aVersion[1]) * 10000 + parseInt(aVersion[2]) * 100 + parseInt(aVersion[3]);
+                const bNum = parseInt(bVersion[1]) * 10000 + parseInt(bVersion[2]) * 100 + parseInt(bVersion[3]);
+                return bNum - aNum;
+              });
+              
+              const latestRelease = branchReleases[0];
+              console.log(`  ✅ Latest published release: ${latestRelease.tag_name}`);
+              
+              // Get the commit SHA for this release tag
+              let releaseCommitSha;
+              try {
+                releaseCommitSha = execSync(`git rev-list -n 1 ${latestRelease.tag_name}`, { encoding: 'utf8' }).trim();
+                console.log(`  Release commit SHA: ${releaseCommitSha}`);
+              } catch (error) {
+                console.log(`  ⚠️  Could not find commit for tag ${latestRelease.tag_name}, skipping`);
+                continue;
+              }
+              
+              // Checkout the branch
+              execSync(`git fetch origin ${branch}:${branch}`, { encoding: 'utf8' });
+              execSync(`git checkout ${branch}`, { encoding: 'utf8' });
+              
+              // Get the latest commit on the branch
+              const latestBranchCommit = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+              console.log(`  Latest branch commit: ${latestBranchCommit}`);
+              
+              // Check if there are new commits after the release
+              const commitsAfterRelease = execSync(
+                `git rev-list ${releaseCommitSha}..HEAD --oneline`,
+                { encoding: 'utf8' }
+              ).trim();
+              
+              if (!commitsAfterRelease) {
+                console.log(`  ℹ️  No new commits after ${latestRelease.tag_name}, skipping`);
+                continue;
+              }
+              
+              console.log(`  ✅ Found new commits after release:`);
+              console.log(commitsAfterRelease);
+              
+              // Calculate next version (Z+1)
+              const versionMatch = latestRelease.tag_name.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+              if (!versionMatch) {
+                console.log(`  ❌ Could not parse version from ${latestRelease.tag_name}, skipping`);
+                continue;
+              }
+              
+              const nextPatch = parseInt(versionMatch[3]) + 1;
+              const nextTag = `v${versionMatch[1]}.${versionMatch[2]}.${nextPatch}`;
+              
+              console.log(`  🏷️  Creating new tag: ${nextTag} on commit ${latestBranchCommit}`);
+              
+              // Create and push the tag (force push to update if exists)
+              try {
+                execSync(`git tag -f ${nextTag} ${latestBranchCommit}`, { encoding: 'utf8' });
+                execSync(`git push -f origin ${nextTag}`, { encoding: 'utf8' });
+                console.log(`  ✅ Successfully created and pushed tag ${nextTag}`);
+              } catch (error) {
+                console.log(`  ❌ Error creating/pushing tag ${nextTag}: ${error.message}`);
+                core.setFailed(`Failed to create tag ${nextTag} for branch ${branch}`);
+              }
+            }
+            
+            console.log(`\n✅ Finished processing all release branches`);
+
