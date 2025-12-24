@@ -192,6 +192,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controller.WorkloadMonitorFromCRDReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkloadMonitorFromCRD")
+		os.Exit(1)
+	}
+
 	if err = (&controller.WorkloadReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

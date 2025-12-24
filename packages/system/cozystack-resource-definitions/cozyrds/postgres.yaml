@@ -49,3 +49,12 @@ spec:
           - postgres-{{ .name }}-ro
           - postgres-{{ .name }}-rw
           - postgres-{{ .name }}-external-write
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: postgres
+      type: postgres
+      selector:
+        app.kubernetes.io/name: postgres.apps.cozystack.io
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"

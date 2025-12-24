@@ -80,17 +80,3 @@ spec:
       policy.cozystack.io/allow-to-apiserver: "true"
       app.kubernetes.io/name: postgres.apps.cozystack.io
       app.kubernetes.io/instance: {{ $.Release.Name }}
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: {{ $.Release.Name }}
-spec:
-  replicas: {{ .Values.replicas }}
-  minReplicas: 1
-  kind: postgres
-  type: postgres
-  selector:
-    app.kubernetes.io/name: postgres.apps.cozystack.io
-    app.kubernetes.io/instance: {{ $.Release.Name }}
-  version: {{ $.Chart.Version }}

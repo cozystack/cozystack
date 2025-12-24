@@ -38,3 +38,20 @@ spec:
     include:
       - resourceNames:
           - kafka-{{ .name }}-kafka-bootstrap
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: kafka
+      type: kafka
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+        app.kubernetes.io/name: kafka
+      replicas: "{{ .Values.kafka.replicas }}"
+      minReplicas: "1"
+    - name: "{{ .Release.Name }}-zookeeper"
+      kind: kafka
+      type: zookeeper
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+        app.kubernetes.io/name: zookeeper
+      replicas: "{{ .Values.zookeeper.replicas }}"
+      minReplicas: "1"

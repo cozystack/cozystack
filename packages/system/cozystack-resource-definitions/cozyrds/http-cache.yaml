@@ -32,3 +32,25 @@ spec:
   secrets:
     exclude: []
     include: []
+  workloadMonitors:
+    - name: "{{ .Release.Name }}-haproxy"
+      kind: http-cache
+      type: http-cache
+      selector:
+        app: "{{ .Release.Name }}-haproxy"
+      replicas: "{{ .Values.haproxy.replicas }}"
+      minReplicas: "1"
+    - name: "{{ .Release.Name }}-nginx"
+      kind: http-cache
+      type: http-cache
+      selector:
+        app: "{{ .Release.Name }}-nginx-cache"
+      replicas: "{{ .Values.nginx.replicas }}"
+      minReplicas: "1"
+    - name: "{{ .Release.Name }}"
+      kind: http-cache
+      type: http-cache
+      selector:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"

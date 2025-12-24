@@ -40,3 +40,11 @@ spec:
     include:
       - resourceNames:
           - rabbitmq-{{ .name }}
+  workloadMonitors:
+    - name: "{{ .Release.Name }}"
+      kind: rabbitmq
+      type: rabbitmq
+      selector:
+        app.kubernetes.io/name: "{{ .Release.Name }}"
+      replicas: "{{ .Values.replicas }}"
+      minReplicas: "1"
