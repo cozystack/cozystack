@@ -58,7 +58,7 @@ jobs:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
       - name: Build Talos image
-        run: make -C packages/core/installer talos-nocloud
+        run: make -C packages/core/talos talos-nocloud
 
       - name: Save git diff as patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
