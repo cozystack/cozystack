@@ -37,6 +37,8 @@ type CozystackResourceDefinitionReconciler struct {
 }
 
 func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Only handle debounced restart logic
+	// HelmRelease reconciliation is handled by CozystackResourceDefinitionHelmReconciler
 	return r.debouncedRestart(ctx)
 }
 

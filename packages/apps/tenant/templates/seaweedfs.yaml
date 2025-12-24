@@ -9,6 +9,9 @@ metadata:
     internal.cozystack.io/tenantmodule: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+    apps.cozystack.io/application.kind: SeaweedFS
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: seaweedfs
 spec:
   chart:
     spec:
