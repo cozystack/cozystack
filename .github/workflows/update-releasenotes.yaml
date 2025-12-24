@@ -1,0 +1,92 @@
+name: Update Release Notes
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: update-releasenotes-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  update-releasenotes:
+    name: Update Release Notes
+    runs-on: [self-hosted]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update release notes from changelogs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            const changelogDir = 'docs/changelogs';
+            
+            // Get releases from first page
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 30
+            });
+            
+            console.log(`Found ${releases.data.length} releases (first page only)`);
+            
+            // Process each release
+            for (const release of releases.data) {
+              const tag = release.tag_name;
+              const changelogFile = `${tag}.md`;
+              const changelogPath = path.join(changelogDir, changelogFile);
+              
+              console.log(`\nProcessing release: ${tag}`);
+              
+              // Check if changelog file exists
+              if (!fs.existsSync(changelogPath)) {
+                console.log(`  ⚠️  Changelog file ${changelogFile} does not exist, skipping...`);
+                continue;
+              }
+              
+              // Read changelog file content
+              let changelogContent;
+              try {
+                changelogContent = fs.readFileSync(changelogPath, 'utf8');
+              } catch (error) {
+                console.log(`  ❌ Error reading file ${changelogPath}: ${error.message}`);
+                continue;
+              }
+              
+              if (!changelogContent.trim()) {
+                console.log(`  ⚠️  Changelog file ${changelogFile} is empty, skipping...`);
+                continue;
+              }
+              
+              // Check if content is already up to date
+              const currentBody = release.body || '';
+              if (currentBody.trim() === changelogContent.trim()) {
+                console.log(`  ✓ Content is already up to date, skipping...`);
+                continue;
+              }
+              
+              // Update release notes
+              try {
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release.id,
+                  body: changelogContent
+                });
+                console.log(`  ✅ Successfully updated release notes for ${tag}`);
+              } catch (error) {
+                console.log(`  ❌ Error updating release ${tag}: ${error.message}`);
+                core.setFailed(`Failed to update release notes for ${tag}`);
+              }
+            }
+
