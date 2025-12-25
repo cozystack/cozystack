@@ -26,7 +26,7 @@ import (
 //   - Tenant Info  (/openapi-ui/{clusterName}/{namespace}/factory/info-details/info)
 //   - All other sections are built from CRDs where spec.dashboard != nil.
 //   - Categories are ordered strictly as:
-//     Marketplace, IaaS, PaaS, NaaS, <others A→Z>, Resources, Administration
+//     Marketplace, IaaS, PaaS, NaaS, <others A→Z>, Resources, Backups, Administration
 //   - Items within each category: sort by Weight (desc), then Label (A→Z).
 func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
 	// Build the full menu once.
@@ -112,6 +112,9 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	keysAndTags["secrets"] = []any{"secret-sidebar"}
 	keysAndTags["ingresses"] = []any{"ingress-sidebar"}
 
+	// Add sidebar for backups.cozystack.io Plan resource
+	keysAndTags["plans"] = []any{"plan-sidebar"}
+
 	// 3) Sort items within each category by Weight (desc), then Label (A→Z)
 	for cat := range categories {
 		sort.Slice(categories[cat], func(i, j int) bool {
@@ -123,10 +126,10 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	}
 
 	// 4) Order categories strictly:
-	//    Marketplace (hardcoded), IaaS, PaaS, NaaS, <others A→Z>, Resources, Administration
+	//    Marketplace (hardcoded), IaaS, PaaS, NaaS, <others A→Z>, Resources, Backups (hardcoded), Administration (hardcoded)
 	orderedCats := orderCategoryLabels(categories)
 
-	// 5) Build menuItems (hardcode "Marketplace"; then dynamic categories; then hardcode "Administration")
+	// 5) Build menuItems (hardcode "Marketplace"; then dynamic categories; then hardcode "Backups" and "Administration")
 	menuItems := []any{
 		map[string]any{
 			"key":   "marketplace",
@@ -142,8 +145,8 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	}
 
 	for _, cat := range orderedCats {
-		// Skip "Marketplace" and "Administration" here since they're hardcoded
-		if strings.EqualFold(cat, "Marketplace") || strings.EqualFold(cat, "Administration") {
+		// Skip "Marketplace", "Backups", and "Administration" here since they're hardcoded
+		if strings.EqualFold(cat, "Marketplace") || strings.EqualFold(cat, "Backups") || strings.EqualFold(cat, "Administration") {
 			continue
 		}
 		children := []any{}
@@ -162,6 +165,19 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 			})
 		}
 	}
+
+	// Add hardcoded Backups section
+	menuItems = append(menuItems, map[string]any{
+		"key":   "backups",
+		"label": "Backups",
+		"children": []any{
+			map[string]any{
+				"key":   "plans",
+				"label": "Plans",
+				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/backups.cozystack.io/v1alpha1/plans",
+			},
+		},
+	})
 
 	// Add hardcoded Administration section
 	menuItems = append(menuItems, map[string]any{
@@ -201,6 +217,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		"stock-project-factory-kube-service-details",
 		"stock-project-factory-kube-secret-details",
 		"stock-project-factory-kube-ingress-details",
+		"stock-project-factory-plan-details",
 		"stock-project-api-form",
 		"stock-project-api-table",
 		"stock-project-builtin-form",
