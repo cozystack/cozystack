@@ -22,9 +22,9 @@ done
 
 kubectl delete helmrelease -n cozy-dashboard dashboard --ignore-not-found
 sleep 5
-cozypkg -n cozy-system -C packages/system/cozystack-resource-definition-crd apply cozystack-resource-definition-crd --plain
-cozypkg -n cozy-system -C packages/system/cozystack-resource-definitions apply cozystack-resource-definitions --plain
-cozypkg -n cozy-system -C packages/system/cozystack-api apply cozystack-api --plain
+cozyhr -n cozy-system -C packages/system/cozystack-resource-definition-crd apply cozystack-resource-definition-crd --plain
+cozyhr -n cozy-system -C packages/system/cozystack-resource-definitions apply cozystack-resource-definitions --plain
+cozyhr -n cozy-system -C packages/system/cozystack-api apply cozystack-api --plain
 if kubectl get ds cozystack-api -n cozy-system >/dev/null 2>&1; then
   echo "Waiting for cozystack-api daemonset"
   kubectl rollout status ds/cozystack-api -n cozy-system --timeout=5m || exit 1

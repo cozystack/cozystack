@@ -10,7 +10,7 @@ Cozystack is an open-source Kubernetes-based platform and framework for building
 - **Multi-tenancy**: Full isolation and self-service for tenants
 - **GitOps-driven**: FluxCD-based continuous delivery
 - **Modular Architecture**: Extensible with custom packages and services
-- **Developer Experience**: Simplified local development with cozypkg tool
+- **Developer Experience**: Simplified local development with cozyhr tool
 
 The platform exposes infrastructure services via the Kubernetes API with ready-made configs, built-in monitoring, and alerts.
 
