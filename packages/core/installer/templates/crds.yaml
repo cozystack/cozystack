@@ -1,6 +1,6 @@
-{{/*
+{{- if .Values.cozystackOperator.enabled }}
 {{- range $path, $_ := .Files.Glob "definitions/*.yaml" }}
 ---
 {{ $.Files.Get $path }}
 {{- end }}
-*/}}
+{{- end }}

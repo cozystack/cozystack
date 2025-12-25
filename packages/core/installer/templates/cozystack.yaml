@@ -1,3 +1,4 @@
+{{- if not .Values.cozystackOperator.enabled }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -77,3 +78,4 @@ spec:
       - key: "node.cilium.io/agent-not-ready"
         operator: "Exists"
         effect: "NoSchedule"
+{{- end }}
