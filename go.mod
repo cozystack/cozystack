@@ -5,6 +5,7 @@ module github.com/cozystack/cozystack
 go 1.25.0
 
 require (
+	github.com/emicklei/dot v1.10.0
 	github.com/fluxcd/helm-controller/api v1.4.3
 	github.com/go-logr/logr v1.4.3
 	github.com/go-logr/zapr v1.3.0
