@@ -21,7 +21,7 @@ import (
 )
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Cluster,shortName={pkgsrc,pkgsrcs}
+// +kubebuilder:resource:scope=Cluster,shortName={pks}
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Variants",type="string",JSONPath=".status.variants",description="Package variants (comma-separated)"
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status",description="Ready status"
