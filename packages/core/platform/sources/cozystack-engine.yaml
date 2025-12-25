@@ -1,0 +1,108 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cozystack-engine
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+    components:
+    - name: cozystack-resource-definition-crd
+      path: system/cozystack-resource-definition-crd
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-resource-definition-crd
+    - name: cozystack-controller
+      path: system/cozystack-controller
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-controller
+        dependsOn:
+        - cozystack-resource-definition-crd
+    - name: cozystack-api
+      path: system/cozystack-api
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-api
+        dependsOn:
+        - cozystack-controller
+        - cozystack-resource-definition-crd
+    - name: lineage-controller-webhook
+      path: system/lineage-controller-webhook
+      install:
+        namespace: cozy-system
+        releaseName: lineage-controller-webhook
+        dependsOn:
+        - cozystack-controller
+        - cozystack-resource-definition-crd
+    - name: dashboard
+      path: system/dashboard
+      install:
+        namespace: cozy-dashboard
+        releaseName: dashboard
+        dependsOn:
+        - cozystack-api
+        - cozystack-controller
+        - cozystack-resource-definition-crd
+  - name: oidc
+    dependsOn:
+    - cozystack.networking
+    - cozystack.keycloak
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+    components:
+    - name: cozystack-resource-definition-crd
+      path: system/cozystack-resource-definition-crd
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-resource-definition-crd
+    - name: cozystack-controller
+      path: system/cozystack-controller
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-controller
+        dependsOn:
+        - cozystack-resource-definition-crd
+    - name: cozystack-api
+      path: system/cozystack-api
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-api
+        dependsOn:
+        - cozystack-controller
+        - cozystack-resource-definition-crd
+    - name: lineage-controller-webhook
+      path: system/lineage-controller-webhook
+      install:
+        namespace: cozy-system
+        releaseName: lineage-controller-webhook
+        dependsOn:
+        - cozystack-controller
+        - cozystack-resource-definition-crd
+    - name: dashboard
+      path: system/dashboard
+      install:
+        namespace: cozy-dashboard
+        releaseName: dashboard
+        dependsOn:
+        - cozystack-api
+        - cozystack-controller
+        - keycloak-configure
+        - cozystack-resource-definition-crd
+    - name: keycloak-configure
+      path: system/keycloak-configure
+      install:
+        namespace: cozy-keycloak
+        releaseName: keycloak-configure
+        dependsOn: []

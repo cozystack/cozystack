@@ -1,0 +1,24 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.capi-providers-cpprovider
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: kamaji
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-operator
+    - cozystack.kamaji
+    components:
+    - name: capi-providers-cpprovider
+      path: system/capi-providers-cpprovider
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-cpprovider

@@ -1,0 +1,24 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.monitoring-agents
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.victoria-metrics-operator
+        - cozystack.vertical-pod-autoscaler
+      components:
+        - name: monitoring-agents
+          path: system/monitoring-agents
+          install:
+            releaseName: monitoring-agents
+            namespace: cozy-monitoring
+            privileged: true

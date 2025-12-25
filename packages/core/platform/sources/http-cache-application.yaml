@@ -1,0 +1,27 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.http-cache-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: http-cache
+          path: apps/http-cache
+          libraries: [cozy-lib]
+        - name: http-cache-rd
+          path: system/http-cache-rd
+          install:
+            namespace: cozy-system
+            releaseName: http-cache-rd

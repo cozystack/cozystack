@@ -1,0 +1,32 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.bootbox-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: bootbox-system
+          path: system/bootbox
+          install:
+            releaseName: bootbox-application
+            namespace: cozy-system
+        - name: bootbox
+          path: extra/bootbox
+          libraries: ["cozy-lib"]
+        - name: bootbox-rd
+          path: system/bootbox-rd
+          install:
+            namespace: cozy-system
+            releaseName: bootbox-rd

@@ -1,0 +1,27 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.monitoring-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: monitoring
+          path: extra/monitoring
+          libraries: ["cozy-lib"]
+        - name: monitoring-rd
+          path: system/monitoring-rd
+          install:
+            namespace: cozy-system
+            releaseName: monitoring-rd
