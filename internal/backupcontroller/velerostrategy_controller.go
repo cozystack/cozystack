@@ -2,56 +2,59 @@ package backupcontroller
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	velerostrategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 )
 
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	backupJob := j
-	if err := r.Get(ctx, req.NamespacedName, backupJob); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	// Check if this BackupJob matches our strategy type (Velero)
-	if backupJob.Spec.StrategyRef.Kind != "Velero"  {
+	if j.Spec.StrategyRef.Kind != "Velero"  {
 		// Not a Velero strategy, ignore
 		return ctrl.Result{}, nil
 	}
 
 	// If already completed, no need to reconcile
-	if backupJob.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded ||
-		backupJob.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded ||
+		j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
 		return ctrl.Result{}, nil
 	}
 
 	// For now implemented backup logic for App Kubevirt VirtualMachine only
-	if backupJob.Spec.ApplicationRef.Kind != "VirtualMachine" ||
-		backupJob.Spec.ApplicationRef.APIGroup != "kubevirt.io/v1" {
-		return r.markBackupJobFailed(ctx, backupJob, fmt.Sprintf("Unsupported application type: %s", backupJob.Spec.ApplicationRef.Kind), logger)
+	if j.Spec.ApplicationRef.Kind != "VirtualMachine" ||
+		j.Spec.ApplicationRef.APIGroup != "kubevirt.io/v1" {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application type: %s", j.Spec.ApplicationRef.Kind), logger)
 	}
 
 	// Step 1: On first reconcile, set startedAt and phase = Running
-	if backupJob.Status.StartedAt == nil {
+	if j.Status.StartedAt == nil {
 		now := metav1.Now()
-		backupJob.Status.StartedAt = &now
-		backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
-		if err := r.Status().Update(ctx, backupJob); err != nil {
+		j.Status.StartedAt = &now
+		j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
+		if err := r.Status().Update(ctx, j); err != nil {
 			logger.Error(err, "failed to update BackupJob status")
 			return ctrl.Result{}, err
 		}
-		logger.Info("started BackupJob", "phase", backupJob.Status.Phase)
+		logger.Info("started BackupJob", "phase", j.Status.Phase)
 	}
 
 	// Step 2: Resolve inputs - Read Strategy, Storage, Application, optionally Plan
 	veleroStrategy := &velerostrategyv1alpha1.Velero{}
-	if err := r.Get(ctx, client.ObjectKey{Name: backupJob.Spec.StrategyRef.Name}, veleroStrategy); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: j.Spec.StrategyRef.Name}, veleroStrategy); err != nil {
 		if errors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, backupJob, fmt.Sprintf("Velero strategy not found: %s", backupJob.Spec.StrategyRef.Name), logger)
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Velero strategy not found: %s", j.Spec.StrategyRef.Name), logger)
 		}
 		return ctrl.Result{}, err
 	}
@@ -59,18 +62,18 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	// Step 3: Execute backup logic
 	// Check if we already created a Velero Backup
 	// Use human-readable timestamp: YYYY-MM-DD-HH-MM-SS
-	timestamp := backupJob.Status.StartedAt.Time.Format("2006-01-02-15-04-05")
-	veleroBackupName := fmt.Sprintf("%s-velero-%s", backupJob.Name, timestamp)
+	timestamp := j.Status.StartedAt.Time.Format("2006-01-02-15-04-05")
+	veleroBackupName := fmt.Sprintf("%s-velero-%s", j.Name, timestamp)
 	veleroBackup := &unstructured.Unstructured{}
 	veleroBackup.SetAPIVersion("velero.io/v1")
 	veleroBackup.SetKind("Backup")
-	veleroBackupKey := client.ObjectKey{Namespace: backupJob.Namespace, Name: veleroBackupName}
+	veleroBackupKey := client.ObjectKey{Namespace: j.Namespace, Name: veleroBackupName}
 
 	if err := r.Get(ctx, veleroBackupKey, veleroBackup); err != nil {
 		if errors.IsNotFound(err) {
 			// Create Velero Backup
-			if err := r.createVeleroBackup(ctx, backupJob, veleroBackupName, logger); err != nil {
-				return r.markBackupJobFailed(ctx, backupJob, fmt.Sprintf("failed to create Velero Backup: %v", err), logger)
+			if err := r.createVeleroBackup(ctx, j, veleroBackupName, logger); err != nil {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err), logger)
 			}
 			// Requeue to check status
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -92,17 +95,17 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	// Step 4: On success - Create Backup resource and update status
 	if phase == "Completed" {
 		// Check if we already created the Backup resource
-		if backupJob.Status.BackupRef == nil {
-			backup, err := r.createBackupResource(ctx, backupJob, veleroBackup, logger)
+		if j.Status.BackupRef == nil {
+			backup, err := r.createBackupResource(ctx, j, veleroBackup, logger)
 			if err != nil {
-				return r.markBackupJobFailed(ctx, backupJob, fmt.Sprintf("failed to create Backup resource: %v", err), logger)
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup resource: %v", err), logger)
 			}
 
 			now := metav1.Now()
-			backupJob.Status.BackupRef = &corev1.LocalObjectReference{Name: backup.Name}
-			backupJob.Status.CompletedAt = &now
-			backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
-			if err := r.Status().Update(ctx, backupJob); err != nil {
+			j.Status.BackupRef = &corev1.LocalObjectReference{Name: backup.Name}
+			j.Status.CompletedAt = &now
+			j.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
+			if err := r.Status().Update(ctx, j); err != nil {
 				logger.Error(err, "failed to update BackupJob status")
 				return ctrl.Result{}, err
 			}
@@ -117,7 +120,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		if message == "" {
 			message = fmt.Sprintf("Velero Backup failed with phase: %s", phase)
 		}
-		return r.markBackupJobFailed(ctx, backupJob, message, logger)
+		return r.markBackupJobFailed(ctx, j, message, logger)
 	}
 
 	// Still in progress (InProgress, New, etc.)
