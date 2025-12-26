@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
 )
 
 // -----------------------------------------------------------------------------
@@ -278,17 +278,7 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	for i := range list.Items {
 		out.Items = append(out.Items, *secretToTenant(&list.Items[i]))
 	}
-	slices.SortFunc(out.Items, func(a, b corev1alpha1.TenantSecret) int {
-		aKey := fmt.Sprintf("%s/%s", a.Namespace, a.Name)
-		bKey := fmt.Sprintf("%s/%s", b.Namespace, b.Name)
-		switch {
-		case aKey < bKey:
-			return -1
-		case aKey > bKey:
-			return 1
-		}
-		return 0
-	})
+	sorting.ByNamespacedName[corev1alpha1.TenantSecret, *corev1alpha1.TenantSecret](out.Items)
 	return out, nil
 }
 
@@ -481,10 +471,10 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 		for i := range v.Items {
 			tbl.Rows = append(tbl.Rows, row(&v.Items[i]))
 		}
-		tbl.ListMeta.ResourceVersion = v.ListMeta.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	case *corev1alpha1.TenantSecret:
 		tbl.Rows = append(tbl.Rows, row(v))
-		tbl.ListMeta.ResourceVersion = v.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	default:
 		return nil, notAcceptable{r.gvr.GroupResource(), fmt.Sprintf("unexpected %T", obj)}
 	}
