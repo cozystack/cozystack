@@ -124,6 +124,9 @@ EOF
 @test "Configure Tenant and wait for applications" {
   # Patch root tenant and wait for its releases
 
+  # Enable Gateway API for testing
+  kubectl patch configmap/cozystack -n cozy-system --type merge -p '{"data":{"addons.gatewayAPI.enabled":"true"}}'
+
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
