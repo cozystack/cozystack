@@ -125,7 +125,7 @@ EOF
   # Patch root tenant and wait for its releases
 
   # Enable Gateway API for testing
-  kubectl patch configmap/kubernetes -n cozy-system --type merge -p '{"data":{"addons.gatewayAPI.enabled":"true"}}'
+  kubectl patch configmap/cozystack -n cozy-system --type merge -p '{"data":{"addons.gatewayAPI.enabled":"true"}}'
 
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
