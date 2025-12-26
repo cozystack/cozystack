@@ -75,7 +75,7 @@ seaweedfs:
           name: seaweedfs-db-app
     s3:
       replicas: 2
-      enabled: true
+      enabled: false
       port: 8333
       httpsPort: 0
       # Suffix of the host name, {bucket}.{domainName}
@@ -87,20 +87,22 @@ seaweedfs:
       existingConfigSecret: null
       auditLogConfig: {}
   s3:
-    enabled: false
+    enabled: true
+    replicas: 2
+    httpsPort: 0
     extraArgs:
       - -idleTimeout=60
     enableAuth: false
     readinessProbe:
-      scheme: HTTPS
+      scheme: HTTP
     livenessProbe:
-      scheme: HTTPS
+      scheme: HTTP
     logs:
       type: ""
     ingress:
       enabled: true
       className: "tenant-root"
-      host: "seaweedfs2.demo.cozystack.io"
+      host: "seaweedfs.demo.cozystack.io"
       annotations:
         nginx.ingress.kubernetes.io/proxy-body-size: "0"
         nginx.ingress.kubernetes.io/proxy-buffering: "off"
@@ -110,6 +112,7 @@ seaweedfs:
         nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
         nginx.ingress.kubernetes.io/client-body-timeout: "3600"
         nginx.ingress.kubernetes.io/client-header-timeout: "120"
+        nginx.ingress.kubernetes.io/service-upstream: "true"
         acme.cert-manager.io/http01-ingress-class: tenant-root
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls:
