@@ -147,7 +147,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&backupcontroller.BackupJobStrategyReconciler{
+	if err = (&backupcontroller.BackupJobReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
