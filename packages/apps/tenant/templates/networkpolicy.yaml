@@ -67,6 +67,19 @@ spec:
     {{- end }}
     {{- end }}
   {{- end }}
+  {{- if ne (include "tenant.name" .) "tenant-root" }}
+  - toEndpoints:
+    {{- if hasPrefix "tenant-" .Release.Namespace }}
+    {{- $parts := splitList "-" .Release.Namespace }}
+    {{- range $i, $v := $parts }}
+    {{- if ne $i 0 }}
+    - matchLabels:
+        cozystack.io/service: ingress
+        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
