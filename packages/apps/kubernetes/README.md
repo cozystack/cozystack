@@ -128,6 +128,9 @@ See the reference for components utilized in this service:
 | `addons.gpuOperator`                          | NVIDIA GPU Operator.                                                        | `object`   | `{}`      |
 | `addons.gpuOperator.enabled`                  | Enable GPU Operator.                                                        | `bool`     | `false`   |
 | `addons.gpuOperator.valuesOverride`           | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.hami`                                 | HAMi scheduler extender.                                                    | `object`   | `{}`      |
+| `addons.hami.enabled`                         | Enable HAMi scheduler extender (requires GPU Operator).                     | `bool`     | `false`   |
+| `addons.hami.valuesOverride`                  | Custom Helm values overrides.                                               | `object`   | `{}`      |
 | `addons.fluxcd`                               | FluxCD GitOps operator.                                                     | `object`   | `{}`      |
 | `addons.fluxcd.enabled`                       | Enable FluxCD.                                                              | `bool`     | `false`   |
 | `addons.fluxcd.valuesOverride`                | Custom Helm values overrides.                                               | `object`   | `{}`      |
