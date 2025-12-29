@@ -43,6 +43,11 @@ type bucketInfo struct {
 	} `json:"spec"`
 }
 
+const (
+	defaultRequeueAfter             = 5 * time.Second
+	defaultActiveJobPollingInterval = defaultRequeueAfter
+)
+
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -99,7 +104,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
 			}
 			// Requeue to check status
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 		}
 		return ctrl.Result{}, err
 	}
@@ -108,7 +113,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	phase := string(veleroBackup.Status.Phase)
 	if phase == "" {
 		// Still in progress, requeue
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: defaultActiveJobPollingInterval}, nil
 	}
 
 	// Step 4: On success - Create Backup resource and update status
