@@ -150,7 +150,8 @@ jobs:
     if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
     steps:
       - name: Capture runner name
-        run: echo "All e2e jobs will run on runner: ${{ runner.name }}"
+        run: |
+          echo "All e2e jobs will run on runner: ${{ runner.name }}"
 
   prepare_env:
     name: "Prepare environment"
