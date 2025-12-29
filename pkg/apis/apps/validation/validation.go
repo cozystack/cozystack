@@ -17,24 +17,40 @@ limitations under the License.
 package validation
 
 import (
-	"github.com/cozystack/cozystack/pkg/apis/apps"
+	"regexp"
+
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// ValidateApplication validates a Application.
-func ValidateApplication(f *apps.Application) field.ErrorList {
+// dns1035LabelRegex validates DNS-1035 label format.
+// DNS-1035 labels must start with a letter, contain only lowercase alphanumeric
+// characters or hyphens, and end with an alphanumeric character.
+var dns1035LabelRegex = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
+
+// maxDNS1035LabelLength is the maximum length of a DNS-1035 label.
+const maxDNS1035LabelLength = 63
+
+// ValidateApplicationName validates that an Application name conforms to DNS-1035.
+// This is required because Application names are used to create Kubernetes resources
+// (Services, Namespaces, etc.) that must have DNS-1035 compliant names.
+func ValidateApplicationName(name string, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	allErrs = append(allErrs, ValidateApplicationSpec(&f.Spec, field.NewPath("spec"))...)
+	if len(name) == 0 {
+		allErrs = append(allErrs, field.Required(fldPath, "name is required"))
+		return allErrs
+	}
 
-	return allErrs
-}
+	if len(name) > maxDNS1035LabelLength {
+		allErrs = append(allErrs, field.TooLongMaxLength(fldPath, name, maxDNS1035LabelLength))
+	}
 
-// ValidateApplicationSpec validates a ApplicationSpec.
-func ValidateApplicationSpec(s *apps.ApplicationSpec, fldPath *field.Path) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	// TODO validation
+	if !dns1035LabelRegex.MatchString(name) {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			"a DNS-1035 label must consist of lower case alphanumeric characters or '-', "+
+				"start with an alphabetic character, and end with an alphanumeric character "+
+				"(e.g. 'my-name', regex used for validation is '[a-z]([-a-z0-9]*[a-z0-9])?')"))
+	}
 
 	return allErrs
 }

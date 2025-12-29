@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -41,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
@@ -146,6 +148,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	app, ok := obj.(*appsv1alpha1.Application)
 	if !ok {
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
+	}
+
+	// Validate Application name conforms to DNS-1035
+	if errs := validation.ValidateApplicationName(app.Name, field.NewPath("metadata").Child("name")); len(errs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
 	}
 
 	// Convert Application to HelmRelease
