@@ -6,9 +6,14 @@ Tenants can be created recursively and are subject to the following rules:
 
 ### Tenant naming
 
-Tenant names must be alphanumeric.
-Using dashes (`-`) in tenant names is not allowed, unlike with other services.
-This limitation exists to keep consistent naming in tenants, nested tenants, and services deployed in them.
+Tenant names must follow DNS-1035 naming rules:
+-   Must start with a lowercase letter (`a-z`)
+-   Can only contain lowercase letters, numbers, and hyphens (`a-z`, `0-9`, `-`)
+-   Must end with a letter or number (not a hyphen)
+-   Maximum length: 40 characters
+
+**Note:** Using dashes (`-`) in tenant names is discouraged, unlike with other services.
+This is to keep consistent naming in tenants, nested tenants, and services deployed in them.
 
 For example:
 
