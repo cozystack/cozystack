@@ -27,8 +27,10 @@ import (
 // characters or hyphens, and end with an alphanumeric character.
 var dns1035LabelRegex = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
 
-// maxDNS1035LabelLength is the maximum length of a DNS-1035 label.
-const maxDNS1035LabelLength = 63
+// maxApplicationNameLength is the maximum length of an Application name.
+// This is set to 40 (not 63) to allow room for prefixes like "tenant-"
+// and nested tenant namespaces (e.g., "tenant-parent-child").
+const maxApplicationNameLength = 40
 
 // ValidateApplicationName validates that an Application name conforms to DNS-1035.
 // This is required because Application names are used to create Kubernetes resources
@@ -41,8 +43,8 @@ func ValidateApplicationName(name string, fldPath *field.Path) field.ErrorList {
 		return allErrs
 	}
 
-	if len(name) > maxDNS1035LabelLength {
-		allErrs = append(allErrs, field.TooLongMaxLength(fldPath, name, maxDNS1035LabelLength))
+	if len(name) > maxApplicationNameLength {
+		allErrs = append(allErrs, field.TooLongMaxLength(fldPath, name, maxApplicationNameLength))
 	}
 
 	if !dns1035LabelRegex.MatchString(name) {
