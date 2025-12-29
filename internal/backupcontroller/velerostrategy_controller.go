@@ -2,6 +2,8 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -16,6 +19,28 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	velerostrategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 )
+
+// S3Credentials holds the discovered S3 credentials from a Bucket storageRef
+type S3Credentials struct {
+	BucketName      string
+	Endpoint        string
+	Region          string
+	AccessKeyID     string
+	AccessSecretKey string
+}
+
+// bucketInfo represents the structure of BucketInfo stored in the secret
+type bucketInfo struct {
+	Spec struct {
+		BucketName string `json:"bucketName"`
+		SecretS3   struct {
+			Endpoint        string `json:"endpoint"`
+			Region          string `json:"region"`
+			AccessKeyID     string `json:"accessKeyID"`
+			AccessSecretKey string `json:"accessSecretKey"`
+		} `json:"secretS3"`
+	} `json:"spec"`
+}
 
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -32,10 +57,15 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		return ctrl.Result{}, nil
 	}
 
-	// For now implemented backup logic for App Kubevirt VirtualMachine only
+	// For now implemented backup logic for apps.cozystack.io VirtualMachine only
 	if j.Spec.ApplicationRef.Kind != "VirtualMachine" ||
-		j.Spec.ApplicationRef.APIGroup != "kubevirt.io/v1" {
+		j.Spec.ApplicationRef.APIGroup != "apps.cozystack.io/v1alpha1" {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application type: %s", j.Spec.ApplicationRef.Kind), logger)
+	}
+
+	if j.Spec.StorageRef.Kind != "Bucket" ||
+		j.Spec.StorageRef.APIGroup != "apps.cozystack.io/v1alpha1" {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage type: %s %s", j.Spec.StorageRef.Kind, j.Spec.StorageRef.APIGroup), logger)
 	}
 
 	// Step 1: On first reconcile, set startedAt and phase = Running
@@ -127,7 +157,115 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-func (r *BackupVeleroStrategyReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string, logger log.Logger) (ctrl.Result, error) {
+// resolveBucketStorageRef discovers S3 credentials from a Bucket storageRef
+// It follows this flow:
+// 1. Get the Bucket resource (apps.cozystack.io/v1alpha1 or objectstorage.k8s.io/v1alpha1)
+// 2. Find the BucketAccess that references this bucket via bucketClaimName
+// 3. Get the secret from BucketAccess.spec.credentialsSecretName
+// 4. Decode BucketInfo from secret.data.BucketInfo and extract S3 credentials
+func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, storageRef corev1.TypedLocalObjectReference, namespace string, logger log.Logger) (*S3Credentials, error) {
+	// Step 1: Get the Bucket resource
+	// Try apps.cozystack.io first, then fall back to objectstorage.k8s.io
+	bucket := &unstructured.Unstructured{}
+	bucket.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   storageRef.APIGroup,
+		Version: "v1alpha1",
+		Kind:    storageRef.Kind,
+	})
+
+	bucketKey := client.ObjectKey{Name: storageRef.Name}
+	// Bucket in apps.cozystack.io is namespaced, objectstorage.k8s.io is cluster-scoped
+	if storageRef.APIGroup == "apps.cozystack.io" || storageRef.APIGroup == "apps.coyzstack.io" {
+		bucketKey.Namespace = namespace
+	}
+
+	if err := r.Get(ctx, bucketKey, bucket); err != nil {
+		return nil, fmt.Errorf("failed to get Bucket %s: %w", storageRef.Name, err)
+	}
+
+	// Step 2: Determine the bucket claim name
+	// For apps.cozystack.io Bucket, the BucketClaim name is typically the same as the Bucket name
+	// or follows a pattern. Based on the templates, it's usually the Release.Name which equals the Bucket name
+	bucketClaimName := storageRef.Name
+
+	// Step 3: Find BucketAccess by bucketClaimName
+	bucketAccessList := &unstructured.UnstructuredList{}
+	bucketAccessList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "objectstorage.k8s.io",
+		Version: "v1alpha1",
+		Kind:    "BucketAccessList",
+	})
+
+	if err := r.List(ctx, bucketAccessList, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("failed to list BucketAccess resources: %w", err)
+	}
+
+	var bucketAccess *unstructured.Unstructured
+	for i := range bucketAccessList.Items {
+		ba := &bucketAccessList.Items[i]
+		baBucketClaimName, found, err := unstructured.NestedString(ba.Object, "spec", "bucketClaimName")
+		if err != nil {
+			continue
+		}
+		if found && baBucketClaimName == bucketClaimName {
+			bucketAccess = ba
+			break
+		}
+	}
+
+	if bucketAccess == nil {
+		return nil, fmt.Errorf("BucketAccess not found for bucketClaimName: %s in namespace: %s", bucketClaimName, namespace)
+	}
+
+	// Step 4: Get the secret name from BucketAccess
+	secretName, found, err := unstructured.NestedString(bucketAccess.Object, "spec", "credentialsSecretName")
+	if err != nil || !found {
+		return nil, fmt.Errorf("failed to get credentialsSecretName from BucketAccess: %w", err)
+	}
+
+	// Step 5: Get the secret
+	secret := &corev1.Secret{}
+	secretKey := client.ObjectKey{Namespace: namespace, Name: secretName}
+	if err := r.Get(ctx, secretKey, secret); err != nil {
+		return nil, fmt.Errorf("failed to get secret %s: %w", secretName, err)
+	}
+
+	// Step 6: Decode BucketInfo from secret.data.BucketInfo
+	bucketInfoData, found := secret.Data["BucketInfo"]
+	if !found {
+		return nil, fmt.Errorf("BucketInfo key not found in secret %s", secretName)
+	}
+
+	// Decode base64
+	decoded, err := base64.StdEncoding.DecodeString(string(bucketInfoData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode BucketInfo from secret %s: %w", secretName, err)
+	}
+
+	// Parse JSON
+	var info bucketInfo
+	if err := json.Unmarshal(decoded, &info); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal BucketInfo from secret %s: %w", secretName, err)
+	}
+
+	// Step 7: Extract and return S3 credentials
+	creds := &S3Credentials{
+		BucketName:      info.Spec.BucketName,
+		Endpoint:        info.Spec.SecretS3.Endpoint,
+		Region:          info.Spec.SecretS3.Region,
+		AccessKeyID:     info.Spec.SecretS3.AccessKeyID,
+		AccessSecretKey: info.Spec.SecretS3.AccessSecretKey,
+	}
+
+	logger.Info("resolved S3 credentials from Bucket storageRef",
+		"bucket", storageRef.Name,
+		"bucketName", creds.BucketName,
+		"endpoint", creds.Endpoint)
+
+	return creds, nil
+}
+
+func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string, logger log.Logger) (ctrl.Result, error) {
 	now := metav1.Now()
 	backupJob.Status.CompletedAt = &now
 	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
@@ -150,7 +288,7 @@ func (r *BackupVeleroStrategyReconciler) markBackupJobFailed(ctx context.Context
 	return ctrl.Result{}, nil
 }
 
-func (r *BackupVeleroStrategyReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, name string, logger log.Logger) error {
+func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, name string, logger log.Logger) error {
 
 	// Resolve the application to determine which VM to backup
 	// If ApplicationRef points to a HelmRelease, we use label selector to find the VM it manages
@@ -170,15 +308,30 @@ func (r *BackupVeleroStrategyReconciler) createVeleroBackup(ctx context.Context,
 		// TODO: Add label selector for direct VM references if needed
 	}
 
+	// Resolve StorageRef to get S3 credentials if it's a Bucket
+	var storageLocation string = "default"
+	if backupJob.Spec.StorageRef.Kind == "Bucket" {
+		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace, logger)
+		if err != nil {
+			return fmt.Errorf("failed to resolve Bucket storageRef: %w", err)
+		}
+
+		// TODO: Create or reference a Velero BackupStorageLocation using the discovered credentials
+		// For now, we'll use "default" but log the discovered credentials
+		logger.Info("discovered S3 credentials from Bucket storageRef",
+			"bucketName", creds.BucketName,
+			"endpoint", creds.Endpoint,
+			"region", creds.Region)
+		// Note: The actual BackupStorageLocation should be created/configured separately
+		// or we should create it here dynamically. For now, using "default" as placeholder.
+	}
+
 	// Create a Velero Backup (velero.io/v1) using unstructured object
 	// Only backup VirtualMachine resources
 	spec := map[string]interface{}{
 		"includedNamespaces": []string{backupJob.Namespace},
 		"includedResources":   []string{"virtualmachines.kubevirt.io"},
-		// TODO: Resolve StorageRef to get the BackupStorageLocation name
-		// For now, using "default" as a placeholder
-		// This should be resolved from the Storage CRD referenced in backupJob.Spec.StorageRef
-		"storageLocation": "default",
+		"storageLocation":     storageLocation,
 	}
 
 	// Add label selector if we have one (for HelmRelease-managed VMs)
@@ -217,7 +370,7 @@ func (r *BackupVeleroStrategyReconciler) createVeleroBackup(ctx context.Context,
 	return nil
 }
 
-func (r *BackupVeleroStrategyReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *unstructured.Unstructured, logger log.Logger) (*backupsv1alpha1.Backup, error) {
+func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *unstructured.Unstructured, logger log.Logger) (*backupsv1alpha1.Backup, error) {
 	// Extract artifact information from Velero Backup
 	var artifact *backupsv1alpha1.BackupArtifact
 	artifactMap, found, err := unstructured.NestedMap(veleroBackup.Object, "status", "backupItemOperations")
