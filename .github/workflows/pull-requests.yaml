@@ -141,15 +141,25 @@ jobs:
             core.setOutput('installer_id', installerId);
             core.setOutput('disk_id',      diskId);
 
+  capture_runner:
+    name: "Capture runner"
+    runs-on: [self-hosted]
+    outputs:
+      runner_name: ${{ runner.name }}
+    needs: ["build", "resolve_assets"]
+    if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
+    steps:
+      - name: Capture runner name
+        run: echo "All e2e jobs will run on runner: ${{ runner.name }}"
 
   prepare_env:
     name: "Prepare environment"
-    runs-on: [self-hosted]
+    runs-on: ${{ needs.capture_runner.outputs.runner_name }}
     permissions:
       contents: read
       packages: read
-    needs: ["build", "resolve_assets"]
-    if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
+    needs: ["capture_runner"]
+    if: ${{ always() && needs.capture_runner.result == 'success' }}
 
     steps:
       # ▸ Checkout and prepare the codebase
@@ -212,11 +222,11 @@ jobs:
 
   install_cozystack:
     name: "Install Cozystack"
-    runs-on: [self-hosted]
+    runs-on: ${{ needs.capture_runner.outputs.runner_name }}
     permissions:
       contents: read
       packages: read
-    needs: ["prepare_env", "resolve_assets"]
+    needs: ["capture_runner", "prepare_env", "resolve_assets"]
     if: ${{ always() && needs.prepare_env.result == 'success' }}
 
     steps:
@@ -288,8 +298,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.detect_test_matrix.outputs.matrix) }}
     name: Test ${{ matrix.app }}
-    runs-on: [self-hosted]
-    needs: [install_cozystack,detect_test_matrix]
+    runs-on: ${{ needs.capture_runner.outputs.runner_name }}
+    needs: [capture_runner, install_cozystack, detect_test_matrix]
     if: ${{ always() && (needs.install_cozystack.result == 'success' && needs.detect_test_matrix.result == 'success') }}
 
     steps:
@@ -312,8 +322,8 @@ jobs:
 
   collect_debug_information:
     name: Collect debug information
-    runs-on: [self-hosted]
-    needs: [test_apps]
+    runs-on: ${{ needs.capture_runner.outputs.runner_name }}
+    needs: [capture_runner, test_apps]
     if: ${{ always() }}
     steps:
       - name: Checkout code
@@ -346,8 +356,8 @@ jobs:
 
   cleanup:
     name: Tear down environment
-    runs-on: [self-hosted]
-    needs: [collect_debug_information]
+    runs-on: ${{ needs.capture_runner.outputs.runner_name }}
+    needs: [capture_runner, collect_debug_information]
     if: ${{ always() && needs.test_apps.result == 'success' }}
 
     steps:
