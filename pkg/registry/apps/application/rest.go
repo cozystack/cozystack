@@ -42,6 +42,7 @@ import (
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
@@ -73,13 +74,6 @@ const (
 	ApplicationGroupLabel = appsv1alpha1.ApplicationGroupLabel
 	ApplicationNameLabel  = appsv1alpha1.ApplicationNameLabel
 )
-
-// Define the GroupVersionResource for HelmRelease
-var helmReleaseGVR = schema.GroupVersionResource{
-	Group:    "helm.toolkit.fluxcd.io",
-	Version:  "v2",
-	Resource: "helmreleases",
-}
 
 // REST implements the RESTStorage interface for Application resources
 type REST struct {
@@ -394,6 +388,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	appList.SetResourceVersion(hrList.GetResourceVersion())
 	appList.Items = items
 
+	sorting.ByNamespacedName[appsv1alpha1.Application, *appsv1alpha1.Application](appList.Items)
+
 	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(items), namespace)
 	return appList, nil
 }
@@ -442,9 +438,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Assert the new object is of type Application
 	app, ok := newObj.(*appsv1alpha1.Application)
 	if !ok {
-		errMsg := fmt.Sprintf("expected *appsv1alpha1.Application object, got %T", newObj)
-		klog.Errorf(errMsg)
-		return nil, false, fmt.Errorf(errMsg)
+		klog.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
+		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 	}
 
 	// Convert Application to HelmRelease
@@ -757,7 +752,7 @@ func (r *REST) getNamespace(ctx context.Context) (string, error) {
 	namespace, ok := request.NamespaceFrom(ctx)
 	if !ok {
 		err := fmt.Errorf("namespace not found in context")
-		klog.Errorf(err.Error())
+		klog.Error(err)
 		return "", err
 	}
 	return namespace, nil
@@ -913,8 +908,8 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			Namespace:       app.Namespace,
 			Labels:          addPrefixedMap(app.Labels, LabelPrefix),
 			Annotations:     addPrefixedMap(app.Annotations, AnnotationPrefix),
-			ResourceVersion: app.ObjectMeta.ResourceVersion,
-			UID:             app.ObjectMeta.UID,
+			ResourceVersion: app.ResourceVersion,
+			UID:             app.UID,
 		},
 		Spec: helmv2.HelmReleaseSpec{
 			Chart: &helmv2.HelmChartTemplate{
@@ -956,10 +951,10 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	switch obj := object.(type) {
 	case *appsv1alpha1.ApplicationList:
 		table = r.buildTableFromApplications(obj.Items)
-		table.ListMeta.ResourceVersion = obj.ListMeta.ResourceVersion
+		table.ResourceVersion = obj.ResourceVersion
 	case *appsv1alpha1.Application:
 		table = r.buildTableFromApplication(*obj)
-		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
+		table.ResourceVersion = obj.GetResourceVersion()
 	default:
 		resource := schema.GroupResource{}
 		if info, ok := request.RequestInfoFrom(ctx); ok {
