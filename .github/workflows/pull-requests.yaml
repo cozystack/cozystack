@@ -325,7 +325,7 @@ jobs:
     name: Collect debug information
     runs-on: ${{ needs.capture_runner.outputs.runner_name }}
     needs: [capture_runner, test_apps]
-    if: ${{ always() }}
+    if: ${{ always() && needs.capture_runner.result == 'success' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -358,8 +358,8 @@ jobs:
   cleanup:
     name: Tear down environment
     runs-on: ${{ needs.capture_runner.outputs.runner_name }}
-    needs: [capture_runner, collect_debug_information]
-    if: ${{ always() && needs.test_apps.result == 'success' }}
+    needs: [capture_runner, collect_debug_information, test_apps]
+    if: ${{ always() && needs.capture_runner.result == 'success' && needs.test_apps.result == 'success' }}
 
     steps:
       - name: Checkout code
