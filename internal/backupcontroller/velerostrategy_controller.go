@@ -59,13 +59,13 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	// For now implemented backup logic for apps.cozystack.io VirtualMachine only
 	if j.Spec.ApplicationRef.Kind != "VirtualMachine" ||
-		j.Spec.ApplicationRef.APIGroup != "apps.cozystack.io/v1alpha1" {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application type: %s", j.Spec.ApplicationRef.Kind), logger)
+		*j.Spec.ApplicationRef.APIGroup != "apps.cozystack.io/v1alpha1" {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application type: %s", j.Spec.ApplicationRef.Kind))
 	}
 
 	if j.Spec.StorageRef.Kind != "Bucket" ||
-		j.Spec.StorageRef.APIGroup != "apps.cozystack.io/v1alpha1" {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage type: %s %s", j.Spec.StorageRef.Kind, j.Spec.StorageRef.APIGroup), logger)
+		*j.Spec.StorageRef.APIGroup != "apps.cozystack.io/v1alpha1" {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage type: %s %s", j.Spec.StorageRef.Kind, j.Spec.StorageRef.APIGroup))
 	}
 
 	// Step 1: On first reconcile, set startedAt and phase = Running
@@ -84,7 +84,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	veleroStrategy := &velerostrategyv1alpha1.Velero{}
 	if err := r.Get(ctx, client.ObjectKey{Name: j.Spec.StrategyRef.Name}, veleroStrategy); err != nil {
 		if errors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Velero strategy not found: %s", j.Spec.StrategyRef.Name), logger)
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Velero strategy not found: %s", j.Spec.StrategyRef.Name))
 		}
 		return ctrl.Result{}, err
 	}
@@ -102,8 +102,8 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	if err := r.Get(ctx, veleroBackupKey, veleroBackup); err != nil {
 		if errors.IsNotFound(err) {
 			// Create Velero Backup
-			if err := r.createVeleroBackup(ctx, j, veleroBackupName, logger); err != nil {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err), logger)
+			if err := r.createVeleroBackup(ctx, j, veleroBackupName); err != nil {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
 			}
 			// Requeue to check status
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -126,9 +126,9 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	if phase == "Completed" {
 		// Check if we already created the Backup resource
 		if j.Status.BackupRef == nil {
-			backup, err := r.createBackupResource(ctx, j, veleroBackup, logger)
+			backup, err := r.createBackupResource(ctx, j, veleroBackup)
 			if err != nil {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup resource: %v", err), logger)
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup resource: %v", err))
 			}
 
 			now := metav1.Now()
@@ -150,7 +150,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		if message == "" {
 			message = fmt.Sprintf("Velero Backup failed with phase: %s", phase)
 		}
-		return r.markBackupJobFailed(ctx, j, message, logger)
+		return r.markBackupJobFailed(ctx, j, message)
 	}
 
 	// Still in progress (InProgress, New, etc.)
@@ -160,24 +160,21 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 // resolveBucketStorageRef discovers S3 credentials from a Bucket storageRef
 // It follows this flow:
 // 1. Get the Bucket resource (apps.cozystack.io/v1alpha1 or objectstorage.k8s.io/v1alpha1)
-// 2. Find the BucketAccess that references this bucket via bucketClaimName
+// 2. Find the BucketAccess that references this bucket
 // 3. Get the secret from BucketAccess.spec.credentialsSecretName
 // 4. Decode BucketInfo from secret.data.BucketInfo and extract S3 credentials
-func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, storageRef corev1.TypedLocalObjectReference, namespace string, logger log.Logger) (*S3Credentials, error) {
+func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, storageRef corev1.TypedLocalObjectReference, namespace string) (*S3Credentials, error) {
+	logger := log.FromContext(ctx)
 	// Step 1: Get the Bucket resource
 	// Try apps.cozystack.io first, then fall back to objectstorage.k8s.io
 	bucket := &unstructured.Unstructured{}
 	bucket.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   storageRef.APIGroup,
+		Group:   *storageRef.APIGroup,
 		Version: "v1alpha1",
 		Kind:    storageRef.Kind,
 	})
 
 	bucketKey := client.ObjectKey{Name: storageRef.Name}
-	// Bucket in apps.cozystack.io is namespaced, objectstorage.k8s.io is cluster-scoped
-	if storageRef.APIGroup == "apps.cozystack.io" || storageRef.APIGroup == "apps.coyzstack.io" {
-		bucketKey.Namespace = namespace
-	}
 
 	if err := r.Get(ctx, bucketKey, bucket); err != nil {
 		return nil, fmt.Errorf("failed to get Bucket %s: %w", storageRef.Name, err)
@@ -186,35 +183,19 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 	// Step 2: Determine the bucket claim name
 	// For apps.cozystack.io Bucket, the BucketClaim name is typically the same as the Bucket name
 	// or follows a pattern. Based on the templates, it's usually the Release.Name which equals the Bucket name
-	bucketClaimName := storageRef.Name
+	bucketName := storageRef.Name
 
-	// Step 3: Find BucketAccess by bucketClaimName
-	bucketAccessList := &unstructured.UnstructuredList{}
-	bucketAccessList.SetGroupVersionKind(schema.GroupVersionKind{
+	// Step 3: Get BucketAccess by name (assuming BucketAccess name matches bucketName)
+	bucketAccess := &unstructured.Unstructured{}
+	bucketAccess.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "objectstorage.k8s.io",
 		Version: "v1alpha1",
-		Kind:    "BucketAccessList",
+		Kind:    "BucketAccess",
 	})
 
-	if err := r.List(ctx, bucketAccessList, client.InNamespace(namespace)); err != nil {
-		return nil, fmt.Errorf("failed to list BucketAccess resources: %w", err)
-	}
-
-	var bucketAccess *unstructured.Unstructured
-	for i := range bucketAccessList.Items {
-		ba := &bucketAccessList.Items[i]
-		baBucketClaimName, found, err := unstructured.NestedString(ba.Object, "spec", "bucketClaimName")
-		if err != nil {
-			continue
-		}
-		if found && baBucketClaimName == bucketClaimName {
-			bucketAccess = ba
-			break
-		}
-	}
-
-	if bucketAccess == nil {
-		return nil, fmt.Errorf("BucketAccess not found for bucketClaimName: %s in namespace: %s", bucketClaimName, namespace)
+	bucketAccessKey := client.ObjectKey{Name: bucketName, Namespace: namespace}
+	if err := r.Get(ctx, bucketAccessKey, bucketAccess); err != nil {
+		return nil, fmt.Errorf("failed to get BucketAccess %s in namespace %s: %w", bucketName, namespace, err)
 	}
 
 	// Step 4: Get the secret name from BucketAccess
@@ -265,7 +246,8 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 	return creds, nil
 }
 
-func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string, logger log.Logger) (ctrl.Result, error) {
+func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	now := metav1.Now()
 	backupJob.Status.CompletedAt = &now
 	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
@@ -288,30 +270,13 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	return ctrl.Result{}, nil
 }
 
-func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, name string, logger log.Logger) error {
-
-	// Resolve the application to determine which VM to backup
-	// If ApplicationRef points to a HelmRelease, we use label selector to find the VM it manages
-	var labelSelector map[string]interface{}
-
-	if backupJob.Spec.ApplicationRef.Kind == "HelmRelease" {
-		// If it's a HelmRelease, use label selector to match the VM it manages
-		// VMs managed by HelmRelease have label: helm.toolkit.fluxcd.io/name=<helmrelease-name>
-		labelSelector = map[string]interface{}{
-			"matchLabels": map[string]interface{}{
-				"helm.toolkit.fluxcd.io/name": backupJob.Spec.ApplicationRef.Name,
-			},
-		}
-	} else if backupJob.Spec.ApplicationRef.Kind == "VirtualMachine" {
-		// If it directly references a VM, we could use a label selector if the VM has a unique label
-		// For now, we'll backup all VMs in the namespace (the includedResources filter will limit to VMs only)
-		// TODO: Add label selector for direct VM references if needed
-	}
+func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, name string) error {
+	logger := log.FromContext(ctx)
 
 	// Resolve StorageRef to get S3 credentials if it's a Bucket
 	var storageLocation string = "default"
 	if backupJob.Spec.StorageRef.Kind == "Bucket" {
-		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace, logger)
+		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace)
 		if err != nil {
 			return fmt.Errorf("failed to resolve Bucket storageRef: %w", err)
 		}
@@ -327,16 +292,16 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	}
 
 	// Create a Velero Backup (velero.io/v1) using unstructured object
-	// Only backup VirtualMachine resources
+	// Now implemented only for backup of VirtualMachine resources
 	spec := map[string]interface{}{
 		"includedNamespaces": []string{backupJob.Namespace},
 		"includedResources":   []string{"virtualmachines.kubevirt.io"},
 		"storageLocation":     storageLocation,
-	}
-
-	// Add label selector if we have one (for HelmRelease-managed VMs)
-	if labelSelector != nil {
-		spec["labelSelector"] = labelSelector
+		"labelSelector": map[string]interface{}{
+			"matchLabels": map[string]interface{}{
+				"app.kubernetes.io/instance": "virtual-machine-" + backupJob.Spec.ApplicationRef.Name,
+			},
+		},
 	}
 
 	veleroBackup := &unstructured.Unstructured{
@@ -370,7 +335,8 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	return nil
 }
 
-func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *unstructured.Unstructured, logger log.Logger) (*backupsv1alpha1.Backup, error) {
+func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *unstructured.Unstructured) (*backupsv1alpha1.Backup, error) {
+	logger := log.FromContext(ctx)
 	// Extract artifact information from Velero Backup
 	var artifact *backupsv1alpha1.BackupArtifact
 	artifactMap, found, err := unstructured.NestedMap(veleroBackup.Object, "status", "backupItemOperations")
