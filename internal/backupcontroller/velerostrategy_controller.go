@@ -459,10 +459,6 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 			logger.Error(err, "failed to create or update VolumeSnapshotLocation for Velero")
 			return fmt.Errorf("failed to create or update Velero VolumeSnapshotLocation: %w", err)
 		}
-
-		// TODO: Create or reference a Velero BackupStorageLocation using the discovered credentials
-		// Note: The actual BackupStorageLocation should be created/configured separately
-		// or we should create it here dynamically. For now, using "default" as placeholder.
 	}
 
 	// Create a Velero Backup (velero.io/v1) using typed object
