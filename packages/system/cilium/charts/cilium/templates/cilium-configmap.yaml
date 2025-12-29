@@ -1,4 +1,4 @@
-{{- if and ( or (.Values.agent) (.Values.operator.enabled) .Values.externalWorkloads.enabled .Values.clustermesh.useAPIServer) (not .Values.preflight.enabled) }}
+{{- if and ( or (.Values.agent) (.Values.operator.enabled) .Values.clustermesh.useAPIServer) (not .Values.preflight.enabled) }}
 {{- /*  Default values with backwards compatibility */ -}}
 {{- $defaultBpfMapDynamicSizeRatio := 0.0 -}}
 {{- $defaultBpfMasquerade := "false" -}}
@@ -15,6 +15,7 @@
 {{- $defaultK8sClientQPS := 5 -}}
 {{- $defaultK8sClientBurst := 10 -}}
 {{- $defaultDNSProxyEnableTransparentMode := "false" -}}
+{{- $defaultEnableIPv4Masquerade := "true" -}}
 {{- $envoyDS := eq (include "envoyDaemonSetEnabled" .) "true" -}}
 {{- $readSecretsOnlyFromSecretsNamespace := eq (include "readSecretsOnlyFromSecretsNamespace" .) "true" -}}
 {{- $secretSyncEnabled := eq (include "secretSyncEnabled" .) "true" -}}
@@ -61,6 +62,14 @@
   {{- $defaultKubeProxyReplacement = "false" -}}
 {{- end -}}
 
+{{- /* Default values when 1.18 was initially deployed */ -}}
+{{- if semverCompare ">=1.18" (default "1.18" .Values.upgradeCompatibility) -}}
+  {{- /* defaultIPv4Masquerad in ENI mode for 1.18 needed to override earlier version defaults set above when upgradeCompatibility is not specified */ -}}
+  {{- if .Values.eni.enabled }}
+    {{- $defaultEnableIPv4Masquerade = "false" -}}
+    # Will also do this for ipv6 when ENI mode works with ipv6.
+  {{- end }}
+{{- end -}}
 {{- $ipam := (coalesce .Values.ipam.mode $defaultIPAM) -}}
 {{- $bpfCtTcpMax := (coalesce .Values.bpf.ctTcpMax $defaultBpfCtTcpMax) -}}
 {{- $bpfCtAnyMax := (coalesce .Values.bpf.ctAnyMax $defaultBpfCtAnyMax) -}}
@@ -175,6 +184,10 @@ data:
 
 {{- if hasKey .Values.debug "verbose" }}
   debug-verbose: "{{ .Values.debug.verbose }}"
+{{- end }}
+
+{{- if hasKey .Values.debug "metricsSamplingInterval" }}
+  metrics-sampling-interval: "{{ .Values.debug.metricsSamplingInterval }}"
 {{- end }}
 
 {{- if ne (int .Values.healthPort) 9879 }}
@@ -443,6 +456,11 @@ data:
   # policy map (per endpoint)
   bpf-policy-map-max: "{{ .Values.bpf.policyMapMax | int }}"
 {{- end }}
+{{- if hasKey .Values.bpf "policyStatsMapMax" }}
+  # bpf-policy-stats-map-max specifies the maximum number of entries in global
+  # policy stats map
+  bpf-policy-stats-map-max: "{{ .Values.bpf.policyStatsMapMax | int }}"
+{{- end }}
 {{- if hasKey .Values.bpf "lbMapMax" }}
   # bpf-lb-map-max specifies the maximum number of entries in bpf lb service,
   # backend and affinity maps.
@@ -484,7 +502,7 @@ data:
   preallocate-bpf-maps: "{{ .Values.bpf.preallocateMaps }}"
 
   # Name of the cluster. Only relevant when building a mesh of clusters.
-  cluster-name: {{ .Values.cluster.name }}
+  cluster-name: {{ .Values.cluster.name | quote }}
 
 {{- if hasKey .Values.cluster "id" }}
   # Unique ID of the cluster. Must be unique across all conneted clusters and
@@ -511,11 +529,29 @@ data:
   routing-mode: {{ .Values.routingMode | default (ternary "native" "tunnel" .Values.gke.enabled) | quote }}
   tunnel-protocol: {{ .Values.tunnelProtocol | default "vxlan" | quote }}
 
+{{- if eq .Values.routingMode "native" }}
+  {{- if and .Values.ipv4.enabled .Values.enableIPv4Masquerade (not .Values.ipMasqAgent.enabled) }}
+    {{- if and (ne $ipam "eni") (ne $ipam "alibabacloud") }}
+      {{- if not .Values.ipv4NativeRoutingCIDR }}
+        {{- fail " ipv4NativeRoutingCIDR must be set when routingMode is native"}}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if and .Values.ipv6.enabled .Values.enableIPv6Masquerade (not .Values.ipMasqAgent.enabled) }}
+    {{- if not .Values.ipv6NativeRoutingCIDR }}
+      {{- fail "ipv6NativeRoutingCIDR must be set when routingMode is native"  }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
 {{- if .Values.tunnelPort }}
   tunnel-port: {{ .Values.tunnelPort | quote }}
 {{- end }}
 {{- if .Values.tunnelSourcePortRange }}
   tunnel-source-port-range: {{ .Values.tunnelSourcePortRange | quote }}
+{{- end }}
+{{- if .Values.underlayProtocol }}
+  underlay-protocol: {{ .Values.underlayProtocol | quote }}
 {{- end }}
 
 {{- if .Values.serviceNoBackendResponse }}
@@ -531,9 +567,6 @@ data:
   enable-endpoint-routes: "true"
   {{- end }}
   auto-create-cilium-node-resource: "true"
-{{- if .Values.eni.updateEC2AdapterLimitViaAPI }}
-  update-ec2-adapter-limit-via-api: "true"
-{{- end }}
 {{- if .Values.eni.awsReleaseExcessIPs }}
   aws-release-excess-ips: "true"
 {{- end }}
@@ -602,7 +635,11 @@ data:
 {{- end }}
 {{- end }}
 
-  enable-ipv4-masquerade: {{ .Values.enableIPv4Masquerade | quote }}
+{{- if (not (kindIs "invalid" .Values.enableIPv4Masquerade)) }}
+  enable-ipv4-masquerade: {{.Values.enableIPv4Masquerade | quote }}
+{{- else }}
+  enable-ipv4-masquerade: {{ $defaultEnableIPv4Masquerade | quote }}
+{{- end }}
   enable-ipv4-big-tcp: {{ .Values.enableIPv4BIGTCP | quote }}
   enable-ipv6-big-tcp: {{ .Values.enableIPv6BIGTCP | quote }}
   enable-ipv6-masquerade: {{ .Values.enableIPv6Masquerade | quote }}
@@ -686,15 +723,16 @@ data:
 {{- if .Values.bandwidthManager.enabled }}
   enable-bandwidth-manager: {{ .Values.bandwidthManager.enabled | quote }}
   enable-bbr: {{ .Values.bandwidthManager.bbr | quote }}
+  enable-bbr-hostns-only: {{ .Values.bandwidthManager.bbrHostNamespaceOnly | quote }}
 {{- end }}
 {{- end }}
 
-{{- if .Values.highScaleIPcache.enabled }}
-  enable-high-scale-ipcache: {{ .Values.highScaleIPcache.enabled | quote }}
+{{ if or .Values.localRedirectPolicies.enabled .Values.localRedirectPolicy }}
+  enable-local-redirect-policy: "true"
 {{- end }}
 
-{{- if hasKey .Values "localRedirectPolicy" }}
-  enable-local-redirect-policy: {{ .Values.localRedirectPolicy | quote }}
+{{- if .Values.localRedirectPolicies.addressMatcherCIDRs }}
+  lrp-address-matcher-cidrs: {{ .Values.localRedirectPolicies.addressMatcherCIDRs | join "," | quote }}
 {{- end }}
 
 {{- if .Values.ipv4NativeRoutingCIDR }}
@@ -725,10 +763,6 @@ data:
   devices: {{ join " " .Values.devices | quote }}
 {{- end }}
 
-{{- if .Values.enableRuntimeDeviceDetection }}
-  enable-runtime-device-detection: "true"
-{{- end }}
-
 {{- if .Values.forceDeviceDetection }}
   force-device-detection: "true"
 {{- end }}
@@ -751,12 +785,6 @@ data:
 {{- end }}
 {{- if hasKey $socketLB "tracing" }}
   trace-sock: {{ $socketLB.tracing | quote }}
-{{- end }}
-{{- end }}
-
-{{- if hasKey .Values "hostPort" }}
-{{- if eq $kubeProxyReplacement "false" }}
-  enable-host-port: {{ .Values.hostPort.enabled | quote }}
 {{- end }}
 {{- end }}
 
@@ -786,7 +814,7 @@ data:
 {{- end }}
 {{- if hasKey .Values "loadBalancer" }}
 {{- if .Values.loadBalancer.standalone }}
-  datapath-mode: lb-only
+  bpf-lb-only: {{ .Values.loadBalancer.standalone | quote }}
 {{- end }}
 {{- if hasKey .Values.loadBalancer "mode" }}
   bpf-lb-mode: {{ .Values.loadBalancer.mode | quote }}
@@ -804,9 +832,6 @@ data:
   enable-service-topology: {{ .Values.loadBalancer.serviceTopology | quote }}
 # {{- end }}
 
-{{- if hasKey .Values.loadBalancer "experimental" }}
-  enable-experimental-lb: {{ .Values.loadBalancer.experimental | quote }}
-{{- end }}
 {{- if hasKey .Values.loadBalancer "protocolDifferentiation" }}
   bpf-lb-proto-diff: {{ .Values.loadBalancer.protocolDifferentiation.enabled | quote }}
 {{- end }}
@@ -829,7 +854,6 @@ data:
 {{- if hasKey .Values.l2NeighDiscovery "enabled" }}
   enable-l2-neigh-discovery: {{ .Values.l2NeighDiscovery.enabled | quote }}
 {{- end }}
-  arping-refresh-period: {{ include "validateDuration" .Values.l2NeighDiscovery.refreshPeriod | quote }}
 {{- end }}
 
 {{- if .Values.pprof.enabled }}
@@ -855,6 +879,9 @@ data:
 {{- end }}
 {{- if hasKey .Values.k8s "requireIPv6PodCIDR" }}
   k8s-require-ipv6-pod-cidr: {{ .Values.k8s.requireIPv6PodCIDR | quote }}
+{{- end }}
+{{- if hasKey .Values.k8s "apiServerURLs" }}
+  k8s-api-server-urls: {{ .Values.k8s.apiServerURLs | quote }}
 {{- end }}
 {{- if and .Values.endpointRoutes .Values.endpointRoutes.enabled }}
   enable-endpoint-routes: {{ .Values.endpointRoutes.enabled | quote }}
@@ -915,6 +942,12 @@ data:
 {{- end }}
   enable-node-selector-labels: {{ .Values.nodeSelectorLabels | quote }}
 
+{{- if hasKey .Values "nodeLabels" }}
+  # To include or exclude matched resources from cilium node identity evaluation
+  # List of labels just like --labels flag (.Values.labels)
+  node-labels: {{ .Values.nodeLabels | quote }}
+{{- end }}
+
 {{- if hasKey .Values "synchronizeK8sNodes" }}
   synchronize-k8s-nodes: {{ .Values.synchronizeK8sNodes | quote }}
 {{- end }}
@@ -967,6 +1000,9 @@ data:
   hubble-dynamic-metrics-config-path: /dynamic-metrics-config/dynamic-metrics.yaml
 {{- end }}
 
+{{- if hasKey .Values.hubble.networkPolicyCorrelation "enabled" }}
+  hubble-network-policy-correlation-enabled: {{ .Values.hubble.networkPolicyCorrelation.enabled | quote }}
+{{- end }}
 {{- if .Values.hubble.redact }}
 {{- if eq .Values.hubble.redact.enabled true }}
   # Enables hubble redact capabilities
@@ -998,9 +1034,12 @@ data:
 {{- end }}
 {{- end }}
 {{- if .Values.hubble.export }}
-  hubble-export-file-max-size-mb: {{ .Values.hubble.export.fileMaxSizeMb | quote }}
-  hubble-export-file-max-backups: {{ .Values.hubble.export.fileMaxBackups | quote }}
+{{- /* hubble export configurations moved, use default to make upgrades seemless */ -}}
+{{- /* TODO: remove default once v1.18 is released, remove warning in warnings.txt and add failure validation in validate.yaml */ -}}
 {{- if .Values.hubble.export.static.enabled }}
+  hubble-export-file-max-size-mb: {{ .Values.hubble.export.fileMaxSizeMb | default .Values.hubble.export.static.fileMaxSizeMb | quote }}
+  hubble-export-file-max-backups: {{ .Values.hubble.export.fileMaxBackups | default .Values.hubble.export.static.fileMaxBackups | quote }}
+  hubble-export-file-compress: {{ .Values.hubble.export.fileCompress | default .Values.hubble.export.static.fileCompress | quote }}
   hubble-export-file-path: {{ .Values.hubble.export.static.filePath | quote }}
   hubble-export-fieldmask: {{ .Values.hubble.export.static.fieldMask | join " " | quote }}
   hubble-export-allowlist: {{ .Values.hubble.export.static.allowList | join " " | quote }}
@@ -1104,7 +1143,7 @@ data:
 {{- end }}
 
 {{- if .Values.egressGateway.enabled }}
-  enable-ipv4-egress-gateway: "true"
+  enable-egress-gateway: "true"
 {{- end }}
 {{- if hasKey .Values.egressGateway "reconciliationTriggerInterval" }}
   egress-gateway-reconciliation-trigger-interval: {{ .Values.egressGateway.reconciliationTriggerInterval | quote }}
@@ -1163,13 +1202,20 @@ data:
 
 {{- if .Values.l2podAnnouncements.enabled }}
   enable-l2-pod-announcements: {{ .Values.l2podAnnouncements.enabled | quote }}
+  {{- if .Values.l2podAnnouncements.interfacePattern }}
+  l2-pod-announcements-interface-pattern: {{ .Values.l2podAnnouncements.interfacePattern | quote }}
+  {{- else }}
   l2-pod-announcements-interface: {{ .Values.l2podAnnouncements.interface | quote }}
+  {{- end }}
 {{- end }}
 
 {{- if .Values.bgpControlPlane.enabled }}
   enable-bgp-control-plane: "true"
   bgp-secrets-namespace: {{ .Values.bgpControlPlane.secretsNamespace.name | quote }}
   enable-bgp-control-plane-status-report: {{ .Values.bgpControlPlane.statusReport.enabled | quote }}
+  bgp-router-id-allocation-mode: {{ .Values.bgpControlPlane.routerIDAllocation.mode | quote }}
+  bgp-router-id-allocation-ip-pool: {{ .Values.bgpControlPlane.routerIDAllocation.ipPool | quote }}
+  enable-bgp-legacy-origin-attribute: {{ .Values.bgpControlPlane.legacyOriginAttribute.enabled | quote }}
 {{- end }}
 
 {{- if .Values.pmtuDiscovery.enabled }}
@@ -1197,19 +1243,14 @@ data:
   disable-external-ip-mitigation: {{ .Values.bpf.disableExternalIPMitigation | quote }}
 {{- end }}
 
-{{- if or .Values.ciliumEndpointSlice.enabled .Values.enableCiliumEndpointSlice }}
+{{- if .Values.ciliumEndpointSlice.enabled }}
   enable-cilium-endpoint-slice: "true"
   {{- if .Values.ciliumEndpointSlice.rateLimits }}
   ces-rate-limits: {{ .Values.ciliumEndpointSlice.rateLimits | toJson | quote }}
   {{- end }}
-  {{- if .Values.ciliumEndpointSlice.sliceMode }}
-  ces-slice-mode: {{ .Values.ciliumEndpointSlice.sliceMode | quote }}
-  {{- end }}
 {{- end }}
 
-{{- if hasKey .Values "enableK8sTerminatingEndpoint" }}
-  enable-k8s-terminating-endpoint: {{ .Values.enableK8sTerminatingEndpoint | quote }}
-{{- end }}
+  identity-management-mode: {{ .Values.identityManagementMode | quote }}
 
 {{- if hasKey .Values.sctp "enabled" }}
   enable-sctp: {{ .Values.sctp.enabled | quote }}
@@ -1298,6 +1339,7 @@ data:
   {{- if .Values.dnsProxy.proxyResponseMaxDelay }}
   tofqdns-proxy-response-max-delay: {{ .Values.dnsProxy.proxyResponseMaxDelay | quote }}
   {{- end }}
+  tofqdns-preallocate-identities:  {{ .Values.dnsProxy.preAllocateIdentities | quote }}
 {{- end }}
 
 {{- if hasKey .Values "agentNotReadyTaintKey" }}
@@ -1333,9 +1375,14 @@ data:
   proxy-idle-timeout-seconds: {{ .Values.envoy.idleTimeoutDurationSeconds | quote }}
   proxy-max-concurrent-retries: {{ .Values.envoy.maxConcurrentRetries | quote }}
   http-retry-count: {{ .Values.envoy.httpRetryCount | quote }}
+  http-stream-idle-timeout: {{ .Values.envoy.streamIdleTimeoutDurationSeconds | quote }}
 
   external-envoy-proxy: {{ include "envoyDaemonSetEnabled" . | quote }}
   envoy-base-id: {{ .Values.envoy.baseID | quote }}
+
+{{- if .Values.envoy.httpUpstreamLingerTimeout }}
+  envoy-http-upstream-linger-timeout: {{ .Values.envoy.httpUpstreamLingerTimeout | quote }}
+{{- end }}
 
 {{- if .Values.envoy.policyRestoreTimeoutDuration }}
   envoy-policy-restore-timeout: {{ .Values.envoy.policyRestoreTimeoutDuration | quote }}
@@ -1357,6 +1404,7 @@ data:
 {{- end }}
   clustermesh-enable-endpoint-sync: {{ .Values.clustermesh.enableEndpointSliceSynchronization | quote }}
   clustermesh-enable-mcs-api: {{ .Values.clustermesh.enableMCSAPISupport | quote }}
+  policy-default-local-cluster: {{ .Values.clustermesh.policyDefaultLocalCluster | quote }}
 
   nat-map-stats-entries: {{ .Values.nat.mapStatsEntries | quote }}
   nat-map-stats-interval: {{ .Values.nat.mapStatsInterval | quote }}
@@ -1366,6 +1414,10 @@ data:
 
 {{- if hasKey .Values.daemon "enableSourceIPVerification" }}
   enable-source-ip-verification: {{ .Values.daemon.enableSourceIPVerification | quote }}
+{{- end }}
+
+{{- if has (kindOf .Values.connectivityProbeFrequencyRatio) (list "int64" "float64") }}
+  connectivity-probe-frequency-ratio: {{ .Values.connectivityProbeFrequencyRatio | quote }}
 {{- end }}
 
 # Extra config allows adding arbitrary properties to the cilium config.

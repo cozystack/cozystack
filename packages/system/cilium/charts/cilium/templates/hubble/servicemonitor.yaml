@@ -6,7 +6,7 @@ metadata:
   namespace: {{ .Values.prometheus.serviceMonitor.namespace | default (include "cilium.namespace" .) }}
   labels:
     app.kubernetes.io/part-of: cilium
-    
+    app.kubernetes.io/name: hubble
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -33,6 +33,9 @@ spec:
   endpoints:
   - port: hubble-metrics
     interval: {{ .Values.hubble.metrics.serviceMonitor.interval | quote }}
+    {{- if .Values.hubble.metrics.serviceMonitor.scrapeTimeout }}
+    scrapeTimeout: {{ .Values.hubble.metrics.serviceMonitor.scrapeTimeout | quote }}
+    {{- end }}
     honorLabels: true
     path: /metrics
     {{- if .Values.hubble.metrics.tls.enabled }}

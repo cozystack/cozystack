@@ -5,6 +5,8 @@ metadata:
   name: hubble-relay
   namespace: {{ .Values.hubble.relay.prometheus.serviceMonitor.namespace | default (include "cilium.namespace" .) }}
   labels:
+    app.kubernetes.io/part-of: cilium
+    app.kubernetes.io/name: hubble-relay
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -31,6 +33,9 @@ spec:
   endpoints:
   - port: metrics
     interval: {{ .Values.hubble.relay.prometheus.serviceMonitor.interval | quote }}
+    {{- if .Values.hubble.relay.prometheus.serviceMonitor.scrapeTimeout }}
+    scrapeTimeout: {{ .Values.hubble.relay.prometheus.serviceMonitor.scrapeTimeout | quote }}
+    {{- end }}
     path: /metrics
     {{- with .Values.hubble.relay.prometheus.serviceMonitor.relabelings }}
     relabelings:
