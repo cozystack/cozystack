@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -59,13 +60,6 @@ const (
 	TenantModuleLabelValue = "true"
 	singularName           = "tenantmodule"
 )
-
-// Define the GroupVersionResource for HelmRelease
-var helmReleaseGVR = schema.GroupVersionResource{
-	Group:    "helm.toolkit.fluxcd.io",
-	Version:  "v2",
-	Resource: "helmreleases",
-}
 
 // REST implements the RESTStorage interface for TenantModule resources
 type REST struct {
@@ -287,6 +281,8 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 	moduleList.SetResourceVersion(hrList.GetResourceVersion())
 	moduleList.Items = items
+
+	sorting.ByNamespacedName[corev1alpha1.TenantModule, *corev1alpha1.TenantModule](moduleList.Items)
 
 	klog.V(6).Infof("Successfully listed %d TenantModule resources in namespace %s", len(items), namespace)
 	return moduleList, nil
@@ -514,7 +510,7 @@ func (r *REST) getNamespace(ctx context.Context) (string, error) {
 	namespace, ok := request.NamespaceFrom(ctx)
 	if !ok {
 		err := fmt.Errorf("namespace not found in context")
-		klog.Errorf(err.Error())
+		klog.Error(err)
 		return "", err
 	}
 	return namespace, nil
@@ -593,10 +589,10 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	switch obj := object.(type) {
 	case *corev1alpha1.TenantModuleList:
 		table = r.buildTableFromTenantModules(obj.Items)
-		table.ListMeta.ResourceVersion = obj.ListMeta.ResourceVersion
+		table.ResourceVersion = obj.ResourceVersion
 	case *corev1alpha1.TenantModule:
 		table = r.buildTableFromTenantModule(*obj)
-		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
+		table.ResourceVersion = obj.GetResourceVersion()
 	default:
 		resource := schema.GroupResource{}
 		if info, ok := request.RequestInfoFrom(ctx); ok {
