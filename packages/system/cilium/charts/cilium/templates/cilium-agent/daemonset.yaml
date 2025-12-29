@@ -15,7 +15,7 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: cilium
+  name: {{ .Values.name }}
   namespace: {{ include "cilium.namespace" . }}
   {{- with .Values.annotations }}
   annotations:
@@ -72,6 +72,7 @@ spec:
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        kubectl.kubernetes.io/default-container: cilium-agent
       labels:
         k8s-app: cilium
         app.kubernetes.io/name: cilium-agent
@@ -205,18 +206,33 @@ spec:
             resourceFieldRef:
               resource: limits.memory
               divisor: '1'
+        {{- if and .Values.k8sServiceHostRef.name .Values.k8sServiceHostRef.key }}
+        - name: KUBERNETES_SERVICE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.k8sServiceHostRef.name }}
+              key: {{ .Values.k8sServiceHostRef.key }}
+        - name: KUBERNETES_SERVICE_PORT
+          value: {{ include "k8sServicePort" . }}
+        {{- end }}
         {{- if .Values.k8sServiceHost }}
         - name: KUBERNETES_SERVICE_HOST
           value: {{ include "k8sServiceHost" . }}
         - name: KUBERNETES_SERVICE_PORT
           value: {{ include "k8sServicePort" . }}
         {{- end }}
+        {{- if .Values.k8sClientExponentialBackoff.enabled }}
+        - name: KUBE_CLIENT_BACKOFF_BASE
+          value: {{ .Values.k8sClientExponentialBackoff.backoffBaseSeconds | quote }}
+        - name: KUBE_CLIENT_BACKOFF_DURATION
+          value: {{ .Values.k8sClientExponentialBackoff.backoffMaxDurationSeconds | quote }}
+        {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | trim | nindent 8 }}
         {{- end }}
         {{- if .Values.cni.install }}
         lifecycle:
-          {{- if ne .Values.cni.chainingMode "aws-cni" }}
+          {{- if and .Values.cni.iptablesRemoveAWSRules (ne .Values.cni.chainingMode "aws-cni") }}
           postStart:
             exec:
               command:
@@ -251,7 +267,7 @@ spec:
           hostPort: {{ .Values.envoy.prometheus.port }}
           protocol: TCP
         {{- end }}
-        {{- if and .Values.envoy.debug.admin.port (not $envoyDS) }}
+        {{- if and .Values.envoy.debug.admin.enabled .Values.envoy.debug.admin.port (not $envoyDS) }}
         - name: envoy-admin
           containerPort: {{ .Values.envoy.debug.admin.port }}
           hostPort: {{ .Values.envoy.debug.admin.port }}
@@ -303,7 +319,6 @@ spec:
         - mountPath: /host/proc/sys/kernel
           name: host-proc-sys-kernel
         {{- end}}
-        {{- if .Values.bpf.autoMount.enabled }}
         - name: bpf-maps
           mountPath: /sys/fs/bpf
           {{- if .Values.securityContext.privileged }}
@@ -315,7 +330,6 @@ spec:
           # in Cilium.
           mountPropagation: HostToContainer
           {{- end}}
-        {{- end }}
         {{- if not (contains "/run/cilium/cgroupv2" .Values.cgroup.hostRoot) }}
         # Check for duplicate mounts before mounting
         - name: cilium-cgroup
@@ -436,6 +450,10 @@ spec:
       - name: config
         image: {{ include "cilium.image" .Values.image | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- with .Values.initResources }}
+        resources:
+          {{- toYaml . | trim | nindent 10 }}
+        {{- end }}
         command:
         - cilium-dbg
         - build-config
@@ -451,6 +469,9 @@ spec:
         {{- if .Values.kubeConfigPath }}
         - "--k8s-kubeconfig-path={{ .Values.kubeConfigPath }}"
         {{- end }}
+        {{- if hasKey .Values.k8s "apiServerURLs" }}
+        - "--k8s-api-server-urls={{ .Values.k8s.apiServerURLs }}"
+        {{- end }}
         env:
         - name: K8S_NODE_NAME
           valueFrom:
@@ -462,6 +483,15 @@ spec:
             fieldRef:
               apiVersion: v1
               fieldPath: metadata.namespace
+        {{- if and .Values.k8sServiceHostRef.name .Values.k8sServiceHostRef.key }}
+        - name: KUBERNETES_SERVICE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.k8sServiceHostRef.name }}
+              key: {{ .Values.k8sServiceHostRef.key }}
+        - name: KUBERNETES_SERVICE_PORT
+          value: {{ include "k8sServicePort" . }}
+        {{- end }}
         {{- if .Values.k8sServiceHost }}
         - name: KUBERNETES_SERVICE_HOST
           value: {{ include "k8sServiceHost" . }}
@@ -599,12 +629,10 @@ spec:
         terminationMessagePolicy: FallbackToLogsOnError
         securityContext:
           privileged: true
-      {{- if and .Values.bpf.autoMount.enabled }}
         volumeMounts:
         - name: bpf-maps
           mountPath: /sys/fs/bpf
           mountPropagation: Bidirectional
-        {{- end }}
       {{- end }}
       {{- if and .Values.nodeinit.enabled .Values.nodeinit.bootstrapFile }}
       - name: wait-for-node-init
@@ -651,6 +679,15 @@ spec:
               name: cilium-config
               key: write-cni-conf-when-ready
               optional: true
+        {{- if and .Values.k8sServiceHostRef.name .Values.k8sServiceHostRef.key }}
+        - name: KUBERNETES_SERVICE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: {{ .Values.k8sServiceHostRef.name }}
+              key: {{ .Values.k8sServiceHostRef.key }}
+        - name: KUBERNETES_SERVICE_PORT
+          value: {{ include "k8sServicePort" . }}
+        {{- end }}
         {{- if .Values.k8sServiceHost }}
         - name: KUBERNETES_SERVICE_HOST
           value: {{ include "k8sServiceHost" . }}
@@ -678,10 +715,8 @@ spec:
               - ALL
           {{- end}}
         volumeMounts:
-        {{- if .Values.bpf.autoMount.enabled}}
         - name: bpf-maps
           mountPath: /sys/fs/bpf
-        {{- end }}
           # Required to mount cgroup filesystem from the host to cilium agent pod
         - name: cilium-cgroup
           mountPath: {{ .Values.cgroup.hostRoot }}
@@ -807,13 +842,11 @@ spec:
         hostPath:
           path: /var/run/netns
           type: DirectoryOrCreate
-      {{- if .Values.bpf.autoMount.enabled }}
         # To keep state between restarts / upgrades for bpf maps
       - name: bpf-maps
         hostPath:
           path: /sys/fs/bpf
           type: DirectoryOrCreate
-      {{- end }}
       {{- if or .Values.cgroup.autoMount.enabled .Values.sysctlfix.enabled }}
       # To mount cgroup2 filesystem on the host or apply sysctlfix
       - name: hostproc
