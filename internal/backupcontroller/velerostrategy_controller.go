@@ -9,15 +9,16 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	velerostrategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
+	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
 
 // S3Credentials holds the discovered S3 credentials from a Bucket storageRef
@@ -44,12 +45,6 @@ type bucketInfo struct {
 
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-
-	// Check if this BackupJob matches our strategy type (Velero)
-	if j.Spec.StrategyRef.Kind != "Velero"  {
-		// Not a Velero strategy, ignore
-		return ctrl.Result{}, nil
-	}
 
 	// If already completed, no need to reconcile
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded ||
@@ -94,9 +89,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	// Use human-readable timestamp: YYYY-MM-DD-HH-MM-SS
 	timestamp := j.Status.StartedAt.Time.Format("2006-01-02-15-04-05")
 	veleroBackupName := fmt.Sprintf("%s-velero-%s", j.Name, timestamp)
-	veleroBackup := &unstructured.Unstructured{}
-	veleroBackup.SetAPIVersion("velero.io/v1")
-	veleroBackup.SetKind("Backup")
+	veleroBackup := &velerov1.Backup{}
 	veleroBackupKey := client.ObjectKey{Namespace: j.Namespace, Name: veleroBackupName}
 
 	if err := r.Get(ctx, veleroBackupKey, veleroBackup); err != nil {
@@ -112,12 +105,8 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 
 	// Check Velero Backup status
-	phase, found, err := unstructured.NestedString(veleroBackup.Object, "status", "phase")
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if !found || phase == "" {
+	phase := string(veleroBackup.Status.Phase)
+	if phase == "" {
 		// Still in progress, requeue
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -146,9 +135,9 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	// Step 5: On failure
 	if phase == "Failed" || phase == "PartiallyFailed" {
-		message, _, _ := unstructured.NestedString(veleroBackup.Object, "status", "message")
-		if message == "" {
-			message = fmt.Sprintf("Velero Backup failed with phase: %s", phase)
+		message := fmt.Sprintf("Velero Backup failed with phase: %s", phase)
+		if len(veleroBackup.Status.ValidationErrors) > 0 {
+			message = fmt.Sprintf("%s: %v", message, veleroBackup.Status.ValidationErrors)
 		}
 		return r.markBackupJobFailed(ctx, j, message)
 	}
@@ -246,6 +235,119 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 	return creds, nil
 }
 
+func veleroS3SecretName(backupJobName string) string {
+	return fmt.Sprintf("backup-%s-s3-credentials", backupJobName)
+}
+
+// createS3CredsForVelero creates or updates a Kubernetes Secret containing
+// Velero S3 credentials in the format expected by Velero's cloud-credentials plugin.
+func (r *BackupJobReconciler) createS3CredsForVelero(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, creds *S3Credentials) error {
+	logger := log.FromContext(ctx)
+	secretName := veleroS3SecretName(backupJob.Name)
+	secretNamespace := backupJob.Namespace
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: secretNamespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+		StringData: map[string]string{
+			"cloud": fmt.Sprintf(`[default]
+aws_access_key_id=%s
+aws_secret_access_key=%s
+
+services = seaweed-s3
+[services seaweed-s3]
+s3 =
+    endpoint_url = %s
+`, creds.AccessKeyID, creds.AccessSecretKey, creds.Endpoint),
+		},
+	}
+
+	// Set owner reference to BackupJob so it gets cleaned up
+	if err := ctrl.SetControllerReference(backupJob, secret, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set controller reference on Velero credentials secret: %w", err)
+	}
+
+	foundSecret := &corev1.Secret{}
+	secretKey := client.ObjectKey{Name: secretName, Namespace: secretNamespace}
+	err := r.Get(ctx, secretKey, foundSecret)
+	if err != nil && errors.IsNotFound(err) {
+		// Create the Secret
+		if err := r.Create(ctx, secret); err != nil {
+			return fmt.Errorf("failed to create Velero credentials secret: %w", err)
+		}
+		logger.Info("created Velero credentials secret", "secret", secretName)
+	} else if err == nil {
+		// Update if necessary
+		foundSecret.StringData = secret.StringData
+		foundSecret.Data = nil // Clear .Data so .StringData will be used
+		if err := r.Update(ctx, foundSecret); err != nil {
+			return fmt.Errorf("failed to update Velero credentials secret: %w", err)
+		}
+		logger.Info("updated Velero credentials secret", "secret", secretName)
+	} else if err != nil {
+		return fmt.Errorf("error checking for existing Velero credentials secret: %w", err)
+	}
+
+	return nil
+}
+
+// createBackupStorageLocation creates or updates a Velero BackupStorageLocation resource.
+func (r *BackupJobReconciler) createBackupStorageLocation(ctx context.Context, bsl *velerov1.BackupStorageLocation) error {
+	logger := log.FromContext(ctx)
+	foundBSL := &velerov1.BackupStorageLocation{}
+	bslKey := client.ObjectKey{Name: bsl.Name, Namespace: bsl.Namespace}
+
+	err := r.Get(ctx, bslKey, foundBSL)
+	if err != nil && errors.IsNotFound(err) {
+		// Create the BackupStorageLocation
+		if err := r.Create(ctx, bsl); err != nil {
+			return fmt.Errorf("failed to create BackupStorageLocation: %w", err)
+		}
+		logger.Info("created BackupStorageLocation", "name", bsl.Name, "namespace", bsl.Namespace)
+	} else if err == nil {
+		// Update if necessary
+		foundBSL.Spec = bsl.Spec
+		if err := r.Update(ctx, foundBSL); err != nil {
+			return fmt.Errorf("failed to update BackupStorageLocation: %w", err)
+		}
+		logger.Info("updated BackupStorageLocation", "name", bsl.Name, "namespace", bsl.Namespace)
+	} else if err != nil {
+		return fmt.Errorf("error checking for existing BackupStorageLocation: %w", err)
+	}
+
+	return nil
+}
+
+// createVolumeSnapshotLocation creates or updates a Velero VolumeSnapshotLocation resource.
+func (r *BackupJobReconciler) createVolumeSnapshotLocation(ctx context.Context, vsl *velerov1.VolumeSnapshotLocation) error {
+	logger := log.FromContext(ctx)
+	foundVSL := &velerov1.VolumeSnapshotLocation{}
+	vslKey := client.ObjectKey{Name: vsl.Name, Namespace: vsl.Namespace}
+
+	err := r.Get(ctx, vslKey, foundVSL)
+	if err != nil && errors.IsNotFound(err) {
+		// Create the VolumeSnapshotLocation
+		if err := r.Create(ctx, vsl); err != nil {
+			return fmt.Errorf("failed to create VolumeSnapshotLocation: %w", err)
+		}
+		logger.Info("created VolumeSnapshotLocation", "name", vsl.Name, "namespace", vsl.Namespace)
+	} else if err == nil {
+		// Update if necessary
+		foundVSL.Spec = vsl.Spec
+		if err := r.Update(ctx, foundVSL); err != nil {
+			return fmt.Errorf("failed to update VolumeSnapshotLocation: %w", err)
+		}
+		logger.Info("updated VolumeSnapshotLocation", "name", vsl.Name, "namespace", vsl.Namespace)
+	} else if err != nil {
+		return fmt.Errorf("error checking for existing VolumeSnapshotLocation: %w", err)
+	}
+
+	return nil
+}
+
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	now := metav1.Now()
@@ -281,87 +383,139 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 			return fmt.Errorf("failed to resolve Bucket storageRef: %w", err)
 		}
 
-		// TODO: Create or reference a Velero BackupStorageLocation using the discovered credentials
 		// For now, we'll use "default" but log the discovered credentials
 		logger.Info("discovered S3 credentials from Bucket storageRef",
 			"bucketName", creds.BucketName,
 			"endpoint", creds.Endpoint,
 			"region", creds.Region)
+
+		if err := r.createS3CredsForVelero(ctx, backupJob, creds); err != nil {
+			return fmt.Errorf("failed to create or update Velero credentials secret: %w", err)
+		}
+		// Dynamically create a Velero BackupStorageLocation and VolumeSnapshotLocation using discovered credentials.
+
+		// BackupStorageLocation manifest
+		bsl := &velerov1.BackupStorageLocation{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default",
+				Namespace: "cozy-velero",
+			},
+			Spec: velerov1.BackupStorageLocationSpec{
+				Provider: "aws",
+				StorageType: velerov1.StorageType{
+					ObjectStorage: &velerov1.ObjectStorageLocation{
+						Bucket: creds.BucketName,
+					},
+				},
+				Config: map[string]string{
+					"checksumAlgorithm": "",
+					"profile":           "default",
+					"s3ForcePathStyle":  "true",
+					"s3Url":             creds.Endpoint,
+				},
+				Credential: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: veleroS3SecretName(backupJob.Name),
+					},
+					Key: "cloud",
+				},
+			},
+		}
+
+		// Create or update the BackupStorageLocation
+		if err := r.createBackupStorageLocation(ctx, bsl); err != nil {
+			logger.Error(err, "failed to create or update BackupStorageLocation for Velero")
+			return fmt.Errorf("failed to create or update Velero BackupStorageLocation: %w", err)
+		}
+
+		// VolumeSnapshotLocation manifest
+		vsl := &velerov1.VolumeSnapshotLocation{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default",
+				Namespace: "cozy-velero",
+			},
+			Spec: velerov1.VolumeSnapshotLocationSpec{
+				Provider: "aws",
+				Credential: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: veleroS3SecretName(backupJob.Name),
+					},
+					Key: "cloud",
+				},
+				Config: map[string]string{
+					"region":  creds.Region,
+					"profile": "default",
+				},
+			},
+		}
+
+		// Create or update the VolumeSnapshotLocation
+		if err := r.createVolumeSnapshotLocation(ctx, vsl); err != nil {
+			logger.Error(err, "failed to create or update VolumeSnapshotLocation for Velero")
+			return fmt.Errorf("failed to create or update Velero VolumeSnapshotLocation: %w", err)
+		}
+
+		// TODO: Create or reference a Velero BackupStorageLocation using the discovered credentials
 		// Note: The actual BackupStorageLocation should be created/configured separately
 		// or we should create it here dynamically. For now, using "default" as placeholder.
 	}
 
-	// Create a Velero Backup (velero.io/v1) using unstructured object
+	// Create a Velero Backup (velero.io/v1) using typed object
 	// Now implemented only for backup of VirtualMachine resources
-	spec := map[string]interface{}{
-		"includedNamespaces": []string{backupJob.Namespace},
-		"includedResources":   []string{"virtualmachines.kubevirt.io"},
-		"storageLocation":     storageLocation,
-		"labelSelector": map[string]interface{}{
-			"matchLabels": map[string]interface{}{
-				"app.kubernetes.io/instance": "virtual-machine-" + backupJob.Spec.ApplicationRef.Name,
+	veleroBackup := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: backupJob.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: backupJob.APIVersion,
+					Kind:       backupJob.Kind,
+					Name:       backupJob.Name,
+					UID:        backupJob.UID,
+				},
+			},
+		},
+		Spec: velerov1.BackupSpec{
+			IncludedNamespaces: []string{backupJob.Namespace},
+			IncludedResources:  []string{"virtualmachines.kubevirt.io"},
+			StorageLocation:    storageLocation,
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/instance": "virtual-machine-" + backupJob.Spec.ApplicationRef.Name,
+				},
 			},
 		},
 	}
-
-	veleroBackup := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "velero.io/v1",
-			"kind":       "Backup",
-			"metadata": map[string]interface{}{
-				"name":      name,
-				"namespace": backupJob.Namespace,
-			},
-			"spec": spec,
-		},
-	}
-
-	// Set owner reference to the BackupJob
-	veleroBackup.SetOwnerReferences([]metav1.OwnerReference{
-		{
-			APIVersion: backupJob.APIVersion,
-			Kind:       backupJob.Kind,
-			Name:       backupJob.Name,
-			UID:        backupJob.UID,
-		},
-	})
 
 	if err := r.Create(ctx, veleroBackup); err != nil {
-		logger.Error(err, "failed to create Velero Backup", "name", veleroBackup.GetName())
+		logger.Error(err, "failed to create Velero Backup", "name", veleroBackup.Name)
 		return err
 	}
 
-	logger.Info("created Velero Backup", "name", veleroBackup.GetName(), "namespace", veleroBackup.GetNamespace())
+	logger.Info("created Velero Backup", "name", veleroBackup.Name, "namespace", veleroBackup.Namespace)
 	return nil
 }
 
-func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *unstructured.Unstructured) (*backupsv1alpha1.Backup, error) {
+func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *velerov1.Backup) (*backupsv1alpha1.Backup, error) {
 	logger := log.FromContext(ctx)
 	// Extract artifact information from Velero Backup
-	var artifact *backupsv1alpha1.BackupArtifact
-	artifactMap, found, err := unstructured.NestedMap(veleroBackup.Object, "status", "backupItemOperations")
-	if err == nil && found && len(artifactMap) > 0 {
-		// Try to get backup location and snapshot info
-		// For now, we'll create a basic artifact
-		artifact = &backupsv1alpha1.BackupArtifact{
-			URI: fmt.Sprintf("velero://%s/%s", backupJob.Namespace, veleroBackup.GetName()),
-		}
+	// Create a basic artifact referencing the Velero backup
+	artifact := &backupsv1alpha1.BackupArtifact{
+		URI: fmt.Sprintf("velero://%s/%s", backupJob.Namespace, veleroBackup.Name),
 	}
 
 	// Get takenAt from Velero Backup creation timestamp or status
 	takenAt := metav1.Now()
-	if startTime, found, err := unstructured.NestedString(veleroBackup.Object, "status", "startTimestamp"); err == nil && found {
-		if t, err := time.Parse(time.RFC3339, startTime); err == nil {
-			takenAt = metav1.NewTime(t)
-		}
-	} else if creationTime := veleroBackup.GetCreationTimestamp(); !creationTime.IsZero() {
-		takenAt = creationTime
+	if veleroBackup.Status.StartTimestamp != nil {
+		takenAt = *veleroBackup.Status.StartTimestamp
+	} else if !veleroBackup.CreationTimestamp.IsZero() {
+		takenAt = veleroBackup.CreationTimestamp
 	}
 
 	// Extract driver metadata (e.g., Velero backup name)
 	driverMetadata := map[string]string{
-		"velero.io/backup-name":      veleroBackup.GetName(),
-		"velero.io/backup-namespace":  veleroBackup.GetNamespace(),
+		"velero.io/backup-name":      veleroBackup.Name,
+		"velero.io/backup-namespace": veleroBackup.Namespace,
 	}
 
 	backup := &backupsv1alpha1.Backup{
