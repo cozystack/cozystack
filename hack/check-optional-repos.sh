@@ -48,7 +48,7 @@ echo "  End: $RELEASE_END"
 echo ""
 
 # Loop through ALL optional repositories
-for repo_name in talm boot-to-talos cozypkg cozy-proxy; do
+for repo_name in talm boot-to-talos cozyhr cozy-proxy; do
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Checking repository: $repo_name"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

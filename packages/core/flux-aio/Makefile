@@ -4,13 +4,13 @@ NAMESPACE=cozy-$(NAME)
 include ../../../scripts/common-envs.mk
 
 show:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain
+	cozyhr show -n $(NAMESPACE) $(NAME) --plain
 
 apply:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f- --server-side --force-conflicts
+	cozyhr show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f- --server-side --force-conflicts
 
 diff:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f-
+	cozyhr show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f-
 
 update:
 	timoni bundle build -f flux-aio.cue > templates/fluxcd.yaml
