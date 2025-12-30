@@ -162,7 +162,7 @@ spec:
               memory: "100Mi"
             limits:
               cpu: "100m"
-              memory: "300Mi"
+              memory: "900Mi"
           securityContext:
             privileged: true
           terminationMessagePolicy: FallbackToLogsOnError
