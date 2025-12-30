@@ -10,7 +10,7 @@ spec:
       expr: |
         max_over_time(
           kubevirt_vm_info{
-            status!="running",
+            status!="Running",
             exported_namespace=~".+",
             name=~".+"
           }[10m]
