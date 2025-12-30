@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ include "tenant.name" . }}-cleanup
-  namespace: {{ include "tenant.name" . }}
+  namespace: cozy-system
   annotations:
     helm.sh/hook: pre-delete
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
@@ -39,13 +39,13 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: {{ include "tenant.name" . }}-cleanup
-  namespace: {{ include "tenant.name" . }}
+  namespace: cozy-system
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "tenant.name" . }}-cleanup
-  namespace: {{ include "tenant.name" . }}
+  namespace: cozy-system
   annotations:
     helm.sh/hook: pre-delete
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
