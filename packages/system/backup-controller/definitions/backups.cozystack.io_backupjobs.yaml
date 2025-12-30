@@ -233,3 +233,5 @@ spec:
     - jsonPath: .spec.applicationRef.name
     served: true
     storage: true
+    subresources:
+      status: {}

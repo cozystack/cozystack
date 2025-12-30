@@ -2,7 +2,6 @@ package backupcontroller
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -50,64 +49,103 @@ const (
 
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+	logger.Info("reconciling Velero strategy", "backupjob", j.Name, "phase", j.Status.Phase)
 
 	// If already completed, no need to reconcile
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded ||
 		j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		logger.V(1).Info("BackupJob already completed, skipping", "phase", j.Status.Phase)
 		return ctrl.Result{}, nil
 	}
 
 	// For now implemented backup logic for apps.cozystack.io VirtualMachine only
-	if j.Spec.ApplicationRef.Kind != "VirtualMachine" ||
-		*j.Spec.ApplicationRef.APIGroup != "apps.cozystack.io/v1alpha1" {
+	logger.Info("validating BackupJob spec",
+		"applicationRef", fmt.Sprintf("%s/%s", j.Spec.ApplicationRef.APIGroup, j.Spec.ApplicationRef.Kind),
+		"storageRef", fmt.Sprintf("%s/%s", j.Spec.StorageRef.APIGroup, j.Spec.StorageRef.Kind))
+
+	if j.Spec.ApplicationRef.Kind != "VirtualMachine" {
+		logger.Error(nil, "Unsupported application type", "kind", j.Spec.ApplicationRef.Kind)
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application type: %s", j.Spec.ApplicationRef.Kind))
 	}
-
-	if j.Spec.StorageRef.Kind != "Bucket" ||
-		*j.Spec.StorageRef.APIGroup != "apps.cozystack.io/v1alpha1" {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage type: %s %s", j.Spec.StorageRef.Kind, j.Spec.StorageRef.APIGroup))
+	if j.Spec.ApplicationRef.APIGroup == nil || *j.Spec.ApplicationRef.APIGroup != "apps.cozystack.io" {
+		logger.Error(nil, "Unsupported application APIGroup", "apiGroup", j.Spec.ApplicationRef.APIGroup, "expected", "apps.cozystack.io")
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application APIGroup: %v, expected apps.cozystack.io", j.Spec.ApplicationRef.APIGroup))
 	}
 
+	if j.Spec.StorageRef.Kind != "Bucket" {
+		logger.Error(nil, "Unsupported storage type", "kind", j.Spec.StorageRef.Kind)
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage type: %s", j.Spec.StorageRef.Kind))
+	}
+	if j.Spec.StorageRef.APIGroup == nil || *j.Spec.StorageRef.APIGroup != "apps.cozystack.io" {
+		logger.Error(nil, "Unsupported storage APIGroup", "apiGroup", j.Spec.StorageRef.APIGroup, "expected", "apps.cozystack.io")
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage APIGroup: %v, expected apps.cozystack.io", j.Spec.StorageRef.APIGroup))
+	}
+
+	logger.Info("BackupJob spec validation passed")
+
 	// Step 1: On first reconcile, set startedAt and phase = Running
+	logger.Info("checking BackupJob status", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
 	if j.Status.StartedAt == nil {
+		logger.Info("setting BackupJob status to Running")
 		now := metav1.Now()
 		j.Status.StartedAt = &now
 		j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
 		if err := r.Status().Update(ctx, j); err != nil {
+			if errors.IsNotFound(err) {
+				// BackupJob was deleted, nothing to update
+				logger.V(1).Info("BackupJob was deleted, skipping status update")
+				return ctrl.Result{}, nil
+			}
 			logger.Error(err, "failed to update BackupJob status")
 			return ctrl.Result{}, err
 		}
 		logger.Info("started BackupJob", "phase", j.Status.Phase)
+	} else {
+		logger.Info("BackupJob already started", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
 	}
 
 	// Step 2: Resolve inputs - Read Strategy, Storage, Application, optionally Plan
+	logger.Info("fetching Velero strategy", "strategyName", j.Spec.StrategyRef.Name)
 	veleroStrategy := &velerostrategyv1alpha1.Velero{}
 	if err := r.Get(ctx, client.ObjectKey{Name: j.Spec.StrategyRef.Name}, veleroStrategy); err != nil {
 		if errors.IsNotFound(err) {
+			logger.Error(err, "Velero strategy not found", "strategyName", j.Spec.StrategyRef.Name)
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Velero strategy not found: %s", j.Spec.StrategyRef.Name))
 		}
+		logger.Error(err, "failed to get Velero strategy")
 		return ctrl.Result{}, err
 	}
+	logger.Info("fetched Velero strategy", "strategyName", veleroStrategy.Name)
 
 	// Step 3: Execute backup logic
 	// Check if we already created a Velero Backup
 	// Use human-readable timestamp: YYYY-MM-DD-HH-MM-SS
+	if j.Status.StartedAt == nil {
+		logger.Error(nil, "StartedAt is nil after status update, this should not happen")
+		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+	}
 	timestamp := j.Status.StartedAt.Time.Format("2006-01-02-15-04-05")
 	veleroBackupName := fmt.Sprintf("%s-velero-%s", j.Name, timestamp)
+	logger.Info("checking for existing Velero Backup", "veleroBackupName", veleroBackupName)
 	veleroBackup := &velerov1.Backup{}
 	veleroBackupKey := client.ObjectKey{Namespace: j.Namespace, Name: veleroBackupName}
 
 	if err := r.Get(ctx, veleroBackupKey, veleroBackup); err != nil {
 		if errors.IsNotFound(err) {
 			// Create Velero Backup
+			logger.Info("Velero Backup not found, creating new one", "veleroBackupName", veleroBackupName)
 			if err := r.createVeleroBackup(ctx, j, veleroBackupName); err != nil {
+				logger.Error(err, "failed to create Velero Backup")
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
 			}
+			logger.Info("created Velero Backup, requeuing", "veleroBackupName", veleroBackupName)
 			// Requeue to check status
 			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 		}
+		logger.Error(err, "failed to get Velero Backup")
 		return ctrl.Result{}, err
 	}
+	logger.Info("found existing Velero Backup", "veleroBackupName", veleroBackupName, "phase", veleroBackup.Status.Phase)
 
 	// Check Velero Backup status
 	phase := string(veleroBackup.Status.Phase)
@@ -130,6 +168,11 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 			j.Status.CompletedAt = &now
 			j.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
 			if err := r.Status().Update(ctx, j); err != nil {
+				if errors.IsNotFound(err) {
+					// BackupJob was deleted, nothing to update
+					logger.V(1).Info("BackupJob was deleted, skipping status update")
+					return ctrl.Result{}, nil
+				}
 				logger.Error(err, "failed to update BackupJob status")
 				return ctrl.Result{}, err
 			}
@@ -153,14 +196,14 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 // resolveBucketStorageRef discovers S3 credentials from a Bucket storageRef
 // It follows this flow:
-// 1. Get the Bucket resource (apps.cozystack.io/v1alpha1 or objectstorage.k8s.io/v1alpha1)
+// 1. Get the Bucket resource (apps.cozystack.io/v1alpha1)
 // 2. Find the BucketAccess that references this bucket
 // 3. Get the secret from BucketAccess.spec.credentialsSecretName
 // 4. Decode BucketInfo from secret.data.BucketInfo and extract S3 credentials
 func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, storageRef corev1.TypedLocalObjectReference, namespace string) (*S3Credentials, error) {
 	logger := log.FromContext(ctx)
+
 	// Step 1: Get the Bucket resource
-	// Try apps.cozystack.io first, then fall back to objectstorage.k8s.io
 	bucket := &unstructured.Unstructured{}
 	bucket.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   *storageRef.APIGroup,
@@ -168,7 +211,10 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 		Kind:    storageRef.Kind,
 	})
 
-	bucketKey := client.ObjectKey{Name: storageRef.Name}
+	if *storageRef.APIGroup != "apps.cozystack.io" {
+		return nil, fmt.Errorf("Unsupported storage APIGroup: %v, expected apps.cozystack.io", storageRef.APIGroup)
+	}
+	bucketKey := client.ObjectKey{Namespace: namespace, Name: storageRef.Name}
 
 	if err := r.Get(ctx, bucketKey, bucket); err != nil {
 		return nil, fmt.Errorf("failed to get Bucket %s: %w", storageRef.Name, err)
@@ -187,7 +233,7 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 		Kind:    "BucketAccess",
 	})
 
-	bucketAccessKey := client.ObjectKey{Name: bucketName, Namespace: namespace}
+	bucketAccessKey := client.ObjectKey{Name: "bucket-" + bucketName, Namespace: namespace}
 	if err := r.Get(ctx, bucketAccessKey, bucketAccess); err != nil {
 		return nil, fmt.Errorf("failed to get BucketAccess %s in namespace %s: %w", bucketName, namespace, err)
 	}
@@ -211,15 +257,9 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 		return nil, fmt.Errorf("BucketInfo key not found in secret %s", secretName)
 	}
 
-	// Decode base64
-	decoded, err := base64.StdEncoding.DecodeString(string(bucketInfoData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode BucketInfo from secret %s: %w", secretName, err)
-	}
-
-	// Parse JSON
+	// Parse JSON value
 	var info bucketInfo
-	if err := json.Unmarshal(decoded, &info); err != nil {
+	if err := json.Unmarshal(bucketInfoData, &info); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal BucketInfo from secret %s: %w", secretName, err)
 	}
 
@@ -370,6 +410,11 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	})
 
 	if err := r.Status().Update(ctx, backupJob); err != nil {
+		if errors.IsNotFound(err) {
+			// BackupJob was deleted, nothing to update
+			logger.V(1).Info("BackupJob was deleted, skipping status update", "message", message)
+			return ctrl.Result{}, nil
+		}
 		logger.Error(err, "failed to update BackupJob status to Failed")
 		return ctrl.Result{}, err
 	}
@@ -379,12 +424,15 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 
 func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, name string) error {
 	logger := log.FromContext(ctx)
+	logger.Info("createVeleroBackup called", "backupJob", backupJob.Name, "veleroBackupName", name)
 
 	// Resolve StorageRef to get S3 credentials if it's a Bucket
 	var storageLocation string = "default"
 	if backupJob.Spec.StorageRef.Kind == "Bucket" {
+		logger.Info("resolving Bucket storageRef", "storageRef", backupJob.Spec.StorageRef.Name)
 		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace)
 		if err != nil {
+			logger.Error(err, "failed to resolve Bucket storageRef")
 			return fmt.Errorf("failed to resolve Bucket storageRef: %w", err)
 		}
 
