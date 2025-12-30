@@ -36,11 +36,18 @@ jobs:
 
       - name: Process release branches
         uses: actions/github-script@v7
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         with:
           github-token: ${{ secrets.GH_PAT }}
           script: |
             const { execSync } = require('child_process');
-            
+
+            // Configure git to use PAT for authentication
+            execSync('git config user.name "cozystack-bot"', { encoding: 'utf8' });
+            execSync('git config user.email "217169706+cozystack-bot@users.noreply.github.com"', { encoding: 'utf8' });
+            execSync(`git remote set-url origin https://cozystack-bot:${process.env.GH_PAT}@github.com/${process.env.GITHUB_REPOSITORY}`, { encoding: 'utf8' });
+
             // Get all release-X.Y branches
             const branches = execSync('git branch -r | grep -E "origin/release-[0-9]+\\.[0-9]+$" | sed "s|origin/||" | tr -d " "', { encoding: 'utf8' })
               .split('\n')
@@ -146,10 +153,27 @@ jobs:
               
               console.log(`  🏷️  Creating new tag: ${nextTag} on commit ${latestBranchCommit}`);
               
-              // Create and push the tag (force push to update if exists)
+              // Create and push the tag with base_ref for workflow triggering
               try {
-                execSync(`git tag -f ${nextTag} ${latestBranchCommit}`, { encoding: 'utf8' });
-                execSync(`git push -f origin ${nextTag}`, { encoding: 'utf8' });
+                // Delete local tag if exists to force update
+                try {
+                  execSync(`git tag -d ${nextTag}`, { encoding: 'utf8' });
+                } catch (e) {
+                  // Tag doesn't exist locally, that's fine
+                }
+
+                // Delete remote tag if exists
+                try {
+                  execSync(`git push origin :refs/tags/${nextTag}`, { encoding: 'utf8' });
+                } catch (e) {
+                  // Tag doesn't exist remotely, that's fine
+                }
+
+                // Create tag locally
+                execSync(`git tag ${nextTag} ${latestBranchCommit}`, { encoding: 'utf8' });
+
+                // Push tag with HEAD reference to preserve base_ref
+                execSync(`git push origin HEAD:refs/tags/${nextTag}`, { encoding: 'utf8' });
                 console.log(`  ✅ Successfully created and pushed tag ${nextTag}`);
               } catch (error) {
                 console.log(`  ❌ Error creating/pushing tag ${nextTag}: ${error.message}`);
