@@ -86,6 +86,7 @@ type BackupJobStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",priority=0
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
