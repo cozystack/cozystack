@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 ARG KUBECTL_VERSION=1.33.2
 ARG TALOSCTL_VERSION=1.10.4
 ARG HELM_VERSION=3.18.3
-ARG COZYPKG_VERSION=1.1.0
+ARG COZYHR_VERSION=1.5.0
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -18,7 +18,7 @@ RUN curl -sSL "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm
 RUN curl -sSL "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_${TARGETOS}_${TARGETARCH}" -o /usr/local/bin/yq \
  && chmod +x /usr/local/bin/yq
 RUN curl -sSL "https://fluxcd.io/install.sh" | bash
-RUN curl -sSL "https://github.com/cozystack/cozypkg/raw/refs/heads/main/hack/install.sh" | sh -s -- -v "${COZYPKG_VERSION}"
+RUN curl -sSL "https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh" | sh -s -- -v "${COZYHR_VERSION}"
 RUN curl https://dl.min.io/client/mc/release/${TARGETOS}-${TARGETARCH}/mc --create-dirs -o  /usr/local/bin/mc \
 && chmod +x /usr/local/bin/mc
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

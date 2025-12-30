@@ -7,13 +7,13 @@ pre-checks:
 	../../../hack/pre-checks.sh
 
 show:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain
+	cozyhr show -n $(NAMESPACE) $(NAME) --plain
 
 apply:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f-
+	cozyhr show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f-
 
 diff:
-	cozypkg show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f -
+	cozyhr show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f -
 
 image: pre-checks image-cozystack
 

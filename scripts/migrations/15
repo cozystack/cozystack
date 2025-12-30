@@ -21,7 +21,7 @@ kubectl get kuberneteses.apps.cozystack.io -A --no-headers --output=custom-colum
 done
 
 if kubectl get helmrelease kamaji -n cozy-kamaji; then
-  cozypkg reconcile kamaji -n cozy-kamaji --force
+  cozyhr reconcile kamaji -n cozy-kamaji --force
 fi
 
 # Write version to cozystack-version config
