@@ -427,7 +427,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	logger.Info("createVeleroBackup called", "backupJob", backupJob.Name, "veleroBackupName", name)
 
 	// Resolve StorageRef to get S3 credentials if it's a Bucket
-	var storageLocation string = "default"
+	var storageLocation string = backupJob.Name
 	if backupJob.Spec.StorageRef.Kind == "Bucket" {
 		logger.Info("resolving Bucket storageRef", "storageRef", backupJob.Spec.StorageRef.Name)
 		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace)
@@ -436,7 +436,6 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 			return fmt.Errorf("failed to resolve Bucket storageRef: %w", err)
 		}
 
-		// For now, we'll use "default" but log the discovered credentials
 		logger.Info("discovered S3 credentials from Bucket storageRef",
 			"bucketName", creds.BucketName,
 			"endpoint", creds.Endpoint,
@@ -450,8 +449,8 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// BackupStorageLocation manifest
 		bsl := &velerov1.BackupStorageLocation{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "default",
-				Namespace: "cozy-velero",
+				Name:      backupJob.Name,
+				Namespace: backupJob.Namespace,
 			},
 			Spec: velerov1.BackupStorageLocationSpec{
 				Provider: "aws",
@@ -484,8 +483,8 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// VolumeSnapshotLocation manifest
 		vsl := &velerov1.VolumeSnapshotLocation{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "default",
-				Namespace: "cozy-velero",
+				Name:      backupJob.Name,
+				Namespace: backupJob.Namespace,
 			},
 			Spec: velerov1.VolumeSnapshotLocationSpec{
 				Provider: "aws",
