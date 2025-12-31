@@ -334,17 +334,25 @@ s3 =
 	if err != nil && errors.IsNotFound(err) {
 		// Create the Secret
 		if err := r.Create(ctx, secret); err != nil {
+			r.Recorder.Event(backupJob, corev1.EventTypeWarning, "SecretCreationFailed",
+				fmt.Sprintf("Failed to create Velero credentials secret %s/%s: %v", secretNamespace, secretName, err))
 			return fmt.Errorf("failed to create Velero credentials secret: %w", err)
 		}
 		logger.Info("created Velero credentials secret", "secret", secretName)
+		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "SecretCreated",
+			fmt.Sprintf("Created Velero credentials secret %s/%s", secretNamespace, secretName))
 	} else if err == nil {
 		// Update if necessary
 		foundSecret.StringData = secret.StringData
 		foundSecret.Data = nil // Clear .Data so .StringData will be used
 		if err := r.Update(ctx, foundSecret); err != nil {
+			r.Recorder.Event(backupJob, corev1.EventTypeWarning, "SecretUpdateFailed",
+				fmt.Sprintf("Failed to update Velero credentials secret %s/%s: %v", secretNamespace, secretName, err))
 			return fmt.Errorf("failed to update Velero credentials secret: %w", err)
 		}
 		logger.Info("updated Velero credentials secret", "secret", secretName)
+		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "SecretUpdated",
+			fmt.Sprintf("Updated Velero credentials secret %s/%s", secretNamespace, secretName))
 	} else if err != nil {
 		return fmt.Errorf("error checking for existing Velero credentials secret: %w", err)
 	}
@@ -525,8 +533,12 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// Create or update the BackupStorageLocation
 		if err := r.createBackupStorageLocation(ctx, bsl); err != nil {
 			logger.Error(err, "failed to create or update BackupStorageLocation for Velero")
+			r.Recorder.Event(backupJob, corev1.EventTypeWarning, "BackupStorageLocationCreationFailed",
+				fmt.Sprintf("Failed to create or update BackupStorageLocation %s/%s: %v", veleroNamespace, locationName, err))
 			return fmt.Errorf("failed to create or update Velero BackupStorageLocation: %w", err)
 		}
+		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "BackupStorageLocationCreated",
+			fmt.Sprintf("Created or updated BackupStorageLocation %s/%s", veleroNamespace, locationName))
 
 		// VolumeSnapshotLocation manifest
 		// Note: Cannot set owner reference for cross-namespace resources
@@ -553,8 +565,12 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// Create or update the VolumeSnapshotLocation
 		if err := r.createVolumeSnapshotLocation(ctx, vsl); err != nil {
 			logger.Error(err, "failed to create or update VolumeSnapshotLocation for Velero")
+			r.Recorder.Event(backupJob, corev1.EventTypeWarning, "VolumeSnapshotLocationCreationFailed",
+				fmt.Sprintf("Failed to create or update VolumeSnapshotLocation %s/%s: %v", veleroNamespace, locationName, err))
 			return fmt.Errorf("failed to create or update Velero VolumeSnapshotLocation: %w", err)
 		}
+		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "VolumeSnapshotLocationCreated",
+			fmt.Sprintf("Created or updated VolumeSnapshotLocation %s/%s", veleroNamespace, locationName))
 	}
 
 	// Create a Velero Backup (velero.io/v1) using typed object
@@ -581,10 +597,14 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 
 	if err := r.Create(ctx, veleroBackup); err != nil {
 		logger.Error(err, "failed to create Velero Backup", "name", veleroBackup.Name)
+		r.Recorder.Event(backupJob, corev1.EventTypeWarning, "VeleroBackupCreationFailed",
+			fmt.Sprintf("Failed to create Velero Backup %s/%s: %v", veleroNamespace, name, err))
 		return err
 	}
 
 	logger.Info("created Velero Backup", "name", veleroBackup.Name, "namespace", veleroBackup.Namespace)
+	r.Recorder.Event(backupJob, corev1.EventTypeNormal, "VeleroBackupCreated",
+		fmt.Sprintf("Created Velero Backup %s/%s", veleroNamespace, name))
 	return nil
 }
 
