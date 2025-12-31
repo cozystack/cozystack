@@ -50,8 +50,8 @@ const (
 	veleroNamespace = "cozy-velero"
 )
 
-func storageS3SecretName(backupJobName string) string {
-	return fmt.Sprintf("backup-%s-s3-credentials", backupJobName)
+func storageS3SecretName(namespace, backupJobName string) string {
+	return fmt.Sprintf("backup-%s-%s-s3-credentials", namespace, backupJobName)
 }
 
 func boolPtr(b bool) *bool {
@@ -147,7 +147,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
 	timestamp := j.Status.StartedAt.Time.Format("2006-01-02-15-04-05")
-	veleroBackupName := fmt.Sprintf("%s-velero-%s", j.Name, timestamp)
+	veleroBackupName := fmt.Sprintf("%s-%s-%s", j.Namespace, j.Name, timestamp)
 	logger.Info("checking for existing Velero Backup", "veleroBackupName", veleroBackupName, "namespace", veleroNamespace)
 	veleroBackup := &velerov1.Backup{}
 	veleroBackupKey := client.ObjectKey{Namespace: veleroNamespace, Name: veleroBackupName}
@@ -306,7 +306,7 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 // Velero S3 credentials in the format expected by Velero's cloud-credentials plugin.
 func (r *BackupJobReconciler) createS3CredsForVelero(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, creds *S3Credentials) error {
 	logger := log.FromContext(ctx)
-	secretName := storageS3SecretName(backupJob.Name)
+	secretName := storageS3SecretName(backupJob.Namespace, backupJob.Name)
 	secretNamespace := veleroNamespace
 
 	secret := &corev1.Secret{
@@ -473,7 +473,8 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	logger.Info("createVeleroBackup called", "backupJob", backupJob.Name, "veleroBackupName", name)
 
 	// Resolve StorageRef to get S3 credentials if it's a Bucket
-	var locationName string = backupJob.Name
+	// Prefix with namespace to avoid conflicts in cozy-velero namespace
+	var locationName string = fmt.Sprintf("%s-%s", backupJob.Namespace, backupJob.Name)
 	if backupJob.Spec.StorageRef.Kind == "Bucket" {
 		logger.Info("resolving Bucket storageRef", "storageRef", backupJob.Spec.StorageRef.Name)
 		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace)
@@ -514,7 +515,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 				},
 				Credential: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: storageS3SecretName(backupJob.Name),
+						Name: storageS3SecretName(backupJob.Namespace, backupJob.Name),
 					},
 					Key: "cloud",
 				},
@@ -538,7 +539,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 				Provider: "aws",
 				Credential: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: storageS3SecretName(backupJob.Name),
+						Name: storageS3SecretName(backupJob.Namespace, backupJob.Name),
 					},
 					Key: "cloud",
 				},
