@@ -47,8 +47,12 @@ const (
 	defaultActiveJobPollingInterval = defaultRequeueAfter
 )
 
-func veleroS3SecretName(backupJobName string) string {
+func storageS3SecretName(backupJobName string) string {
 	return fmt.Sprintf("backup-%s-s3-credentials", backupJobName)
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }
 
 func ownerRefsFromBackupJob(backupJob *backupsv1alpha1.BackupJob) []metav1.OwnerReference {
@@ -299,7 +303,7 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 // Velero S3 credentials in the format expected by Velero's cloud-credentials plugin.
 func (r *BackupJobReconciler) createS3CredsForVelero(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, creds *S3Credentials) error {
 	logger := log.FromContext(ctx)
-	secretName := veleroS3SecretName(backupJob.Name)
+	secretName := storageS3SecretName(backupJob.Name)
 	secretNamespace := backupJob.Namespace
 
 	secret := &corev1.Secret{
@@ -439,7 +443,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	logger.Info("createVeleroBackup called", "backupJob", backupJob.Name, "veleroBackupName", name)
 
 	// Resolve StorageRef to get S3 credentials if it's a Bucket
-	var storageLocation string = backupJob.Name
+	var locationName string = backupJob.Name
 	if backupJob.Spec.StorageRef.Kind == "Bucket" {
 		logger.Info("resolving Bucket storageRef", "storageRef", backupJob.Spec.StorageRef.Name)
 		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace)
@@ -461,7 +465,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// BackupStorageLocation manifest
 		bsl := &velerov1.BackupStorageLocation{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            backupJob.Name,
+				Name:            locationName,
 				Namespace:       backupJob.Namespace,
 				OwnerReferences: ownerRefsFromBackupJob(backupJob),
 			},
@@ -480,7 +484,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 				},
 				Credential: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: veleroS3SecretName(backupJob.Name),
+						Name: storageS3SecretName(backupJob.Name),
 					},
 					Key: "cloud",
 				},
@@ -496,7 +500,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// VolumeSnapshotLocation manifest
 		vsl := &velerov1.VolumeSnapshotLocation{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:            backupJob.Name,
+				Name:            locationName,
 				Namespace:       backupJob.Namespace,
 				OwnerReferences: ownerRefsFromBackupJob(backupJob),
 			},
@@ -504,7 +508,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 				Provider: "aws",
 				Credential: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: veleroS3SecretName(backupJob.Name),
+						Name: storageS3SecretName(backupJob.Name),
 					},
 					Key: "cloud",
 				},
@@ -531,9 +535,11 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 			OwnerReferences: ownerRefsFromBackupJob(backupJob),
 		},
 		Spec: velerov1.BackupSpec{
-			IncludedNamespaces: []string{backupJob.Namespace},
-			IncludedResources:  []string{"virtualmachines.kubevirt.io"},
-			StorageLocation:    storageLocation,
+			IncludedNamespaces:      []string{backupJob.Namespace},
+			IncludedResources:       []string{"virtualmachines.kubevirt.io"},
+			SnapshotVolumes:         boolPtr(true),
+			StorageLocation:         locationName,
+			VolumeSnapshotLocations: []string{locationName},
 			LabelSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app.kubernetes.io/instance": "virtual-machine-" + backupJob.Spec.ApplicationRef.Name,
