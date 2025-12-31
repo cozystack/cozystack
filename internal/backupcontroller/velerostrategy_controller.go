@@ -58,17 +58,6 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-func ownerRefsFromBackupJob(backupJob *backupsv1alpha1.BackupJob) []metav1.OwnerReference {
-	return []metav1.OwnerReference{
-		{
-			APIVersion: backupJob.APIVersion,
-			Kind:       backupJob.Kind,
-			Name:       backupJob.Name,
-			UID:        backupJob.UID,
-		},
-	}
-}
-
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("reconciling Velero strategy", "backupjob", j.Name, "phase", j.Status.Phase)
@@ -262,8 +251,11 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 
 	// Step 4: Get the secret name from BucketAccess
 	secretName, found, err := unstructured.NestedString(bucketAccess.Object, "spec", "credentialsSecretName")
-	if err != nil || !found {
+	if err != nil {
 		return nil, fmt.Errorf("failed to get credentialsSecretName from BucketAccess: %w", err)
+	}
+	if !found || secretName == "" {
+		return nil, fmt.Errorf("credentialsSecretName not found in BucketAccess %s", bucketAccessKey.Name)
 	}
 
 	// Step 5: Get the secret
@@ -632,9 +624,17 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 
 	backup := &backupsv1alpha1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            fmt.Sprintf("%s-backup", backupJob.Name),
-			Namespace:       backupJob.Namespace,
-			OwnerReferences: ownerRefsFromBackupJob(backupJob),
+			Name:      fmt.Sprintf("%s-backup", backupJob.Name),
+			Namespace: backupJob.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: backupJob.APIVersion,
+					Kind:       backupJob.Kind,
+					Name:       backupJob.Name,
+					UID:        backupJob.UID,
+					Controller: boolPtr(true),
+				},
+			},
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: backupJob.Spec.ApplicationRef,
