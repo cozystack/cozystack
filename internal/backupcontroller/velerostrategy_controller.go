@@ -334,17 +334,45 @@ s3 =
 		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "SecretCreated",
 			fmt.Sprintf("Created Velero credentials secret %s/%s", secretNamespace, secretName))
 	} else if err == nil {
-		// Update if necessary
-		foundSecret.StringData = secret.StringData
-		foundSecret.Data = nil // Clear .Data so .StringData will be used
-		if err := r.Update(ctx, foundSecret); err != nil {
-			r.Recorder.Event(backupJob, corev1.EventTypeWarning, "SecretUpdateFailed",
-				fmt.Sprintf("Failed to update Velero credentials secret %s/%s: %v", secretNamespace, secretName, err))
-			return fmt.Errorf("failed to update Velero credentials secret: %w", err)
+		// Update if necessary - only update if the secret data has actually changed
+		// Compare the new secret data with existing secret data
+		existingData := foundSecret.Data
+		if existingData == nil {
+			existingData = make(map[string][]byte)
 		}
-		logger.Info("updated Velero credentials secret", "secret", secretName)
-		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "SecretUpdated",
-			fmt.Sprintf("Updated Velero credentials secret %s/%s", secretNamespace, secretName))
+		newData := make(map[string][]byte)
+		for k, v := range secret.StringData {
+			newData[k] = []byte(v)
+		}
+
+		// Check if data has changed
+		dataChanged := false
+		if len(existingData) != len(newData) {
+			dataChanged = true
+		} else {
+			for k, newVal := range newData {
+				existingVal, exists := existingData[k]
+				if !exists || !reflect.DeepEqual(existingVal, newVal) {
+					dataChanged = true
+					break
+				}
+			}
+		}
+
+		if dataChanged {
+			foundSecret.StringData = secret.StringData
+			foundSecret.Data = nil // Clear .Data so .StringData will be used
+			if err := r.Update(ctx, foundSecret); err != nil {
+				r.Recorder.Event(backupJob, corev1.EventTypeWarning, "SecretUpdateFailed",
+					fmt.Sprintf("Failed to update Velero credentials secret %s/%s: %v", secretNamespace, secretName, err))
+				return fmt.Errorf("failed to update Velero credentials secret: %w", err)
+			}
+			logger.Info("updated Velero credentials secret", "secret", secretName)
+			r.Recorder.Event(backupJob, corev1.EventTypeNormal, "SecretUpdated",
+				fmt.Sprintf("Updated Velero credentials secret %s/%s", secretNamespace, secretName))
+		} else {
+			logger.V(1).Info("Velero credentials secret data unchanged, skipping update", "secret", secretName)
+		}
 	} else if err != nil {
 		return fmt.Errorf("error checking for existing Velero credentials secret: %w", err)
 	}
