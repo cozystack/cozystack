@@ -47,6 +47,21 @@ const (
 	defaultActiveJobPollingInterval = defaultRequeueAfter
 )
 
+func veleroS3SecretName(backupJobName string) string {
+	return fmt.Sprintf("backup-%s-s3-credentials", backupJobName)
+}
+
+func ownerRefsFromBackupJob(backupJob *backupsv1alpha1.BackupJob) []metav1.OwnerReference {
+	return []metav1.OwnerReference{
+		{
+			APIVersion: backupJob.APIVersion,
+			Kind:       backupJob.Kind,
+			Name:       backupJob.Name,
+			UID:        backupJob.UID,
+		},
+	}
+}
+
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("reconciling Velero strategy", "backupjob", j.Name, "phase", j.Status.Phase)
@@ -280,10 +295,6 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 	return creds, nil
 }
 
-func veleroS3SecretName(backupJobName string) string {
-	return fmt.Sprintf("backup-%s-s3-credentials", backupJobName)
-}
-
 // createS3CredsForVelero creates or updates a Kubernetes Secret containing
 // Velero S3 credentials in the format expected by Velero's cloud-credentials plugin.
 func (r *BackupJobReconciler) createS3CredsForVelero(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, creds *S3Credentials) error {
@@ -293,8 +304,9 @@ func (r *BackupJobReconciler) createS3CredsForVelero(ctx context.Context, backup
 
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: secretNamespace,
+			Name:            secretName,
+			Namespace:       secretNamespace,
+			OwnerReferences: ownerRefsFromBackupJob(backupJob),
 		},
 		Type: corev1.SecretTypeOpaque,
 		StringData: map[string]string{
@@ -449,8 +461,9 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// BackupStorageLocation manifest
 		bsl := &velerov1.BackupStorageLocation{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      backupJob.Name,
-				Namespace: backupJob.Namespace,
+				Name:            backupJob.Name,
+				Namespace:       backupJob.Namespace,
+				OwnerReferences: ownerRefsFromBackupJob(backupJob),
 			},
 			Spec: velerov1.BackupStorageLocationSpec{
 				Provider: "aws",
@@ -483,8 +496,9 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		// VolumeSnapshotLocation manifest
 		vsl := &velerov1.VolumeSnapshotLocation{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      backupJob.Name,
-				Namespace: backupJob.Namespace,
+				Name:            backupJob.Name,
+				Namespace:       backupJob.Namespace,
+				OwnerReferences: ownerRefsFromBackupJob(backupJob),
 			},
 			Spec: velerov1.VolumeSnapshotLocationSpec{
 				Provider: "aws",
@@ -512,16 +526,9 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	// Now implemented only for backup of VirtualMachine resources
 	veleroBackup := &velerov1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: backupJob.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: backupJob.APIVersion,
-					Kind:       backupJob.Kind,
-					Name:       backupJob.Name,
-					UID:        backupJob.UID,
-				},
-			},
+			Name:            name,
+			Namespace:       backupJob.Namespace,
+			OwnerReferences: ownerRefsFromBackupJob(backupJob),
 		},
 		Spec: velerov1.BackupSpec{
 			IncludedNamespaces: []string{backupJob.Namespace},
@@ -568,16 +575,9 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 
 	backup := &backupsv1alpha1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-backup", backupJob.Name),
-			Namespace: backupJob.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: backupJob.APIVersion,
-					Kind:       backupJob.Kind,
-					Name:       backupJob.Name,
-					UID:        backupJob.UID,
-				},
-			},
+			Name:            fmt.Sprintf("%s-backup", backupJob.Name),
+			Namespace:       backupJob.Namespace,
+			OwnerReferences: ownerRefsFromBackupJob(backupJob),
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: backupJob.Spec.ApplicationRef,
