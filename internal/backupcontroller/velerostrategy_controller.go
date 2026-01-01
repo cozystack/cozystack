@@ -16,10 +16,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	velerostrategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
+	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+
+	"github.com/go-logr/logr"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
+
+func getLogger(ctx context.Context) loggerWithDebug {
+	return loggerWithDebug{Logger: log.FromContext(ctx)}
+}
+
+// loggerWithDebug wraps a logr.Logger and provides a Debug() method
+// that maps to V(1).Info() for convenience.
+type loggerWithDebug struct {
+	logr.Logger
+}
+
+// Debug logs at debug level (equivalent to V(1).Info())
+func (l loggerWithDebug) Debug(msg string, keysAndValues ...interface{}) {
+	l.Logger.V(1).Info(msg, keysAndValues...)
+}
 
 // S3Credentials holds the discovered S3 credentials from a Bucket storageRef
 type S3Credentials struct {
@@ -59,18 +76,18 @@ func boolPtr(b bool) *bool {
 }
 
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-	logger.Info("reconciling Velero strategy", "backupjob", j.Name, "phase", j.Status.Phase)
+	logger := getLogger(ctx)
+	logger.Debug("reconciling Velero strategy", "backupjob", j.Name, "phase", j.Status.Phase)
 
 	// If already completed, no need to reconcile
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded ||
 		j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
-		logger.V(1).Info("BackupJob already completed, skipping", "phase", j.Status.Phase)
+		logger.Debug("BackupJob already completed, skipping", "phase", j.Status.Phase)
 		return ctrl.Result{}, nil
 	}
 
 	// For now implemented backup logic for apps.cozystack.io VirtualMachine only
-	logger.Info("validating BackupJob spec",
+	logger.Debug("validating BackupJob spec",
 		"applicationRef", fmt.Sprintf("%s/%s", j.Spec.ApplicationRef.APIGroup, j.Spec.ApplicationRef.Kind),
 		"storageRef", fmt.Sprintf("%s/%s", j.Spec.StorageRef.APIGroup, j.Spec.StorageRef.Kind))
 
@@ -92,32 +109,32 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage APIGroup: %v, expected apps.cozystack.io", j.Spec.StorageRef.APIGroup))
 	}
 
-	logger.Info("BackupJob spec validation passed")
+	logger.Debug("BackupJob spec validation passed")
 
 	// Step 1: On first reconcile, set startedAt and phase = Running
-	logger.Info("checking BackupJob status", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
+	logger.Debug("checking BackupJob status", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
 	if j.Status.StartedAt == nil {
-		logger.Info("setting BackupJob status to Running")
+		logger.Debug("setting BackupJob status to Running")
 		now := metav1.Now()
 		j.Status.StartedAt = &now
 		j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
 		if err := r.Status().Update(ctx, j); err != nil {
 			if errors.IsNotFound(err) {
 				// BackupJob was deleted, nothing to update
-				logger.V(1).Info("BackupJob was deleted, skipping status update")
+				logger.Debug("BackupJob was deleted, skipping status update")
 				return ctrl.Result{}, nil
 			}
 			logger.Error(err, "failed to update BackupJob status")
 			return ctrl.Result{}, err
 		}
-		logger.Info("started BackupJob", "phase", j.Status.Phase)
+		logger.Debug("started BackupJob", "phase", j.Status.Phase)
 	} else {
-		logger.Info("BackupJob already started", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
+		logger.Debug("BackupJob already started", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
 	}
 
 	// Step 2: Resolve inputs - Read Strategy, Storage, Application, optionally Plan
-	logger.Info("fetching Velero strategy", "strategyName", j.Spec.StrategyRef.Name)
-	veleroStrategy := &velerostrategyv1alpha1.Velero{}
+	logger.Debug("fetching Velero strategy", "strategyName", j.Spec.StrategyRef.Name)
+	veleroStrategy := &strategyv1alpha1.Velero{}
 	if err := r.Get(ctx, client.ObjectKey{Name: j.Spec.StrategyRef.Name}, veleroStrategy); err != nil {
 		if errors.IsNotFound(err) {
 			logger.Error(err, "Velero strategy not found", "strategyName", j.Spec.StrategyRef.Name)
@@ -126,7 +143,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		logger.Error(err, "failed to get Velero strategy")
 		return ctrl.Result{}, err
 	}
-	logger.Info("fetched Velero strategy", "strategyName", veleroStrategy.Name)
+	logger.Debug("fetched Velero strategy", "strategyName", veleroStrategy.Name)
 
 	// Step 3: Execute backup logic
 	// Check if we already created a Velero Backup
@@ -137,26 +154,26 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 	timestamp := j.Status.StartedAt.Time.Format("2006-01-02-15-04-05")
 	veleroBackupName := fmt.Sprintf("%s-%s-%s", j.Namespace, j.Name, timestamp)
-	logger.Info("checking for existing Velero Backup", "veleroBackupName", veleroBackupName, "namespace", veleroNamespace)
+	logger.Debug("checking for existing Velero Backup", "veleroBackupName", veleroBackupName, "namespace", veleroNamespace)
 	veleroBackup := &velerov1.Backup{}
 	veleroBackupKey := client.ObjectKey{Namespace: veleroNamespace, Name: veleroBackupName}
 
 	if err := r.Get(ctx, veleroBackupKey, veleroBackup); err != nil {
 		if errors.IsNotFound(err) {
 			// Create Velero Backup
-			logger.Info("Velero Backup not found, creating new one", "veleroBackupName", veleroBackupName)
+			logger.Debug("Velero Backup not found, creating new one", "veleroBackupName", veleroBackupName)
 			if err := r.createVeleroBackup(ctx, j, veleroBackupName); err != nil {
 				logger.Error(err, "failed to create Velero Backup")
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
 			}
-			logger.Info("created Velero Backup, requeuing", "veleroBackupName", veleroBackupName)
+			logger.Debug("created Velero Backup, requeuing", "veleroBackupName", veleroBackupName)
 			// Requeue to check status
 			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 		}
 		logger.Error(err, "failed to get Velero Backup")
 		return ctrl.Result{}, err
 	}
-	logger.Info("found existing Velero Backup", "veleroBackupName", veleroBackupName, "phase", veleroBackup.Status.Phase)
+	logger.Debug("found existing Velero Backup", "veleroBackupName", veleroBackupName, "phase", veleroBackup.Status.Phase)
 
 	// Check Velero Backup status
 	phase := string(veleroBackup.Status.Phase)
@@ -181,13 +198,13 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 			if err := r.Status().Update(ctx, j); err != nil {
 				if errors.IsNotFound(err) {
 					// BackupJob was deleted, nothing to update
-					logger.V(1).Info("BackupJob was deleted, skipping status update")
+					logger.Debug("BackupJob was deleted, skipping status update")
 					return ctrl.Result{}, nil
 				}
 				logger.Error(err, "failed to update BackupJob status")
 				return ctrl.Result{}, err
 			}
-			logger.Info("BackupJob succeeded", "backup", backup.Name)
+			logger.Debug("BackupJob succeeded", "backup", backup.Name)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -212,7 +229,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 // 3. Get the secret from BucketAccess.spec.credentialsSecretName
 // 4. Decode BucketInfo from secret.data.BucketInfo and extract S3 credentials
 func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, storageRef corev1.TypedLocalObjectReference, namespace string) (*S3Credentials, error) {
-	logger := log.FromContext(ctx)
+	logger := getLogger(ctx)
 
 	// Step 1: Get the Bucket resource
 	bucket := &unstructured.Unstructured{}
@@ -286,7 +303,7 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 		AccessSecretKey: info.Spec.SecretS3.AccessSecretKey,
 	}
 
-	logger.Info("resolved S3 credentials from Bucket storageRef",
+	logger.Debug("resolved S3 credentials from Bucket storageRef",
 		"bucket", storageRef.Name,
 		"bucketName", creds.BucketName,
 		"endpoint", creds.Endpoint)
@@ -297,7 +314,7 @@ func (r *BackupJobReconciler) resolveBucketStorageRef(ctx context.Context, stora
 // createS3CredsForVelero creates or updates a Kubernetes Secret containing
 // Velero S3 credentials in the format expected by Velero's cloud-credentials plugin.
 func (r *BackupJobReconciler) createS3CredsForVelero(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, creds *S3Credentials) error {
-	logger := log.FromContext(ctx)
+	logger := getLogger(ctx)
 	secretName := storageS3SecretName(backupJob.Namespace, backupJob.Name)
 	secretNamespace := veleroNamespace
 
@@ -330,7 +347,7 @@ s3 =
 				fmt.Sprintf("Failed to create Velero credentials secret %s/%s: %v", secretNamespace, secretName, err))
 			return fmt.Errorf("failed to create Velero credentials secret: %w", err)
 		}
-		logger.Info("created Velero credentials secret", "secret", secretName)
+		logger.Debug("created Velero credentials secret", "secret", secretName)
 		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "SecretCreated",
 			fmt.Sprintf("Created Velero credentials secret %s/%s", secretNamespace, secretName))
 	} else if err == nil {
@@ -367,11 +384,11 @@ s3 =
 					fmt.Sprintf("Failed to update Velero credentials secret %s/%s: %v", secretNamespace, secretName, err))
 				return fmt.Errorf("failed to update Velero credentials secret: %w", err)
 			}
-			logger.Info("updated Velero credentials secret", "secret", secretName)
+			logger.Debug("updated Velero credentials secret", "secret", secretName)
 			r.Recorder.Event(backupJob, corev1.EventTypeNormal, "SecretUpdated",
 				fmt.Sprintf("Updated Velero credentials secret %s/%s", secretNamespace, secretName))
 		} else {
-			logger.V(1).Info("Velero credentials secret data unchanged, skipping update", "secret", secretName)
+			logger.Debug("Velero credentials secret data unchanged, skipping update", "secret", secretName)
 		}
 	} else if err != nil {
 		return fmt.Errorf("error checking for existing Velero credentials secret: %w", err)
@@ -382,7 +399,7 @@ s3 =
 
 // createBackupStorageLocation creates or updates a Velero BackupStorageLocation resource.
 func (r *BackupJobReconciler) createBackupStorageLocation(ctx context.Context, bsl *velerov1.BackupStorageLocation) error {
-	logger := log.FromContext(ctx)
+	logger := getLogger(ctx)
 	foundBSL := &velerov1.BackupStorageLocation{}
 	bslKey := client.ObjectKey{Name: bsl.Name, Namespace: bsl.Namespace}
 
@@ -392,7 +409,7 @@ func (r *BackupJobReconciler) createBackupStorageLocation(ctx context.Context, b
 		if err := r.Create(ctx, bsl); err != nil {
 			return fmt.Errorf("failed to create BackupStorageLocation: %w", err)
 		}
-		logger.Info("created BackupStorageLocation", "name", bsl.Name, "namespace", bsl.Namespace)
+		logger.Debug("created BackupStorageLocation", "name", bsl.Name, "namespace", bsl.Namespace)
 	} else if err == nil {
 		// Update if necessary - use patch to avoid conflicts with Velero's status updates
 		// Only update if the spec has actually changed
@@ -405,17 +422,17 @@ func (r *BackupJobReconciler) createBackupStorageLocation(ctx context.Context, b
 				foundBSL.Spec = bsl.Spec
 				if err := r.Update(ctx, foundBSL); err != nil {
 					if errors.IsConflict(err) && i < 2 {
-						logger.V(1).Info("conflict updating BackupStorageLocation, retrying", "attempt", i+1)
+						logger.Debug("conflict updating BackupStorageLocation, retrying", "attempt", i+1)
 						time.Sleep(100 * time.Millisecond)
 						continue
 					}
 					return fmt.Errorf("failed to update BackupStorageLocation: %w", err)
 				}
-				logger.Info("updated BackupStorageLocation", "name", bsl.Name, "namespace", bsl.Namespace)
+				logger.Debug("updated BackupStorageLocation", "name", bsl.Name, "namespace", bsl.Namespace)
 				return nil
 			}
 		} else {
-			logger.V(1).Info("BackupStorageLocation spec unchanged, skipping update", "name", bsl.Name, "namespace", bsl.Namespace)
+			logger.Debug("BackupStorageLocation spec unchanged, skipping update", "name", bsl.Name, "namespace", bsl.Namespace)
 		}
 	} else if err != nil {
 		return fmt.Errorf("error checking for existing BackupStorageLocation: %w", err)
@@ -426,7 +443,7 @@ func (r *BackupJobReconciler) createBackupStorageLocation(ctx context.Context, b
 
 // createVolumeSnapshotLocation creates or updates a Velero VolumeSnapshotLocation resource.
 func (r *BackupJobReconciler) createVolumeSnapshotLocation(ctx context.Context, vsl *velerov1.VolumeSnapshotLocation) error {
-	logger := log.FromContext(ctx)
+	logger := getLogger(ctx)
 	foundVSL := &velerov1.VolumeSnapshotLocation{}
 	vslKey := client.ObjectKey{Name: vsl.Name, Namespace: vsl.Namespace}
 
@@ -436,7 +453,7 @@ func (r *BackupJobReconciler) createVolumeSnapshotLocation(ctx context.Context, 
 		if err := r.Create(ctx, vsl); err != nil {
 			return fmt.Errorf("failed to create VolumeSnapshotLocation: %w", err)
 		}
-		logger.Info("created VolumeSnapshotLocation", "name", vsl.Name, "namespace", vsl.Namespace)
+		logger.Debug("created VolumeSnapshotLocation", "name", vsl.Name, "namespace", vsl.Namespace)
 	} else if err == nil {
 		// Update if necessary - only update if the spec has actually changed
 		if !reflect.DeepEqual(foundVSL.Spec, vsl.Spec) {
@@ -448,17 +465,17 @@ func (r *BackupJobReconciler) createVolumeSnapshotLocation(ctx context.Context, 
 				foundVSL.Spec = vsl.Spec
 				if err := r.Update(ctx, foundVSL); err != nil {
 					if errors.IsConflict(err) && i < 2 {
-						logger.V(1).Info("conflict updating VolumeSnapshotLocation, retrying", "attempt", i+1)
+						logger.Debug("conflict updating VolumeSnapshotLocation, retrying", "attempt", i+1)
 						time.Sleep(100 * time.Millisecond)
 						continue
 					}
 					return fmt.Errorf("failed to update VolumeSnapshotLocation: %w", err)
 				}
-				logger.Info("updated VolumeSnapshotLocation", "name", vsl.Name, "namespace", vsl.Namespace)
+				logger.Debug("updated VolumeSnapshotLocation", "name", vsl.Name, "namespace", vsl.Namespace)
 				return nil
 			}
 		} else {
-			logger.V(1).Info("VolumeSnapshotLocation spec unchanged, skipping update", "name", vsl.Name, "namespace", vsl.Namespace)
+			logger.Debug("VolumeSnapshotLocation spec unchanged, skipping update", "name", vsl.Name, "namespace", vsl.Namespace)
 		}
 	} else if err != nil {
 		return fmt.Errorf("error checking for existing VolumeSnapshotLocation: %w", err)
@@ -468,7 +485,7 @@ func (r *BackupJobReconciler) createVolumeSnapshotLocation(ctx context.Context, 
 }
 
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+	logger := getLogger(ctx)
 	now := metav1.Now()
 	backupJob.Status.CompletedAt = &now
 	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
@@ -486,32 +503,32 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	if err := r.Status().Update(ctx, backupJob); err != nil {
 		if errors.IsNotFound(err) {
 			// BackupJob was deleted, nothing to update
-			logger.V(1).Info("BackupJob was deleted, skipping status update", "message", message)
+			logger.Debug("BackupJob was deleted, skipping status update", "message", message)
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "failed to update BackupJob status to Failed")
 		return ctrl.Result{}, err
 	}
-	logger.Info("BackupJob failed", "message", message)
+	logger.Debug("BackupJob failed", "message", message)
 	return ctrl.Result{}, nil
 }
 
 func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, name string) error {
-	logger := log.FromContext(ctx)
-	logger.Info("createVeleroBackup called", "backupJob", backupJob.Name, "veleroBackupName", name)
+	logger := getLogger(ctx)
+	logger.Debug("createVeleroBackup called", "backupJob", backupJob.Name, "veleroBackupName", name)
 
 	// Resolve StorageRef to get S3 credentials if it's a Bucket
 	// Prefix with namespace to avoid conflicts in cozy-velero namespace
 	var locationName string = fmt.Sprintf("%s-%s", backupJob.Namespace, backupJob.Name)
 	if backupJob.Spec.StorageRef.Kind == "Bucket" {
-		logger.Info("resolving Bucket storageRef", "storageRef", backupJob.Spec.StorageRef.Name)
+		logger.Debug("resolving Bucket storageRef", "storageRef", backupJob.Spec.StorageRef.Name)
 		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace)
 		if err != nil {
 			logger.Error(err, "failed to resolve Bucket storageRef")
 			return fmt.Errorf("failed to resolve Bucket storageRef: %w", err)
 		}
 
-		logger.Info("discovered S3 credentials from Bucket storageRef",
+		logger.Debug("discovered S3 credentials from Bucket storageRef",
 			"bucketName", creds.BucketName,
 			"endpoint", creds.Endpoint,
 			"region", creds.Region)
@@ -622,14 +639,14 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		return err
 	}
 
-	logger.Info("created Velero Backup", "name", veleroBackup.Name, "namespace", veleroBackup.Namespace)
+	logger.Debug("created Velero Backup", "name", veleroBackup.Name, "namespace", veleroBackup.Namespace)
 	r.Recorder.Event(backupJob, corev1.EventTypeNormal, "VeleroBackupCreated",
 		fmt.Sprintf("Created Velero Backup %s/%s", veleroNamespace, name))
 	return nil
 }
 
 func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *velerov1.Backup) (*backupsv1alpha1.Backup, error) {
-	logger := log.FromContext(ctx)
+	logger := getLogger(ctx)
 	// Extract artifact information from Velero Backup
 	// Create a basic artifact referencing the Velero backup
 	artifact := &backupsv1alpha1.BackupArtifact{
@@ -689,6 +706,6 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 		return nil, err
 	}
 
-	logger.Info("created Backup resource", "name", backup.Name)
+	logger.Debug("created Backup resource", "name", backup.Name)
 	return backup, nil
 }
