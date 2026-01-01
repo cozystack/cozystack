@@ -111,23 +111,18 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	logger.Debug("BackupJob spec validation passed")
 
-	// Step 1: On first reconcile, set startedAt and phase = Running
+	// Step 1: On first reconcile, set startedAt (but not phase yet - phase will be set after backup creation)
 	logger.Debug("checking BackupJob status", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
 	if j.Status.StartedAt == nil {
-		logger.Debug("setting BackupJob status to Running")
+		logger.Debug("setting BackupJob StartedAt")
 		now := metav1.Now()
 		j.Status.StartedAt = &now
-		j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
+		// Don't set phase to Running yet - will be set after Velero backup is successfully created
 		if err := r.Status().Update(ctx, j); err != nil {
-			if errors.IsNotFound(err) {
-				// BackupJob was deleted, nothing to update
-				logger.Debug("BackupJob was deleted, skipping status update")
-				return ctrl.Result{}, nil
-			}
 			logger.Error(err, "failed to update BackupJob status")
 			return ctrl.Result{}, err
 		}
-		logger.Debug("started BackupJob", "phase", j.Status.Phase)
+		logger.Debug("set BackupJob StartedAt", "startedAt", j.Status.StartedAt)
 	} else {
 		logger.Debug("BackupJob already started", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
 	}
@@ -166,6 +161,15 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 				logger.Error(err, "failed to create Velero Backup")
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
 			}
+			// After successful Velero backup creation, set phase to Running
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
+				logger.Debug("setting BackupJob phase to Running after successful Velero backup creation")
+				j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
+				if err := r.Status().Update(ctx, j); err != nil {
+					logger.Error(err, "failed to update BackupJob phase to Running")
+					return ctrl.Result{}, err
+				}
+			}
 			logger.Debug("created Velero Backup, requeuing", "veleroBackupName", veleroBackupName)
 			// Requeue to check status
 			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
@@ -174,6 +178,17 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		return ctrl.Result{}, err
 	}
 	logger.Debug("found existing Velero Backup", "veleroBackupName", veleroBackupName, "phase", veleroBackup.Status.Phase)
+
+	// If Velero backup exists but phase is not Running, set it to Running
+	// This handles the case where the backup was created but phase wasn't set yet
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
+		logger.Debug("setting BackupJob phase to Running (Velero backup already exists)")
+		j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
+		if err := r.Status().Update(ctx, j); err != nil {
+			logger.Error(err, "failed to update BackupJob phase to Running")
+			return ctrl.Result{}, err
+		}
+	}
 
 	// Check Velero Backup status
 	phase := string(veleroBackup.Status.Phase)
@@ -196,11 +211,6 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 			j.Status.CompletedAt = &now
 			j.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
 			if err := r.Status().Update(ctx, j); err != nil {
-				if errors.IsNotFound(err) {
-					// BackupJob was deleted, nothing to update
-					logger.Debug("BackupJob was deleted, skipping status update")
-					return ctrl.Result{}, nil
-				}
 				logger.Error(err, "failed to update BackupJob status")
 				return ctrl.Result{}, err
 			}
@@ -501,11 +511,6 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	})
 
 	if err := r.Status().Update(ctx, backupJob); err != nil {
-		if errors.IsNotFound(err) {
-			// BackupJob was deleted, nothing to update
-			logger.Debug("BackupJob was deleted, skipping status update", "message", message)
-			return ctrl.Result{}, nil
-		}
 		logger.Error(err, "failed to update BackupJob status to Failed")
 		return ctrl.Result{}, err
 	}
