@@ -64,7 +64,8 @@ const (
 	defaultRequeueAfter             = 5 * time.Second
 	defaultActiveJobPollingInterval = defaultRequeueAfter
 	// Velero requires API objects and secrets to be in the cozy-velero namespace
-	veleroNamespace = "cozy-velero"
+	veleroNamespace      = "cozy-velero"
+	virtualMachinePrefix = "virtual-machine-"
 )
 
 func storageS3SecretName(namespace, backupJobName string) string {
@@ -631,7 +632,7 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 			VolumeSnapshotLocations: []string{locationName},
 			LabelSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app.kubernetes.io/instance": "virtual-machine-" + backupJob.Spec.ApplicationRef.Name,
+					"app.kubernetes.io/instance": virtualMachinePrefix + backupJob.Spec.ApplicationRef.Name,
 				},
 			},
 		},
