@@ -53,6 +53,16 @@ teardown() {
   backupjob_name="${TEST_BACKUPJOB_NAME}"
   namespace="${TEST_NAMESPACE}"
 
+  # Ensure BackupJob and Velero strategy CRDs are installed
+  kubectl apply -f packages/system/backup-controller/definitions/backups.cozystack.io_backupjobs.yaml
+  kubectl apply -f packages/system/backupstrategy-controller/definitions/strategy.backups.cozystack.io_veleroes.yaml
+  # Wait for CRDs to be ready
+  kubectl wait --for condition=established --timeout=30s crd backupjobs.backups.cozystack.io
+  kubectl wait --for condition=established --timeout=30s crd veleroes.strategy.backups.cozystack.io
+  
+  # Ensure velero-strategy-default resource exists
+  kubectl apply -f packages/system/backup-controller/templates/strategy.yaml
+
   # Step 1: Create the bucket resource
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
