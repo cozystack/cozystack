@@ -73,7 +73,12 @@ EOF
   ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' /tmp/bucket-backup-credentials.json)
   SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' /tmp/bucket-backup-credentials.json)
   BUCKET_NAME=$(jq -r '.spec.bucketName' /tmp/bucket-backup-credentials.json)
-  ENDPOINT=$(jq -r '.spec.secretS3.endpoint' /tmp/bucket-backup-credentials.json)
+  
+  # Fix the endpoint in BucketInfo secret (replace placeholder with actual cluster service endpoint)
+  # This is needed for Velero to access S3 correctly
+  jq '.spec.secretS3.endpoint = "http://seaweedfs-s3.tenant-root.svc.cluster.local:8333"' /tmp/bucket-backup-credentials.json > /tmp/bucket-backup-credentials-fixed.json
+  UPDATED_BUCKET_INFO=$(cat /tmp/bucket-backup-credentials-fixed.json | base64 | tr -d '\n')
+  kubectl -n ${namespace} patch secret bucket-${bucket_name} --type='json' -p="[{\"op\": \"replace\", \"path\": \"/data/BucketInfo\", \"value\": \"${UPDATED_BUCKET_INFO}\"}]"
 
   # Step 2: Create the Virtual Machine
   kubectl apply -f - <<EOF
@@ -187,27 +192,18 @@ EOF
   [ "$VELERO_BACKUP_PHASE" = "Completed" ]
 
   # Step 4: Verify S3 has backup data
-  # Extract endpoint host and port for port-forwarding
-  ENDPOINT_NO_PROTO=$(echo "$ENDPOINT" | sed 's|https\?://||')
-  ENDPOINT_HOST=$(echo "$ENDPOINT_NO_PROTO" | cut -d: -f1)
-  if echo "$ENDPOINT_NO_PROTO" | grep -q ':'; then
-    ENDPOINT_PORT=$(echo "$ENDPOINT_NO_PROTO" | cut -d: -f2)
-  else
-    ENDPOINT_PORT=8333
-  fi
-
-  # Start port-forwarding to S3 endpoint
-  kubectl -n tenant-root port-forward service/seaweedfs-s3 ${ENDPOINT_PORT}:${ENDPOINT_PORT} > /dev/null 2>&1 &
+  # Start port-forwarding to S3 service
+  kubectl -n tenant-root port-forward service/seaweedfs-s3 8333:8333 > /dev/null 2>&1 &
   PORT_FORWARD_PID=$!
 
   # Wait for port-forward to be ready
-  timeout 30 sh -ec "until nc -z localhost ${ENDPOINT_PORT}; do sleep 1; done"
+  timeout 30 sh -ec "until nc -z localhost 8333; do sleep 1; done"
 
   # Wait a bit for backup data to be written to S3
   sleep 10
   
   # Set up MinIO client
-  mc alias set local https://localhost:${ENDPOINT_PORT} $ACCESS_KEY $SECRET_KEY --insecure
+  mc alias set local https://localhost:8333 $ACCESS_KEY $SECRET_KEY --insecure
 
   # Verify backup directory exists in S3
   # Path structure: {BUCKET_NAME}/backups/{VELERO_BACKUP_NAME}/
