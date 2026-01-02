@@ -2854,7 +2854,7 @@ operator:
     pullPolicy: "IfNotPresent"
     suffix: ""
   # -- Number of replicas to run for the cilium-operator deployment
-  replicas: 1
+  replicas: 2
   # -- The priority class to use for cilium-operator
   priorityClassName: ""
   # -- DNS policy for Cilium operator pods.
