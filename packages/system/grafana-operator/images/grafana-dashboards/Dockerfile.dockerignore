@@ -1,0 +1,3 @@
+# Exclude everything except dashboards directory
+*
+!dashboards/**
