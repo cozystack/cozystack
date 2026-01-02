@@ -33,6 +33,7 @@ jobs:
           git config user.name  "cozystack-bot"
           git config user.email "217169706+cozystack-bot@users.noreply.github.com"
           git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config --unset-all http.https://github.com/.extraheader || true
 
       - name: Process release branches
         uses: actions/github-script@v7
@@ -47,6 +48,8 @@ jobs:
             execSync('git config user.name "cozystack-bot"', { encoding: 'utf8' });
             execSync('git config user.email "217169706+cozystack-bot@users.noreply.github.com"', { encoding: 'utf8' });
             execSync(`git remote set-url origin https://cozystack-bot:${process.env.GH_PAT}@github.com/${process.env.GITHUB_REPOSITORY}`, { encoding: 'utf8' });
+            // Remove GITHUB_TOKEN extraheader to ensure PAT is used (needed to trigger other workflows)
+            execSync('git config --unset-all http.https://github.com/.extraheader || true', { encoding: 'utf8' });
 
             // Get all release-X.Y branches
             const branches = execSync('git branch -r | grep -E "origin/release-[0-9]+\\.[0-9]+$" | sed "s|origin/||" | tr -d " "', { encoding: 'utf8' })
