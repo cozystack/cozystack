@@ -201,29 +201,22 @@ EOF
   # Wait for port-forward to be ready
   timeout 30 sh -ec "until nc -z localhost ${ENDPOINT_PORT}; do sleep 1; done"
 
-  # Set up MinIO alias
-  mc alias set backup-test https://localhost:${ENDPOINT_PORT} $ACCESS_KEY $SECRET_KEY --insecure
-
-  # Check if backup data exists in S3 bucket
-  # Velero stores backups in a structure like: backups/<backup-name>/
-  BACKUP_PREFIX="backups/${VELERO_BACKUP_NAME}"
-  
   # Wait a bit for backup data to be written to S3
   sleep 10
   
-  # List backup directory in S3
-  BACKUP_FILES=$(mc ls backup-test/${BUCKET_NAME}/${BACKUP_PREFIX}/ 2>/dev/null | wc -l || echo "0")
-  
-  # Verify backup files exist (should have at least metadata files)
-  if [ "$BACKUP_FILES" -eq "0" ]; then
-    # Try alternative paths - Velero might use different structure
-    BACKUP_FILES=$(mc ls backup-test/${BUCKET_NAME}/backups/ 2>/dev/null | grep "${VELERO_BACKUP_NAME}" | wc -l || echo "0")
-  fi
-  
-  # At minimum, verify the bucket has some Velero-related data
-  VELERO_DATA=$(mc ls backup-test/${BUCKET_NAME}/backups/ 2>/dev/null | wc -l || echo "0")
-  [ "$VELERO_DATA" -gt "0" ]
+  # Set up MinIO client
+  mc alias set local https://localhost:${ENDPOINT_PORT} $ACCESS_KEY $SECRET_KEY --insecure
 
+  # Verify backup directory exists in S3
+  # Path structure: {BUCKET_NAME}/backups/{VELERO_BACKUP_NAME}/
+  BACKUP_PATH="${BUCKET_NAME}/backups/${VELERO_BACKUP_NAME}"
+  mc ls ${BACKUP_PATH}/ 2>/dev/null
+  [ $? -eq 0 ]
+  
+  # Verify backup files exist (at least metadata files)
+  BACKUP_FILES=$(mc ls ${BACKUP_PATH}/ 2>/dev/null | wc -l || echo "0")
+  [ "$BACKUP_FILES" -gt "0" ]
+  
   # Clean up port-forward
   kill $PORT_FORWARD_PID 2>/dev/null || true
   wait $PORT_FORWARD_PID 2>/dev/null || true
