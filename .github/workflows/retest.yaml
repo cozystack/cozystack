@@ -1,0 +1,78 @@
+name: Retest
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  retest:
+    name: Retest PR
+    runs-on: ubuntu-latest
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/retest')
+    permissions:
+      actions: write
+      pull-requests: read
+
+    steps:
+      - name: Rerun from Prepare environment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.issue.number;
+
+            // Get the PR to find the head SHA
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Find the latest workflow run for this PR
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'pull-requests.yaml',
+              head_sha: pr.data.head.sha
+            });
+
+            if (runs.data.workflow_runs.length === 0) {
+              core.setFailed('No workflow runs found for this PR');
+              return;
+            }
+
+            const latestRun = runs.data.workflow_runs[0];
+            console.log(`Found workflow run: ${latestRun.id} (${latestRun.status})`);
+
+            // Check if workflow is waiting for approval (fork PRs)
+            if (latestRun.conclusion === 'action_required') {
+              core.setFailed('Workflow is waiting for approval. A maintainer must approve the workflow first.');
+              return;
+            }
+
+            // Get jobs for this run
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: latestRun.id
+            });
+
+            // Find "Prepare environment" job
+            const prepareJob = jobs.data.jobs.find(j => j.name === 'Prepare environment');
+
+            if (!prepareJob) {
+              core.setFailed('Could not find "Prepare environment" job');
+              return;
+            }
+
+            console.log(`Found job: ${prepareJob.name} (id: ${prepareJob.id}, status: ${prepareJob.status})`);
+
+            // Rerun the job
+            await github.rest.actions.reRunJobForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              job_id: prepareJob.id
+            });
+
+            console.log(`✅ Triggered rerun of job "${prepareJob.name}" (${prepareJob.id})`);
