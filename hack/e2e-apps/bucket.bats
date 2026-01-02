@@ -25,6 +25,10 @@ EOF
   SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' bucket-test-credentials.json)
   BUCKET_NAME=$(jq -r '.spec.bucketName' bucket-test-credentials.json)
 
+  # Tmp for test via s3 endpoint from bucket credentials
+  S3_ENDPOINT=$(jq -r '.spec.secretS3.endpoint' bucket-test-credentials.json)
+  echo "# S3 endopint = $S3_ENDPOINT" >&3
+
   # Start port-forwarding
   bash -c 'timeout 100s kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 > /dev/null 2>&1 &'
 
@@ -32,7 +36,7 @@ EOF
   timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
 
   # Set up MinIO alias with error handling
-  mc alias set local https://localhost:8333 $ACCESS_KEY $SECRET_KEY --insecure
+  mc alias set local $S3_ENDPOINT $ACCESS_KEY $SECRET_KEY --insecure
 
   # Upload file to bucket
   mc cp bucket-test-credentials.json $BUCKET_NAME/bucket-test-credentials.json
