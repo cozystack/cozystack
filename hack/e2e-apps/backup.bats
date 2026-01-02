@@ -1,11 +1,57 @@
 #!/usr/bin/env bats
 
+# Test variables - stored for teardown
+TEST_NAMESPACE='tenant-test'
+TEST_BUCKET_NAME='test-backup-bucket'
+TEST_VM_NAME='test-backup-vm'
+TEST_BACKUPJOB_NAME='test-backup-job'
+
+teardown() {
+  # Clean up resources (runs even if test fails)
+  namespace="${TEST_NAMESPACE}"
+  bucket_name="${TEST_BUCKET_NAME}"
+  vm_name="${TEST_VM_NAME}"
+  backupjob_name="${TEST_BACKUPJOB_NAME}"
+  
+  # Clean up port-forward if still running
+  pkill -f "kubectl.*port-forward.*seaweedfs-s3" 2>/dev/null || true
+  
+  # Clean up Velero resources in cozy-velero namespace
+  # Find Velero backup by pattern matching namespace-backupjob
+  for backup in $(kubectl -n cozy-velero get backups.velero.io -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
+    if echo "$backup" | grep -q "^${namespace}-${backupjob_name}-"; then
+      kubectl -n cozy-velero delete backups.velero.io ${backup} --wait=false 2>/dev/null || true
+    fi
+  done
+  
+  # Clean up BackupStorageLocation and VolumeSnapshotLocation (named: namespace-backupjob)
+  BSL_NAME="${namespace}-${backupjob_name}"
+  kubectl -n cozy-velero delete backupstoragelocations.velero.io ${BSL_NAME} --wait=false 2>/dev/null || true
+  kubectl -n cozy-velero delete volumesnapshotlocations.velero.io ${BSL_NAME} --wait=false 2>/dev/null || true
+  
+  # Clean up Velero credentials secret
+  SECRET_NAME="backup-${namespace}-${backupjob_name}-s3-credentials"
+  kubectl -n cozy-velero delete secret ${SECRET_NAME} --wait=false 2>/dev/null || true
+  
+  # Clean up BackupJob
+  kubectl -n ${namespace} delete backupjob ${backupjob_name} --wait=false 2>/dev/null || true
+  
+  # Clean up Virtual Machine
+  kubectl -n ${namespace} delete virtualmachines.apps.cozystack.io ${vm_name} --wait=false 2>/dev/null || true
+  
+  # Clean up Bucket
+  kubectl -n ${namespace} delete bucket.apps.cozystack.io ${bucket_name} --wait=false 2>/dev/null || true
+
+  # Clean up temporary files
+  rm -f /tmp/bucket-backup-credentials.json
+}
+
 @test "Create Backup for Virtual Machine" {
   # Test variables
-  bucket_name='test-backup-bucket'
-  vm_name='test-backup-vm'
-  backupjob_name='test-backup-job'
-  namespace='tenant-test'
+  bucket_name="${TEST_BUCKET_NAME}"
+  vm_name="${TEST_VM_NAME}"
+  backupjob_name="${TEST_BACKUPJOB_NAME}"
+  namespace="${TEST_NAMESPACE}"
 
   # Step 1: Create the bucket resource
   kubectl apply -f - <<EOF
@@ -181,33 +227,5 @@ EOF
   # Clean up port-forward
   kill $PORT_FORWARD_PID 2>/dev/null || true
   wait $PORT_FORWARD_PID 2>/dev/null || true
-
-  # Step 5: Clean up resources (in reverse order)
-  
-  # Clean up Velero resources in cozy-velero namespace
-  if [ -n "$VELERO_BACKUP_NAME" ]; then
-    kubectl -n cozy-velero delete backups.velero.io ${VELERO_BACKUP_NAME} --wait=false 2>/dev/null || true
-  fi
-  
-  # Clean up BackupStorageLocation and VolumeSnapshotLocation (named: namespace-backupjob)
-  BSL_NAME="${namespace}-${backupjob_name}"
-  kubectl -n cozy-velero delete backupstoragelocations.velero.io ${BSL_NAME} --wait=false 2>/dev/null || true
-  kubectl -n cozy-velero delete volumesnapshotlocations.velero.io ${BSL_NAME} --wait=false 2>/dev/null || true
-  
-  # Clean up Velero credentials secret
-  SECRET_NAME="backup-${namespace}-${backupjob_name}-s3-credentials"
-  kubectl -n cozy-velero delete secret ${SECRET_NAME} --wait=false 2>/dev/null || true
-  
-  # Clean up BackupJob
-  kubectl -n ${namespace} delete backupjob ${backupjob_name} --wait=false
-  
-  # Clean up Virtual Machine
-  kubectl -n ${namespace} delete virtualmachines.apps.cozystack.io ${vm_name} --wait=false
-  
-  # Clean up Bucket
-  kubectl -n ${namespace} delete bucket.apps.cozystack.io ${bucket_name} --wait=false
-
-  # Clean up temporary files
-  rm -f /tmp/bucket-backup-credentials.json
 }
 
