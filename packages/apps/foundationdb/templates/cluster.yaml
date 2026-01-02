@@ -1,5 +1,4 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" | default (dict "data" (dict)) }}
-{{- $clusterDomain := index $cozyConfig.data "cluster-domain" | default "cozy.local" }}
+{{- $clusterDomain := index .Values._cluster "cluster-domain" | default "cozy.local" }}
 ---
 apiVersion: apps.foundationdb.org/v1beta2
 kind: FoundationDBCluster

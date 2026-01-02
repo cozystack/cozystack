@@ -1,5 +1,4 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
+{{- $host := index .Values._cluster "root-host" }}
 
 apiVersion: v1
 data:

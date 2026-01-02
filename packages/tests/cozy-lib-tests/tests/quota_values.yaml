@@ -3,3 +3,6 @@ quota:
   cpu: "20"
   storage: "5Gi"
   foobar: "3"
+
+_cluster: {}
+_namespace: {}

@@ -200,22 +200,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.TenantHelmReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TenantHelmReconciler")
-		os.Exit(1)
-	}
-
-	if err = (&controller.CozystackConfigReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackConfigReconciler")
-		os.Exit(1)
-	}
-
 	cozyAPIKind := "DaemonSet"
 	if reconcileDeployment {
 		cozyAPIKind = "Deployment"

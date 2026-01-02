@@ -49,10 +49,9 @@ spec:
         {{- with .Values.resources }}
         resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 10 }}
         {{- end }}
-    {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
     {{- $rawConstraints := "" }}
-    {{- if $configMap }}
-      {{- $rawConstraints = get $configMap.data "globalAppTopologySpreadConstraints" }}
+    {{- if .Values._cluster.scheduling }}
+      {{- $rawConstraints = get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
     {{- end }}
     {{- if $rawConstraints }}
       {{- $rawConstraints | fromYaml | toYaml | nindent 6 }}

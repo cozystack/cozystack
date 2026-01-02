@@ -21,5 +21,14 @@ spec:
     force: true
     remediation:
       retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+    valuesKey: _cluster
+    targetPath: _cluster
+  - kind: Secret
+    name: cozystack-values
+    valuesKey: _namespace
+    targetPath: _namespace
   values:
     bucketName: {{ .Release.Name }}

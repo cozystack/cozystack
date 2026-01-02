@@ -83,6 +83,11 @@ spec:
   values:
     {{- toYaml . | nindent 4}}
   {{- end }}
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+    valuesKey: _cluster
+    targetPath: _cluster
 
   {{- with $x.dependsOn }}
   dependsOn:

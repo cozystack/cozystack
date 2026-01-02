@@ -1,4 +1,6 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $cozystackBranding := lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
+{{- $cozystackScheduling := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
 {{- $bundleName := index $cozyConfig.data "bundle-name" }}
 {{- $bundle := tpl (.Files.Get (printf "bundles/%s.yaml" $bundleName)) . | fromYaml }}
 {{- $host := "example.org" }}
@@ -22,12 +24,40 @@ kind: Namespace
 metadata:
   annotations:
     helm.sh/resource-policy: keep
+  labels:
+    tenant.cozystack.io/tenant-root: ""
     namespace.cozystack.io/etcd: tenant-root
     namespace.cozystack.io/monitoring: tenant-root
     namespace.cozystack.io/ingress: tenant-root
     namespace.cozystack.io/seaweedfs: tenant-root
     namespace.cozystack.io/host: "{{ $host }}"
   name: tenant-root
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cozystack-values
+  namespace: tenant-root
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
+type: Opaque
+stringData:
+  _cluster: |
+    {{- $cozyConfig.data | toYaml | nindent 4 }}
+    {{- with $cozystackBranding.data }}
+    branding:
+      {{- . | toYaml | nindent 6 }}
+    {{- end }}
+    {{- with $cozystackScheduling.data }}
+    scheduling:
+      {{- . | toYaml | nindent 6 }}
+    {{- end }}
+  _namespace: |
+    etcd: tenant-root
+    monitoring: tenant-root
+    ingress: tenant-root
+    seaweedfs: tenant-root
+    host: {{ $host | quote }}
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -56,6 +86,17 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  valuesFrom:
+    - kind: Secret
+      name: cozystack-values
+      valuesKey: _namespace
+      targetPath: _namespace
+      optional: false
+    - kind: Secret
+      name: cozystack-values
+      valuesKey: _cluster
+      targetPath: _cluster
+      optional: false
   values:
     host: "{{ $host }}"
   dependsOn:

@@ -1,4 +1,6 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $cozystackBranding := lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
+{{- $cozystackScheduling := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
 {{- $bundleName := index $cozyConfig.data "bundle-name" }}
 {{- $bundle := tpl (.Files.Get (printf "bundles/%s.yaml" $bundleName)) . | fromYaml }}
 {{- $disabledComponents := splitList "," ((index $cozyConfig.data "bundle-disable") | default "") }}
@@ -37,4 +39,24 @@ metadata:
     pod-security.kubernetes.io/enforce: privileged
     {{- end }}
   name: {{ $namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cozystack-values
+  namespace: {{ $namespace }}
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
+type: Opaque
+stringData:
+  _cluster: |
+    {{- $cozyConfig.data | toYaml | nindent 4 }}
+    {{- with $cozystackBranding.data }}
+    branding:
+      {{- . | toYaml | nindent 6 }}
+    {{- end }}
+    {{- with $cozystackScheduling.data }}
+    scheduling:
+      {{- . | toYaml | nindent 6 }}
+    {{- end }}
 {{- end }}
