@@ -46,6 +46,10 @@ teardown() {
   rm -f /tmp/bucket-backup-credentials.json
 }
 
+print_log() {
+  echo "# $1" >&3
+}
+
 @test "Create Backup for Virtual Machine" {
   # Test variables
   bucket_name="${TEST_BUCKET_NAME}"
@@ -53,7 +57,7 @@ teardown() {
   backupjob_name="${TEST_BACKUPJOB_NAME}"
   namespace="${TEST_NAMESPACE}"
 
-  # Ensure BackupJob and Velero strategy CRDs are installed
+  print_log "Step 0:Ensure BackupJob and Velero strategy CRDs are installed"
   kubectl apply -f packages/system/backup-controller/definitions/backups.cozystack.io_backupjobs.yaml
   kubectl apply -f packages/system/backupstrategy-controller/definitions/strategy.backups.cozystack.io_veleroes.yaml
   # Wait for CRDs to be ready
@@ -63,7 +67,7 @@ teardown() {
   # Ensure velero-strategy-default resource exists
   kubectl apply -f packages/system/backup-controller/templates/strategy.yaml
 
-  # Step 1: Create the bucket resource
+  print_log "Step 1: Create the bucket resource"
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Bucket
@@ -73,7 +77,7 @@ metadata:
 spec: {}
 EOF
 
-  # Wait for the bucket to be ready
+  print_log "Wait for the bucket to be ready"
   kubectl -n ${namespace} wait hr bucket-${bucket_name} --timeout=100s --for=condition=ready
   kubectl -n ${namespace} wait bucketclaims.objectstorage.k8s.io bucket-${bucket_name} --timeout=300s --for=jsonpath='{.status.bucketReady}'=true
   kubectl -n ${namespace} wait bucketaccesses.objectstorage.k8s.io bucket-${bucket_name} --timeout=300s --for=jsonpath='{.status.accessGranted}'=true
@@ -83,14 +87,8 @@ EOF
   ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' /tmp/bucket-backup-credentials.json)
   SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' /tmp/bucket-backup-credentials.json)
   BUCKET_NAME=$(jq -r '.spec.bucketName' /tmp/bucket-backup-credentials.json)
-  
-  # Fix the endpoint in BucketInfo secret (replace placeholder with actual cluster service endpoint)
-  # This is needed for Velero to access S3 correctly
-  jq '.spec.secretS3.endpoint = "http://seaweedfs-s3.tenant-root.svc.cluster.local:8333"' /tmp/bucket-backup-credentials.json > /tmp/bucket-backup-credentials-fixed.json
-  UPDATED_BUCKET_INFO=$(cat /tmp/bucket-backup-credentials-fixed.json | base64 | tr -d '\n')
-  kubectl -n ${namespace} patch secret bucket-${bucket_name} --type='json' -p="[{\"op\": \"replace\", \"path\": \"/data/BucketInfo\", \"value\": \"${UPDATED_BUCKET_INFO}\"}]"
 
-  # Step 2: Create the Virtual Machine
+  print_log "Step 2: Create the Virtual Machine"
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VirtualMachine
@@ -125,14 +123,14 @@ spec:
   cloudInitSeed: ""
 EOF
 
-  # Wait for VM to be ready
+  print_log "Wait for VM to be ready"
   sleep 5
   kubectl -n ${namespace} wait hr virtual-machine-${vm_name} --timeout=10s --for=condition=ready
   kubectl -n ${namespace} wait dv virtual-machine-${vm_name} --timeout=150s --for=condition=ready
   kubectl -n ${namespace} wait pvc virtual-machine-${vm_name} --timeout=100s --for=jsonpath='{.status.phase}'=Bound
   kubectl -n ${namespace} wait vm virtual-machine-${vm_name} --timeout=100s --for=condition=ready
 
-  # Step 3: Create BackupJob
+  print_log "Step 3: Create BackupJob"
   kubectl apply -f - <<EOF
 apiVersion: backups.cozystack.io/v1alpha1
 kind: BackupJob
@@ -156,13 +154,13 @@ spec:
     name: velero-strategy-default
 EOF
 
-  # Wait for BackupJob to start (phase should be Running after Velero backup is created)
+  print_log "Wait for BackupJob to start"
   kubectl -n ${namespace} wait backupjob ${backupjob_name} --timeout=60s --for=jsonpath='{.status.phase}'=Running
 
-  # Wait for BackupJob to complete (Succeeded phase)
+  print_log "Wait for BackupJob to complete"
   kubectl -n ${namespace} wait backupjob ${backupjob_name} --timeout=300s --for=jsonpath='{.status.phase}'=Succeeded
 
-  # Verify BackupJob status
+  print_log "Verify BackupJob status"
   PHASE=$(kubectl -n ${namespace} get backupjob ${backupjob_name} -o jsonpath='{.status.phase}')
   [ "$PHASE" = "Succeeded" ]
 
@@ -175,8 +173,8 @@ EOF
   VELERO_BACKUP_NAME=""
   VELERO_BACKUP_PHASE=""
   
-  # Wait a bit for the backup to be created and appear in the API
-  sleep 5
+  print_log "Wait a bit for the backup to be created and appear in the API"
+  sleep 30
   
   # Find backup by pattern matching namespace-backupjob
   for backup in $(kubectl -n cozy-velero get backups.velero.io -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
@@ -187,46 +185,42 @@ EOF
     fi
   done
 
-  # Verify Velero Backup was found
+  print_log "Verify Velero Backup was found"
   [ -n "$VELERO_BACKUP_NAME" ]
   
-  # Wait for Velero Backup to complete (with timeout)
-  timeout 300 sh -ec "
-    until kubectl -n cozy-velero get backups.velero.io ${VELERO_BACKUP_NAME} -o jsonpath='{.status.phase}' | grep -q 'Completed\|Failed'; do
-      sleep 5
-    done
-  "
+  echo '# Wait for Velero Backup to complete' >&3
+  until kubectl -n cozy-velero get backups.velero.io ${VELERO_BACKUP_NAME} -o jsonpath='{.status.phase}' | grep -q 'Completed\|Failed'; do
+    sleep 5
+  done
 
-  # Verify Velero Backup is Completed
-  VELERO_BACKUP_PHASE=$(kubectl -n cozy-velero get backups.velero.io ${VELERO_BACKUP_NAME} -o jsonpath='{.status.phase}')
+  print_log "Verify Velero Backup is Completed"
+  timeout 90 sh -ec "until [ \"\$(kubectl -n cozy-velero get backups.velero.io ${VELERO_BACKUP_NAME} -o jsonpath='{.status.phase}' 2>/dev/null)\" = \"Completed\" ]; do sleep 30; done"
+  
+  # Final verification
+  VELERO_BACKUP_PHASE=$(kubectl -n cozy-velero get backups.velero.io ${VELERO_BACKUP_NAME} -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
   [ "$VELERO_BACKUP_PHASE" = "Completed" ]
 
-  # Step 4: Verify S3 has backup data
-  # Start port-forwarding to S3 service
-  kubectl -n tenant-root port-forward service/seaweedfs-s3 8333:8333 > /dev/null 2>&1 &
-  PORT_FORWARD_PID=$!
+  print_log "Step 4: Verify S3 has backup data"
+  # Start port-forwarding to S3 service (with timeout to keep it alive)
+  bash -c 'timeout 100s kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 > /dev/null 2>&1 &'
 
   # Wait for port-forward to be ready
   timeout 30 sh -ec "until nc -z localhost 8333; do sleep 1; done"
 
   # Wait a bit for backup data to be written to S3
-  sleep 10
+  sleep 30
   
-  # Set up MinIO client
-  mc alias set local https://localhost:8333 $ACCESS_KEY $SECRET_KEY --insecure
+  # Set up MinIO client with insecure flag (use environment variable for all commands)
+  export MC_INSECURE=1
+  mc alias set local https://localhost:8333 $ACCESS_KEY $SECRET_KEY
 
   # Verify backup directory exists in S3
-  # Path structure: {BUCKET_NAME}/backups/{VELERO_BACKUP_NAME}/
   BACKUP_PATH="${BUCKET_NAME}/backups/${VELERO_BACKUP_NAME}"
-  mc ls ${BACKUP_PATH}/ 2>/dev/null
+  mc ls local/${BACKUP_PATH}/ 2>/dev/null
   [ $? -eq 0 ]
   
   # Verify backup files exist (at least metadata files)
-  BACKUP_FILES=$(mc ls ${BACKUP_PATH}/ 2>/dev/null | wc -l || echo "0")
+  BACKUP_FILES=$(mc ls local/${BACKUP_PATH}/ 2>/dev/null | wc -l || echo "0")
   [ "$BACKUP_FILES" -gt "0" ]
-  
-  # Clean up port-forward
-  kill $PORT_FORWARD_PID 2>/dev/null || true
-  wait $PORT_FORWARD_PID 2>/dev/null || true
 }
 
