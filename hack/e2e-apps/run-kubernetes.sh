@@ -202,20 +202,16 @@ if [ -z "$LB_ADDR" ]; then
   exit 1
 fi
 
-  kubectl run -n tenant-test lb-check-${test_name} \
-  --rm -i --restart=Never \
-  --image=curlimages/curl \
-  --timeout=60s \
-  --command -- \
-  sh -c "
-    for i in \$(seq 1 20); do
-      echo \"Attempt \$i\";
-      curl -sf http://${LB_ADDR} && exit 0;
-      sleep 3;
-    done;
-    echo 'LoadBalancer not reachable';
+  for i in $(seq 1 20); do
+    echo "Attempt $i"
+    curl --silent --fail "http://${LB_ADDR}" && break
+    sleep 3
+  done
+
+  if [ "$i" -eq 20 ]; then
+    echo "LoadBalancer not reachable" >&2
     exit 1
-  "
+  fi
 
   # Cleanup
   kubectl delete deployment --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
