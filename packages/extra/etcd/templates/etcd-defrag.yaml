@@ -12,6 +12,13 @@ spec:
           containers:
           - name: etcd-defrag
             image: ghcr.io/ahrtr/etcd-defrag:v0.13.0
+            resources:
+              requests:
+                cpu: 200m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
             args:
             - --endpoints={{ range $i, $e := until (int .Values.replicas) }}{{ if $i }},{{ end }}https://{{ $.Release.Name }}-{{ $i }}.{{ $.Release.Name }}-headless.{{ $.Release.Namespace }}.svc:2379{{ end }}
             - --cacert=/etc/etcd/pki/client/cert/ca.crt
