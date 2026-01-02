@@ -188,9 +188,11 @@ EOF
 
   # Step 4: Verify S3 has backup data
   # Extract endpoint host and port for port-forwarding
-  ENDPOINT_HOST=$(echo $ENDPOINT | sed 's|https\?://||' | cut -d: -f1)
-  ENDPOINT_PORT=$(echo $ENDPOINT | sed 's|https\?://||' | cut -d: -f2)
-  if [ -z "$ENDPOINT_PORT" ]; then
+  ENDPOINT_NO_PROTO=$(echo "$ENDPOINT" | sed 's|https\?://||')
+  ENDPOINT_HOST=$(echo "$ENDPOINT_NO_PROTO" | cut -d: -f1)
+  if echo "$ENDPOINT_NO_PROTO" | grep -q ':'; then
+    ENDPOINT_PORT=$(echo "$ENDPOINT_NO_PROTO" | cut -d: -f2)
+  else
     ENDPOINT_PORT=8333
   fi
 
