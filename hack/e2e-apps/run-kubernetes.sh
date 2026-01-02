@@ -174,7 +174,8 @@ metadata:
 spec:
   type: LoadBalancer
   selector:
-    app: "${test_name}-backend"
+    app: backend
+    backend: "${test_name}-backend"
   ports:
   - port: 80
     targetPort: 80
