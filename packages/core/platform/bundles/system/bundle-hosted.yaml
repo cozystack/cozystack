@@ -1,0 +1,303 @@
+{{- $host := .Values.publishing.host }}
+{{- if not $host }}
+{{- fail "ERROR: publishing.host is required" }}
+{{- end }}
+{{- $clusterDomain := .Values.networking.clusterDomain | default "cozy.local" }}
+{{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
+
+apiVersion: cozystack.io/v1alpha1
+kind: Bundle
+metadata:
+  name: cozystack-system
+spec:
+  deletionPolicy: Orphan
+
+  dependencyTargets:
+  - name: network
+    packages: []
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+
+  artifacts:
+    - name: tenant
+      path: apps/tenant
+      libraries: [cozy-lib]
+    - name: bootbox
+      path: extra/bootbox
+      libraries: [cozy-lib]
+    - name: etcd
+      path: extra/etcd
+      libraries: [cozy-lib]
+    - name: ingress
+      path: extra/ingress
+      libraries: [cozy-lib]
+    - name: ingress-system
+      path: system/ingress
+    - name: seaweedfs
+      path: extra/seaweedfs
+      libraries: [cozy-lib]
+    - name: seaweedfs-system
+      path: system/seaweedfs
+    - name: info
+      path: extra/info
+      libraries: [cozy-lib]
+    - name: monitoring
+      path: extra/monitoring
+      libraries: [cozy-lib]
+
+  packages:
+    - name: tenant-root
+      releaseName: tenant-root
+      artifact: tenant
+      namespace: tenant-root
+      namespaceAnnotations:
+        namespace.cozystack.io/host: {{ $host }}
+        namespace.cozystack.io/etcd: tenant-root
+        namespace.cozystack.io/ingress: tenant-root
+        namespace.cozystack.io/monitoring: tenant-root
+        namespace.cozystack.io/seaweedfs: tenant-root
+      namespaceLabels:
+        namespace.cozystack.io/etcd: tenant-root
+        namespace.cozystack.io/ingress: tenant-root
+        namespace.cozystack.io/monitoring: tenant-root
+        namespace.cozystack.io/seaweedfs: tenant-root
+      labels:
+        cozystack.io/ui: "true"
+        apps.cozystack.io/application.kind: Tenant
+        apps.cozystack.io/application.group: apps.cozystack.io
+        apps.cozystack.io/application.name: tenant-root
+      values:
+        host: {{ $host }}
+
+    - name: cert-manager-crds
+      releaseName: cert-manager-crds
+      path: system/cert-manager-crds
+      namespace: cozy-cert-manager
+      dependsOn: []
+    
+    - name: cozystack-api
+      releaseName: cozystack-api
+      path: system/cozystack-api
+      namespace: cozy-system
+      dependsOn: [cozystack-controller]
+      values:
+        cozystackAPI:
+          localK8sAPIEndpoint:
+            enabled: false
+    
+    - name: cozystack-controller
+      releaseName: cozystack-controller
+      path: system/cozystack-controller
+      namespace: cozy-system
+      dependsOn: []
+    
+    - name: lineage-controller-webhook
+      releaseName: lineage-controller-webhook
+      path: system/lineage-controller-webhook
+      namespace: cozy-system
+      dependsOn: [cozystack-controller,cert-manager]
+    
+    - name: cert-manager
+      releaseName: cert-manager
+      path: system/cert-manager
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager-crds]
+    
+    - name: cert-manager-issuers
+      releaseName: cert-manager-issuers
+      path: system/cert-manager-issuers
+      namespace: cozy-cert-manager
+      dependsOn: [cert-manager]
+    
+    - name: victoria-metrics-operator
+      releaseName: victoria-metrics-operator
+      path: system/victoria-metrics-operator
+      namespace: cozy-victoria-metrics-operator
+      dependsOn: [cert-manager]
+    
+    - name: monitoring-agents
+      releaseName: monitoring-agents
+      path: system/monitoring-agents
+      namespace: cozy-monitoring
+      privileged: true
+      dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds]
+      values:
+        scrapeRules:
+          etcd:
+            enabled: true
+    
+    - name: etcd-operator
+      releaseName: etcd-operator
+      path: system/etcd-operator
+      namespace: cozy-etcd-operator
+      dependsOn: [cert-manager]
+    
+    - name: grafana-operator
+      releaseName: grafana-operator
+      path: system/grafana-operator
+      namespace: cozy-grafana-operator
+      dependsOn: []
+    
+    - name: mariadb-operator
+      releaseName: mariadb-operator
+      path: system/mariadb-operator
+      namespace: cozy-mariadb-operator
+      dependsOn: [cert-manager,victoria-metrics-operator]
+      values:
+        mariadb-operator:
+          clusterName: {{ .Values.networking.clusterDomain | default "cozy.local" }}
+    
+    - name: postgres-operator
+      releaseName: postgres-operator
+      path: system/postgres-operator
+      namespace: cozy-postgres-operator
+      dependsOn: [cert-manager,victoria-metrics-operator]
+    
+    - name: objectstorage-controller
+      releaseName: objectstorage-controller
+      path: system/objectstorage-controller
+      namespace: cozy-objectstorage-controller
+      dependsOn: []
+    
+    - name: telepresence
+      releaseName: traffic-manager
+      path: system/telepresence
+      namespace: cozy-telepresence
+      disabled: true
+      dependsOn: []
+    
+    - name: external-dns
+      releaseName: external-dns
+      path: system/external-dns
+      namespace: cozy-external-dns
+      disabled: true
+      dependsOn: []
+    
+    - name: external-secrets-operator
+      releaseName: external-secrets-operator
+      path: system/external-secrets-operator
+      namespace: cozy-external-secrets-operator
+      disabled: true
+      dependsOn: []
+    
+    - name: dashboard
+      releaseName: dashboard
+      path: system/dashboard
+      namespace: cozy-dashboard
+      dependsOn:
+      - cilium
+      - kubeovn
+      - cozystack-api
+      - cozystack-controller
+      {{- if $oidcEnabled }}
+      - keycloak-configure
+      {{- end }}
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+            ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+            exposedServices: {{ .Values.publishing.exposedServices | toJson }}
+            certificates:
+              issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+          authentication:
+            oidc:
+              enabled: {{ $oidcEnabled }}
+              dashboard:
+                extraRedirectUris: {{ .Values.authentication.oidc.dashboard.extraRedirectUris | toJson }}
+          {{- if hasKey .Values.branding "dashboard" }}
+          branding:
+            dashboard:
+              {{- toYaml .Values.branding.dashboard | nindent 14 }}
+          {{- end }}
+    
+    {{- if $oidcEnabled }}
+    - name: keycloak
+      releaseName: keycloak
+      path: system/keycloak
+      namespace: cozy-keycloak
+      dependsOn: [postgres-operator]
+      libraries: [cozy-lib]
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+            ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+            certificates:
+              issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+          networking:
+            clusterDomain: {{ $clusterDomain }}
+          scheduling:
+            topologySpreadConstraints: {{ .Values.scheduling.topologySpreadConstraints | default list | toJson }}
+    
+    - name: keycloak-operator
+      releaseName: keycloak-operator
+      path: system/keycloak-operator
+      namespace: cozy-keycloak
+      dependsOn: [keycloak]
+    
+    - name: keycloak-configure
+      releaseName: keycloak-configure
+      path: system/keycloak-configure
+      namespace: cozy-keycloak
+      dependsOn: [keycloak-operator]
+      values:
+        cozystack:
+          publishing:
+            host: {{ $host }}
+          authentication:
+            oidc:
+              dashboard:
+                extraRedirectUris: {{ .Values.authentication.oidc.dashboard.extraRedirectUris | toJson }}
+          {{- if hasKey .Values.branding "keycloak" }}
+          branding:
+            {{- toYaml .Values.branding.keycloak | nindent 12 }}
+          {{- end }}
+    {{- end }}
+    
+    - name: goldpinger
+      releaseName: goldpinger
+      path: system/goldpinger
+      namespace: cozy-goldpinger
+      privileged: true
+      dependsOn: [monitoring-agents]
+    
+    - name: vertical-pod-autoscaler
+      releaseName: vertical-pod-autoscaler
+      path: system/vertical-pod-autoscaler
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: [monitoring-agents]
+      values:
+        vertical-pod-autoscaler:
+          recommender:
+            extraArgs:
+              prometheus-address: http://vmselect-shortterm.tenant-root.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
+    
+    - name: vertical-pod-autoscaler-crds
+      releaseName: vertical-pod-autoscaler-crds
+      path: system/vertical-pod-autoscaler-crds
+      namespace: cozy-vertical-pod-autoscaler
+      privileged: true
+      dependsOn: []
+    
+    - name: velero
+      releaseName: velero
+      path: system/velero
+      namespace: cozy-velero
+      privileged: true
+      disabled: true
+      dependsOn: [monitoring-agents]
+    
+    - name: hetzner-robotlb
+      releaseName: robotlb
+      disabled: true
+      path: system/hetzner-robotlb
+      namespace: cozy-hetzner-robotlb
