@@ -13,12 +13,10 @@ spec:
     prefix: rabbitmq-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: rabbitmq
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: rabbitmq-rd
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: RabbitMQ

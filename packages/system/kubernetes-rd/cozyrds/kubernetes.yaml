@@ -13,12 +13,10 @@ spec:
     prefix: kubernetes-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: kubernetes
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: kubernetes-rd
+      namespace: cozy-system
   dashboard:
     category: IaaS
     singular: Kubernetes
