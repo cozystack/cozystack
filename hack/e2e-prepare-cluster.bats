@@ -136,25 +136,28 @@ machine:
     mirrors:
       docker.io:
         endpoints:
-        - https://dockerio.nexus.aenix.org
-      cr.fluentbit.io:
-        endpoints:
-        - https://fluentbit.nexus.aenix.org
-      docker-registry3.mariadb.com:
-        endpoints:
-        - https://mariadb.nexus.aenix.org
-      gcr.io:
-        endpoints:
-        - https://gcr.nexus.aenix.org
-      ghcr.io:
-        endpoints:
-        - https://ghcr.nexus.aenix.org
-      quay.io:
-        endpoints:
-        - https://quay.nexus.aenix.org
-      registry.k8s.io:
-        endpoints:
-        - https://k8s.nexus.aenix.org
+        - https://mirror.gcr.io
+      #docker.io:
+      #  endpoints:
+      #  - https://dockerio.nexus.aenix.org
+      #cr.fluentbit.io:
+      #  endpoints:
+      #  - https://fluentbit.nexus.aenix.org
+      #docker-registry3.mariadb.com:
+      #  endpoints:
+      #  - https://mariadb.nexus.aenix.org
+      #gcr.io:
+      #  endpoints:
+      #  - https://gcr.nexus.aenix.org
+      #ghcr.io:
+      #  endpoints:
+      #  - https://ghcr.nexus.aenix.org
+      #quay.io:
+      #  endpoints:
+      #  - https://quay.nexus.aenix.org
+      #registry.k8s.io:
+      #  endpoints:
+      #  - https://k8s.nexus.aenix.org
   files:
   - content: |
       [plugins]
@@ -236,7 +239,10 @@ EOF
   timeout 10 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 1; done'
 
   # Wait until etcd is healthy
-  timeout 180 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'
+  if ! timeout 180 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
+    talosctl dmesg -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 || true
+    exit 1
+  fi
   timeout 60 sh -ec 'while talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 2>&1 | grep -q "rpc error"; do sleep 1; done'
 
   # Retrieve kubeconfig
