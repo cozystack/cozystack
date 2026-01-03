@@ -13,12 +13,10 @@ spec:
     prefix: kafka-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: kafka
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: kafka-rd
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: Kafka

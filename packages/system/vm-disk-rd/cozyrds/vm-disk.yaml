@@ -13,12 +13,10 @@ spec:
     prefix: vm-disk-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: vm-disk
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: vm-disk-rd
+      namespace: cozy-system
   dashboard:
     category: IaaS
     singular: VM Disk

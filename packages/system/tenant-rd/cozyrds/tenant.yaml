@@ -13,12 +13,10 @@ spec:
     prefix: tenant-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: tenant
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: tenant-rd
+      namespace: cozy-system
   dashboard:
     category: Administration
     singular: Tenant

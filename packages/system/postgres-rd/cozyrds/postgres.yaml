@@ -13,12 +13,10 @@ spec:
     prefix: postgres-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: postgres
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: postgres-rd
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: PostgreSQL

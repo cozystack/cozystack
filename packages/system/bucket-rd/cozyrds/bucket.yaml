@@ -13,12 +13,10 @@ spec:
     prefix: bucket-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: bucket
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: bucket-rd
+      namespace: cozy-system
   dashboard:
     singular: Bucket
     plural: Buckets
