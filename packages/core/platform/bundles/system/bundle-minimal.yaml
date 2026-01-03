@@ -1,0 +1,82 @@
+{{- $host := .Values.publishing.host }}
+{{- if not $host }}
+{{- fail "ERROR: publishing.host is required" }}
+{{- end }}
+{{- $oidcEnabled := .Values.authentication.oidc.enabled | default false }}
+
+apiVersion: cozystack.io/v1alpha1
+kind: Bundle
+metadata:
+  name: cozystack-minimal
+spec:
+  deletionPolicy: Orphan
+
+  dependencyTargets:
+  - name: network
+    packages: []
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+
+  artifacts:
+    - name: tenant
+      path: apps/tenant
+      libraries: [cozy-lib]
+
+  packages:
+  - name: cozystack-api
+    releaseName: cozystack-api
+    path: system/cozystack-api
+    namespace: cozy-system
+    dependsOn: [cozystack-controller]
+    values:
+      cozystackAPI:
+        localK8sAPIEndpoint:
+          enabled: false
+  
+  - name: cozystack-controller
+    releaseName: cozystack-controller
+    path: system/cozystack-controller
+    namespace: cozy-system
+    dependsOn: []
+  
+  - name: lineage-controller-webhook
+    releaseName: lineage-controller-webhook
+    path: system/lineage-controller-webhook
+    namespace: cozy-system
+    dependsOn: [cozystack-controller]
+  
+  - name: dashboard
+    releaseName: dashboard
+    path: system/dashboard
+    namespace: cozy-dashboard
+    dependsOn:
+    - cozystack-api
+    - cozystack-controller
+    values:
+      cozystack:
+        publishing:
+          host: {{ $host }}
+          ingressClassName: {{ .Values.publishing.ingressName | default "tenant-root" }}
+          exposedServices: {{ .Values.publishing.exposedServices | toJson }}
+          certificates:
+            issuerType: {{ .Values.publishing.certificates.issuerType | default "http01" }}
+        authentication:
+          oidc:
+            enabled: {{ $oidcEnabled }}
+            dashboard:
+              extraRedirectUris: {{ .Values.authentication.oidc.dashboard.extraRedirectUris | toJson }}
+        branding:
+          dashboard:
+            tenantText: {{ .Values.branding.dashboard.tenantText | default "v0.38.0-alpha.1" | quote }}
+            footerText: {{ .Values.branding.dashboard.footerText | default "Cozystack" | quote }}
+            titleText: {{ .Values.branding.dashboard.titleText | default "Cozystack Dashboard" | quote }}
+            logoText: {{ .Values.branding.dashboard.logoText | default "" | quote }}
+            logoSvg: {{ .Values.branding.dashboard.logoSvg | default "" | quote }}
+            iconSvg: {{ .Values.branding.dashboard.iconSvg | default "" | quote }}

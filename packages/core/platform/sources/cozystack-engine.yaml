@@ -58,6 +58,7 @@ spec:
     dependsOn:
     - cozystack.networking
     - cozystack.keycloak
+    - cozystack.keycloak-operator
     libraries:
     - name: cozy-lib
       path: library/cozy-lib

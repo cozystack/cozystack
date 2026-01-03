@@ -1,0 +1,39 @@
+apiVersion: cozystack.io/v1alpha1
+kind: ApplicationDefinition
+metadata:
+  name: info
+spec:
+  application:
+    kind: Info
+    plural: infos
+    singular: info
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{}}
+  release:
+    prefix: ""
+    labels:
+      cozystack.io/ui: "true"
+      internal.cozystack.io/tenantmodule: "true"
+    chartRef:
+      sourceRef:
+        kind: ExternalArtifact
+        name: cozystack-system-info
+        namespace: cozy-system
+    values:
+      _cozystack:
+        {{- include "cozystack.build-values" . | nindent 8 }}
+  dashboard:
+    name: info
+    category: Administration
+    singular: Info
+    plural: Info
+    description: Info
+    module: true
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX3JhZGlhbF8xNDRfMykiLz4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzE0NF8zKSI+CjxwYXRoIGQ9Ik03Ny42NDA3IDk3LjA4NDRMODIuODMzIDk3LjM2MDRWMTA0LjYzN0g2MS4xNzI4Vjk3LjcxOTdMNjQuMTc3MSA5Ny40NDk1QzY1LjgxMDEgOTcuMjY4NCA2Ni44MTA2IDk2LjcxOTMgNjYuODEwNiA5NC41MzQzVjY5LjIzMTRDNjYuODEwNiA2Ny4yMjE3IDY2LjI3MDEgNjYuNTg2NCA2NC41MzY1IDY2LjU4NjRMNjEuMzU2OCA2Ni40MDgxVjU4Ljg1ODRINzcuNjQ2NUw3Ny42NDA3IDk3LjA4NDRaTTcxLjI3MjYgMzkuMzYzQzc1LjI4MDQgMzkuMzYzIDc4LjE4NyA0Mi4zNzMxIDc4LjE4NyA0Ni4xODgzQzc4LjE4NyA1MC4wMTQ5IDc1LjI3MTggNTIuODM4MSA3MS4xNzc4IDUyLjgzODFDNjYuOTk3NSA1Mi44MzgxIDY0LjI2NjMgNTAuMDE0OSA2NC4yNjYzIDQ2LjE4ODNDNjQuMjY2MyA0Mi4zNzMxIDY2Ljk5NzUgMzkuMzYzIDcxLjI3MjYgMzkuMzYzWk03MiAxMThDNDYuNjM2OCAxMTggMjYgOTcuMzYzMiAyNiA3MkMyNiA0Ni42MzY4IDQ2LjYzNjggMjYgNzIgMjZDOTcuMzU3NSAyNiAxMTggNDYuNjM2OCAxMTggNzJDMTE4IDk3LjM2MzIgOTcuMzU3NSAxMTggNzIgMTE4Wk03MiAzNC42MjVDNTEuMzkyIDM0LjYyNSAzNC42MjUgNTEuMzkyIDM0LjYyNSA3MkMzNC42MjUgOTIuNjA4IDUxLjM5MiAxMDkuMzc1IDcyIDEwOS4zNzVDOTIuNjA4IDEwOS4zNzUgMTA5LjM3NSA5Mi42MDggMTA5LjM3NSA3MkMxMDkuMzc1IDUxLjM5MiA5Mi42MDggMzQuNjI1IDcyIDM0LjYyNVoiIGZpbGw9IndoaXRlIi8+CjwvZz4KPGRlZnM+CjxyYWRpYWxHcmFkaWVudCBpZD0icGFpbnQwX3JhZGlhbF8xNDRfMyIgY3g9IjAiIGN5PSIwIiByPSIxIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSIgZ3JhZGllbnRUcmFuc2Zvcm09InRyYW5zbGF0ZSgxLjMyMjk4ZS0wNSAtNy41MDAwMSkgcm90YXRlKDQ0LjcxNzgpIHNjYWxlKDIxNS4zMTcgMzEyLjQ1NSkiPgo8c3RvcCBzdG9wLWNvbG9yPSIjMDBCNUU3Ii8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzAwMzk4NCIvPgo8L3JhZGlhbEdyYWRpZW50Pgo8Y2xpcFBhdGggaWQ9ImNsaXAwXzE0NF8zIj4KPHJlY3Qgd2lkdGg9IjkyIiBoZWlnaHQ9IjkyIiBmaWxsPSJ3aGl0ZSIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjYgMjYpIi8+CjwvY2xpcFBhdGg+CjwvZGVmcz4KPC9zdmc+Cg==
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"]]
+  secrets:
+    exclude: []
+    include:
+      - resourceNames:
+          - "{{`kubeconfig-{{ .namespace }}`}}"
+          - "{{`{{ .namespace }}`}}"

@@ -1,0 +1,30 @@
+apiVersion: cozystack.io/v1alpha1
+kind: Bundle
+metadata:
+  name: cozystack-naas
+spec:
+  dependsOn: [cozystack-system/network]
+
+  sourceRef:
+    kind: {{ .Values.sourceRef.kind }}
+    name: {{ .Values.sourceRef.name }}
+    namespace: {{ .Values.sourceRef.namespace }}
+
+  libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+
+  artifacts:
+    - name: http-cache
+      path: apps/http-cache
+      libraries: [cozy-lib]
+
+    - name: tcp-balancer
+      path: apps/tcp-balancer
+      libraries: [cozy-lib]
+
+    - name: vpn
+      path: apps/vpn
+      libraries: [cozy-lib]
+
+  packages: []

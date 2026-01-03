@@ -1,0 +1,23 @@
+{{- if and .Values.bundles.iaas.enabled (ne .Values.bundles.system.variant "isp-full") }}
+{{- fail "bundles.iaas.enabled can only be true when bundles.system.variant is 'isp-full'" }}
+{{- end }}
+{{- if and .Values.bundles.iaas.enabled (eq .Values.bundles.system.variant "isp-full") }}
+{{- include "cozystack.platform.package.default" "cozystack.kubevirt-operator" }}
+{{- include "cozystack.platform.package.default" "cozystack.kubevirt" }}
+{{- include "cozystack.platform.package.default" "cozystack.kubevirt-instancetypes" }}
+{{- include "cozystack.platform.package.default" "cozystack.kubevirt-cdi-operator" }}
+{{- include "cozystack.platform.package.default" "cozystack.kubevirt-cdi" }}
+{{- include "cozystack.platform.package.optional.default" "cozystack.gpu-operator" }}
+{{- include "cozystack.platform.package.default" "cozystack.kamaji" }}
+{{- include "cozystack.platform.package.default" "cozystack.capi-operator" }}
+{{- include "cozystack.platform.package.default" "cozystack.capi-providers-bootstrap" }}
+{{- include "cozystack.platform.package.default" "cozystack.capi-providers-core" }}
+{{- include "cozystack.platform.package.default" "cozystack.capi-providers-cpprovider" }}
+{{- include "cozystack.platform.package.default" "cozystack.capi-providers-infraprovider" }}
+{{- include "cozystack.platform.package.default" "cozystack.bucket-application" }}
+{{- include "cozystack.platform.package.default" "cozystack.kubernetes-application" }}
+{{- include "cozystack.platform.package.default" "cozystack.virtual-machine-application" }}
+{{- include "cozystack.platform.package.default" "cozystack.virtualprivatecloud-application" }}
+{{- include "cozystack.platform.package.default" "cozystack.vm-disk-application" }}
+{{- include "cozystack.platform.package.default" "cozystack.vm-instance-application" }}
+{{- end }}
