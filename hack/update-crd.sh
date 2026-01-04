@@ -8,7 +8,6 @@ need yq; need jq; need base64
 CHART_YAML="${CHART_YAML:-Chart.yaml}"
 VALUES_YAML="${VALUES_YAML:-values.yaml}"
 SCHEMA_JSON="${SCHEMA_JSON:-values.schema.json}"
-CRD_DIR="../../system/cozystack-resource-definitions/cozyrds"
 
 [[ -f "$CHART_YAML" ]] || { echo "No $CHART_YAML found"; exit 1; }
 [[ -f "$SCHEMA_JSON" ]] || { echo "No $SCHEMA_JSON found"; exit 1; }
@@ -21,6 +20,8 @@ ICON_PATH_RAW="$(yq -r '.icon // ""' "$CHART_YAML")"
 if [[ -z "$NAME" ]]; then
   echo "Chart.yaml: .name is empty"; exit 1
 fi
+
+CRD_DIR="../../system/${NAME}-rd/cozyrds"
 
 # Resolve icon path
 # Accepts:
