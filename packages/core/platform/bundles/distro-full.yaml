@@ -62,11 +62,155 @@ releases:
   namespace: cozy-system
   dependsOn: [cilium]
 
-- name: cozystack-resource-definitions
-  releaseName: cozystack-resource-definitions
-  chart: cozystack-resource-definitions
+- name: bootbox-rd
+  releaseName: bootbox-rd
+  chart: bootbox-rd
   namespace: cozy-system
-  dependsOn: [cilium,cozystack-controller,cozystack-resource-definition-crd]
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: bucket-rd
+  releaseName: bucket-rd
+  chart: bucket-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: clickhouse-rd
+  releaseName: clickhouse-rd
+  chart: clickhouse-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: etcd-rd
+  releaseName: etcd-rd
+  chart: etcd-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: ferretdb-rd
+  releaseName: ferretdb-rd
+  chart: ferretdb-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: foundationdb-rd
+  releaseName: foundationdb-rd
+  chart: foundationdb-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: http-cache-rd
+  releaseName: http-cache-rd
+  chart: http-cache-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: info-rd
+  releaseName: info-rd
+  chart: info-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: ingress-rd
+  releaseName: ingress-rd
+  chart: ingress-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: kafka-rd
+  releaseName: kafka-rd
+  chart: kafka-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: kubernetes-rd
+  releaseName: kubernetes-rd
+  chart: kubernetes-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: monitoring-rd
+  releaseName: monitoring-rd
+  chart: monitoring-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: mysql-rd
+  releaseName: mysql-rd
+  chart: mysql-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: nats-rd
+  releaseName: nats-rd
+  chart: nats-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: postgres-rd
+  releaseName: postgres-rd
+  chart: postgres-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: rabbitmq-rd
+  releaseName: rabbitmq-rd
+  chart: rabbitmq-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: redis-rd
+  releaseName: redis-rd
+  chart: redis-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: seaweedfs-rd
+  releaseName: seaweedfs-rd
+  chart: seaweedfs-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: tcp-balancer-rd
+  releaseName: tcp-balancer-rd
+  chart: tcp-balancer-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: tenant-rd
+  releaseName: tenant-rd
+  chart: tenant-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: virtual-machine-rd
+  releaseName: virtual-machine-rd
+  chart: virtual-machine-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: virtualprivatecloud-rd
+  releaseName: virtualprivatecloud-rd
+  chart: virtualprivatecloud-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: vm-disk-rd
+  releaseName: vm-disk-rd
+  chart: vm-disk-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: vm-instance-rd
+  releaseName: vm-instance-rd
+  chart: vm-instance-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
+- name: vpn-rd
+  releaseName: vpn-rd
+  chart: vpn-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
 
 - name: cert-manager
   releaseName: cert-manager

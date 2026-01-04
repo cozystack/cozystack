@@ -1,4 +1,4 @@
-export NAME=cozystack-resource-definitions
+export NAME=postgres-rd
 export NAMESPACE=cozy-system
 
 include ../../../scripts/package.mk
