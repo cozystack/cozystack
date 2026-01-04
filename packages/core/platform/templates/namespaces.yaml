@@ -2,6 +2,19 @@
 {{- $cozystackBranding := lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
 {{- $cozystackScheduling := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
 {{- $bundleName := index $cozyConfig.data "bundle-name" }}
+{{/* Default values for _cluster config to ensure all required keys exist */}}
+{{- $clusterDefaults := dict
+    "root-host" ""
+    "bundle-name" ""
+    "clusterissuer" "http01"
+    "oidc-enabled" "false"
+    "expose-services" ""
+    "expose-ingress" "tenant-root"
+    "expose-external-ips" ""
+    "cluster-domain" "cozy.local"
+    "api-server-endpoint" ""
+}}
+{{- $clusterConfig := mergeOverwrite $clusterDefaults ($cozyConfig.data | default dict) }}
 {{- $bundle := tpl (.Files.Get (printf "bundles/%s.yaml" $bundleName)) . | fromYaml }}
 {{- $disabledComponents := splitList "," ((index $cozyConfig.data "bundle-disable") | default "") }}
 {{- $enabledComponents := splitList "," ((index $cozyConfig.data "bundle-enable") | default "") }}
@@ -50,7 +63,7 @@ metadata:
 type: Opaque
 stringData:
   _cluster: |
-    {{- $cozyConfig.data | toYaml | nindent 4 }}
+    {{- $clusterConfig | toYaml | nindent 4 }}
     {{- with $cozystackBranding.data }}
     branding:
       {{- . | toYaml | nindent 6 }}
