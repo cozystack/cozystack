@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -18,6 +19,7 @@ import (
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	"github.com/cozystack/cozystack/internal/template"
 
 	"github.com/go-logr/logr"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
@@ -87,31 +89,6 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		return ctrl.Result{}, nil
 	}
 
-	// For now implemented backup logic for apps.cozystack.io VirtualMachine only
-	logger.Debug("validating BackupJob spec",
-		"applicationRef", fmt.Sprintf("%s/%s", j.Spec.ApplicationRef.APIGroup, j.Spec.ApplicationRef.Kind),
-		"storageRef", fmt.Sprintf("%s/%s", j.Spec.StorageRef.APIGroup, j.Spec.StorageRef.Kind))
-
-	if j.Spec.ApplicationRef.Kind != "VirtualMachine" {
-		logger.Error(nil, "Unsupported application type", "kind", j.Spec.ApplicationRef.Kind)
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application type: %s", j.Spec.ApplicationRef.Kind))
-	}
-	if j.Spec.ApplicationRef.APIGroup == nil || *j.Spec.ApplicationRef.APIGroup != "apps.cozystack.io" {
-		logger.Error(nil, "Unsupported application APIGroup", "apiGroup", j.Spec.ApplicationRef.APIGroup, "expected", "apps.cozystack.io")
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported application APIGroup: %v, expected apps.cozystack.io", j.Spec.ApplicationRef.APIGroup))
-	}
-
-	if j.Spec.StorageRef.Kind != "Bucket" {
-		logger.Error(nil, "Unsupported storage type", "kind", j.Spec.StorageRef.Kind)
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage type: %s", j.Spec.StorageRef.Kind))
-	}
-	if j.Spec.StorageRef.APIGroup == nil || *j.Spec.StorageRef.APIGroup != "apps.cozystack.io" {
-		logger.Error(nil, "Unsupported storage APIGroup", "apiGroup", j.Spec.StorageRef.APIGroup, "expected", "apps.cozystack.io")
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Unsupported storage APIGroup: %v, expected apps.cozystack.io", j.Spec.StorageRef.APIGroup))
-	}
-
-	logger.Debug("BackupJob spec validation passed")
-
 	// Step 1: On first reconcile, set startedAt (but not phase yet - phase will be set after backup creation)
 	logger.Debug("checking BackupJob status", "startedAt", j.Status.StartedAt, "phase", j.Status.Phase)
 	if j.Status.StartedAt == nil {
@@ -148,36 +125,44 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 		logger.Error(nil, "StartedAt is nil after status update, this should not happen")
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
 	}
-	timestamp := j.Status.StartedAt.Time.Format("2006-01-02-15-04-05")
-	veleroBackupName := fmt.Sprintf("%s-%s-%s", j.Namespace, j.Name, timestamp)
+	veleroBackupName := fmt.Sprintf("%s.%s", j.Namespace, j.Name)
 	logger.Debug("checking for existing Velero Backup", "veleroBackupName", veleroBackupName, "namespace", veleroNamespace)
 	veleroBackup := &velerov1.Backup{}
-	veleroBackupKey := client.ObjectKey{Namespace: veleroNamespace, Name: veleroBackupName}
+	veleroBackupList := &velerov1.BackupList{}
+	opts := []client.ListOption{
+		client.InNamespace(veleroNamespace),
+		client.MatchingLabels{
+			backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
+			backupsv1alpha1.OwningJobNameLabel:      j.Name,
+		},
+	}
 
-	if err := r.Get(ctx, veleroBackupKey, veleroBackup); err != nil {
-		if errors.IsNotFound(err) {
-			// Create Velero Backup
-			logger.Debug("Velero Backup not found, creating new one", "veleroBackupName", veleroBackupName)
-			if err := r.createVeleroBackup(ctx, j, veleroBackupName); err != nil {
-				logger.Error(err, "failed to create Velero Backup")
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
-			}
-			// After successful Velero backup creation, set phase to Running
-			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
-				logger.Debug("setting BackupJob phase to Running after successful Velero backup creation")
-				j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
-				if err := r.Status().Update(ctx, j); err != nil {
-					logger.Error(err, "failed to update BackupJob phase to Running")
-					return ctrl.Result{}, err
-				}
-			}
-			logger.Debug("created Velero Backup, requeuing", "veleroBackupName", veleroBackupName)
-			// Requeue to check status
-			return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
-		}
+	if err := r.List(ctx, veleroBackupList, opts...); err != nil {
 		logger.Error(err, "failed to get Velero Backup")
 		return ctrl.Result{}, err
 	}
+
+	if len(veleroBackupList.Items) == 0 {
+		// Create Velero Backup
+		logger.Debug("Velero Backup not found, creating new one")
+		if err := r.createVeleroBackup(ctx, j, veleroStrategy); err != nil {
+			logger.Error(err, "failed to create Velero Backup")
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
+		}
+		// After successful Velero backup creation, set phase to Running
+		if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
+			logger.Debug("setting BackupJob phase to Running after successful Velero backup creation")
+			j.Status.Phase = backupsv1alpha1.BackupJobPhaseRunning
+			if err := r.Status().Update(ctx, j); err != nil {
+				logger.Error(err, "failed to update BackupJob phase to Running")
+				return ctrl.Result{}, err
+			}
+		}
+		logger.Debug("created Velero Backup, requeuing", "veleroBackupName", veleroBackupName)
+		// Requeue to check status
+		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
+	}
+
 	logger.Debug("found existing Velero Backup", "veleroBackupName", veleroBackupName, "phase", veleroBackup.Status.Phase)
 
 	// If Velero backup exists but phase is not Running, set it to Running
@@ -519,126 +504,40 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	return ctrl.Result{}, nil
 }
 
-func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, name string) error {
+func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, strategy *strategyv1alpha1.Velero) error {
 	logger := getLogger(ctx)
-	logger.Debug("createVeleroBackup called", "backupJob", backupJob.Name, "veleroBackupName", name)
+	logger.Debug("createVeleroBackup called", "strategy", strategy.Name)
 
-	// Resolve StorageRef to get S3 credentials if it's a Bucket
-	// Prefix with namespace to avoid conflicts in cozy-velero namespace
-	var locationName string = fmt.Sprintf("%s-%s", backupJob.Namespace, backupJob.Name)
-	if backupJob.Spec.StorageRef.Kind == "Bucket" {
-		logger.Debug("resolving Bucket storageRef", "storageRef", backupJob.Spec.StorageRef.Name)
-		creds, err := r.resolveBucketStorageRef(ctx, backupJob.Spec.StorageRef, backupJob.Namespace)
-		if err != nil {
-			logger.Error(err, "failed to resolve Bucket storageRef")
-			return fmt.Errorf("failed to resolve Bucket storageRef: %w", err)
-		}
-
-		logger.Debug("discovered S3 credentials from Bucket storageRef",
-			"bucketName", creds.BucketName,
-			"endpoint", creds.Endpoint,
-			"region", creds.Region)
-
-		if err := r.createS3CredsForVelero(ctx, backupJob, creds); err != nil {
-			return fmt.Errorf("failed to create or update Velero credentials secret: %w", err)
-		}
-		// Dynamically create a Velero BackupStorageLocation and VolumeSnapshotLocation using discovered credentials.
-
-		// BackupStorageLocation manifest
-		// Note: Cannot set owner reference for cross-namespace resources
-		bsl := &velerov1.BackupStorageLocation{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      locationName,
-				Namespace: veleroNamespace,
-			},
-			Spec: velerov1.BackupStorageLocationSpec{
-				Provider: "aws",
-				StorageType: velerov1.StorageType{
-					ObjectStorage: &velerov1.ObjectStorageLocation{
-						Bucket: creds.BucketName,
-					},
-				},
-				Config: map[string]string{
-					"checksumAlgorithm": "",
-					"profile":           "default",
-					"s3ForcePathStyle":  "true",
-					"s3Url":             creds.Endpoint,
-				},
-				Credential: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: storageS3SecretName(backupJob.Namespace, backupJob.Name),
-					},
-					Key: "cloud",
-				},
-			},
-		}
-
-		// Create or update the BackupStorageLocation
-		if err := r.createBackupStorageLocation(ctx, bsl); err != nil {
-			logger.Error(err, "failed to create or update BackupStorageLocation for Velero")
-			r.Recorder.Event(backupJob, corev1.EventTypeWarning, "BackupStorageLocationCreationFailed",
-				fmt.Sprintf("Failed to create or update BackupStorageLocation %s/%s: %v", veleroNamespace, locationName, err))
-			return fmt.Errorf("failed to create or update Velero BackupStorageLocation: %w", err)
-		}
-		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "BackupStorageLocationCreated",
-			fmt.Sprintf("Created or updated BackupStorageLocation %s/%s", veleroNamespace, locationName))
-
-		// VolumeSnapshotLocation manifest
-		// Note: Cannot set owner reference for cross-namespace resources
-		vsl := &velerov1.VolumeSnapshotLocation{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      locationName,
-				Namespace: veleroNamespace,
-			},
-			Spec: velerov1.VolumeSnapshotLocationSpec{
-				Provider: "aws",
-				Credential: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: storageS3SecretName(backupJob.Namespace, backupJob.Name),
-					},
-					Key: "cloud",
-				},
-				Config: map[string]string{
-					"region":  creds.Region,
-					"profile": "default",
-				},
-			},
-		}
-
-		// Create or update the VolumeSnapshotLocation
-		if err := r.createVolumeSnapshotLocation(ctx, vsl); err != nil {
-			logger.Error(err, "failed to create or update VolumeSnapshotLocation for Velero")
-			r.Recorder.Event(backupJob, corev1.EventTypeWarning, "VolumeSnapshotLocationCreationFailed",
-				fmt.Sprintf("Failed to create or update VolumeSnapshotLocation %s/%s: %v", veleroNamespace, locationName, err))
-			return fmt.Errorf("failed to create or update Velero VolumeSnapshotLocation: %w", err)
-		}
-		r.Recorder.Event(backupJob, corev1.EventTypeNormal, "VolumeSnapshotLocationCreated",
-			fmt.Sprintf("Created or updated VolumeSnapshotLocation %s/%s", veleroNamespace, locationName))
+	mapping, err := r.RESTMapping(schema.GroupKind{Group: *backupJob.Spec.ApplicationRef.APIGroup, Kind: backupJob.Spec.ApplicationRef.Kind})
+	if err != nil {
+		return err
 	}
+	ns := backupJob.Namespace
+	if mapping.Scope.Name() != meta.RESTScopeNameNamespace {
+		ns = ""
+	}
+	app, err := r.Resource(mapping.Resource).Namespace(ns).Get(ctx, backupJob.Spec.ApplicationRef.Name, metav1.GetOptions{})
 
-	// Create a Velero Backup (velero.io/v1) using typed object
-	// Now implemented only for backup of VirtualMachine resources
-	// Note: Cannot set owner reference for cross-namespace resources
+	veleroBackupSpec, err := template.Template(&strategy.Spec.Template.Spec, app.Object)
+	if err != nil {
+		return err
+	}
 	veleroBackup := &velerov1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: veleroNamespace,
-		},
-		Spec: velerov1.BackupSpec{
-			IncludedNamespaces:      []string{backupJob.Namespace},
-			IncludedResources:       []string{"virtualmachines.kubevirt.io"},
-			SnapshotVolumes:         boolPtr(true),
-			StorageLocation:         locationName,
-			VolumeSnapshotLocations: []string{locationName},
-			LabelSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"app.kubernetes.io/instance": virtualMachinePrefix + backupJob.Spec.ApplicationRef.Name,
-				},
+			GenerateName: fmt.Sprintf("%s.%s-", backupJob.Namespace, backupJob.Name),
+			Namespace:    veleroNamespace,
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      backupJob.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: backupJob.Namespace,
 			},
 		},
+		Spec: *veleroBackupSpec,
 	}
-
+	name := veleroBackup.GenerateName
 	if err := r.Create(ctx, veleroBackup); err != nil {
+		if veleroBackup.Name != "" {
+			name = veleroBackup.Name
+		}
 		logger.Error(err, "failed to create Velero Backup", "name", veleroBackup.Name)
 		r.Recorder.Event(backupJob, corev1.EventTypeWarning, "VeleroBackupCreationFailed",
 			fmt.Sprintf("Failed to create Velero Backup %s/%s: %v", veleroNamespace, name, err))
@@ -675,7 +574,7 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 
 	backup := &backupsv1alpha1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-backup", backupJob.Name),
+			Name:      fmt.Sprintf("%s", backupJob.Name),
 			Namespace: backupJob.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				{

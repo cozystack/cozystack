@@ -2,13 +2,18 @@ package backupcontroller
 
 import (
 	"context"
+	"net/http"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
@@ -19,6 +24,8 @@ import (
 // Velero.strategy.backups.cozystack.io objects.
 type BackupJobReconciler struct {
 	client.Client
+	dynamic.Interface
+	meta.RESTMapper
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 }
@@ -68,6 +75,18 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	cfg := mgr.GetConfig()
+	var err error
+	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
+		return err
+	}
+	var h *http.Client
+	if h, err = rest.HTTPClientFor(cfg); err != nil {
+		return err
+	}
+	if r.RESTMapper, err = apiutil.NewDynamicRESTMapper(cfg, h); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.BackupJob{}).
 		Complete(r)

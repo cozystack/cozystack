@@ -21,6 +21,11 @@ func init() {
 	})
 }
 
+const (
+	OwningJobNameLabel      = thisGroup + "/owned-by.BackupJobName"
+	OwningJobNamespaceLabel = thisGroup + "/owned-by.BackupJobNamespace"
+)
+
 // BackupJobPhase represents the lifecycle phase of a BackupJob.
 type BackupJobPhase string
 

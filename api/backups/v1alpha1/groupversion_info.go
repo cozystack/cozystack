@@ -25,8 +25,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+const (
+	thisGroup   = "backups.cozystack.io"
+	thisVersion = "v1alpha1"
+)
+
 var (
-	GroupVersion  = schema.GroupVersion{Group: "backups.cozystack.io", Version: "v1alpha1"}
+	GroupVersion  = schema.GroupVersion{Group: thisGroup, Version: thisVersion}
 	SchemeBuilder = runtime.NewSchemeBuilder(addGroupVersion)
 	AddToScheme   = SchemeBuilder.AddToScheme
 )
