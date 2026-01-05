@@ -1,0 +1,65 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cozystack-values
+  namespace: tenant-root
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/system-app: "true"
+spec:
+  interval: 5m
+  releaseName: cozystack-values
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  chart:
+    spec:
+      chart: cozy-cozystack-values
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-system
+        namespace: cozy-system
+      version: '>= 0.0.0-0'
+  valuesFrom:
+    # Cluster configuration from cozystack ConfigMap
+    # The ConfigMap data keys (root-host, bundle-name, etc.) will be mapped to _cluster
+    - kind: ConfigMap
+      name: cozystack
+      namespace: cozy-system
+      targetPath: _cluster
+    # Branding configuration from cozystack-branding ConfigMap
+    # All keys from the ConfigMap data will be nested under _cluster.branding
+    - kind: ConfigMap
+      name: cozystack-branding
+      namespace: cozy-system
+      targetPath: _cluster.branding
+      optional: true
+    # Scheduling configuration from cozystack-scheduling ConfigMap
+    # All keys from the ConfigMap data will be nested under _cluster.scheduling
+    - kind: ConfigMap
+      name: cozystack-scheduling
+      namespace: cozy-system
+      targetPath: _cluster.scheduling
+      optional: true
+    # Kube root CA from kube-root-ca.crt ConfigMap
+    # Extract the ca.crt key and place it at _cluster.kubeRootCa
+    - kind: ConfigMap
+      name: kube-root-ca.crt
+      namespace: kube-system
+      targetPath: _cluster.kubeRootCa
+      valuesKey: ca.crt
+      optional: true
+  values:
+    _namespace:
+      etcd: tenant-root
+      monitoring: tenant-root
+      ingress: tenant-root
+      seaweedfs: tenant-root
+      # host will be determined from _cluster.root-host or tenantRootHost
+      # Default to example.org if neither is set
+      host: "example.org"
+

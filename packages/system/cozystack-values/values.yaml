@@ -1,0 +1,18 @@
+# Default values for cozystack-values chart
+# These values will be populated via valuesFrom in the HelmRelease
+
+# Cluster configuration from cozystack ConfigMap
+# The ConfigMap data keys will be mapped directly to _cluster
+_cluster: {}
+
+# Namespace configuration
+_namespace:
+  etcd: tenant-root
+  monitoring: tenant-root
+  ingress: tenant-root
+  seaweedfs: tenant-root
+  host: "example.org"
+
+# Host value from tenant-root HelmRelease (if available)
+tenantRootHost: ""
+
