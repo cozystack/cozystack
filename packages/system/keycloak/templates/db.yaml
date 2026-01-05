@@ -6,9 +6,8 @@ spec:
   instances: 2
   storage:
     size: 20Gi
-  {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-  {{- if $configMap }}
-  {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
+  {{- if .Values._cluster.scheduling }}
+  {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}
   {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
     labelSelector:

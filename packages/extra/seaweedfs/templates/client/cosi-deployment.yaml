@@ -1,7 +1,5 @@
 {{- if eq .Values.topology "Client" }}
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
+{{- $host := .Values._namespace.host }}
 ---
 apiVersion: apps/v1
 kind: Deployment

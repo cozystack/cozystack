@@ -34,9 +34,8 @@
 {{- end }}
 
 {{- if not (eq .Values.topology "Client") }}
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
+{{- $ingress := .Values._namespace.ingress }}
+{{- $host := .Values._namespace.host }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -60,6 +59,9 @@ spec:
     force: true
     remediation:
       retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
   values:
     global:
       serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"

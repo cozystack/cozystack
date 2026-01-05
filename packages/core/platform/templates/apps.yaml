@@ -1,6 +1,22 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $cozystackBranding := lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
+{{- $cozystackScheduling := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
+{{- $kubeRootCa := lookup "v1" "ConfigMap" "kube-system" "kube-root-ca.crt" }}
 {{- $bundleName := index $cozyConfig.data "bundle-name" }}
 {{- $bundle := tpl (.Files.Get (printf "bundles/%s.yaml" $bundleName)) . | fromYaml }}
+{{/* Default values for _cluster config to ensure all required keys exist */}}
+{{- $clusterDefaults := dict
+    "root-host" ""
+    "bundle-name" ""
+    "clusterissuer" "http01"
+    "oidc-enabled" "false"
+    "expose-services" ""
+    "expose-ingress" "tenant-root"
+    "expose-external-ips" ""
+    "cluster-domain" "cozy.local"
+    "api-server-endpoint" ""
+}}
+{{- $clusterConfig := mergeOverwrite $clusterDefaults ($cozyConfig.data | default dict) }}
 {{- $host := "example.org" }}
 {{- $host := "example.org" }}
 {{- if $cozyConfig.data }}
@@ -22,12 +38,44 @@ kind: Namespace
 metadata:
   annotations:
     helm.sh/resource-policy: keep
+  labels:
+    tenant.cozystack.io/tenant-root: ""
     namespace.cozystack.io/etcd: tenant-root
     namespace.cozystack.io/monitoring: tenant-root
     namespace.cozystack.io/ingress: tenant-root
     namespace.cozystack.io/seaweedfs: tenant-root
     namespace.cozystack.io/host: "{{ $host }}"
   name: tenant-root
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cozystack-values
+  namespace: tenant-root
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
+type: Opaque
+stringData:
+  values.yaml: |
+    _cluster:
+      {{- $clusterConfig | toYaml | nindent 6 }}
+      {{- with $cozystackBranding.data }}
+      branding:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      {{- with $cozystackScheduling.data }}
+      scheduling:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      {{- with $kubeRootCa.data }}
+      kube-root-ca: {{ index . "ca.crt" | b64enc | quote }}
+      {{- end }}
+    _namespace:
+      etcd: tenant-root
+      monitoring: tenant-root
+      ingress: tenant-root
+      seaweedfs: tenant-root
+      host: {{ $host | quote }}
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -56,6 +104,9 @@ spec:
         kind: HelmRepository
         name: cozystack-apps
         namespace: cozy-public
+  valuesFrom:
+    - kind: Secret
+      name: cozystack-values
   values:
     host: "{{ $host }}"
   dependsOn:

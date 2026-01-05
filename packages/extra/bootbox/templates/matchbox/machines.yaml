@@ -1,9 +1,4 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $issuerType := (index $cozyConfig.data "clusterissuer") | default "http01" }}
-
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
+{{- $host := .Values._namespace.host }}
 
 {{ range $m := .Values.machines }}
 ---

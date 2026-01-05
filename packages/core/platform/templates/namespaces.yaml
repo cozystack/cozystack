@@ -1,5 +1,20 @@
 {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
+{{- $cozystackBranding := lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
+{{- $cozystackScheduling := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
 {{- $bundleName := index $cozyConfig.data "bundle-name" }}
+{{/* Default values for _cluster config to ensure all required keys exist */}}
+{{- $clusterDefaults := dict
+    "root-host" ""
+    "bundle-name" ""
+    "clusterissuer" "http01"
+    "oidc-enabled" "false"
+    "expose-services" ""
+    "expose-ingress" "tenant-root"
+    "expose-external-ips" ""
+    "cluster-domain" "cozy.local"
+    "api-server-endpoint" ""
+}}
+{{- $clusterConfig := mergeOverwrite $clusterDefaults ($cozyConfig.data | default dict) }}
 {{- $bundle := tpl (.Files.Get (printf "bundles/%s.yaml" $bundleName)) . | fromYaml }}
 {{- $disabledComponents := splitList "," ((index $cozyConfig.data "bundle-disable") | default "") }}
 {{- $enabledComponents := splitList "," ((index $cozyConfig.data "bundle-enable") | default "") }}
@@ -37,4 +52,25 @@ metadata:
     pod-security.kubernetes.io/enforce: privileged
     {{- end }}
   name: {{ $namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cozystack-values
+  namespace: {{ $namespace }}
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
+type: Opaque
+stringData:
+  values.yaml: |
+    _cluster:
+      {{- $clusterConfig | toYaml | nindent 6 }}
+      {{- with $cozystackBranding.data }}
+      branding:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      {{- with $cozystackScheduling.data }}
+      scheduling:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
 {{- end }}

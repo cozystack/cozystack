@@ -1,13 +1,11 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
-{{- $extraRedirectUris := splitList "," ((index $cozyConfig.data "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
-{{- $rootSaConfigMap := lookup "v1" "ConfigMap" "kube-system" "kube-root-ca.crt" }}
-{{- $k8sCa := index $rootSaConfigMap.data "ca.crt" | b64enc }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $extraRedirectUris := splitList "," ((index .Values._cluster "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
+{{- $k8sCa := index .Values._cluster "kube-root-ca" }}
 
 {{- $existingK8sSecret := lookup "v1" "Secret" .Release.Namespace "k8s-client" }}
 {{- $existingKubeappsSecret := lookup "v1" "Secret" .Release.Namespace "kubeapps-client" }}
 {{- $existingAuthConfig := lookup "v1" "Secret" "cozy-dashboard" "kubeapps-auth-config" }}
-{{- $cozystackBranding:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
+{{- $brandingConfig := .Values._cluster.branding | default dict }}
 
 {{ $k8sClient := "" }}
 {{- if $existingK8sSecret }}
@@ -17,8 +15,8 @@
 {{- end }}
 
 {{ $branding := "" }}
-{{- if $cozystackBranding }}
-  {{- $branding = index $cozystackBranding.data "branding" }}
+{{- if $brandingConfig }}
+  {{- $branding = $brandingConfig.branding }}
 {{- end }}
 
 ---

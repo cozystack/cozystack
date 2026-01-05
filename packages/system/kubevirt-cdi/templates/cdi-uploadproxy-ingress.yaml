@@ -1,7 +1,6 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
-{{- $exposeServices := splitList "," ((index $cozyConfig.data "expose-services") | default "") }}
-{{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 
 
 {{- if and (has "cdi-uploadproxy" $exposeServices) }}

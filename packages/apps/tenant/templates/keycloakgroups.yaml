@@ -1,5 +1,4 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
 {{- if eq $oidcEnabled "true" }}
 {{- if .Capabilities.APIVersions.Has "v1.edp.epam.com/v1" }}
 apiVersion: v1.edp.epam.com/v1

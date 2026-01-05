@@ -1,5 +1,4 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}  
-{{- $issuerType := (index $cozyConfig.data "clusterissuer") | default "http01" }}  
+{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}  
 
 apiVersion: cert-manager.io/v1 
 kind: ClusterIssuer  
