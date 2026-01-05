@@ -110,67 +110,95 @@ jobs:
               }
             }
 
-      # Get the latest published release
-      - name: Get the latest published release
-        id: latest_release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            try {
-              const rel = await github.rest.repos.getLatestRelease({
-                owner: context.repo.owner,
-                repo:  context.repo.repo
-              });
-              core.setOutput('tag', rel.data.tag_name);
-            } catch (_) {
-              core.setOutput('tag', '');
-            }
-
-      # Compare current tag vs latest using semver-utils
-      - name: Semver compare
-        id: semver
-        uses: madhead/semver-utils@v4.3.0
-        with:
-          version:    ${{ steps.get_tag.outputs.tag }}
-          compare-to: ${{ steps.latest_release.outputs.tag }}
-
-      # Derive flags: prerelease?  make_latest?
-      - name: Calculate publish flags
-        id: flags
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const tag = '${{ steps.get_tag.outputs.tag }}';              // v0.31.5-rc.1
-            const m = tag.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);
-            if (!m) {
-              core.setFailed(`❌ tag '${tag}' must match 'vX.Y.Z' or 'vX.Y.Z-(alpha|beta|rc).N'`);
-              return;
-            }
-            const version = m[1] + (m[2] ?? '');                         // 0.31.5-rc.1
-            const isRc    = Boolean(m[2]);
-            core.setOutput('is_rc',      isRc);
-            const outdated = '${{ steps.semver.outputs.comparison-result }}' === '<';
-            core.setOutput('make_latest', isRc || outdated ? 'false' : 'legacy');
-
-      # Publish draft release with correct flags
+      # Publish draft release and ensure correct latest flag
       - name: Publish draft release
         uses: actions/github-script@v7
         with:
           script: |
             const tag = '${{ steps.get_tag.outputs.tag }}';
+            const m = tag.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);
+            if (!m) {
+              core.setFailed(`❌ tag '${tag}' must match 'vX.Y.Z' or 'vX.Y.Z-(alpha|beta|rc).N'`);
+              return;
+            }
+            const isRc = Boolean(m[2]);
+
+            // Parse semver string to comparable numbers
+            function parseSemver(v) {
+              const match = v.replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)/);
+              if (!match) return null;
+              return {
+                major: parseInt(match[1]),
+                minor: parseInt(match[2]),
+                patch: parseInt(match[3])
+              };
+            }
+
+            // Compare two semver objects
+            function compareSemver(a, b) {
+              if (a.major !== b.major) return a.major - b.major;
+              if (a.minor !== b.minor) return a.minor - b.minor;
+              return a.patch - b.patch;
+            }
+
+            const currentSemver = parseSemver(tag);
+
+            // Get all releases
             const releases = await github.rest.repos.listReleases({
               owner: context.repo.owner,
-              repo:  context.repo.repo
-            });
-            const draft = releases.data.find(r => r.tag_name === tag && r.draft);
-            if (!draft) throw new Error(`Draft release for ${tag} not found`);
-            await github.rest.repos.updateRelease({
-              owner:       context.repo.owner,
-              repo:        context.repo.repo,
-              release_id:  draft.id,
-              draft:       false,
-              prerelease:  ${{ steps.flags.outputs.is_rc }},
-              make_latest: '${{ steps.flags.outputs.make_latest }}'
+              repo: context.repo.repo,
+              per_page: 100
             });
 
-            console.log(`🚀 Published release for ${tag}`);
+            // Find draft release to publish
+            const draft = releases.data.find(r => r.tag_name === tag && r.draft);
+            if (!draft) throw new Error(`Draft release for ${tag} not found`);
+
+            // Find max semver among published releases (excluding current draft)
+            const publishedReleases = releases.data
+              .filter(r => !r.draft && !r.prerelease)
+              .filter(r => /^v\d+\.\d+\.\d+$/.test(r.tag_name))
+              .map(r => ({ id: r.id, tag: r.tag_name, semver: parseSemver(r.tag_name) }))
+              .filter(r => r.semver !== null);
+
+            let maxRelease = null;
+            for (const rel of publishedReleases) {
+              if (!maxRelease || compareSemver(rel.semver, maxRelease.semver) > 0) {
+                maxRelease = rel;
+              }
+            }
+
+            // Determine if this release should be latest
+            const isOutdated = maxRelease && compareSemver(currentSemver, maxRelease.semver) < 0;
+            const makeLatest = (isRc || isOutdated) ? 'false' : 'true';
+
+            if (isRc) {
+              console.log(`🏷️  ${tag} is a prerelease, make_latest: false`);
+            } else if (isOutdated) {
+              console.log(`🏷️  ${tag} < ${maxRelease.tag} (max semver), make_latest: false`);
+            } else {
+              console.log(`🏷️  ${tag} is the highest version, make_latest: true`);
+            }
+
+            // Publish the release
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: draft.id,
+              draft: false,
+              prerelease: isRc,
+              make_latest: makeLatest
+            });
+            console.log(`🚀 Published release ${tag}`);
+
+            // If this is a backport/outdated release, ensure the correct release is marked as latest
+            if (isOutdated && maxRelease) {
+              console.log(`🔧 Ensuring ${maxRelease.tag} remains the latest release...`);
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: maxRelease.id,
+                make_latest: 'true'
+              });
+              console.log(`✅ Restored ${maxRelease.tag} as latest release`);
+            }
