@@ -21,6 +21,11 @@ func init() {
 	})
 }
 
+const (
+	OwningJobNameLabel      = thisGroup + "/owned-by.BackupJobName"
+	OwningJobNamespaceLabel = thisGroup + "/owned-by.BackupJobNamespace"
+)
+
 // BackupJobPhase represents the lifecycle phase of a BackupJob.
 type BackupJobPhase string
 
@@ -85,6 +90,8 @@ type BackupJobStatus struct {
 // The field indexing on applicationRef will be needed later to display per-app backup resources.
 
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",priority=0
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`

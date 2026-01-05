@@ -14,7 +14,11 @@ spec:
     singular: backupjob
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
@@ -233,3 +237,5 @@ spec:
     - jsonPath: .spec.applicationRef.name
     served: true
     storage: true
+    subresources:
+      status: {}

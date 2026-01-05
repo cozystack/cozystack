@@ -6,6 +6,7 @@
 package v1alpha1
 
 import (
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -47,7 +48,15 @@ type VeleroList struct {
 }
 
 // VeleroSpec specifies the desired strategy for backing up with Velero.
-type VeleroSpec struct{}
+type VeleroSpec struct {
+	Template VeleroTemplate `json:"template"`
+}
+
+// VeleroTemplate describes the data a backup.velero.io should have when
+// templated from a Velero backup strategy.
+type VeleroTemplate struct {
+	Spec velerov1.BackupSpec `json:"spec"`
+}
 
 type VeleroStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
