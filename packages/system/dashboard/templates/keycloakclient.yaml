@@ -1,6 +1,5 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
-{{- $extraRedirectUris := splitList "," ((index $cozyConfig.data "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $extraRedirectUris := splitList "," ((index .Values._cluster "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
 
 {{- $existingK8sSecret := lookup "v1" "Secret" .Release.Namespace "k8s-client" }}
 {{- $existingDashboardSecret := lookup "v1" "Secret" .Release.Namespace "dashboard-client" }}

@@ -1,6 +1,5 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
 
 apiVersion: apps/v1
 kind: Deployment

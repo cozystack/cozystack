@@ -1,5 +1,4 @@
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $seaweedfs := index $myNS.metadata.annotations "namespace.cozystack.io/seaweedfs" }}
+{{- $seaweedfs := .Values._namespace.seaweedfs }}
 apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketClaim
 metadata:

@@ -74,9 +74,8 @@ Generate a stable UUID for cloud-init re-initialization upon upgrade.
 Node Affinity for Windows VMs
 */}}
 {{- define "virtual-machine.nodeAffinity" -}}
-{{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" -}}
-{{- if $configMap -}}
-{{- $dedicatedNodesForWindowsVMs := get $configMap.data "dedicatedNodesForWindowsVMs" -}}
+{{- if .Values._cluster.scheduling -}}
+{{- $dedicatedNodesForWindowsVMs := get .Values._cluster.scheduling "dedicatedNodesForWindowsVMs" -}}
 {{- if eq $dedicatedNodesForWindowsVMs "true" -}}
 {{- $isWindows := hasPrefix "windows" (toString .Values.instanceProfile) -}}
 affinity:

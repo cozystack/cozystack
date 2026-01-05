@@ -97,7 +97,34 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleasesForCRD(ctx
 	return nil
 }
 
-// updateHelmReleaseChart updates the chart in HelmRelease based on CozystackResourceDefinition
+// expectedValuesFrom returns the expected valuesFrom configuration for HelmReleases
+func expectedValuesFrom() []helmv2.ValuesReference {
+	return []helmv2.ValuesReference{
+		{
+			Kind: "Secret",
+			Name: "cozystack-values",
+		},
+	}
+}
+
+// valuesFromEqual compares two ValuesReference slices
+func valuesFromEqual(a, b []helmv2.ValuesReference) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Kind != b[i].Kind ||
+			a[i].Name != b[i].Name ||
+			a[i].ValuesKey != b[i].ValuesKey ||
+			a[i].TargetPath != b[i].TargetPath ||
+			a[i].Optional != b[i].Optional {
+			return false
+		}
+	}
+	return true
+}
+
+// updateHelmReleaseChart updates the chart and valuesFrom in HelmRelease based on CozystackResourceDefinition
 func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleaseChart(ctx context.Context, hr *helmv2.HelmRelease, crd *cozyv1alpha1.CozystackResourceDefinition) error {
 	logger := log.FromContext(ctx)
 	hrCopy := hr.DeepCopy()
@@ -152,6 +179,14 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleaseChart(ctx c
 			hrCopy.Spec.Chart.Spec.SourceRef = expectedSourceRef
 			updated = true
 		}
+	}
+
+	// Check and update valuesFrom configuration
+	expected := expectedValuesFrom()
+	if !valuesFromEqual(hrCopy.Spec.ValuesFrom, expected) {
+		logger.V(4).Info("Updating HelmRelease valuesFrom", "name", hr.Name, "namespace", hr.Namespace)
+		hrCopy.Spec.ValuesFrom = expected
+		updated = true
 	}
 
 	if updated {

@@ -148,6 +148,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
 	}
 
+	// Validate that values don't contain reserved keys (starting with "_")
+	if err := validateNoInternalKeys(app.Spec); err != nil {
+		return nil, apierrors.NewBadRequest(err.Error())
+	}
+
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
 	if err != nil {
@@ -440,6 +445,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if !ok {
 		klog.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
+	}
+
+	// Validate that values don't contain reserved keys (starting with "_")
+	if err := validateNoInternalKeys(app.Spec); err != nil {
+		return nil, false, apierrors.NewBadRequest(err.Error())
 	}
 
 	// Convert Application to HelmRelease
@@ -851,8 +861,49 @@ func (r *REST) ConvertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	return r.convertApplicationToHelmRelease(app)
 }
 
+// filterInternalKeys removes keys starting with "_" from the JSON values
+func filterInternalKeys(values *apiextv1.JSON) *apiextv1.JSON {
+	if values == nil || len(values.Raw) == 0 {
+		return values
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(values.Raw, &data); err != nil {
+		return values
+	}
+	for key := range data {
+		if strings.HasPrefix(key, "_") {
+			delete(data, key)
+		}
+	}
+	filtered, err := json.Marshal(data)
+	if err != nil {
+		return values
+	}
+	return &apiextv1.JSON{Raw: filtered}
+}
+
+// validateNoInternalKeys checks that values don't contain keys starting with "_"
+func validateNoInternalKeys(values *apiextv1.JSON) error {
+	if values == nil || len(values.Raw) == 0 {
+		return nil
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(values.Raw, &data); err != nil {
+		return err
+	}
+	for key := range data {
+		if strings.HasPrefix(key, "_") {
+			return fmt.Errorf("values key %q is reserved (keys starting with '_' are not allowed)", key)
+		}
+	}
+	return nil
+}
+
 // convertHelmReleaseToApplication implements the actual conversion logic
 func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+	// Filter out internal keys (starting with "_") from spec
+	filteredSpec := filterInternalKeys(hr.Spec.Values)
+
 	app := appsv1alpha1.Application{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps.cozystack.io/v1alpha1",
@@ -868,7 +919,7 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 			Labels:            filterPrefixedMap(hr.Labels, LabelPrefix),
 			Annotations:       filterPrefixedMap(hr.Annotations, AnnotationPrefix),
 		},
-		Spec: hr.Spec.Values,
+		Spec: filteredSpec,
 		Status: appsv1alpha1.ApplicationStatus{
 			Version: hr.Status.LastAttemptedRevision,
 		},
@@ -933,6 +984,12 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			Upgrade: &helmv2.Upgrade{
 				Remediation: &helmv2.UpgradeRemediation{
 					Retries: -1,
+				},
+			},
+			ValuesFrom: []helmv2.ValuesReference{
+				{
+					Kind: "Secret",
+					Name: "cozystack-values",
 				},
 			},
 			Values: app.Spec,

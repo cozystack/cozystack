@@ -1,5 +1,4 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $oidcEnabled := index $cozyConfig.data "oidc-enabled" }}
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

@@ -1,7 +1,6 @@
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $etcd := index $myNS.metadata.annotations "namespace.cozystack.io/etcd" }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
+{{- $etcd := .Values._namespace.etcd }}
+{{- $ingress := .Values._namespace.ingress }}
+{{- $host := .Values._namespace.host }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
@@ -31,9 +30,8 @@ spec:
             {{- end }}
             cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ .groupName }}
         spec:
-          {{- $configMap := lookup "v1" "ConfigMap" "cozy-system" "cozystack-scheduling" }}
-          {{- if $configMap }}
-          {{- $rawConstraints := get $configMap.data "globalAppTopologySpreadConstraints" }}
+          {{- if .Values._cluster.scheduling }}
+          {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
           {{- if $rawConstraints }}
           {{- $rawConstraints | fromYaml | toYaml | nindent 10 }}
             labelSelector:
