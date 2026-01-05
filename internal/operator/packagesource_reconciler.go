@@ -31,9 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // PackageSourceReconciler reconciles PackageSource resources
@@ -409,26 +407,7 @@ func (r *PackageSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystack-packagesource").
 		For(&cozyv1alpha1.PackageSource{}).
-		Watches(
-			&sourcewatcherv1beta1.ArtifactGenerator{},
-			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				ag, ok := obj.(*sourcewatcherv1beta1.ArtifactGenerator)
-				if !ok {
-					return nil
-				}
-				// Find the PackageSource that owns this ArtifactGenerator by ownerReference
-				for _, ownerRef := range ag.OwnerReferences {
-					if ownerRef.Kind == "PackageSource" {
-						return []reconcile.Request{{
-							NamespacedName: types.NamespacedName{
-								Name: ownerRef.Name,
-							},
-						}}
-					}
-				}
-				return nil
-			}),
-		).
+		Owns(&sourcewatcherv1beta1.ArtifactGenerator{}).
 		Complete(r)
 }
 

@@ -887,6 +887,7 @@ func (r *PackageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("cozystack-package").
 		For(&cozyv1alpha1.Package{}).
+		Owns(&helmv2.HelmRelease{}).
 		Watches(
 			&cozyv1alpha1.PackageSource{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
