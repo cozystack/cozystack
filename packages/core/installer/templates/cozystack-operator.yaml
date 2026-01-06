@@ -1,4 +1,3 @@
-{{- if .Values.cozystackOperator.enabled }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -121,4 +120,3 @@ spec:
       valuesFiles:
       - values.yaml
       - values-isp-hosted.yaml
-{{- end }}
