@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.16.4
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: cozystackresourcedefinitions.cozystack.io
 spec:
   group: cozystack.io
@@ -285,26 +285,31 @@ spec:
                   chartRef:
                     description: Reference to the chart source
                     properties:
+                      apiVersion:
+                        description: APIVersion of the referent.
+                        type: string
                       kind:
-                        default: OCIRepository
-                        description: Kind of the source reference (e.g., OCIRepository,
-                          GitRepository)
+                        description: Kind of the referent.
+                        enum:
+                        - OCIRepository
+                        - HelmChart
+                        - ExternalArtifact
                         type: string
                       name:
-                        description: Name of the source reference
+                        description: Name of the referent.
+                        maxLength: 253
+                        minLength: 1
                         type: string
                       namespace:
-                        default: cozy-system
-                        description: Namespace of the source reference
-                        type: string
-                      path:
-                        description: Path within the source artifact where the chart
-                          is located
+                        description: |-
+                          Namespace of the referent, defaults to the namespace of the Kubernetes
+                          resource object that contains the reference.
+                        maxLength: 63
+                        minLength: 1
                         type: string
                     required:
                     - kind
                     - name
-                    - namespace
                     type: object
                   labels:
                     additionalProperties:

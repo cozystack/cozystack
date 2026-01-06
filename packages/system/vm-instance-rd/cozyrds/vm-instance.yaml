@@ -13,12 +13,10 @@ spec:
     prefix: vm-instance-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: vm-instance
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: vm-instance-rd
+      namespace: cozy-system
   dashboard:
     category: IaaS
     singular: VM Instance

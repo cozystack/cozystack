@@ -13,12 +13,10 @@ spec:
     prefix: ferretdb-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: ferretdb
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: ferretdb-rd
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: FerretDB

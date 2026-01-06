@@ -73,7 +73,7 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleasesForCRD(ctx
 	labelSelector := client.MatchingLabels{
 		"apps.cozystack.io/application.kind":  applicationKind,
 		"apps.cozystack.io/application.group": applicationGroup,
-		"cozystack.io/ui":                      "true",
+		"cozystack.io/ui":                     "true",
 	}
 
 	// List all HelmReleases with matching labels
@@ -130,55 +130,30 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleaseChart(ctx c
 	hrCopy := hr.DeepCopy()
 	updated := false
 
-	// Validate Chart configuration exists
-	if crd.Spec.Release.Chart.Name == "" {
-		logger.V(4).Info("Skipping HelmRelease chart update: Chart.Name is empty", "crd", crd.Name)
+	// Validate ChartRef configuration exists
+	if crd.Spec.Release.ChartRef == nil ||
+		crd.Spec.Release.ChartRef.Kind == "" ||
+		crd.Spec.Release.ChartRef.Name == "" ||
+		crd.Spec.Release.ChartRef.Namespace == "" {
+		logger.Error(fmt.Errorf("invalid ChartRef in CRD"), "Skipping HelmRelease chartRef update: ChartRef is nil or incomplete",
+			"crd", crd.Name)
 		return nil
 	}
 
-	// Validate SourceRef fields
-	if crd.Spec.Release.Chart.SourceRef.Kind == "" ||
-		crd.Spec.Release.Chart.SourceRef.Name == "" ||
-		crd.Spec.Release.Chart.SourceRef.Namespace == "" {
-		logger.Error(fmt.Errorf("invalid SourceRef in CRD"), "Skipping HelmRelease chart update: SourceRef fields are incomplete",
-			"crd", crd.Name,
-			"kind", crd.Spec.Release.Chart.SourceRef.Kind,
-			"name", crd.Spec.Release.Chart.SourceRef.Name,
-			"namespace", crd.Spec.Release.Chart.SourceRef.Namespace)
-		return nil
-	}
+	// Use ChartRef directly from CRD
+	expectedChartRef := crd.Spec.Release.ChartRef
 
-	// Get version and reconcileStrategy from CRD or use defaults
-	version := ">= 0.0.0-0"
-	reconcileStrategy := "Revision"
-	// TODO: Add Version and ReconcileStrategy fields to CozystackResourceDefinitionChart if needed
-
-	// Build expected SourceRef
-	expectedSourceRef := helmv2.CrossNamespaceObjectReference{
-		Kind:      crd.Spec.Release.Chart.SourceRef.Kind,
-		Name:      crd.Spec.Release.Chart.SourceRef.Name,
-		Namespace: crd.Spec.Release.Chart.SourceRef.Namespace,
-	}
-
-	if hrCopy.Spec.Chart == nil {
-		// Need to create Chart spec
-		hrCopy.Spec.Chart = &helmv2.HelmChartTemplate{
-			Spec: helmv2.HelmChartTemplateSpec{
-				Chart:             crd.Spec.Release.Chart.Name,
-				Version:           version,
-				ReconcileStrategy: reconcileStrategy,
-				SourceRef:         expectedSourceRef,
-			},
-		}
+	// Check if chartRef needs to be updated
+	if hrCopy.Spec.ChartRef == nil {
+		hrCopy.Spec.ChartRef = expectedChartRef
+		// Clear the old chart field when switching to chartRef
+		hrCopy.Spec.Chart = nil
 		updated = true
-	} else {
-		// Update existing Chart spec
-		if hrCopy.Spec.Chart.Spec.Chart != crd.Spec.Release.Chart.Name ||
-			hrCopy.Spec.Chart.Spec.SourceRef != expectedSourceRef {
-			hrCopy.Spec.Chart.Spec.Chart = crd.Spec.Release.Chart.Name
-			hrCopy.Spec.Chart.Spec.SourceRef = expectedSourceRef
-			updated = true
-		}
+	} else if hrCopy.Spec.ChartRef.Kind != expectedChartRef.Kind ||
+		hrCopy.Spec.ChartRef.Name != expectedChartRef.Name ||
+		hrCopy.Spec.ChartRef.Namespace != expectedChartRef.Namespace {
+		hrCopy.Spec.ChartRef = expectedChartRef
+		updated = true
 	}
 
 	// Check and update valuesFrom configuration
@@ -190,7 +165,7 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleaseChart(ctx c
 	}
 
 	if updated {
-		logger.V(4).Info("Updating HelmRelease chart", "name", hr.Name, "namespace", hr.Namespace)
+		logger.V(4).Info("Updating HelmRelease chartRef", "name", hr.Name, "namespace", hr.Namespace)
 		if err := r.Update(ctx, hrCopy); err != nil {
 			return fmt.Errorf("failed to update HelmRelease: %w", err)
 		}
@@ -198,4 +173,3 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleaseChart(ctx c
 
 	return nil
 }
-

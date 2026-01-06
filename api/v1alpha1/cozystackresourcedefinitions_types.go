@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -61,24 +62,6 @@ type CozystackResourceDefinitionSpec struct {
 	Dashboard *CozystackResourceDefinitionDashboard `json:"dashboard,omitempty"`
 }
 
-type CozystackResourceDefinitionChart struct {
-	// Name of the Helm chart
-	Name string `json:"name"`
-	// Source reference for the Helm chart
-	SourceRef SourceRef `json:"sourceRef"`
-}
-
-type SourceRef struct {
-	// Kind of the source reference
-	// +kubebuilder:default:="HelmRepository"
-	Kind string `json:"kind"`
-	// Name of the source reference
-	Name string `json:"name"`
-	// Namespace of the source reference
-	// +kubebuilder:default:="cozy-public"
-	Namespace string `json:"namespace"`
-}
-
 type CozystackResourceDefinitionApplication struct {
 	// Kind of the application, used for UI and API
 	Kind string `json:"kind"`
@@ -91,9 +74,8 @@ type CozystackResourceDefinitionApplication struct {
 }
 
 type CozystackResourceDefinitionRelease struct {
-	// Helm chart configuration
-	// +optional
-	Chart CozystackResourceDefinitionChart `json:"chart,omitempty"`
+	// Reference to the chart source
+	ChartRef *helmv2.CrossNamespaceSourceReference `json:"chartRef"`
 	// Labels for the release
 	Labels map[string]string `json:"labels,omitempty"`
 	// Prefix for the release name

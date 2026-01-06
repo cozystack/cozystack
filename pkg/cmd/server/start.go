@@ -169,13 +169,10 @@ func (o *CozyServerOptions) Complete() error {
 			Release: config.ReleaseConfig{
 				Prefix: crd.Spec.Release.Prefix,
 				Labels: crd.Spec.Release.Labels,
-				Chart: config.ChartConfig{
-					Name: crd.Spec.Release.Chart.Name,
-					SourceRef: config.SourceRefConfig{
-						Kind:      crd.Spec.Release.Chart.SourceRef.Kind,
-						Name:      crd.Spec.Release.Chart.SourceRef.Name,
-						Namespace: crd.Spec.Release.Chart.SourceRef.Namespace,
-					},
+				ChartRef: config.ChartRefConfig{
+					Kind:      crd.Spec.Release.ChartRef.Kind,
+					Name:      crd.Spec.Release.ChartRef.Name,
+					Namespace: crd.Spec.Release.ChartRef.Namespace,
 				},
 			},
 		}

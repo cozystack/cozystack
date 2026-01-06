@@ -13,12 +13,10 @@ spec:
     prefix: virtual-machine-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: virtual-machine
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: virtual-machine-rd
+      namespace: cozy-system
   dashboard:
     category: IaaS
     singular: Virtual Machine

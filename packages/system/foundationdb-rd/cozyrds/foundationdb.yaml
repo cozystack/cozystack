@@ -13,12 +13,10 @@ spec:
     prefix: foundationdb-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: foundationdb
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: foundationdb-rd
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: FoundationDB

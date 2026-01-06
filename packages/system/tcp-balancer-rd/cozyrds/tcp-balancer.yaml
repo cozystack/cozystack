@@ -13,12 +13,10 @@ spec:
     prefix: tcp-balancer-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: tcp-balancer
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+    chartRef:
+      kind: OCIRepository
+      name: tcp-balancer-rd
+      namespace: cozy-system
   dashboard:
     category: NaaS
     singular: TCP Balancer
