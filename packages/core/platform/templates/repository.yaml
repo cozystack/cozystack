@@ -1,0 +1,17 @@
+{{- $sourceRef := .Values.sourceRef }}
+{{- $apiVersion := "source.toolkit.fluxcd.io/v1" }}
+{{- $kind := $sourceRef.kind }}
+{{- $name := $sourceRef.name }}
+{{- $namespace := $sourceRef.namespace }}
+{{- $sourceRepo := lookup $apiVersion $kind $namespace $name }}
+{{- if not $sourceRepo }}
+{{- fail (printf "Source repository %s/%s of kind %s not found in namespace %s" $namespace $name $kind $namespace) }}
+{{- end }}
+---
+apiVersion: {{ $apiVersion }}
+kind: {{ $kind }}
+metadata:
+  name: cozystack-packages
+  namespace: cozy-system
+spec:
+{{- $sourceRepo.spec | toYaml | nindent 2 }}

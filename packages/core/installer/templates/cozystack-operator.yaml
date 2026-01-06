@@ -87,7 +87,7 @@ metadata:
 spec:
   sourceRef:
     kind: OCIRepository
-    name: cozystack-packages
+    name: cozystack-platform
     namespace: cozy-system
     path: /
   variants:

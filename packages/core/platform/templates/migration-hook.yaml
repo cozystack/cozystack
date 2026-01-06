@@ -1,3 +1,4 @@
+{{- if .Values.migrations.enabled }}
 {{- $shouldRunMigrationHook := false }}
 {{- $currentVersion := 0 }}
 {{- $targetVersion := .Values.migrations.targetVersion | int }}
@@ -7,8 +8,6 @@
   {{- if lt $currentVersion $targetVersion }}
     {{- $shouldRunMigrationHook = true }}
   {{- end }}
-{{- else }}
-  {{- $shouldRunMigrationHook = true }}
 {{- end }}
 
 {{- if $shouldRunMigrationHook }}
@@ -66,4 +65,5 @@ metadata:
     helm.sh/hook: pre-upgrade,pre-install
     helm.sh/hook-weight: "1"
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+{{- end }}
 {{- end }}
