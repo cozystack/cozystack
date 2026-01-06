@@ -28,7 +28,11 @@ spec:
         - key: CriticalAddonsOnly
           operator: Exists
       serviceAccountName: kube-ovn-app
-      hostPID: true
+      automountServiceAccountToken: true
+      hostPID: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: hostpath-init
           image: {{ .Values.global.registry.address }}/{{ .Values.global.images.kubeovn.repository }}:{{ .Values.global.images.kubeovn.tag }}
