@@ -2,10 +2,12 @@ package backupcontroller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -46,15 +48,11 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if j.Spec.StrategyRef.APIGroup == nil {
-		logger.V(1).Info("BackupJob has nil StrategyRef.APIGroup, skipping", "backupjob", j.Name)
-		return ctrl.Result{}, nil
+		return r.markBackupJobFailed(ctx, j, "StrategyRef.APIGroup is nil")
 	}
 
 	if *j.Spec.StrategyRef.APIGroup != strategyv1alpha1.GroupVersion.Group {
-		logger.V(1).Info("BackupJob StrategyRef.APIGroup doesn't match, skipping",
-			"backupjob", j.Name,
-			"expected", strategyv1alpha1.GroupVersion.Group,
-			"got", *j.Spec.StrategyRef.APIGroup)
+		// skip if the strategy group foreign to this controller
 		return ctrl.Result{}, nil
 	}
 
@@ -65,11 +63,7 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case strategyv1alpha1.VeleroStrategyKind:
 		return r.reconcileVelero(ctx, j)
 	default:
-		logger.V(1).Info("BackupJob StrategyRef.Kind not supported, skipping",
-			"backupjob", j.Name,
-			"kind", j.Spec.StrategyRef.Kind,
-			"supported", []string{strategyv1alpha1.JobStrategyKind, strategyv1alpha1.VeleroStrategyKind})
-		return ctrl.Result{}, nil
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("StrategyRef.Kind not supported: %s", j.Spec.StrategyRef.Kind))
 	}
 }
 
@@ -90,4 +84,28 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.BackupJob{}).
 		Complete(r)
+}
+
+func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	now := metav1.Now()
+	backupJob.Status.CompletedAt = &now
+	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
+	backupJob.Status.Message = message
+
+	// Add condition
+	backupJob.Status.Conditions = append(backupJob.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             "BackupFailed",
+		Message:            message,
+		LastTransitionTime: now,
+	})
+
+	if err := r.Status().Update(ctx, backupJob); err != nil {
+		logger.Error(err, "failed to update BackupJob status to Failed")
+		return ctrl.Result{}, err
+	}
+	logger.Debug("BackupJob failed", "message", message)
+	return ctrl.Result{}, nil
 }

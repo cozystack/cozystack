@@ -63,11 +63,14 @@ type bucketInfo struct {
 }
 
 const (
-	defaultRequeueAfter             = 5 * time.Second
-	defaultActiveJobPollingInterval = defaultRequeueAfter
+	defaultRequeueAfter                 = 5 * time.Second
+	defaultActiveJobPollingInterval     = defaultRequeueAfter
+	defaultRestoreRequeueAfter          = 5 * time.Second
+	defaultActiveRestorePollingInterval = defaultRestoreRequeueAfter
 	// Velero requires API objects and secrets to be in the cozy-velero namespace
-	veleroNamespace      = "cozy-velero"
-	virtualMachinePrefix = "virtual-machine-"
+	veleroNamespace                  = "cozy-velero"
+	veleroBackupNameMetadataKey      = "velero.io/backup-name"
+	veleroBackupNamespaceMetadataKey = "velero.io/backup-namespace"
 )
 
 func storageS3SecretName(namespace, backupJobName string) string {
@@ -120,7 +123,6 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	// Step 3: Execute backup logic
 	// Check if we already created a Velero Backup
-	// Use human-readable timestamp: YYYY-MM-DD-HH-MM-SS
 	if j.Status.StartedAt == nil {
 		logger.Error(nil, "StartedAt is nil after status update, this should not happen")
 		return ctrl.Result{RequeueAfter: defaultRequeueAfter}, nil
@@ -488,30 +490,6 @@ func (r *BackupJobReconciler) createVolumeSnapshotLocation(ctx context.Context, 
 	return nil
 }
 
-func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
-	logger := getLogger(ctx)
-	now := metav1.Now()
-	backupJob.Status.CompletedAt = &now
-	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
-	backupJob.Status.Message = message
-
-	// Add condition
-	backupJob.Status.Conditions = append(backupJob.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "BackupFailed",
-		Message:            message,
-		LastTransitionTime: now,
-	})
-
-	if err := r.Status().Update(ctx, backupJob); err != nil {
-		logger.Error(err, "failed to update BackupJob status to Failed")
-		return ctrl.Result{}, err
-	}
-	logger.Debug("BackupJob failed", "message", message)
-	return ctrl.Result{}, nil
-}
-
 func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, strategy *strategyv1alpha1.Velero) error {
 	logger := getLogger(ctx)
 	logger.Debug("createVeleroBackup called", "strategy", strategy.Name)
@@ -579,8 +557,8 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 
 	// Extract driver metadata (e.g., Velero backup name)
 	driverMetadata := map[string]string{
-		"velero.io/backup-name":      veleroBackup.Name,
-		"velero.io/backup-namespace": veleroBackup.Namespace,
+		veleroBackupNameMetadataKey:      veleroBackup.Name,
+		veleroBackupNamespaceMetadataKey: veleroBackup.Namespace,
 	}
 
 	backup := &backupsv1alpha1.Backup{
@@ -624,4 +602,170 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 
 	logger.Debug("created Backup resource", "name", backup.Name)
 	return backup, nil
+}
+
+// reconcileVeleroRestore handles restore operations for Velero strategy.
+func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	logger.Debug("reconciling Velero strategy restore", "restorejob", restoreJob.Name, "backup", backup.Name)
+
+	// Step 1: On first reconcile, set startedAt and phase = Running
+	if restoreJob.Status.StartedAt == nil {
+		logger.Debug("setting RestoreJob StartedAt and phase to Running")
+		now := metav1.Now()
+		restoreJob.Status.StartedAt = &now
+		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseRunning
+		if err := r.Status().Update(ctx, restoreJob); err != nil {
+			logger.Error(err, "failed to update RestoreJob status")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+	}
+
+	// Step 2: Resolve inputs - Read Strategy, Storage, target Application
+	logger.Debug("fetching Velero strategy", "strategyName", backup.Spec.StrategyRef.Name)
+	veleroStrategy := &strategyv1alpha1.Velero{}
+	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, veleroStrategy); err != nil {
+		if errors.IsNotFound(err) {
+			logger.Error(err, "Velero strategy not found", "strategyName", backup.Spec.StrategyRef.Name)
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Velero strategy not found: %s", backup.Spec.StrategyRef.Name))
+		}
+		logger.Error(err, "failed to get Velero strategy")
+		return ctrl.Result{}, err
+	}
+	logger.Debug("fetched Velero strategy", "strategyName", veleroStrategy.Name)
+
+	// Get Velero backup name from Backup's driverMetadata
+	veleroBackupName, ok := backup.Spec.DriverMetadata[veleroBackupNameMetadataKey]
+	if !ok {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Backup missing Velero backup name in driverMetadata (key: %s)", veleroBackupNameMetadataKey))
+	}
+
+	// Step 3: Execute restore logic
+	// Check if we already created a Velero Restore
+	logger.Debug("checking for existing Velero Restore", "namespace", veleroNamespace)
+	veleroRestoreList := &velerov1.RestoreList{}
+	opts := []client.ListOption{
+		client.InNamespace(veleroNamespace),
+		client.MatchingLabels{
+			backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
+			backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
+		},
+	}
+
+	if err := r.List(ctx, veleroRestoreList, opts...); err != nil {
+		logger.Error(err, "failed to get Velero Restore")
+		return ctrl.Result{}, err
+	}
+
+	if len(veleroRestoreList.Items) == 0 {
+		// Create Velero Restore
+		logger.Debug("Velero Restore not found, creating new one")
+		if err := r.createVeleroRestore(ctx, restoreJob, backup, veleroStrategy, veleroBackupName); err != nil {
+			logger.Error(err, "failed to create Velero Restore")
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to create Velero Restore: %v", err))
+		}
+		logger.Debug("created Velero Restore, requeuing")
+		// Requeue to check status
+		return ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+	}
+
+	if len(veleroRestoreList.Items) > 1 {
+		logger.Error(fmt.Errorf("too many Velero restores for RestoreJob"), "found more than one Velero Restore referencing a single RestoreJob as owner")
+		return r.markRestoreJobFailed(ctx, restoreJob, "found multiple Velero Restores for this RestoreJob")
+	}
+
+	veleroRestore := veleroRestoreList.Items[0].DeepCopy()
+	logger.Debug("found existing Velero Restore", "phase", veleroRestore.Status.Phase)
+
+	// Check Velero Restore status
+	phase := string(veleroRestore.Status.Phase)
+	if phase == "" {
+		// Still in progress, requeue
+		return ctrl.Result{RequeueAfter: defaultActiveRestorePollingInterval}, nil
+	}
+
+	// Step 4: On success
+	if phase == "Completed" {
+		now := metav1.Now()
+		restoreJob.Status.CompletedAt = &now
+		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+		if err := r.Status().Update(ctx, restoreJob); err != nil {
+			logger.Error(err, "failed to update RestoreJob status")
+			return ctrl.Result{}, err
+		}
+		logger.Debug("RestoreJob succeeded")
+		return ctrl.Result{}, nil
+	}
+
+	// Step 5: On failure
+	if phase == "Failed" || phase == "PartiallyFailed" {
+		message := fmt.Sprintf("Velero Restore failed with phase: %s", phase)
+		if veleroRestore.Status.FailureReason != "" {
+			message = fmt.Sprintf("%s: %s", message, veleroRestore.Status.FailureReason)
+		}
+		return r.markRestoreJobFailed(ctx, restoreJob, message)
+	}
+
+	// Still in progress (InProgress, New, etc.)
+	return ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+}
+
+// createVeleroRestore creates a Velero Restore resource.
+func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, strategy *strategyv1alpha1.Velero, veleroBackupName string) error {
+	logger := getLogger(ctx)
+	logger.Debug("createVeleroRestore called", "strategy", strategy.Name, "veleroBackupName", veleroBackupName)
+
+	// Determine target application reference
+	targetAppRef := r.getTargetApplicationRef(restoreJob, backup)
+
+	// Get the target application object for templating
+	mapping, err := r.RESTMapping(schema.GroupKind{Group: *targetAppRef.APIGroup, Kind: targetAppRef.Kind})
+	if err != nil {
+		return fmt.Errorf("failed to get REST mapping for target application: %w", err)
+	}
+	ns := restoreJob.Namespace
+	if mapping.Scope.Name() != meta.RESTScopeNameNamespace {
+		ns = ""
+	}
+	app, err := r.Resource(mapping.Resource).Namespace(ns).Get(ctx, targetAppRef.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get target application: %w", err)
+	}
+
+	// Template the restore spec from the strategy
+	veleroRestoreSpec, err := template.Template(&strategy.Spec.Template.RestoreSpec, app.Object)
+	if err != nil {
+		return fmt.Errorf("failed to template Velero Restore spec: %w", err)
+	}
+
+	// Set the backupName in the spec (required by Velero)
+	veleroRestoreSpec.BackupName = veleroBackupName
+
+	veleroRestore := &velerov1.Restore{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: fmt.Sprintf("%s.%s-", restoreJob.Namespace, restoreJob.Name),
+			Namespace:    veleroNamespace,
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
+			},
+		},
+		Spec: *veleroRestoreSpec,
+	}
+	name := veleroRestore.GenerateName
+	if err := r.Create(ctx, veleroRestore); err != nil {
+		if veleroRestore.Name != "" {
+			name = veleroRestore.Name
+		}
+		logger.Error(err, "failed to create Velero Restore", "name", veleroRestore.Name)
+		r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "VeleroRestoreCreationFailed",
+			fmt.Sprintf("Failed to create Velero Restore %s/%s: %v", veleroNamespace, name, err))
+		return err
+	}
+
+	logger.Debug("created Velero Restore", "name", veleroRestore.Name, "namespace", veleroRestore.Namespace)
+	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "VeleroRestoreCreated",
+		fmt.Sprintf("Created Velero Restore %s/%s", veleroNamespace, name))
+	return nil
 }
