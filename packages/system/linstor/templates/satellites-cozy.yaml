@@ -13,6 +13,7 @@ spec:
       hostNetwork: true
       containers:
       - name: linstor-satellite
+        image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
         securityContext:
           # real-world installations need some debugging from time to time
           readOnlyRootFilesystem: false
