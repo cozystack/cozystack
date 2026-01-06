@@ -1,0 +1,69 @@
+{{- $shouldRunMigrationHook := false }}
+{{- $currentVersion := 0 }}
+{{- $targetVersion := .Values.migrations.targetVersion | int }}
+{{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace "cozystack-version" }}
+{{- if $configMap }}
+  {{- $currentVersion = dig "data" "version" "0" $configMap | int }}
+  {{- if lt $currentVersion $targetVersion }}
+    {{- $shouldRunMigrationHook = true }}
+  {{- end }}
+{{- else }}
+  {{- $shouldRunMigrationHook = true }}
+{{- end }}
+
+{{- if $shouldRunMigrationHook }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cozystack-migration-hook
+  annotations:
+    helm.sh/hook: pre-upgrade,pre-install
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: cozystack-migration-hook
+      containers:
+        - name: migration
+          image: {{ .Values.migrations.image }}
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: CURRENT_VERSION
+              value: {{ $currentVersion | quote }}
+            - name: TARGET_VERSION
+              value: {{ $targetVersion | quote }}
+      restartPolicy: Never
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    helm.sh/hook: pre-upgrade,pre-install
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+  name: cozystack-migration-hook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: cozystack-migration-hook
+    namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozystack-migration-hook
+  annotations:
+    helm.sh/hook: pre-upgrade,pre-install
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+{{- end }}

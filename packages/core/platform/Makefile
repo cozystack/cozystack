@@ -4,31 +4,26 @@ NAMESPACE=cozy-system
 include ../../../scripts/common-envs.mk
 
 show:
-	cozyhr show -n $(NAMESPACE) $(NAME) --plain
+	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain
 
 apply:
-	cozyhr show -n $(NAMESPACE) $(NAME) --plain | kubectl apply -f-
-	kubectl delete helmreleases.helm.toolkit.fluxcd.io -l cozystack.io/marked-for-deletion=true -A
+	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl apply --filename -
+	kubectl delete helmreleases.helm.toolkit.fluxcd.io --selector cozystack.io/marked-for-deletion=true --all-namespaces
 
 reconcile: apply
 
-namespaces-show:
-	cozyhr show -n $(NAMESPACE) $(NAME) --plain -s templates/namespaces.yaml
-
-namespaces-apply:
-	cozyhr show -n $(NAMESPACE) $(NAME) --plain -s templates/namespaces.yaml | kubectl apply -f-
-
 diff:
-	cozyhr show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f-
+	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl diff --filename -
 
-image: image-assets
-image-assets:
-	docker buildx build -f images/cozystack-assets/Dockerfile ../../.. \
-		--tag $(REGISTRY)/cozystack-assets:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-assets:latest \
+image: image-migrations
+
+image-migrations:
+	docker buildx build --file images/migrations/Dockerfile . \
+		--tag $(REGISTRY)/platform-migrations:$(call settag,$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/platform-migrations:latest \
 		--cache-to type=inline \
-		--metadata-file images/cozystack-assets.json \
+		--metadata-file images/migrations.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/cozystack-assets:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/cozystack-assets.json -o json -r)" \
-		yq -i '.assets.image = strenv(IMAGE)' values.yaml
-	rm -f images/cozystack-assets.json
+	IMAGE="$(REGISTRY)/platform-migrations:$(call settag,$(TAG))@$$(yq --exit-status '.["containerimage.digest"]' images/migrations.json --output-format json --raw-output)" \
+		yq --inplace '.migrations.image = strenv(IMAGE)' values.yaml
+	rm -f images/migrations.json
