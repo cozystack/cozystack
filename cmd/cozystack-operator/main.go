@@ -32,12 +32,16 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -45,6 +49,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"github.com/cozystack/cozystack/internal/cozyvaluesreplicator"
 	"github.com/cozystack/cozystack/internal/fluxinstall"
 	"github.com/cozystack/cozystack/internal/operator"
 	// +kubebuilder:scaffold:imports
@@ -73,6 +78,9 @@ func main() {
 	var enableHTTP2 bool
 	var installFlux bool
 	var cozystackVersion string
+	var cozyValuesSecretName string
+	var cozyValuesSecretNamespace string
+	var cozyValuesNamespaceSelector string
 	var platformSourceURL string
 	var platformSourceName string
 	var platformSourceRef string
@@ -92,6 +100,9 @@ func main() {
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-packages", "Name for the generated platform source resource (default: cozystack-packages)")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
+	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
+	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
+	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
 
 	opts := zap.Options{
 		Development: true,
@@ -110,10 +121,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	targetNSSelector, err := labels.Parse(cozyValuesNamespaceSelector)
+	if err != nil {
+		setupLog.Error(err, "could not parse namespace label selector")
+		os.Exit(1)
+	}
+
 	// Start the controller manager
 	setupLog.Info("Starting controller manager")
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme: scheme,
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				// Cache only Secrets named <secretName> (in any namespace)
+				&corev1.Secret{}: {
+					Field: fields.OneTermEqualSelector("metadata.name", cozyValuesSecretName),
+				},
+
+				// Cache only Namespaces that match a label selector
+				&corev1.Namespace{}: {
+					Label: targetNSSelector,
+				},
+			},
+		},
 		Metrics: metricsserver.Options{
 			BindAddress:   metricsAddr,
 			SecureServing: secureMetrics,
@@ -169,6 +199,16 @@ func main() {
 		}
 	}
 
+	if err := (&cozyvaluesreplicator.SecretReplicatorReconciler{
+		Client:                  mgr.GetClient(),
+		Scheme:                  mgr.GetScheme(),
+		SourceNamespace:         cozyValuesSecretNamespace,
+		SecretName:              cozyValuesSecretName,
+		TargetNamespaceSelector: targetNSSelector,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CozyValuesReplicator")
+		os.Exit(1)
+	}
 	// Setup PackageSource reconciler
 	if err := (&operator.PackageSourceReconciler{
 		Client: mgr.GetClient(),
