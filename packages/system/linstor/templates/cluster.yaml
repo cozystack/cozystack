@@ -27,8 +27,10 @@ spec:
     podTemplate:
       spec:
         containers:
+        - name: linstor-controller
+          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
         - name: plunger
-          image: {{ include "cozy.linstor.version.controller" . }}
+          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
           command:
           - "/scripts/plunger-controller.sh"
           securityContext:

@@ -1,1 +1,4 @@
-
+piraeusServer:
+  image:
+    repository: ghcr.io/cozystack/cozystack/piraeus-server
+    tag: latest@sha256:417532baa2801288147cd9ac9ae260751c1a7754f0b829725d09b72a770c111a
