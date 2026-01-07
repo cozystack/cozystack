@@ -39,9 +39,9 @@ spec:
 EOF
 
   # Wait until HelmReleases appear & reconcile them
-  timeout 180 sh -ec 'until kubectl get hr -A -l cozystack.io/system-app=true | grep -q cozys; do sleep 1; done'
+  timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
   sleep 5
-  kubectl get hr -A -l cozystack.io/system-app=true | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
+  kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
 
   # Fail the test if any HelmRelease is not Ready
   if kubectl get hr -A | grep -v " True " | grep -v NAME; then
