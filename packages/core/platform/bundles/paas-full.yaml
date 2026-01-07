@@ -208,6 +208,12 @@ releases:
   namespace: cozy-system
   dependsOn: [cozystack-resource-definition-crd]
 
+- name: mongodb-rd
+  releaseName: mongodb-rd
+  chart: mongodb-rd
+  namespace: cozy-system
+  dependsOn: [cozystack-resource-definition-crd]
+
 - name: seaweedfs-rd
   releaseName: seaweedfs-rd
   chart: seaweedfs-rd
@@ -410,6 +416,12 @@ releases:
   chart: cozy-redis-operator
   namespace: cozy-redis-operator
   dependsOn: [cilium,kubeovn,multus]
+
+- name: mongodb-operator
+  releaseName: mongodb-operator
+  chart: cozy-mongodb-operator
+  namespace: cozy-mongodb-operator
+  dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
 
 - name: piraeus-operator
   releaseName: piraeus-operator
