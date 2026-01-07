@@ -1,7 +1,8 @@
 {{- define "cozystack.platform.package" -}}
 {{- $name := index . 0 -}}
 {{- $variant := default "default" (index . 1) -}}
-{{- $disabled := default (list) $.Values.bundles.disabledPackages -}}
+{{- $root := default $ (index . 2) -}}
+{{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
 {{- if not (has $name $disabled) -}}
 ---
 apiVersion: cozystack.io/v1alpha1
@@ -20,8 +21,9 @@ spec:
 {{- define "cozystack.platform.package.optional" -}}
 {{- $name := index . 0 -}}
 {{- $variant := default "default" (index . 1) -}}
-{{- $disabled := default (list) $.Values.bundles.disabledPackages -}}
-{{- $enabled := default (list) $.Values.bundles.enabledPackages -}}
+{{- $root := default $ (index . 2) -}}
+{{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
+{{- $enabled := default (list) $root.Values.bundles.enabledPackages -}}
 {{- if and (has $name $enabled) (not (has $name $disabled)) -}}
 ---
 apiVersion: cozystack.io/v1alpha1
