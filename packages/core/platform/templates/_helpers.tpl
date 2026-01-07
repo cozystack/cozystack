@@ -15,7 +15,7 @@ spec:
 {{- end -}}
 
 {{- define "cozystack.platform.package.default" -}}
-{{- include "cozystack.platform.package" (list . "default") -}}
+{{- include "cozystack.platform.package" (list . "default" $) -}}
 {{- end -}}
 
 {{- define "cozystack.platform.package.optional" -}}
@@ -36,5 +36,5 @@ spec:
 {{- end -}}
 
 {{- define "cozystack.platform.package.optional.default" -}}
-{{- include "cozystack.platform.package.optional" (list . "default") -}}
+{{- include "cozystack.platform.package.optional" (list . "default" $) -}}
 {{- end -}}
