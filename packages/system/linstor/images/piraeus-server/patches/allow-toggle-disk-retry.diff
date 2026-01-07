@@ -1,8 +1,8 @@
 diff --git a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
-index 1a6f7b7f0..bd447e049 100644
+index d93a18014..cc8ce4f04 100644
 --- a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
 +++ b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
-@@ -58,7 +58,9 @@ import com.linbit.linstor.stateflags.StateFlags;
+@@ -57,7 +57,9 @@ import com.linbit.linstor.stateflags.StateFlags;
  import com.linbit.linstor.storage.StorageException;
  import com.linbit.linstor.storage.data.adapter.drbd.DrbdRscData;
  import com.linbit.linstor.storage.interfaces.categories.resource.AbsRscLayerObject;
@@ -12,7 +12,7 @@ index 1a6f7b7f0..bd447e049 100644
  import com.linbit.linstor.storage.utils.LayerUtils;
  import com.linbit.linstor.tasks.AutoDiskfulTask;
  import com.linbit.linstor.utils.layer.LayerRscUtils;
-@@ -317,21 +319,90 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+@@ -387,21 +389,84 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
  
          Resource rsc = ctrlApiDataLoader.loadRsc(nodeName, rscName, true);
  
@@ -61,18 +61,12 @@ index 1a6f7b7f0..bd447e049 100644
 +                    .concatWith(ctrlRscDfnApiCallHandler.get().updateProps(rsc.getResourceDefinition()));
 +            }
 +            // If adding disk and DISK_ADD_REQUESTED is already set, treat as retry
-+            // First clean up partially created storage by removing and recreating layer data
++            // Simply retry the operation with existing layer data - satellite will handle it idempotently
++            // NOTE: We don't remove/recreate layer data here because removeLayerData() only deletes
++            // from controller DB without calling drbdadm down on satellite, leaving orphaned DRBD devices
 +            errorReporter.logInfo(
-+                "Toggle Disk retry on %s/%s - DISK_ADD_REQUESTED already set, cleaning up and retrying",
++                "Toggle Disk retry on %s/%s - DISK_ADD_REQUESTED already set, retrying operation",
 +                nodeNameStr, rscNameStr);
-+
-+            // Remove old layer data and recreate to ensure clean state
-+            // This forces satellite to delete any partially created storage and start fresh
-+            LayerPayload payload = new LayerPayload();
-+            copyDrbdNodeIdIfExists(rsc, payload);
-+            List<DeviceLayerKind> layerList = removeLayerData(rsc);
-+            ctrlLayerStackHelper.ensureStackDataExists(rsc, layerList, payload);
-+
 +            ctrlTransactionHelper.commit();
 +            return Flux
 +                .<ApiCallRc>just(new ApiCallRcImpl())
@@ -113,7 +107,7 @@ index 1a6f7b7f0..bd447e049 100644
          }
  
          if (!removeDisk && !ctrlVlmCrtApiHelper.isDiskless(rsc))
-@@ -342,17 +413,43 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+@@ -412,17 +477,43 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
                  true
              ));
          }
@@ -160,7 +154,7 @@ index 1a6f7b7f0..bd447e049 100644
          if (removeDisk)
          {
              // Prevent removal of the last disk
-@@ -1324,6 +1421,30 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+@@ -1446,6 +1537,30 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
          }
      }
  
@@ -191,7 +185,7 @@ index 1a6f7b7f0..bd447e049 100644
      private void markDiskAdded(Resource rscData)
      {
          try
-@@ -1389,6 +1510,41 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+@@ -1511,6 +1626,41 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
          return layerData;
      }
  
