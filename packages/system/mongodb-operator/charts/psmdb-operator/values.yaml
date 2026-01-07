@@ -1,0 +1,103 @@
+# Default values for psmdb-operator.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: percona/percona-server-mongodb-operator
+  tag: 1.21.1
+  pullPolicy: IfNotPresent
+
+# disableTelemetry: according to
+# https://docs.percona.com/percona-operator-for-mongodb/telemetry.html
+# this is how you can disable telemetry collection
+# default is false which means telemetry will be collected
+disableTelemetry: false
+
+# set if you want to specify a namespace to watch
+# defaults to `.Release.namespace` if left blank
+# multiple namespaces can be specified and separated by comma
+# watchNamespace:
+# set if you want that watched namespaces are created by helm
+# createNamespace: false
+
+# set if operator should be deployed in cluster wide mode. defaults to false
+watchAllNamespaces: false
+
+# rbac: settings for deployer RBAC creation
+rbac:
+  # rbac.create: if false RBAC resources should be in place
+  create: true
+
+# serviceAccount: settings for Service Accounts used by the deployer
+serviceAccount:
+  # serviceAccount.create: Whether to create the Service Accounts or not
+  create: true
+  # annotations to add to the service account
+  annotations: {}
+
+# annotations to add to the operator deployment
+annotations: {}
+
+# labels to add to the operator deployment
+labels: {}
+
+# annotations to add to the operator pod
+podAnnotations: {}
+  # prometheus.io/scrape: "true"
+  # prometheus.io/port: "8080"
+
+# labels to the operator pod
+podLabels: {}
+  
+podSecurityContext: {}
+  # runAsNonRoot: true
+  # runAsUser: 2
+  # runAsGroup: 2
+  # fsGroup: 2
+  # fsGroupChangePolicy: "OnRootMismatch"
+
+securityContext: {}
+  # allowPrivilegeEscalation: false
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # seccompProfile:
+  #   type: RuntimeDefault
+
+# set if you want to use a different operator name
+# defaults to `percona-server-mongodb-operator`
+# operatorName:
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+env:
+  resyncPeriod: 5s
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+logStructured: false
+logLevel: "INFO"
+
+# maxConcurrentReconciles controls the number of concurrent workers 
+# that can reconcile resources in Percona Server for MongoDB clusters in parallel.
+maxConcurrentReconciles: "1"

@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psmdb-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "psmdb-operator.labels" . | nindent 4 }}
+    {{- with .Values.labels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "psmdb-operator.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app.kubernetes.io/name: {{ include "psmdb-operator.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- with .Values.podLabels }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "psmdb-operator.fullname" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+            name: metrics
+          - containerPort: 8081
+            protocol: TCP
+            name: health
+          command:
+          - percona-server-mongodb-operator
+          {{- if .Values.securityContext.readOnlyRootFilesystem }}
+          volumeMounts:
+            - name: tmpdir
+              mountPath: /tmp
+          {{- end }}
+          env:
+            - name: LOG_STRUCTURED
+              value: "{{ .Values.logStructured }}"
+            - name: LOG_LEVEL
+              value: "{{ .Values.logLevel }}"
+            - name: WATCH_NAMESPACE
+              {{- if .Values.watchAllNamespaces }}
+              value: ""
+              {{- else }}
+              value: "{{ default .Release.Namespace .Values.watchNamespace }}"
+              {{- end }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: {{ default "percona-server-mongodb-operator" .Values.operatorName }}
+            - name: RESYNC_PERIOD
+              value: "{{ .Values.env.resyncPeriod }}"
+            - name: DISABLE_TELEMETRY
+              value: "{{ .Values.disableTelemetry }}"
+            {{- if .Values.maxConcurrentReconciles }}
+            - name: MAX_CONCURRENT_RECONCILES
+              value: "{{ .Values.maxConcurrentReconciles }}"
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- if .Values.securityContext.readOnlyRootFilesystem }}
+      volumes:
+        - name: tmpdir
+          emptyDir: {}
+    {{- end }}

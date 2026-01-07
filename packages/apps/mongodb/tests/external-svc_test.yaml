@@ -1,0 +1,154 @@
+suite: external service tests
+
+templates:
+  - templates/external-svc.yaml
+
+tests:
+  ###################
+  # Rendering       #
+  ###################
+
+  - it: does not render when external is false
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders LoadBalancer service when external is true
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+
+  ###################
+  # Service config  #
+  ###################
+
+  - it: uses correct service name
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mydb-external
+
+  - it: sets LoadBalancer type
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+  - it: sets externalTrafficPolicy to Local
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.externalTrafficPolicy
+          value: Local
+
+  - it: exposes MongoDB port 27017
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.ports[0].name
+          value: mongodb
+      - equal:
+          path: spec.ports[0].port
+          value: 27017
+
+  ###########################
+  # Common selector labels  #
+  ###########################
+
+  - it: sets app.kubernetes.io/name selector
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: percona-server-mongodb
+
+  - it: sets app.kubernetes.io/instance selector
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: mydb
+
+  ###########################
+  # Replica set mode        #
+  ###########################
+
+  - it: selects mongod for replica set mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: false
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: mongod
+      - equal:
+          path: spec.selector["app.kubernetes.io/replset"]
+          value: rs0
+
+  ###########################
+  # Sharded mode            #
+  ###########################
+
+  - it: selects mongos for sharded mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: mongos
+
+  - it: does not set replset selector for sharded mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - notExists:
+          path: spec.selector["app.kubernetes.io/replset"]

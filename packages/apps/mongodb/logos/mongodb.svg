@@ -1,0 +1,13 @@
+<svg width="144" height="144" viewBox="0 0 144 144" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="144" height="144" rx="24" fill="url(#paint0_linear_mongodb)"/>
+<path d="M72 24C72 24 72 24 72 24C72 24 58 40 58 62C58 84 72 120 72 120C72 120 86 84 86 62C86 40 72 24 72 24Z" fill="#00ED64"/>
+<path d="M72 120C72 120 86 84 86 62C86 40 72 24 72 24" stroke="#00684A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M72 24C72 24 58 40 58 62C58 84 72 120 72 120" stroke="#001E2B" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="69" y="108" width="6" height="16" rx="2" fill="#00684A"/>
+<defs>
+<linearGradient id="paint0_linear_mongodb" x1="140" y1="130.5" x2="4" y2="9.49999" gradientUnits="userSpaceOnUse">
+<stop stop-color="#001E2B"/>
+<stop offset="1" stop-color="#023430"/>
+</linearGradient>
+</defs>
+</svg>
