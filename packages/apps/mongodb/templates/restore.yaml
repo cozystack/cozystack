@@ -1,0 +1,37 @@
+{{- if .Values.bootstrap.enabled }}
+{{- if not .Values.bootstrap.backupName }}
+{{- fail "bootstrap.backupName is required when bootstrap.enabled is true" }}
+{{- end }}
+{{- if not .Values.backup.destinationPath }}
+{{- fail "backup.destinationPath is required when bootstrap.enabled is true" }}
+{{- end }}
+{{- if not .Values.backup.endpointURL }}
+{{- fail "backup.endpointURL is required when bootstrap.enabled is true" }}
+{{- end }}
+{{- if not .Values.backup.s3AccessKey }}
+{{- fail "backup.s3AccessKey is required when bootstrap.enabled is true" }}
+{{- end }}
+{{- if not .Values.backup.s3SecretKey }}
+{{- fail "backup.s3SecretKey is required when bootstrap.enabled is true" }}
+{{- end }}
+---
+apiVersion: psmdb.percona.com/v1
+kind: PerconaServerMongoDBRestore
+metadata:
+  name: {{ .Release.Name }}-restore
+spec:
+  clusterName: {{ .Release.Name }}
+  {{- if .Values.bootstrap.recoveryTime }}
+  pitr:
+    type: date
+    date: {{ .Values.bootstrap.recoveryTime | quote }}
+  {{- end }}
+  backupSource:
+    type: logical
+    destination: {{ .Values.backup.destinationPath | trimSuffix "/" }}/{{ .Values.bootstrap.backupName }}
+    s3:
+      credentialsSecret: {{ .Release.Name }}-s3-creds
+      endpointUrl: {{ .Values.backup.endpointURL }}
+      insecureSkipTLSVerify: false
+      forcePathStyle: true
+{{- end }}
