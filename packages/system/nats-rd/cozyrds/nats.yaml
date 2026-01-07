@@ -17,6 +17,12 @@ spec:
       kind: OCIRepository
       name: nats-rd
       namespace: cozy-system
+    chart:
+      name: nats
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
   dashboard:
     category: PaaS
     singular: NATS

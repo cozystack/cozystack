@@ -17,6 +17,12 @@ spec:
       kind: OCIRepository
       name: kafka-rd
       namespace: cozy-system
+    chart:
+      name: kafka
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
   dashboard:
     category: PaaS
     singular: Kafka

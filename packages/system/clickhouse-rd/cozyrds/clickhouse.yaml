@@ -17,6 +17,12 @@ spec:
       kind: OCIRepository
       name: clickhouse-rd
       namespace: cozy-system
+    chart:
+      name: clickhouse
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
   dashboard:
     category: PaaS
     singular: ClickHouse

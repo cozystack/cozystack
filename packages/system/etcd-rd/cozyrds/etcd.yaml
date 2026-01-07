@@ -18,6 +18,12 @@ spec:
       kind: OCIRepository
       name: etcd-rd
       namespace: cozy-system
+    chart:
+      name: etcd
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-extra
+        namespace: cozy-public
   dashboard:
     category: Administration
     singular: Etcd

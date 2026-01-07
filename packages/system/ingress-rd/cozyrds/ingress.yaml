@@ -18,6 +18,12 @@ spec:
       kind: OCIRepository
       name: ingress-rd
       namespace: cozy-system
+    chart:
+      name: ingress
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-extra
+        namespace: cozy-public
   dashboard:
     category: Administration
     singular: Ingress

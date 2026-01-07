@@ -17,6 +17,12 @@ spec:
       kind: OCIRepository
       name: vpn-rd
       namespace: cozy-system
+    chart:
+      name: vpn
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
   dashboard:
     category: NaaS
     singular: VPN
