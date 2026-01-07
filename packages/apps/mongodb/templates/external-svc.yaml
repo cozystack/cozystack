@@ -1,0 +1,24 @@
+{{- if .Values.external }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  {{- if (include "cozy-lib.network.disableLoadBalancerNodePorts" $ | fromYaml) }}
+  allocateLoadBalancerNodePorts: false
+  {{- end }}
+  ports:
+  - name: mongodb
+    port: 27017
+  selector:
+    app.kubernetes.io/name: percona-server-mongodb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- if .Values.sharding }}
+    app.kubernetes.io/component: mongos
+    {{- else }}
+    app.kubernetes.io/component: mongod
+    app.kubernetes.io/replset: rs0
+    {{- end }}
+{{- end }}

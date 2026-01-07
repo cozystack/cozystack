@@ -1,0 +1,13 @@
+apiVersion: v2
+appVersion: 1.21.1
+description: A Helm chart for deploying the Percona Operator for MongoDB
+home: https://docs.percona.com/percona-operator-for-mongodb/
+maintainers:
+- email: natalia.marukovich@percona.com
+  name: nmarukovich
+- email: julio.pasinatto@percona.com
+  name: jvpasinatto
+- email: eleonora.zinchenko@percona.com
+  name: eleo007
+name: psmdb-operator
+version: 1.21.2

@@ -1,0 +1,2 @@
+psmdb-operator:
+  watchAllNamespaces: true

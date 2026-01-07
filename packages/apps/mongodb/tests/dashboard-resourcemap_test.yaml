@@ -1,0 +1,106 @@
+suite: dashboard resourcemap tests
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+tests:
+  # Always renders Role and RoleBinding
+  - it: renders Role and RoleBinding
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Role
+        documentIndex: 0
+      - isKind:
+          of: RoleBinding
+        documentIndex: 1
+
+  # Role naming
+  - it: uses correct Role name
+    release:
+      name: mydb
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mydb-dashboard-resources
+        documentIndex: 0
+
+  # RoleBinding naming
+  - it: uses correct RoleBinding name
+    release:
+      name: mydb
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mydb-dashboard-resources
+        documentIndex: 1
+
+  # Role grants access to services
+  - it: grants access to MongoDB services
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[0].resourceNames
+          content: test-mongodb-rs0
+        documentIndex: 0
+      - contains:
+          path: rules[0].resourceNames
+          content: test-mongodb-mongos
+        documentIndex: 0
+      - contains:
+          path: rules[0].resourceNames
+          content: test-mongodb-external
+        documentIndex: 0
+
+  # Role grants access to credentials secret
+  - it: grants access to credentials secret
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-credentials
+        documentIndex: 0
+
+  # Role grants access to workloadmonitor
+  - it: grants access to WorkloadMonitor
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[2].resourceNames
+          content: test-mongodb
+        documentIndex: 0
+      - equal:
+          path: rules[2].apiGroups[0]
+          value: cozystack.io
+        documentIndex: 0
+
+  # RoleBinding references correct Role
+  - it: RoleBinding references correct Role
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: roleRef.kind
+          value: Role
+        documentIndex: 1
+      - equal:
+          path: roleRef.name
+          value: test-mongodb-dashboard-resources
+        documentIndex: 1
+      - equal:
+          path: roleRef.apiGroup
+          value: rbac.authorization.k8s.io
+        documentIndex: 1

@@ -1,0 +1,349 @@
+suite: restore tests
+
+templates:
+  - templates/restore.yaml
+
+tests:
+  #####################
+  # Rendering         #
+  #####################
+
+  - it: does not render when bootstrap is disabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders PerconaServerMongoDBRestore CR when enabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "my-backup-2025-01-07"
+      backup:
+        destinationPath: "s3://bucket/backups/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PerconaServerMongoDBRestore
+
+  #####################
+  # Validation        #
+  #####################
+
+  - it: fails when backupName is missing
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: ""
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "bootstrap.backupName is required when bootstrap.enabled is true"
+
+  - it: fails when destinationPath is missing
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "my-backup"
+      backup:
+        destinationPath: ""
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.destinationPath is required when bootstrap.enabled is true"
+
+  - it: fails when endpointURL is missing
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "my-backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: ""
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.endpointURL is required when bootstrap.enabled is true"
+
+  #####################
+  # CR metadata       #
+  #####################
+
+  - it: uses correct restore CR name
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup-2025"
+      backup:
+        destinationPath: "s3://bucket/backups/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mydb-restore
+
+  - it: references correct cluster name
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup-2025"
+      backup:
+        destinationPath: "s3://bucket/backups/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.clusterName
+          value: test-mongodb
+
+  #####################
+  # Backup source     #
+  #####################
+
+  - it: sets backupSource type to logical
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup-2025"
+      backup:
+        destinationPath: "s3://bucket/backups/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.type
+          value: logical
+
+  - it: constructs destination from destinationPath and backupName
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "daily-backup-2025-01-07"
+      backup:
+        destinationPath: "s3://mybucket/mongodb/prod/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://mybucket/mongodb/prod/daily-backup-2025-01-07
+
+  - it: trims trailing slash from destinationPath
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.destination
+          value: s3://bucket/path/backup
+
+  #####################
+  # S3 configuration  #
+  #####################
+
+  - it: references s3-creds secret
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.credentialsSecret
+          value: mydb-s3-creds
+
+  - it: sets S3 endpoint URL
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "https://s3.amazonaws.com"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.endpointUrl
+          value: "https://s3.amazonaws.com"
+
+  - it: disables insecureSkipTLSVerify
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.insecureSkipTLSVerify
+          value: false
+
+  - it: enables forcePathStyle
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backupSource.s3.forcePathStyle
+          value: true
+
+  #####################
+  # PITR              #
+  #####################
+
+  - it: does not set pitr when recoveryTime not specified
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - notExists:
+          path: spec.pitr
+
+  - it: configures PITR when recoveryTime is set
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "my-backup"
+        recoveryTime: "2025-01-07 14:30:00"
+      backup:
+        destinationPath: "s3://bucket/backups/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.pitr.type
+          value: date
+      - equal:
+          path: spec.pitr.date
+          value: "2025-01-07 14:30:00"
+
+  #####################
+  # S3 credentials    #
+  #####################
+
+  - it: fails when s3AccessKey is missing
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: ""
+        s3SecretKey: "secret"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.s3AccessKey is required when bootstrap.enabled is true"
+
+  - it: fails when s3SecretKey is missing
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      bootstrap:
+        enabled: true
+        backupName: "backup"
+      backup:
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.s3SecretKey is required when bootstrap.enabled is true"

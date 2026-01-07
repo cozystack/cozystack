@@ -1,0 +1,40 @@
+1. Percona Operator for MongoDB is deployed.
+  See if the operator Pod is running:
+
+    kubectl get pods -l app.kubernetes.io/name=psmdb-operator --namespace {{ .Release.Namespace }}
+
+  Check the operator logs if the Pod is not starting:
+
+    export POD=$(kubectl get pods -l app.kubernetes.io/name=psmdb-operator --namespace {{ .Release.Namespace }} --output name)
+    kubectl logs $POD --namespace={{ .Release.Namespace }}
+
+2. Deploy the database cluster from psmdb-db chart:
+
+    helm install my-db percona/psmdb-db --namespace={{ .Release.Namespace }}
+
+{{- if .Release.IsUpgrade }}
+  {{- $ctx := dict "upgradeCrd" false }}
+  {{- $crdNames := list "perconaservermongodbbackups.psmdb.percona.com" "perconaservermongodbrestores.psmdb.percona.com " "perconaservermongodbs.psmdb.percona.com" }}
+  {{- range $name := $crdNames }}
+    {{- $crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" $name }}
+    {{- if $crd }}
+      {{- $crdLabels := (($crd).metadata).labels | default dict }}
+      {{- $crdVersion := index $crdLabels "app.kubernetes.io/version" }}
+      {{- if or (not $crdVersion) (semverCompare (printf "< %s" $.Chart.AppVersion) (trimPrefix "v" $crdVersion)) }}
+        {{- $_ := set $ctx "upgradeCrd" true }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if $ctx.upgradeCrd }}
+
+** WARNING ** During Helm upgrade CRDs are not automatically upgraded.
+
+Consider upgrading to the latest version of the CRDs using the command below:
+
+    kubectl apply --server-side --force-conflicts -f https://raw.githubusercontent.com/percona/percona-server-mongodb-operator/v{{ .Chart.AppVersion }}/deploy/crd.yaml
+
+Ensure all deprecated fields are reviewed as part of the upgrade process, especially when running multiple PSMDB Operator versions in the same cluster. Deprecated fields may be removed or unsupported in newer CRD versions.
+  {{- end }}
+{{- end }}
+
+Read more in our documentation: https://docs.percona.com/percona-operator-for-mongodb/
