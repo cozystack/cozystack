@@ -1023,6 +1023,27 @@ func createReadyColumn() map[string]any {
 	}
 }
 
+// createApplicationRefColumn creates a column that displays
+// applicationRef in the format "Kind.apiGroup/name"
+func createApplicationRefColumn(name string) map[string]any {
+	return map[string]any{
+		"name": name,
+		"type": "factory",
+		"customProps": map[string]any{
+			"disableEventBubbling": true,
+			"items": []any{
+				map[string]any{
+					"type": "parsedText",
+					"data": map[string]any{
+						"id":   "application-ref-text",
+						"text": "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}",
+					},
+				},
+			},
+		},
+	}
+}
+
 // createConverterBytesColumn creates a column with ConverterBytes component
 func createConverterBytesColumn(name, jsonPath string) map[string]any {
 	return map[string]any{
