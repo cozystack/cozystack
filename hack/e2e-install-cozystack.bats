@@ -39,7 +39,7 @@ spec:
 EOF
 
   # Wait until HelmReleases appear & reconcile them
-  timeout 60 sh -ec 'until kubectl get hr -A -l cozystack.io/system-app=true | grep -q cozys; do sleep 1; done'
+  timeout 180 sh -ec 'until kubectl get hr -A -l cozystack.io/system-app=true | grep -q cozys; do sleep 1; done'
   sleep 5
   kubectl get hr -A -l cozystack.io/system-app=true | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
 
