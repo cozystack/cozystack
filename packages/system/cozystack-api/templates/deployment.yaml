@@ -21,6 +21,8 @@ spec:
       labels:
         app: cozystack-api
     spec:
+      tolerations:
+      - operator: Exists
       serviceAccountName: cozystack-api
       {{- if .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
       nodeSelector:
