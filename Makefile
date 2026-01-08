@@ -13,10 +13,6 @@ build: build-deps
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
 	make -C packages/extra/monitoring image
-	make -C packages/extra/info image
-	make -C packages/extra/ingress image
-	make -C packages/extra/etcd image
-	make -C packages/extra/seaweedfs image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
 	make -C packages/system/backup-controller image
