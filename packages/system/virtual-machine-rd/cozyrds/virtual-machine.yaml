@@ -17,6 +17,12 @@ spec:
       kind: OCIRepository
       name: virtual-machine-rd
       namespace: cozy-system
+    chart:
+      name: virtual-machine
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
   dashboard:
     category: IaaS
     singular: Virtual Machine

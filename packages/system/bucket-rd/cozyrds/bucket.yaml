@@ -17,6 +17,12 @@ spec:
       kind: OCIRepository
       name: bucket-rd
       namespace: cozy-system
+    chart:
+      name: bucket
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
   dashboard:
     singular: Bucket
     plural: Buckets

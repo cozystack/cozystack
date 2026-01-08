@@ -18,6 +18,12 @@ spec:
       kind: OCIRepository
       name: info-rd
       namespace: cozy-system
+    chart:
+      name: info
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-extra
+        namespace: cozy-public
   dashboard:
     name: info
     category: Administration
