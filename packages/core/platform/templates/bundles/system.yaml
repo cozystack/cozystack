@@ -2,7 +2,11 @@
 
 # Networking
 {{- if eq .Values.bundles.system.variant "isp-full" }}
-{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $) }}
+{{- $networkingComponents := dict -}}
+{{- if .Values.networking -}}
+{{- $_ := set $networkingComponents "kubeovn" (dict "values" .Values.networking) -}}
+{{- end -}}
+{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozy-proxy" $) }}

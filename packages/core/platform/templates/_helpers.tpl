@@ -2,6 +2,10 @@
 {{- $name := index . 0 -}}
 {{- $variant := default "default" (index . 1) -}}
 {{- $root := default $ (index . 2) -}}
+{{- $components := dict -}}
+{{- if gt (len .) 3 -}}
+{{- $components = index . 3 -}}
+{{- end -}}
 {{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
 {{- if not (has $name $disabled) -}}
 ---
@@ -11,6 +15,10 @@ metadata:
   name: {{ $name }}
 spec:
   variant: {{ $variant }}
+{{- if $components }}
+  components:
+{{ toYaml $components | indent 4 }}
+{{- end }}
 {{- end -}}
 {{- end -}}
 
