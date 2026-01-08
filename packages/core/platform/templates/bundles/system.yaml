@@ -48,7 +48,10 @@
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
+{{- $basicsComponents := dict -}}
+{{- $basicsValues := dict "oidcEnabled" (ternary "true" "false" .Values.authentication.oidc.enabled) -}}
+{{- $_ := set $basicsComponents "cozystack-basics" (dict "values" $basicsValues) }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-basics" "default" $ $basicsComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}

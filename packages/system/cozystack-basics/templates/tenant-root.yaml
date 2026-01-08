@@ -23,3 +23,6 @@ spec:
     namespace: cozy-system
   interval: 1m0s
   timeout: 5m0s
+  values:
+    _cluster:
+      oidc-enabled: {{ .Values.oidcEnabled | quote }}
