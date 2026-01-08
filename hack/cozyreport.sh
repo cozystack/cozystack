@@ -56,6 +56,26 @@ kubectl get hr -A --no-headers | awk '$4 != "True"' | \
     kubectl describe hr -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
   done
 
+echo "Collecting packages..."
+kubectl get packages -A > $REPORT_DIR/kubernetes/packages.txt 2>&1
+kubectl get packages -A --no-headers | awk '$4 != "True"' | \
+  while read NAMESPACE NAME _; do
+    DIR=$REPORT_DIR/kubernetes/packages/$NAMESPACE/$NAME
+    mkdir -p $DIR
+    kubectl get package -n $NAMESPACE $NAME -o yaml > $DIR/package.yaml 2>&1
+    kubectl describe package -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+  done
+
+echo "Collecting packagesources..."
+kubectl get packagesources -A > $REPORT_DIR/kubernetes/packagesources.txt 2>&1
+kubectl get packagesources -A --no-headers | awk '$4 != "True"' | \
+  while read NAMESPACE NAME _; do
+    DIR=$REPORT_DIR/kubernetes/packagesources/$NAMESPACE/$NAME
+    mkdir -p $DIR
+    kubectl get packagesource -n $NAMESPACE $NAME -o yaml > $DIR/packagesource.yaml 2>&1
+    kubectl describe packagesource -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+  done
+
 echo "Collecting pods..."
 kubectl get pod -A -o wide > $REPORT_DIR/kubernetes/pods.txt 2>&1
 kubectl get pod -A --no-headers | awk '$4 !~ /Running|Succeeded|Completed/' |
