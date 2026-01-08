@@ -30,7 +30,7 @@ FROM alpine:3.22
 
 RUN wget -O- https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.5.0
 
-RUN apk add --no-cache make kubectl helm coreutils git jq openssl
+RUN apk add --no-cache make kubectl helm coreutils git jq
 
 COPY --from=builder /src/scripts /cozystack/scripts
 COPY --from=builder /src/packages/core /cozystack/packages/core
