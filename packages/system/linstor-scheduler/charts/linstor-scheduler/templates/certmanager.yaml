@@ -1,0 +1,56 @@
+{{- if .Values.admission.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}-admission-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}-admission-root-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "linstor-scheduler.fullname" . }}-admission-root-ca
+  duration: 43800h  # 5 years
+  commonName: {{ include "linstor-scheduler.fullname" . }}-admission-root-ca
+  issuerRef:
+    name: {{ include "linstor-scheduler.fullname" . }}-admission-selfsigned
+  isCA: true
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}-admission-ca-issuer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "linstor-scheduler.fullname" . }}-admission-root-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}-admission-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "linstor-scheduler.fullname" . }}-admission-tls
+  duration: 8760h  # 1 year
+  renewBefore: 24h
+  issuerRef:
+    name: {{ include "linstor-scheduler.fullname" . }}-admission-ca-issuer
+  commonName: {{ include "linstor-scheduler.fullname" . }}-admission
+  dnsNames:
+    - {{ include "linstor-scheduler.fullname" . }}-admission
+    - {{ include "linstor-scheduler.fullname" . }}-admission.{{ .Release.Namespace }}.svc
+{{- end }}

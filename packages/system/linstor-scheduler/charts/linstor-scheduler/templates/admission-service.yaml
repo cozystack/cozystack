@@ -1,0 +1,20 @@
+{{- if .Values.admission.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}-admission
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: 8080
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "linstor-scheduler.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: admission
+{{- end }}

@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.linstor-scheduler
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.linstor
+    - cozystack.cert-manager
+    components:
+    - name: linstor-scheduler
+      path: system/linstor-scheduler
+      install:
+        namespace: cozy-linstor
+        releaseName: linstor-scheduler

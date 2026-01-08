@@ -424,6 +424,12 @@ releases:
   privileged: true
   dependsOn: [piraeus-operator,cilium,kubeovn,cert-manager,snapshot-controller]
 
+- name: linstor-scheduler
+  releaseName: linstor-scheduler
+  chart: cozy-linstor-scheduler
+  namespace: cozy-linstor
+  dependsOn: [linstor,cert-manager]
+
 - name: nfs-driver
   releaseName: nfs-driver
   chart: cozy-nfs-driver
