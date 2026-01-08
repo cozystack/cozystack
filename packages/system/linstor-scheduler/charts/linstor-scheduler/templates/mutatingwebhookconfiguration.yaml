@@ -1,0 +1,32 @@
+{{- if .Values.admission.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}-admission
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "linstor-scheduler.fullname" . }}-admission-cert
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+webhooks:
+  - name: linstor-scheduler-admission.linbit.com
+    admissionReviewVersions: ["v1", "v1beta1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admission.failurePolicy }}
+    clientConfig:
+      service:
+        name: {{ include "linstor-scheduler.fullname" . }}-admission
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        scope: "*"
+    {{- with .Values.admission.namespaceSelector }}
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}
