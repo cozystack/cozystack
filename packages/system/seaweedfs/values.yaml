@@ -1,16 +1,12 @@
 global:
   enableSecurity: true
   serviceAccountName: "tenant-foo-seaweedfs"
-  imageName: "seaweedfs"
   extraEnvironmentVars:
     WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
     WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
   monitoring:
     enabled: true
 seaweedfs:
-  image:
-    tag: "latest@sha256:944e9bff98b088773847270238b63ce57dc5291054814d08e0226a139b3affb2"
-    registry: ghcr.io/cozystack/cozystack
   master:
     volumeSizeLimitMB: 30000
     replicas: 3
@@ -75,7 +71,7 @@ seaweedfs:
           name: seaweedfs-db-app
     s3:
       replicas: 2
-      enabled: true
+      enabled: false
       port: 8333
       httpsPort: 0
       # Suffix of the host name, {bucket}.{domainName}
@@ -87,20 +83,24 @@ seaweedfs:
       existingConfigSecret: null
       auditLogConfig: {}
   s3:
-    enabled: false
+    enabled: true
+    replicas: 2
+    port: 8333
     extraArgs:
       - -idleTimeout=60
     enableAuth: false
     readinessProbe:
-      scheme: HTTPS
+      httpGet:
+        scheme: HTTPS
     livenessProbe:
-      scheme: HTTPS
+      httpGet:
+        scheme: HTTPS
     logs:
       type: ""
     ingress:
       enabled: true
       className: "tenant-root"
-      host: "seaweedfs2.demo.cozystack.io"
+      host: "seaweedfs.demo.cozystack.io"
       annotations:
         nginx.ingress.kubernetes.io/proxy-body-size: "0"
         nginx.ingress.kubernetes.io/proxy-buffering: "off"
@@ -110,12 +110,65 @@ seaweedfs:
         nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
         nginx.ingress.kubernetes.io/client-body-timeout: "3600"
         nginx.ingress.kubernetes.io/client-header-timeout: "120"
+        nginx.ingress.kubernetes.io/service-upstream: "true"
         acme.cert-manager.io/http01-ingress-class: tenant-root
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls:
         - hosts:
             - seaweedfs.demo.cozystack.io
           secretName: seaweedfs-s3-ingress-tls
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 10
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                    - '{{ template "seaweedfs.name" . }}'
+                  - key: app.kubernetes.io/instance
+                    operator: In
+                    values:
+                    - '{{ .Release.Name }}'
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                    - s3
+              topologyKey: kubernetes.io/hostname
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                    - '{{ template "seaweedfs.name" . }}'
+                  - key: app.kubernetes.io/instance
+                    operator: In
+                    values:
+                    - '{{ .Release.Name }}'
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                    - s3
+              topologyKey: topology.kubernetes.io/zone
+      podAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 20
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                    - ingress-nginx
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                    - controller
+              topologyKey: kubernetes.io/hostname
   cosi:
     enabled: true
     podLabels:
