@@ -1,0 +1,29 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named {{ .Release.Name }}.
+
+The local-ccm DaemonSet has been deployed to namespace {{ .Release.Namespace }}.
+
+To check the status of the DaemonSet:
+
+  kubectl --namespace {{ .Release.Namespace }} get daemonset {{ include "local-ccm.fullname" . }}
+
+To view the pods:
+
+  kubectl --namespace {{ .Release.Namespace }} get pods -l "{{ include "local-ccm.selectorLabels" . | replace "\n" "," }}"
+
+To check logs from a specific pod:
+
+  kubectl --namespace {{ .Release.Namespace }} logs -l app=local-ccm -c local-ccm
+
+Configuration:
+  - External IP detection target: {{ .Values.ipDetection.externalIPTarget }}
+  {{- if .Values.ipDetection.internalIPTarget }}
+  - Internal IP detection target: {{ .Values.ipDetection.internalIPTarget }}
+  {{- else }}
+  - Internal IP detection: disabled (using kubelet's InternalIP)
+  {{- end }}
+  - Remove uninitialized taint: {{ .Values.controller.removeTaint }}
+  - Reconcile interval: {{ .Values.controller.reconcileInterval }}
+
+For more information, visit: https://github.com/cozystack/local-ccm
