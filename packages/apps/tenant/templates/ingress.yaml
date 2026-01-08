@@ -1,27 +1,22 @@
-{{- if .Values.etcd }}
+{{- if .Values.ingress }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: etcd
+  name: ingress
   namespace: {{ include "tenant.name" . }}
   labels:
     cozystack.io/ui: "true"
     internal.cozystack.io/tenantmodule: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
-    apps.cozystack.io/application.kind: Etcd
+    apps.cozystack.io/application.kind: Ingress
     apps.cozystack.io/application.group: apps.cozystack.io
-    apps.cozystack.io/application.name: etcd
+    apps.cozystack.io/application.name: ingress
 spec:
-  chart:
-    spec:
-      chart: etcd
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-ingress-application-default-ingress
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:
