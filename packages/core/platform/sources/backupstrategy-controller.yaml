@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.backup-controller
+  name: cozystack.backupstrategy-controller
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,11 +13,10 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.backupstrategy-controller
     components:
-    - name: backup-controller
-      path: system/backup-controller
+    - name: backupstrategy-controller
+      path: system/backupstrategy-controller
       install:
         privileged: true
-        namespace: cozy-backup-controller
-        releaseName: backup-controller
+        namespace: cozy-backupstrategy-controller
+        releaseName: backupstrategy-controller
