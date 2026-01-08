@@ -2,33 +2,14 @@
 {{- $extraRedirectUris := splitList "," ((index .Values._cluster "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
 {{- $k8sCa := index .Values._cluster "kube-root-ca" }}
 
-{{- $existingK8sSecret := lookup "v1" "Secret" .Release.Namespace "k8s-client" }}
 {{- $existingKubeappsSecret := lookup "v1" "Secret" .Release.Namespace "kubeapps-client" }}
 {{- $existingAuthConfig := lookup "v1" "Secret" "cozy-dashboard" "kubeapps-auth-config" }}
 {{- $brandingConfig := .Values._cluster.branding | default dict }}
-
-{{ $k8sClient := "" }}
-{{- if $existingK8sSecret }}
-  {{- $k8sClient = index $existingK8sSecret.data "client-secret-key" | b64dec }}
-{{- else }}
-  {{- $k8sClient = randAlphaNum 32 }}
-{{- end }}
 
 {{ $branding := "" }}
 {{- if $brandingConfig }}
   {{- $branding = $brandingConfig.branding }}
 {{- end }}
-
----
-
-apiVersion: v1
-kind: Secret
-metadata:
-  name: k8s-client
-  namespace: {{ .Release.Namespace }}
-type: Opaque
-data:
-  client-secret-key: {{ $k8sClient | b64enc }}
 
 ---
 
@@ -90,23 +71,19 @@ kind: KeycloakClient
 metadata:
   name: keycloakclient
 spec:
-  serviceAccount:
-    enabled: true
+  advancedProtocolMappers: true
+  authorizationServicesEnabled: true
+  clientId: kubernetes
+  defaultClientScopes:
+    - groups
+  name: kubernetes
+  public: true
   realmRef:
     name: keycloakrealm-cozy
     kind: ClusterKeycloakRealm
-  secret: $k8s-client:client-secret-key
-  advancedProtocolMappers: true
-  authorizationServicesEnabled: true
-  name: kubernetes
-  clientId: kubernetes
-  directAccess: true
-  public: false
   webUrl: https://localhost:8000/oauth2/callback
   webOrigins:
     - /*
-  defaultClientScopes:
-    - groups
   redirectUris:
     - http://localhost:18000
     - http://localhost:8000
