@@ -1,4 +1,4 @@
-{{- $brandingConfig:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
+{{- $brandingConfig := .Values._cluster.branding | default dict }}
 
 {{- $tenantText := "v0.38.2" }}
 {{- $footerText := "Cozystack" }}
@@ -16,9 +16,9 @@ metadata:
     app.kubernetes.io/instance: incloud-web
     app.kubernetes.io/name: web
 data:
-  CUSTOM_TENANT_TEXT: {{ $brandingConfig | dig "data" "tenantText" $tenantText | quote }}
-  FOOTER_TEXT: {{ $brandingConfig | dig "data" "footerText" $footerText | quote }}
-  TITLE_TEXT:  {{ $brandingConfig | dig "data" "titleText"  $titleText  | quote }}
-  LOGO_TEXT:   {{ $brandingConfig | dig "data" "logoText"   $logoText   | quote }}
-  CUSTOM_LOGO_SVG:    {{ $brandingConfig | dig "data" "logoSvg"    $logoSvg    | quote }}
-  ICON_SVG:    {{ $brandingConfig | dig "data" "iconSvg"    $iconSvg    | quote }}
+  CUSTOM_TENANT_TEXT: {{ $brandingConfig.tenantText | default $tenantText | quote }}
+  FOOTER_TEXT: {{ $brandingConfig.footerText | default $footerText | quote }}
+  TITLE_TEXT:  {{ $brandingConfig.titleText  | default $titleText  | quote }}
+  LOGO_TEXT:   {{ $brandingConfig.logoText   | default $logoText   | quote }}
+  CUSTOM_LOGO_SVG:    {{ $brandingConfig.logoSvg    | default $logoSvg    | quote }}
+  ICON_SVG:    {{ $brandingConfig.iconSvg    | default $iconSvg    | quote }}

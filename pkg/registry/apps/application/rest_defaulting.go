@@ -72,7 +72,7 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 		return v, nil
 	}
 
-	effType := s.Generic.Type
+	effType := s.Type
 	if effType == "" {
 		switch {
 		case len(s.Properties) > 0 || (s.AdditionalProperties != nil && s.AdditionalProperties.Structural != nil):
@@ -88,8 +88,8 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 	case "object":
 		mv, isMap := v.(map[string]any)
 		if !isMap || v == nil {
-			if s.Generic.Default.Object != nil && !top {
-				if dm, ok := s.Generic.Default.Object.(map[string]any); ok {
+			if s.Default.Object != nil && !top {
+				if dm, ok := s.Default.Object.(map[string]any); ok {
 					mv = cloneMap(dm)
 				}
 			}
@@ -100,8 +100,8 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 
 		for name, ps := range s.Properties {
 			if _, ok := mv[name]; !ok {
-				if ps.Generic.Default.Object != nil {
-					mv[name] = clone(ps.Generic.Default.Object)
+				if ps.Default.Object != nil {
+					mv[name] = clone(ps.Default.Object)
 				}
 			}
 			if cur, ok := mv[name]; ok {
@@ -131,8 +131,8 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 	case "array":
 		sl, isSlice := v.([]any)
 		if !isSlice || v == nil {
-			if s.Generic.Default.Object != nil {
-				if ds, ok := s.Generic.Default.Object.([]any); ok {
+			if s.Default.Object != nil {
+				if ds, ok := s.Default.Object.([]any); ok {
 					sl = cloneSlice(ds)
 				}
 			}
@@ -152,8 +152,8 @@ func applyDefaults(v any, s *structuralschema.Structural, top bool) (any, error)
 		return sl, nil
 
 	default:
-		if v == nil && s.Generic.Default.Object != nil {
-			return clone(s.Generic.Default.Object), nil
+		if v == nil && s.Default.Object != nil {
+			return clone(s.Default.Object), nil
 		}
 		return v, nil
 	}

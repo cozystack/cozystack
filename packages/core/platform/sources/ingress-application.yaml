@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.ingress-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: ingress-system
+          path: system/ingress-nginx
+        - name: ingress
+          path: extra/ingress
+          libraries: ["cozy-lib"]
+        - name: ingress-rd
+          path: system/ingress-rd
+          install:
+            namespace: cozy-system
+            releaseName: ingress-rd

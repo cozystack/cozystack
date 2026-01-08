@@ -1,7 +1,6 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $host := index $cozyConfig.data "root-host" }}
-{{- $issuerType := (index $cozyConfig.data "clusterissuer") | default "http01" }}
-{{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 
 apiVersion: networking.k8s.io/v1
 kind: Ingress

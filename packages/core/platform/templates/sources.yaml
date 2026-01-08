@@ -1,0 +1,6 @@
+{{/*
+{{- range $path, $_ := .Files.Glob "sources/*.yaml" }}
+---
+{{ $.Files.Get $path }}
+{{- end }}
+*/}}

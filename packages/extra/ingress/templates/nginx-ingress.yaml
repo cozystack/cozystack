@@ -1,6 +1,5 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $exposeIngress := index $cozyConfig.data "expose-ingress" | default "tenant-root" }}
-{{- $exposeExternalIPs := (index $cozyConfig.data "expose-external-ips") | default "" | nospace }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -24,6 +23,9 @@ spec:
     force: true
     remediation:
       retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
   values:
     ingress-nginx:
       fullnameOverride: {{ trimPrefix "tenant-" .Release.Namespace }}-ingress

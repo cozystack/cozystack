@@ -1,0 +1,49 @@
+--- a/packages/system/multus/templates/multus-daemonset-thick.yml
++++ b/packages/system/multus/templates/multus-daemonset-thick.yml
+@@ -93,19 +93,19 @@ roleRef:
+ subjects:
+   - kind: ServiceAccount
+     name: multus
+-    namespace: kube-system
++    namespace: cozy-multus
+ ---
+ apiVersion: v1
+ kind: ServiceAccount
+ metadata:
+   name: multus
+-  namespace: kube-system
++  namespace: cozy-multus
+ ---
+ kind: ConfigMap
+ apiVersion: v1
+ metadata:
+   name: multus-daemon-config
+-  namespace: kube-system
++  namespace: cozy-multus
+   labels:
+     tier: node
+     app: multus
+@@ -125,8 +125,8 @@ data:
+ apiVersion: apps/v1
+ kind: DaemonSet
+ metadata:
+-  name: kube-multus-ds
+-  namespace: kube-system
++  name: cozy-multus
++  namespace: cozy-multus
+   labels:
+     tier: node
+     app: multus
+@@ -159,10 +159,10 @@ spec:
+           resources:
+             requests:
+               cpu: "100m"
+-              memory: "50Mi"
++              memory: "100Mi"
+             limits:
+               cpu: "100m"
+-              memory: "50Mi"
++              memory: "900Mi"
+           securityContext:
+             privileged: true
+           terminationMessagePolicy: FallbackToLogsOnError

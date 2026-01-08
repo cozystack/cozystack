@@ -8,7 +8,18 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
+
+func init() {
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion,
+			&RestoreJob{},
+			&RestoreJobList{},
+		)
+		return nil
+	})
+}
 
 // RestoreJobPhase represents the lifecycle phase of a RestoreJob.
 type RestoreJobPhase string

@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.virtual-machine-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: kubevirt
+      dependsOn:
+        - cozystack.networking
+        - cozystack.kubevirt
+        - cozystack.kubevirt-cdi
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: virtual-machine
+          path: apps/virtual-machine
+          libraries: [cozy-lib]
+        - name: virtual-machine-rd
+          path: system/virtual-machine-rd
+          install:
+            namespace: cozy-system
+            releaseName: virtual-machine-rd

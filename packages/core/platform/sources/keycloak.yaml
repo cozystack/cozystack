@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.keycloak
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.postgres-operator
+    components:
+    - name: keycloak
+      path: system/keycloak
+      install:
+        namespace: cozy-keycloak
+        releaseName: keycloak

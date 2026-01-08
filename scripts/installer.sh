@@ -19,43 +19,16 @@ run_migrations() {
   done
 }
 
-flux_is_ok() {
-  kubectl wait --for=condition=available -n cozy-fluxcd deploy/source-controller deploy/helm-controller --timeout=1s
-  kubectl wait --for=condition=ready -n cozy-fluxcd helmrelease/fluxcd --timeout=1s # to call "apply resume" below
-}
-
-ensure_fluxcd() {
-  if flux_is_ok; then
+install_flux() {
+  if [ "$INSTALL_FLUX" != "true" ]; then
     return
   fi
-  # Install fluxcd-operator
-  if kubectl get helmreleases.helm.toolkit.fluxcd.io  -n cozy-fluxcd fluxcd-operator; then
-    make -C packages/system/fluxcd-operator apply resume
-  else
-    make -C packages/system/fluxcd-operator apply-locally
-  fi
-  wait_for_crds fluxinstances.fluxcd.controlplane.io
-
-   # Install fluxcd
-  if kubectl get helmreleases.helm.toolkit.fluxcd.io  -n cozy-fluxcd fluxcd; then
-    make -C packages/system/fluxcd apply resume
-  else
-    make -C packages/system/fluxcd apply-locally
-  fi
+  make -C packages/core/flux-aio apply
   wait_for_crds helmreleases.helm.toolkit.fluxcd.io helmrepositories.source.toolkit.fluxcd.io
 }
 
 wait_for_crds() {
   timeout 60 sh -c "until kubectl get crd $*; do sleep 1; done"
-}
-
-install_basic_charts() {
-  if [ "$BUNDLE" = "paas-full" ] || [ "$BUNDLE" = "distro-full" ]; then
-  make -C packages/system/cilium apply resume
-  fi
-  if [ "$BUNDLE" = "paas-full" ]; then
-    make -C packages/system/kubeovn apply resume
-  fi
 }
 
 cd "$(dirname "$0")/.."
@@ -67,15 +40,13 @@ run_migrations
 make -C packages/core/platform namespaces-apply
 
 # Install fluxcd
-ensure_fluxcd
+install_flux
+
+# Install fluxcd certificates
+./scripts/issue-flux-certificates.sh
 
 # Install platform chart
 make -C packages/core/platform reconcile
-
-# Install basic charts
-if ! flux_is_ok; then
-  install_basic_charts
-fi
 
 # Reconcile Helm repositories
 kubectl annotate helmrepositories.source.toolkit.fluxcd.io -A -l cozystack.io/repository reconcile.fluxcd.io/requestedAt=$(date +"%Y-%m-%dT%H:%M:%SZ") --overwrite

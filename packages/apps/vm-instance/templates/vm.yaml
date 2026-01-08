@@ -95,6 +95,9 @@ spec:
             noCloud: {}
       {{- end }}
       terminationGracePeriodSeconds: 30
+
+      {{- include "virtual-machine.nodeAffinity" . | nindent 6 }}
+
       volumes:
       {{- range .Values.disks }}
       - name: disk-{{ .name }}

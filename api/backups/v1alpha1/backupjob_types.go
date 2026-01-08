@@ -8,6 +8,22 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+)
+
+func init() {
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion,
+			&BackupJob{},
+			&BackupJobList{},
+		)
+		return nil
+	})
+}
+
+const (
+	OwningJobNameLabel      = thisGroup + "/owned-by.BackupJobName"
+	OwningJobNamespaceLabel = thisGroup + "/owned-by.BackupJobNamespace"
 )
 
 // BackupJobPhase represents the lifecycle phase of a BackupJob.
@@ -71,7 +87,14 @@ type BackupJobStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// The field indexing on applicationRef will be needed later to display per-app backup resources.
+
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",priority=0
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
 
 // BackupJob represents a single execution of a backup.
 // It is typically created by a Plan controller when a schedule fires.

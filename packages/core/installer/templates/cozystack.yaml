@@ -1,3 +1,4 @@
+{{- if not .Values.cozystackOperator.enabled }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -54,6 +55,8 @@ spec:
         env:
         - name: KUBERNETES_SERVICE_HOST
           value: localhost
+        - name: INSTALL_FLUX
+          value: "true"
         - name: KUBERNETES_SERVICE_PORT
           value: "7445"
         - name: K8S_AWAIT_ELECTION_ENABLED
@@ -68,15 +71,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
-      - name: assets
-        image: "{{ .Values.cozystack.image }}"
-        command:
-        - /usr/bin/cozystack-assets-server
-        - "-dir=/cozystack/assets"
-        - "-address=:8123"
-        ports:
-        - name: http
-          containerPort: 8123
       tolerations:
       - key: "node.kubernetes.io/not-ready"
         operator: "Exists"
@@ -84,17 +78,4 @@ spec:
       - key: "node.cilium.io/agent-not-ready"
         operator: "Exists"
         effect: "NoSchedule"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: cozystack
-  namespace: cozy-system
-spec:
-  ports:
-  - name: http
-    port: 80
-    targetPort: 8123
-  selector:
-    app: cozystack
-  type: ClusterIP
+{{- end }}

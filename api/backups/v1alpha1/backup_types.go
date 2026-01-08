@@ -8,7 +8,18 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
+
+func init() {
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion,
+			&Backup{},
+			&BackupList{},
+		)
+		return nil
+	})
+}
 
 // BackupPhase represents the lifecycle phase of a Backup.
 type BackupPhase string
@@ -81,7 +92,12 @@ type BackupStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// The field indexing on applicationRef will be needed later to display per-app backup resources.
+
 // +kubebuilder:object:root=true
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
 
 // Backup represents a single backup artifact for a given application.
 type Backup struct {

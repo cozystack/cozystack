@@ -35,14 +35,11 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/endpoints/openapi"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	utilversionpkg "k8s.io/apiserver/pkg/util/version"
-	"k8s.io/component-base/featuregate"
+	basecompatibility "k8s.io/component-base/compatibility"
 	baseversion "k8s.io/component-base/version"
 	netutils "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -86,9 +83,6 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 	cmd := &cobra.Command{
 		Short: "Launch an Cozystack API server",
 		Long:  "Launch an Cozystack API server",
-		PersistentPreRunE: func(*cobra.Command, []string) error {
-			return utilversionpkg.DefaultComponentGlobalsRegistry.Set()
-		},
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := o.Complete(); err != nil {
 				return err
@@ -107,38 +101,8 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 	flags := cmd.Flags()
 	o.RecommendedOptions.AddFlags(flags)
 
-	// The following lines demonstrate how to configure version compatibility and feature gates
-	// for the "Cozy" component according to KEP-4330.
-
-	// Create a default version object for the "Cozy" component.
-	defaultCozyVersion := "1.1"
-	// Register the "Cozy" component in the global component registry,
-	// associating it with its effective version and feature gate configuration.
-	_, appsFeatureGate := utilversionpkg.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
-		apiserver.CozyComponentName, utilversionpkg.NewEffectiveVersion(defaultCozyVersion),
-		featuregate.NewVersionedFeatureGate(version.MustParse(defaultCozyVersion)),
-	)
-
-	// Add feature gate specifications for the "Cozy" component.
-	utilruntime.Must(appsFeatureGate.AddVersioned(map[featuregate.Feature]featuregate.VersionedSpecs{
-		// Example of adding feature gates:
-		// "FeatureName": {{"v1", true}, {"v2", false}},
-	}))
-
-	// Register the standard kube component if it is not already registered in the global registry.
-	_, _ = utilversionpkg.DefaultComponentGlobalsRegistry.ComponentGlobalsOrRegister(
-		utilversionpkg.DefaultKubeComponent,
-		utilversionpkg.NewEffectiveVersion(baseversion.DefaultKubeBinaryVersion),
-		utilfeature.DefaultMutableFeatureGate,
-	)
-
-	// Set the version emulation mapping from the "Cozy" component to the kube component.
-	utilruntime.Must(utilversionpkg.DefaultComponentGlobalsRegistry.SetEmulationVersionMapping(
-		apiserver.CozyComponentName, utilversionpkg.DefaultKubeComponent, CozyVersionToKubeVersion,
-	))
-
-	// Add flags from the global component registry.
-	utilversionpkg.DefaultComponentGlobalsRegistry.AddFlags(flags)
+	// Note: KEP-4330 component versioning functionality (k8s.io/apiserver/pkg/util/version)
+	// is not available in Kubernetes v0.34.1. The component versioning code has been removed.
 
 	return cmd
 }
@@ -225,7 +189,6 @@ func (o *CozyServerOptions) Complete() error {
 func (o CozyServerOptions) Validate(args []string) error {
 	var allErrors []error
 	allErrors = append(allErrors, o.RecommendedOptions.Validate()...)
-	allErrors = append(allErrors, utilversionpkg.DefaultComponentGlobalsRegistry.Validate()...)
 	return utilerrors.NewAggregate(allErrors)
 }
 
@@ -253,14 +216,14 @@ func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
 	)
 
-	version := "0.1"
+	apiVersion := "0.1"
 	if o.ResourceConfig != nil {
 		raw, err := json.Marshal(o.ResourceConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal resource config: %v", err)
 		}
 		sum := sha256.Sum256(raw)
-		version = "0.1-" + hex.EncodeToString(sum[:8])
+		apiVersion = "0.1-" + hex.EncodeToString(sum[:8])
 	}
 
 	// capture schemas from config once for fast lookup inside the closure
@@ -270,23 +233,26 @@ func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 	}
 
 	serverConfig.OpenAPIConfig.Info.Title = "Cozy"
-	serverConfig.OpenAPIConfig.Info.Version = version
+	serverConfig.OpenAPIConfig.Info.Version = apiVersion
 	serverConfig.OpenAPIConfig.PostProcessSpec = buildPostProcessV2(kindSchemas)
 
 	serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
 		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
 	)
 	serverConfig.OpenAPIV3Config.Info.Title = "Cozy"
-	serverConfig.OpenAPIV3Config.Info.Version = version
+	serverConfig.OpenAPIV3Config.Info.Version = apiVersion
 
 	serverConfig.OpenAPIV3Config.PostProcessSpec = buildPostProcessV3(kindSchemas)
 
-	serverConfig.FeatureGate = utilversionpkg.DefaultComponentGlobalsRegistry.FeatureGateFor(
-		utilversionpkg.DefaultKubeComponent,
-	)
-	serverConfig.EffectiveVersion = utilversionpkg.DefaultComponentGlobalsRegistry.EffectiveVersionFor(
-		apiserver.CozyComponentName,
-	)
+	// Set FeatureGate and EffectiveVersion - required for Complete() in Kubernetes v0.34.1
+	// Following the pattern from sample-apiserver, but creating EffectiveVersion directly
+	// without ComponentGlobalsRegistry
+	serverConfig.FeatureGate = utilfeature.DefaultMutableFeatureGate
+	// Create EffectiveVersion directly using compatibility package
+	// This is needed even without ComponentGlobalsRegistry
+	if baseversion.DefaultKubeBinaryVersion != "" {
+		serverConfig.EffectiveVersion = basecompatibility.NewEffectiveVersionFromString(baseversion.DefaultKubeBinaryVersion, "", "")
+	}
 
 	if err := o.RecommendedOptions.ApplyTo(serverConfig); err != nil {
 		return nil, err
@@ -317,19 +283,4 @@ func (o CozyServerOptions) RunCozyServer(ctx context.Context) error {
 	})
 
 	return server.GenericAPIServer.PrepareRun().RunWithContext(ctx)
-}
-
-// CozyVersionToKubeVersion defines the version mapping between the Cozy component and kube
-func CozyVersionToKubeVersion(ver *version.Version) *version.Version {
-	if ver.Major() != 1 {
-		return nil
-	}
-	kubeVer := utilversionpkg.DefaultKubeEffectiveVersion().BinaryVersion()
-	// "1.2" corresponds to kubeVer
-	offset := int(ver.Minor()) - 2
-	mappedVer := kubeVer.OffsetMinor(offset)
-	if mappedVer.GreaterThan(kubeVer) {
-		return kubeVer
-	}
-	return mappedVer
 }

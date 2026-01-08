@@ -1,0 +1,27 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.clickhouse-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.clickhouse-operator
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: clickhouse
+          path: apps/clickhouse
+          libraries: ["cozy-lib"]
+        - name: clickhouse-rd
+          path: system/clickhouse-rd
+          install:
+            namespace: cozy-system
+            releaseName: clickhouse-rd

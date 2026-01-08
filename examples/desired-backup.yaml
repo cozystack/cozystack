@@ -1,0 +1,20 @@
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: desired-backup
+  namespace: tenant-root
+  labels:
+    backups.cozystack.io/triggered-by: manual
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: VirtualMachine
+    name: vm1
+  storageRef:
+    apiGroup: apps.cozystack.io
+    kind: Bucket
+    name: test-bucket
+  strategyRef:
+    apiGroup: strategy.backups.cozystack.io
+    kind: Velero
+    name: velero-strategy-default

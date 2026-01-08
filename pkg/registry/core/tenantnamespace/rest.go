@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
 )
 
 const (
@@ -206,10 +207,10 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 		for i := range v.Items {
 			tbl.Rows = append(tbl.Rows, row(&v.Items[i]))
 		}
-		tbl.ListMeta.ResourceVersion = v.ListMeta.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	case *corev1alpha1.TenantNamespace:
 		tbl.Rows = append(tbl.Rows, row(v))
-		tbl.ListMeta.ResourceVersion = v.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	default:
 		return nil, notAcceptable{r.gvr.GroupResource(), fmt.Sprintf("unexpected %T", obj)}
 	}
@@ -254,6 +255,9 @@ func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alph
 			},
 		})
 	}
+
+	sorting.ByName[corev1alpha1.TenantNamespace, *corev1alpha1.TenantNamespace](out.Items)
+
 	return out
 }
 

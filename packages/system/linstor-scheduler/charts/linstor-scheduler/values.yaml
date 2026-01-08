@@ -1,0 +1,106 @@
+replicaCount: 1
+
+linstor:
+  endpoint: ""
+  clientSecret: ""
+
+scheduler:
+  args: []
+  image:
+    repository: registry.k8s.io/kube-scheduler
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the kubernetes release
+    tag: ""
+    # Overrides which config is written. The default is determined by the current Kubernetes version
+    compatibleKubernetesRelease: ""
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  resources: {}
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+extender:
+  image:
+    repository: quay.io/piraeusdatastore/linstor-scheduler-extender
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the app version
+    tag: ""
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  resources: {}
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+admission:
+  enabled: false
+  replicaCount: 2
+  failurePolicy: Ignore
+  namespaceSelector: {}
+  #  matchExpressions:
+  #    - key: kubernetes.io/metadata.name
+  #      operator: NotIn
+  #      values:
+  #        - kube-system
+  resources: {}
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 10m
+    #   memory: 64Mi

@@ -1,3 +1,10 @@
+# macOS-compatible sed in-place
+ifeq ($(shell uname),Darwin)
+    SED_INPLACE := sed -i ''
+else
+    SED_INPLACE := sed -i
+endif
+
 REGISTRY ?= ghcr.io/cozystack/cozystack
 TAG = $(shell git describe --tags --exact-match 2>/dev/null || echo latest)
 PUSH := 1

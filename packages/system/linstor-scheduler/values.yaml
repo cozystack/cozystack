@@ -1,0 +1,7 @@
+linstor-scheduler:
+  fullnameOverride: linstor-scheduler
+  linstor:
+    endpoint: "https://linstor-controller.cozy-linstor.svc:3371"
+    clientSecret: "linstor-client-tls"
+  admission:
+    enabled: true

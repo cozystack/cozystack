@@ -22,7 +22,7 @@ When the user asks to generate a changelog, follow these steps in the specified 
 - [ ] Step 5: Get the list of commits for the release period
 - [ ] Step 6: Check additional repositories (website is REQUIRED, optional repos if tags exist)
   - [ ] **MANDATORY**: Check website repository for documentation changes WITH authors and PR links via GitHub CLI
-  - [ ] **MANDATORY**: Check ALL optional repositories (talm, boot-to-talos, cozypkg, cozy-proxy) for tags during release period
+  - [ ] **MANDATORY**: Check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy) for tags during release period
   - [ ] **MANDATORY**: For ALL commits from additional repos, get GitHub username via CLI, prioritizing PR author over commit author.
 - [ ] Step 7: Analyze commits (extract PR numbers, authors, user impact)
   - [ ] **MANDATORY**: For EVERY PR in main repo, get PR author via `gh pr view <PR_NUMBER> --json author --jq .author.login` (do NOT skip this step)
@@ -146,7 +146,7 @@ Cozystack release may include changes from related repositories. Check and inclu
 **Optional repositories (MUST check ALL of them for tags during release period):**
 - [https://github.com/cozystack/talm](https://github.com/cozystack/talm)
 - [https://github.com/cozystack/boot-to-talos](https://github.com/cozystack/boot-to-talos)
-- [https://github.com/cozystack/cozypkg](https://github.com/cozystack/cozypkg)
+- [https://github.com/cozystack/cozyhr](https://github.com/cozystack/cozyhr)
 - [https://github.com/cozystack/cozy-proxy](https://github.com/cozystack/cozy-proxy)
 
 **⚠️ IMPORTANT**: You MUST check ALL optional repositories for tags created during the release period. Do NOT skip this step even if you think there might not be any tags. Use the process below to verify.
@@ -195,7 +195,7 @@ Cozystack release may include changes from related repositories. Check and inclu
 
 3. **For optional repositories, check if tags exist during release period:**
 
-   **⚠️ MANDATORY: You MUST check ALL optional repositories (talm, boot-to-talos, cozypkg, cozy-proxy). Do NOT skip any repository!**
+   **⚠️ MANDATORY: You MUST check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy). Do NOT skip any repository!**
 
    **Use the helper script:**
    ```bash
@@ -208,7 +208,7 @@ Cozystack release may include changes from related repositories. Check and inclu
    ```
    
    The script will:
-   - Check ALL optional repositories (talm, boot-to-talos, cozypkg, cozy-proxy)
+   - Check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy)
    - Look for tags created during the release period
    - Get commits between tags (if tags exist) or by date range (if no tags)
    - Extract PR numbers from commit messages
@@ -569,7 +569,7 @@ Create a new changelog file in the format matching previous versions:
 - [ ] Step 5 completed: **ALL commits included** (including merge commits and backports) - do not skip any commits
 - [ ] Step 5 completed: **Backports identified and handled correctly** - original PR author used, both original and backport PR numbers included
 - [ ] Step 6 completed: Website repository checked for documentation changes WITH authors and PR links via GitHub CLI
-- [ ] Step 6 completed: **ALL** optional repositories (talm, boot-to-talos, cozypkg, cozy-proxy) checked for tags during release period
+- [ ] Step 6 completed: **ALL** optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy) checked for tags during release period
 - [ ] Step 6 completed: For ALL commits from additional repos, GitHub username obtained via GitHub CLI (not skipped). For commits with PR numbers, PR author used via `gh pr view` (not commit author)
 - [ ] Step 7 completed: For EVERY PR in main repo (including backports), PR author obtained via `gh pr view <PR_NUMBER> --json author --jq .author.login` (not skipped or assumed). Commit author NOT used - always use PR author
 - [ ] Step 7 completed: **Backports verified** - for each backport PR, original PR found and original PR author used in changelog
@@ -628,7 +628,7 @@ Save the changelog to file `docs/changelogs/v<version>.md` according to the vers
 
 - **Additional repositories (Step 6) - MANDATORY**: 
   - **⚠️ CRITICAL**: Always check the **website** repository for documentation changes during the release period. This is a required step and MUST NOT be skipped.
-  - **⚠️ CRITICAL**: You MUST check ALL optional repositories (talm, boot-to-talos, cozypkg, cozy-proxy) for tags during the release period. Do NOT skip any repository even if you think there might not be tags.
+  - **⚠️ CRITICAL**: You MUST check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy) for tags during the release period. Do NOT skip any repository even if you think there might not be tags.
   - **CRITICAL**: For ALL entries from additional repositories (website and optional), you MUST:
     - **MANDATORY**: Extract PR number from commit message first
     - **MANDATORY**: For commits with PR numbers, ALWAYS use `gh pr view <PR_NUMBER> --repo cozystack/<repo> --json author --jq .author.login` to get PR author (not commit author)
@@ -637,7 +637,7 @@ Save the changelog to file `docs/changelogs/v<version>.md` according to the vers
     - **MANDATORY**: Do NOT use commit author for PRs - always use PR author
     - Include PR link or commit hash reference
     - Format: `* **[repo] Description**: details ([**@username**](https://github.com/username) in cozystack/repo#123)`
-  - For **optional repositories** (talm, boot-to-talos, cozypkg, cozy-proxy), you MUST check ALL of them for tags during the release period. Use the loop provided in Step 6 to check each repository systematically.
+  - For **optional repositories** (talm, boot-to-talos, cozyhr, cozy-proxy), you MUST check ALL of them for tags during the release period. Use the loop provided in Step 6 to check each repository systematically.
   - When including changes from additional repositories, use the format: `[repo-name] Description` and link to the repository's PR/issue if available
   - **Prefer PR numbers over commit hashes**: For commits from additional repositories, extract PR number from commit message using GitHub API. Use PR format (`cozystack/website#123`) instead of commit hash (`cozystack/website@abc1234`) when available
   - **Never add entries without author and PR/commit reference**: Every entry from additional repositories must have both author and link

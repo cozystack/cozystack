@@ -1,0 +1,98 @@
+{{- if .Values.admission.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}-admission
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission
+spec:
+  replicas: {{ .Values.admission.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "linstor-scheduler.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admission
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "linstor-scheduler.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: admission
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "linstor-scheduler.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: linstor-scheduler-admission
+          image: {{ .Values.extender.image.repository }}:{{ .Values.extender.image.tag | default .Chart.AppVersion }}
+          imagePullPolicy: {{ .Values.extender.image.pullPolicy }}
+          command: ["/linstor-scheduler-admission"]
+          args:
+            - -scheduler={{ include "linstor-scheduler.fullname" . }}
+            - -tls-cert-file=/etc/webhook/certs/tls.crt
+            - -tls-key-file=/etc/webhook/certs/tls.key
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - containerPort: 8080
+              name: https
+              protocol: TCP
+          env:
+            - name: LS_CONTROLLERS
+              value: {{ include "linstor-scheduler.linstorEndpoint" . }}
+            {{- if include "linstor-scheduler.linstorClientSecretName" . }}
+            - name: LS_USER_CERTIFICATE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-scheduler.linstorClientSecretName" . }}
+                  key: tls.crt
+            - name: LS_USER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-scheduler.linstorClientSecretName" . }}
+                  key: tls.key
+            - name: LS_ROOT_CA
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-scheduler.linstorClientSecretName" . }}
+                  key: ca.crt
+            {{- end }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /etc/webhook/certs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.admission.resources | nindent 12 }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "linstor-scheduler.fullname" . }}-admission-tls
+            defaultMode: 0400
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

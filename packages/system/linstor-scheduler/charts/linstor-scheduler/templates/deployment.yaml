@@ -1,0 +1,126 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "linstor-scheduler.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "linstor-scheduler.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "linstor-scheduler.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: kube-scheduler
+          image: "{{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag | default .Capabilities.KubeVersion.Version }}"
+          securityContext:
+            {{- toYaml .Values.scheduler.securityContext | nindent 12 }}
+          command:
+            - kube-scheduler
+            {{- if semverCompare ">= 1.22-0" (include "linstor-scheduler.kubeVersion" .) }}
+            - --config=/etc/kubernetes/scheduler-config.yaml
+            {{- else }}
+            - --scheduler-name={{ include "linstor-scheduler.fullname" . }}
+            - --policy-configmap={{ include "linstor-scheduler.fullname" . }}
+            - --policy-configmap-namespace=$(NAMESPACE)
+            {{- end }}
+            - --leader-elect=true
+            - --leader-elect-resource-lock=leases
+            - --leader-elect-resource-name={{ include "linstor-scheduler.fullname" . }}
+            - --leader-elect-resource-namespace=$(NAMESPACE)
+            {{- if .Values.scheduler.args }}
+            {{- toYaml .Values.scheduler.args | nindent 12 }}
+            {{- end }}
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          imagePullPolicy: {{ .Values.scheduler.image.pullPolicy }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+          {{- if semverCompare ">= 1.22-0" (include "linstor-scheduler.kubeVersion" .) }}
+          volumeMounts:
+            - mountPath: /etc/kubernetes
+              name: scheduler-config
+          {{- end }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+        - name: linstor-scheduler-extender
+          image: {{ .Values.extender.image.repository }}:{{ .Values.extender.image.tag | default .Chart.AppVersion }}
+          resources:
+            {{- toYaml .Values.extender.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.extender.securityContext | nindent 12 }}
+          imagePullPolicy: {{ .Values.extender.image.pullPolicy }}
+          args:
+            - --verbose=true
+          env:
+            - name: LS_CONTROLLERS
+              value: {{ include "linstor-scheduler.linstorEndpoint" . }}
+            {{- if include "linstor-scheduler.linstorClientSecretName" . }}
+            - name: LS_USER_CERTIFICATE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-scheduler.linstorClientSecretName" . }}
+                  key: tls.crt
+            - name: LS_USER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-scheduler.linstorClientSecretName" . }}
+                  key: tls.key
+            - name: LS_ROOT_CA
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-scheduler.linstorClientSecretName" . }}
+                  key: ca.crt
+            {{- end }}
+      {{- if semverCompare ">= 1.22-0" .Capabilities.KubeVersion.Version }}
+      volumes:
+        - configMap:
+            name: {{ include "linstor-scheduler.fullname" . }}
+          name: scheduler-config
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,25 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.gpu-operator
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: gpu-operator
+      path: system/gpu-operator
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-operator

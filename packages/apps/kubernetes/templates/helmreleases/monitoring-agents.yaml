@@ -1,5 +1,4 @@
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
+{{- $targetTenant := .Values._namespace.monitoring }}
 {{- if .Values.addons.monitoringAgents.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
