@@ -27,8 +27,12 @@ spec:
       - operator: Exists
       priorityClassName: system-node-critical
       serviceAccountName: ovn-ovs
+      automountServiceAccountToken: true
       hostNetwork: true
       hostPID: true
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: openvswitch
           image: {{ .Values.global.registry.address }}/{{ .Values.global.images.kubeovn.repository }}:{{ .Values.DPDK_IMAGE_TAG }}
