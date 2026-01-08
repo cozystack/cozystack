@@ -13,7 +13,6 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.backupstrategy-controller
     components:
     - name: backup-controller
       path: system/backup-controller

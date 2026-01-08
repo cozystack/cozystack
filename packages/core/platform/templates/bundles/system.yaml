@@ -52,7 +52,7 @@
 {{- $basicsValues := dict "oidcEnabled" (ternary "true" "false" .Values.authentication.oidc.enabled) -}}
 {{- $_ := set $basicsComponents "cozystack-basics" (dict "values" $basicsValues) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-basics" "default" $ $basicsComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.backupstrategy-controller" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
