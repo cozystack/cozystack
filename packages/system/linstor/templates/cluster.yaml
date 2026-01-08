@@ -14,6 +14,12 @@ spec:
       name: linstor-api-ca
       kind: Issuer
   properties:
+  {{- if .Values.linstor.autoDiskful.enabled }}
+  - name: DrbdOptions/auto-diskful
+    value: {{ .Values.linstor.autoDiskful.minutes | quote }}
+  - name: DrbdOptions/auto-diskful-allow-cleanup
+    value: {{ .Values.linstor.autoDiskful.allowCleanup | quote }}
+  {{- end }}
   - name: DrbdOptions/Net/connect-int
     value: "15"
   - name: DrbdOptions/Net/ping-int
