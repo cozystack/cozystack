@@ -4,7 +4,13 @@
 {{- if eq .Values.bundles.system.variant "isp-full" }}
 {{- $networkingComponents := dict -}}
 {{- if .Values.networking -}}
-{{- $_ := set $networkingComponents "kubeovn" (dict "values" .Values.networking) -}}
+{{- $kubeovnValues := dict "kube-ovn" (dict
+  "ipv4" (dict
+    "POD_CIDR" .Values.networking.podCIDR
+    "POD_GATEWAY" .Values.networking.podGateway
+    "SVC_CIDR" .Values.networking.serviceCIDR
+    "JOIN_CIDR" .Values.networking.joinCIDR)) -}}
+{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $) }}
