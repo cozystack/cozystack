@@ -1,0 +1,11 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: backups.cozystack.io:strategy-controller
+rules:
+- apiGroups: ["strategy.backups.cozystack.io"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["backupjobs", "restorejobs"]
+  verbs: ["get", "list", "watch"]
