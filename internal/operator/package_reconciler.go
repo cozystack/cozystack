@@ -211,11 +211,13 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					Namespace: "cozy-system",
 				},
 				Install: &helmv2.Install{
+				Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
 					Remediation: &helmv2.InstallRemediation{
 						Retries: -1,
 					},
 				},
 				Upgrade: &helmv2.Upgrade{
+				Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
 					Remediation: &helmv2.UpgradeRemediation{
 						Retries: -1,
 					},
