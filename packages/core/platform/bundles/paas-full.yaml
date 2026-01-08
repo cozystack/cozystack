@@ -472,6 +472,12 @@ releases:
   - keycloak-configure
   {{- end }}
 
+- name: console
+  releaseName: console
+  chart: cozy-console
+  namespace: cozy-console
+  dependsOn: [cilium,kubeovn]
+
 - name: kamaji
   releaseName: kamaji
   chart: cozy-kamaji

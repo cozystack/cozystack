@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openshift-console.fullname" . }}
+  labels:
+    {{- with .Values.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- include "openshift-console.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.annotations | nindent 4 }}
+spec:
+{{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+{{- end }}
+  selector:
+    matchLabels:
+      {{- include "openshift-console.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+    {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      labels:
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "openshift-console.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      serviceAccountName: {{ include "openshift-console.serviceAccountName" . }}
+      {{- if .Values.podSecurityContext.enabled }}
+      securityContext:
+        {{- omit .Values.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      {{- end }}
+      volumes:
+      {{- if .Values.volumes }}
+      {{- range .Values.volumes }}
+        - name: {{ .name }}
+{{ toYaml .config | indent 10 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.securityContext.enabled }}
+          securityContext:
+            {{- omit .Values.securityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.registry}}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: BRIDGE_KUBECTL_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  key: secret
+                  name: {{ include "openshift-console.fullname" . }}
+            - name: BRIDGE_DOCUMENTATION_BASE_URL
+              value: https://kubernetes.io/docs/
+            - name: BRIDGE_DEX_API_HOST
+              value: {{ .Values.console.dex.host }}
+            - name: BRIDGE_BASE_ADDRESS
+              value: {{ .Values.console.baseUrl }}
+            {{- if .Values.console.oidc.enabled }}
+            - name: BRIDGE_USER_AUTH
+              value: oidc
+            - name: BRIDGE_K8S_AUTH
+              value: oidc
+            - name: BRIDGE_USER_AUTH_OIDC_ISSUER_URL
+              value: {{ .Values.console.oidc.issuerUrl }}
+            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_ID
+              value: {{ .Values.console.oidc.clientId }}
+            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET
+              value: {{ .Values.console.oidc.clientSecret }}
+            {{- end }}
+{{- range $key, $value := .Values.extraEnv }}
+            - name: {{ $key }}
+              value:  {{ $value | quote }}
+{{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          volumeMounts:
+          {{- if .Values.volumes }}
+          {{- range .Values.volumes }}
+            - mountPath: {{ .mountPath }}
+              name: {{ .name }}
+              {{- if .subPath }}
+              subPath: {{ .subPath }}
+              {{- end }}
+          {{- end }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+{{- if .Values.sidecars }}
+{{- include "common.tplvalues.render" ( dict "value" .Values.sidecars "context" $ ) | nindent 8 }}
+{{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

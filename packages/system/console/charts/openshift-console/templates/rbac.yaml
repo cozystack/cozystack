@@ -1,0 +1,31 @@
+{{- if and .Values.console.impersonateOpenShift .Values.rbac.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "openshift-console.fullname" . }}-dashboards
+  namespace: openshift-config-managed
+rules:
+  - verbs:
+      - get
+      - list
+      - watch
+    apiGroups:
+      - ""
+    resources:
+      - configmaps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "openshift-console.fullname" . }}-dashboards
+  # unfortunately this is hardcoded (https://github.com/openshift/console/blob/master/cmd/bridge/main.go#L576)
+  namespace: openshift-config-managed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "openshift-console.fullname" . }}-dashboards
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "openshift-console.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

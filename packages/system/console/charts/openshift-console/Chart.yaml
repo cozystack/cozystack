@@ -1,0 +1,7 @@
+apiVersion: v2
+appVersion: 4.20.0
+description: OpenShift Cluster Console UI
+icon: https://avatars0.githubusercontent.com/u/792337?s=200&v=4
+name: openshift-console
+type: application
+version: 0.3.6
