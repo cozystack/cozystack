@@ -69,25 +69,25 @@ releases:
   releaseName: cozystack
   chart: cozy-cozy-proxy
   namespace: cozy-system
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: cert-manager-crds
   releaseName: cert-manager-crds
   chart: cozy-cert-manager-crds
   namespace: cozy-cert-manager
-  dependsOn: [cilium, kubeovn]
+  dependsOn: []
 
 - name: cozystack-api
   releaseName: cozystack-api
   chart: cozy-cozystack-api
   namespace: cozy-system
-  dependsOn: [cilium,kubeovn,cozystack-controller]
+  dependsOn: [cilium,kubeovn,multus,cozystack-controller]
 
 - name: cozystack-controller
   releaseName: cozystack-controller
   chart: cozy-cozystack-controller
   namespace: cozy-system
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
   {{- if eq (index $cozyConfig.data "telemetry-enabled") "false" }}
   values:
     cozystackController:
@@ -98,13 +98,13 @@ releases:
   releaseName: lineage-controller-webhook
   chart: cozy-lineage-controller-webhook
   namespace: cozy-system
-  dependsOn: [cozystack-controller,cilium,kubeovn,cert-manager]
+  dependsOn: [cozystack-controller,cilium,kubeovn,multus,cert-manager]
 
 - name: cozystack-resource-definition-crd
   releaseName: cozystack-resource-definition-crd
   chart: cozystack-resource-definition-crd
   namespace: cozy-system
-  dependsOn: [cilium,kubeovn,cozystack-api,cozystack-controller]
+  dependsOn: [cilium,kubeovn,multus,cozystack-api,cozystack-controller]
 
 - name: bootbox-rd
   releaseName: bootbox-rd
@@ -260,13 +260,13 @@ releases:
   releaseName: cert-manager
   chart: cozy-cert-manager
   namespace: cozy-cert-manager
-  dependsOn: [cert-manager-crds]
+  dependsOn: [cilium,kubeovn,multus,cert-manager-crds]
 
 - name: cert-manager-issuers
   releaseName: cert-manager-issuers
   chart: cozy-cert-manager-issuers
   namespace: cozy-cert-manager
-  dependsOn: [cilium,kubeovn,cert-manager]
+  dependsOn: [cert-manager]
 
 - name: prometheus-operator-crds
   releaseName: prometheus-operator-crds
@@ -278,20 +278,20 @@ releases:
   releaseName: metrics-server
   chart: cozy-metrics-server
   namespace: cozy-monitoring
-  dependsOn: [cilium,kubeovn,prometheus-operator-crds]
+  dependsOn: [cilium,kubeovn,multus,prometheus-operator-crds]
 
 - name: victoria-metrics-operator
   releaseName: victoria-metrics-operator
   chart: cozy-victoria-metrics-operator
   namespace: cozy-victoria-metrics-operator
-  dependsOn: [cilium,kubeovn,cert-manager,prometheus-operator-crds]
+  dependsOn: [cilium,kubeovn,multus,cert-manager,prometheus-operator-crds]
 
 - name: monitoring-agents
   releaseName: monitoring-agents
   chart: cozy-monitoring-agents
   namespace: cozy-monitoring
   privileged: true
-  dependsOn: [victoria-metrics-operator, vertical-pod-autoscaler-crds, metrics-server]
+  dependsOn: [victoria-metrics-operator,vertical-pod-autoscaler-crds,metrics-server]
   values:
     scrapeRules:
       etcd:
@@ -301,14 +301,14 @@ releases:
   releaseName: kubevirt-operator
   chart: cozy-kubevirt-operator
   namespace: cozy-kubevirt
-  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+  dependsOn: [cilium,kubeovn,multus,victoria-metrics-operator]
 
 - name: kubevirt
   releaseName: kubevirt
   chart: cozy-kubevirt
   namespace: cozy-kubevirt
   privileged: true
-  dependsOn: [cilium,kubeovn,kubevirt-operator]
+  dependsOn: [cilium,kubeovn,multus,kubevirt-operator]
   {{- $cpuAllocationRatio := index $cozyConfig.data "cpu-allocation-ratio" }}
   {{- if $cpuAllocationRatio }}
   values:
@@ -319,19 +319,19 @@ releases:
   releaseName: kubevirt-instancetypes
   chart: cozy-kubevirt-instancetypes
   namespace: cozy-kubevirt
-  dependsOn: [cilium,kubeovn,kubevirt-operator,kubevirt]
+  dependsOn: [cilium,kubeovn,multus,kubevirt-operator,kubevirt]
 
 - name: kubevirt-cdi-operator
   releaseName: kubevirt-cdi-operator
   chart: cozy-kubevirt-cdi-operator
   namespace: cozy-kubevirt-cdi
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: kubevirt-cdi
   releaseName: kubevirt-cdi
   chart: cozy-kubevirt-cdi
   namespace: cozy-kubevirt-cdi
-  dependsOn: [cilium,kubeovn,kubevirt-cdi-operator]
+  dependsOn: [cilium,kubeovn,multus,kubevirt-cdi-operator]
 
 - name: gpu-operator
   releaseName: gpu-operator
@@ -339,7 +339,7 @@ releases:
   namespace: cozy-gpu-operator
   privileged: true
   optional: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
   valuesFiles:
   - values.yaml
   - values-talos.yaml
@@ -349,25 +349,25 @@ releases:
   chart: cozy-metallb
   namespace: cozy-metallb
   privileged: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: etcd-operator
   releaseName: etcd-operator
   chart: cozy-etcd-operator
   namespace: cozy-etcd-operator
-  dependsOn: [cilium,kubeovn,cert-manager]
+  dependsOn: [cilium,kubeovn,multus,cert-manager]
 
 - name: grafana-operator
   releaseName: grafana-operator
   chart: cozy-grafana-operator
   namespace: cozy-grafana-operator
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: mariadb-operator
   releaseName: mariadb-operator
   chart: cozy-mariadb-operator
   namespace: cozy-mariadb-operator
-  dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+  dependsOn: [cilium,kubeovn,multus,cert-manager,victoria-metrics-operator]
   values:
     mariadb-operator:
       clusterName: {{ $clusterDomain }}
@@ -376,13 +376,13 @@ releases:
   releaseName: postgres-operator
   chart: cozy-postgres-operator
   namespace: cozy-postgres-operator
-  dependsOn: [cilium,kubeovn,cert-manager]
+  dependsOn: [cilium,kubeovn,multus,cert-manager]
 
 - name: kafka-operator
   releaseName: kafka-operator
   chart: cozy-kafka-operator
   namespace: cozy-kafka-operator
-  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+  dependsOn: [cilium,kubeovn,multus,victoria-metrics-operator]
   values:
     strimzi-kafka-operator:
       kubernetesServiceDnsDomain: {{ $clusterDomain }}
@@ -391,38 +391,38 @@ releases:
   releaseName: clickhouse-operator
   chart: cozy-clickhouse-operator
   namespace: cozy-clickhouse-operator
-  dependsOn: [cilium,kubeovn,victoria-metrics-operator]
+  dependsOn: [cilium,kubeovn,multus,victoria-metrics-operator]
 
 - name: foundationdb-operator
   releaseName: foundationdb-operator
   chart: cozy-foundationdb-operator
   namespace: cozy-foundationdb-operator
-  dependsOn: [cilium,kubeovn,cert-manager]
+  dependsOn: [cilium,kubeovn,multus,cert-manager]
 
 - name: rabbitmq-operator
   releaseName: rabbitmq-operator
   chart: cozy-rabbitmq-operator
   namespace: cozy-rabbitmq-operator
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: redis-operator
   releaseName: redis-operator
   chart: cozy-redis-operator
   namespace: cozy-redis-operator
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: piraeus-operator
   releaseName: piraeus-operator
   chart: cozy-piraeus-operator
   namespace: cozy-linstor
-  dependsOn: [cilium,kubeovn,cert-manager,victoria-metrics-operator]
+  dependsOn: [cilium,kubeovn,multus,cert-manager,victoria-metrics-operator]
 
 - name: linstor
   releaseName: linstor
   chart: cozy-linstor
   namespace: cozy-linstor
   privileged: true
-  dependsOn: [piraeus-operator,cilium,kubeovn,cert-manager,snapshot-controller]
+  dependsOn: [piraeus-operator,cilium,kubeovn,multus,cert-manager,snapshot-controller]
 
 - name: linstor-scheduler
   releaseName: linstor-scheduler
@@ -435,27 +435,27 @@ releases:
   chart: cozy-nfs-driver
   namespace: cozy-nfs-driver
   privileged: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
   optional: true
 
 - name: snapshot-controller
   releaseName: snapshot-controller
   chart: cozy-snapshot-controller
   namespace: cozy-snapshot-controller
-  dependsOn: [cilium,kubeovn,cert-manager-issuers]
+  dependsOn: [cilium,kubeovn,multus,cert-manager-issuers]
 
 - name: objectstorage-controller
   releaseName: objectstorage-controller
   chart: cozy-objectstorage-controller
   namespace: cozy-objectstorage-controller
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: telepresence
   releaseName: traffic-manager
   chart: cozy-telepresence
   namespace: cozy-telepresence
   optional: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: dashboard
   releaseName: dashboard
@@ -468,6 +468,7 @@ releases:
   dependsOn:
   - cilium
   - kubeovn
+  - multus
   {{- if eq $oidcEnabled "true" }}
   - keycloak-configure
   {{- end }}
@@ -476,56 +477,56 @@ releases:
   releaseName: kamaji
   chart: cozy-kamaji
   namespace: cozy-kamaji
-  dependsOn: [cilium,kubeovn,cert-manager]
+  dependsOn: [cilium,kubeovn,multus,cert-manager]
 
 - name: capi-operator
   releaseName: capi-operator
   chart: cozy-capi-operator
   namespace: cozy-cluster-api
   privileged: true
-  dependsOn: [cilium,kubeovn,cert-manager]
+  dependsOn: [cilium,kubeovn,multus,cert-manager]
 
 - name: capi-providers-bootstrap
   releaseName: capi-providers-bootstrap
   chart: cozy-capi-providers-bootstrap
   namespace: cozy-cluster-api
   privileged: true
-  dependsOn: [cilium,kubeovn,capi-operator]
+  dependsOn: [cilium,kubeovn,multus,capi-operator]
 
 - name: capi-providers-core
   releaseName: capi-providers-core
   chart: cozy-capi-providers-core
   namespace: cozy-cluster-api
   privileged: true
-  dependsOn: [cilium,kubeovn,capi-operator]
+  dependsOn: [cilium,kubeovn,multus,capi-operator]
 
 - name: capi-providers-cpprovider
   releaseName: capi-providers-cpprovider
   chart: cozy-capi-providers-cpprovider
   namespace: cozy-cluster-api
   privileged: true
-  dependsOn: [cilium,kubeovn,capi-operator]
+  dependsOn: [cilium,kubeovn,multus,capi-operator]
 
 - name: capi-providers-infraprovider
   releaseName: capi-providers-infraprovider
   chart: cozy-capi-providers-infraprovider
   namespace: cozy-cluster-api
   privileged: true
-  dependsOn: [cilium,kubeovn,capi-operator]
+  dependsOn: [cilium,kubeovn,multus,capi-operator]
 
 - name: external-dns
   releaseName: external-dns
   chart: cozy-external-dns
   namespace: cozy-external-dns
   optional: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: external-secrets-operator
   releaseName: external-secrets-operator
   chart: cozy-external-secrets-operator
   namespace: cozy-external-secrets-operator
   optional: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 - name: bootbox
   releaseName: bootbox
@@ -533,7 +534,7 @@ releases:
   namespace: cozy-bootbox
   privileged: true
   optional: true
-  dependsOn: [cilium,kubeovn]
+  dependsOn: [cilium,kubeovn,multus]
 
 {{- if $oidcEnabled }}
 - name: keycloak
@@ -582,7 +583,7 @@ releases:
   chart: cozy-vertical-pod-autoscaler-crds
   namespace: cozy-vertical-pod-autoscaler
   privileged: true
-  dependsOn: [cilium, kubeovn]
+  dependsOn: []
 
 - name: reloader
   releaseName: reloader
