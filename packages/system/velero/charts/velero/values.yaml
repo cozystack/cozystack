@@ -27,7 +27,7 @@ namespace:
 # enabling node-agent). Required.
 image:
   repository: velero/velero
-  tag: v1.17.0
+  tag: v1.17.1
   # Digest value example: sha256:d238835e151cec91c6a811fe3a89a66d3231d9f64d09e5f3c49552672d271f38.
   # If used, it will take precedence over the image.tag.
   # digest:
@@ -130,7 +130,7 @@ dnsPolicy: ClusterFirst
 # If the value is a string then it is evaluated as a template.
 initContainers:
   # - name: velero-plugin-for-aws
-  #   image: velero/velero-plugin-for-aws:v1.13.0
+  #   image: velero/velero-plugin-for-aws:v1.13.1
   #   imagePullPolicy: IfNotPresent
   #   volumeMounts:
   #     - mountPath: /target
@@ -282,11 +282,16 @@ metrics:
     enabled: false
     annotations: {}
     additionalLabels: {}
-    # ServiceMonitor namespace. Default to Velero namespace.
+    # metrics.nodeAgentPodMonitor.metricRelabelings Specify Metric Relabelings to add to the scrape endpoint
+    # ref: https://github.com/coreos/prometheus-operator/blob/master/Documentation/api.md#relabelconfig
+    # metricRelabelings: []
+    # metrics.nodeAgentPodMonitor.relabelings [array] Prometheus relabeling rules
+    # relabelings: []
+    # PodMonitor namespace. Default to Velero namespace.
     # namespace:
-    # ServiceMonitor connection scheme. Defaults to HTTP.
+    # PodMonitor connection scheme. Defaults to HTTP.
     # scheme: ""
-    # ServiceMonitor connection tlsConfig. Defaults to {}.
+    # PodMonitor connection tlsConfig. Defaults to {}.
     # tlsConfig: {}
 
   prometheusRule:
@@ -316,14 +321,14 @@ metrics:
     #     severity: critical
     # - alert: VeleroNoNewBackup
     #   annotations:
-    #     message: Velero backup {{ $labels.schedule }} has not run successfuly in the last 30h
+    #     message: Velero backup {{ $labels.schedule }} has not run successfully in the last 25h
     #   expr: |-
     #     (
-    #     rate(velero_backup_last_successful_timestamp{schedule!=""}[15m]) <=bool 0
+    #     (time() - velero_backup_last_successful_timestamp{schedule!=""}) >bool (25 * 3600)
     #     or
     #     absent(velero_backup_last_successful_timestamp{schedule!=""})
     #     ) == 1
-    #   for: 30h
+    #   for: 1h
     #   labels:
     #     severity: critical
     # - alert: VeleroBackupPartialFailures
@@ -784,7 +789,7 @@ schedules: {}
 #       velero.io/plugin-config: ""
 #       velero.io/pod-volume-restore: RestoreItemAction
 #     data:
-#       image: velero/velero:v1.17.0
+#       image: velero/velero:v1.17.1
 #       cpuRequest: 200m
 #       memRequest: 128Mi
 #       cpuLimit: 200m

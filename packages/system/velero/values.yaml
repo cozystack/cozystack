@@ -1,4 +1,8 @@
 velero:
+  image:
+    repository: ghcr.io/cozystack/cozystack/velero
+    tag: latest@sha256:ddf488ed2e281a0cecc5b4969fd84d3905f1e565e3c83aae8015f337a311415c
+    pullPolicy: IfNotPresent
   initContainers:
     - name: velero-plugin-for-aws
       image: velero/velero-plugin-for-aws:v1.12.1
