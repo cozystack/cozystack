@@ -16,14 +16,7 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-nats-application-default-nats
-      namespace: cozy-system
-    chart:
-      name: nats
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
-  dashboard:
+      namespace: cozy-system  dashboard:
     category: PaaS
     singular: NATS
     plural: NATS

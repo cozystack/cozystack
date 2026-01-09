@@ -17,14 +17,7 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-ingress-application-default-ingress
-      namespace: cozy-system
-    chart:
-      name: ingress
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
-  dashboard:
+      namespace: cozy-system  dashboard:
     category: Administration
     singular: Ingress
     plural: Ingress

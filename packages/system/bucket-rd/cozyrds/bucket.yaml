@@ -16,14 +16,7 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-bucket-application-default-bucket
-      namespace: cozy-system
-    chart:
-      name: bucket
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
-  dashboard:
+      namespace: cozy-system  dashboard:
     singular: Bucket
     plural: Buckets
     category: IaaS

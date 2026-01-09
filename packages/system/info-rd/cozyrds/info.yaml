@@ -17,14 +17,7 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-info-application-default-info
-      namespace: cozy-system
-    chart:
-      name: info
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
-  dashboard:
+      namespace: cozy-system  dashboard:
     name: info
     category: Administration
     singular: Info

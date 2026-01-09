@@ -16,14 +16,7 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-virtual-machine-application-default-virtual-machine
-      namespace: cozy-system
-    chart:
-      name: virtual-machine
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
-  dashboard:
+      namespace: cozy-system  dashboard:
     category: IaaS
     singular: Virtual Machine
     plural: Virtual Machines

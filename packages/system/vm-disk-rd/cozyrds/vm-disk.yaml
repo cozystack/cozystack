@@ -16,14 +16,7 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-vm-disk-application-default-vm-disk
-      namespace: cozy-system
-    chart:
-      name: vm-disk
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
-  dashboard:
+      namespace: cozy-system  dashboard:
     category: IaaS
     singular: VM Disk
     plural: VM Disks

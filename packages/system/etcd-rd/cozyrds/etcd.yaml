@@ -17,14 +17,7 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-etcd-application-default-etcd
-      namespace: cozy-system
-    chart:
-      name: etcd
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
-  dashboard:
+      namespace: cozy-system  dashboard:
     category: Administration
     singular: Etcd
     plural: Etcd
