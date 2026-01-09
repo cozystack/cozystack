@@ -58,6 +58,12 @@ releases:
   namespace: cozy-kubeovn
   dependsOn: [cilium,kubeovn]
 
+- name: flux-plunger
+  releaseName: flux-plunger
+  chart: cozy-flux-plunger
+  namespace: cozy-fluxcd
+  dependsOn: [cilium,kubeovn]
+
 - name: multus
   releaseName: multus
   chart: cozy-multus
