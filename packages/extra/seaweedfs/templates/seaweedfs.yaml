@@ -46,8 +46,8 @@ spec:
       chart: cozy-seaweedfs
       reconcileStrategy: Revision
       sourceRef:
-        kind: OCIRepository
-        name: cozystack-packages
+        kind: HelmRepository
+        name: cozystack-system
         namespace: cozy-system
       version: '>= 0.0.0-0'
   interval: 5m
