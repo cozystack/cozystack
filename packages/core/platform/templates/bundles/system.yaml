@@ -49,7 +49,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
 {{- $basicsComponents := dict -}}
-{{- $basicsValues := dict "oidcEnabled" (ternary "true" "false" .Values.authentication.oidc.enabled) -}}
+{{- $basicsValues := dict "oidcEnabled" (ternary "true" "false" .Values.authentication.oidc.enabled) "rootHost" .Values.publishing.host -}}
 {{- $_ := set $basicsComponents "cozystack-basics" (dict "values" $basicsValues) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-basics" "default" $ $basicsComponents) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.backupstrategy-controller" $) }}

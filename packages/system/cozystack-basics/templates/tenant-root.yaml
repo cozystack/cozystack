@@ -26,3 +26,4 @@ spec:
   values:
     _cluster:
       oidc-enabled: {{ .Values.oidcEnabled | quote }}
+      root-host: {{ .Values.rootHost | quote }}
