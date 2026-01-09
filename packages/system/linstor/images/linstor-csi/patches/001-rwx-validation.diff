@@ -1,0 +1,652 @@
+diff --git a/pkg/driver/driver.go b/pkg/driver/driver.go
+index bea69a8..848bd5b 100644
+--- a/pkg/driver/driver.go
++++ b/pkg/driver/driver.go
+@@ -401,6 +401,16 @@ func (d Driver) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolum
+ 		}
+ 	}
+ 
++	// Validate RWX block volumes on node side using local filesystem check
++	// This provides protection for the edge case where two pods from different VMs land on the same node
++	if req.GetVolumeCapability().GetBlock() != nil &&
++		req.GetVolumeCapability().GetAccessMode().GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
++		if err := d.validateRWXBlockOnNode(ctx, req.GetVolumeId(), req.GetTargetPath()); err != nil {
++			return nil, status.Errorf(codes.FailedPrecondition,
++				"NodePublishVolume failed for %s: %v", req.GetVolumeId(), err)
++		}
++	}
++
+ 	if block := req.GetVolumeCapability().GetBlock(); block != nil {
+ 		volCtx.MountOptions = []string{"bind"}
+ 	}
+@@ -707,6 +717,255 @@ func (d Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest)
+ 	return &csi.DeleteVolumeResponse{}, nil
+ }
+ 
++// KubeVirtVMLabel is the label that KubeVirt adds to pods to identify the VM they belong to.
++const KubeVirtVMLabel = "vm.kubevirt.io/name"
++
++// KubeVirtHotplugDiskLabel is the label that KubeVirt adds to hotplug disk pods.
++const KubeVirtHotplugDiskLabel = "kubevirt.io"
++
++// podGVR is the GroupVersionResource for pods.
++var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
++
++// pvGVR is the GroupVersionResource for persistent volumes.
++var pvGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"}
++
++// getVMNameFromPod extracts the VM name from a pod, handling both regular virt-launcher pods
++// and hotplug disk pods (which reference the virt-launcher pod via ownerReferences).
++func (d Driver) getVMNameFromPod(ctx context.Context, pod *unstructured.Unstructured) (string, error) {
++	labels := pod.GetLabels()
++	if labels == nil {
++		return "", nil
++	}
++
++	// Direct case: pod has vm.kubevirt.io/name label (virt-launcher pod)
++	if vmName, ok := labels[KubeVirtVMLabel]; ok && vmName != "" {
++		return vmName, nil
++	}
++
++	// Hotplug disk case: pod has kubevirt.io: hotplug-disk label
++	// Follow ownerReferences to find the virt-launcher pod
++	if hotplugValue, ok := labels[KubeVirtHotplugDiskLabel]; ok && hotplugValue == "hotplug-disk" {
++		ownerRefs := pod.GetOwnerReferences()
++		for _, owner := range ownerRefs {
++			if owner.Kind != "Pod" || owner.Controller == nil || !*owner.Controller {
++				continue
++			}
++
++			// Get the owner pod (virt-launcher)
++			ownerPod, err := d.kubeClient.Resource(podGVR).Namespace(pod.GetNamespace()).Get(ctx, owner.Name, metav1.GetOptions{})
++			if err != nil {
++				return "", fmt.Errorf("failed to get owner pod %s: %w", owner.Name, err)
++			}
++
++			// Extract VM name from owner pod
++			ownerLabels := ownerPod.GetLabels()
++			if ownerLabels != nil {
++				if vmName, ok := ownerLabels[KubeVirtVMLabel]; ok && vmName != "" {
++					d.log.WithFields(logrus.Fields{
++						"hotplugPod":   pod.GetName(),
++						"virtLauncher": owner.Name,
++						"vmName":       vmName,
++					}).Debug("resolved VM name from hotplug disk pod via owner reference")
++
++					return vmName, nil
++				}
++			}
++
++			return "", fmt.Errorf("owner pod %s does not have %s label", owner.Name, KubeVirtVMLabel)
++		}
++
++		return "", fmt.Errorf("hotplug disk pod %s has no controller owner reference", pod.GetName())
++	}
++
++	return "", nil
++}
++
++// validateRWXBlockAttachment checks that RWX block volumes are only used by pods belonging to the same VM.
++// This prevents misuse of allow-two-primaries while still permitting live migration.
++// Returns the VM name if validation passes, or an error if:
++// - Multiple pods from different VMs are trying to use the same volume
++// - A pod without the KubeVirt VM label is trying to use a volume already attached elsewhere (strict mode)
++// Returns empty string for VM name when no pods are using the volume or validation is skipped.
++func (d Driver) validateRWXBlockAttachment(ctx context.Context, volumeID string) (string, error) {
++	d.log.WithField("volumeID", volumeID).Info("validateRWXBlockAttachment called")
++
++	if d.kubeClient == nil {
++		// Not running in Kubernetes, skip validation
++		d.log.Warn("validateRWXBlockAttachment: kubeClient is nil, skipping validation")
++		return "", nil
++	}
++
++	// Get PV to find PVC reference (volumeID == PV name in CSI)
++	pv, err := d.kubeClient.Resource(pvGVR).Get(ctx, volumeID, metav1.GetOptions{})
++	if err != nil {
++		d.log.WithError(err).Warn("cannot validate RWX attachment: failed to get PV")
++		return "", nil
++	}
++
++	// Extract claimRef from PV
++	claimRef, found, _ := unstructured.NestedMap(pv.Object, "spec", "claimRef")
++	if !found {
++		d.log.Warn("cannot validate RWX attachment: PV has no claimRef")
++		return "", nil
++	}
++
++	pvcName, _, _ := unstructured.NestedString(claimRef, "name")
++	pvcNamespace, _, _ := unstructured.NestedString(claimRef, "namespace")
++
++	if pvcNamespace == "" || pvcName == "" {
++		d.log.Warn("cannot validate RWX attachment: PVC name or namespace is empty in claimRef")
++		return "", nil
++	}
++
++	// List all pods in the namespace
++	podList, err := d.kubeClient.Resource(podGVR).Namespace(pvcNamespace).List(ctx, metav1.ListOptions{})
++	if err != nil {
++		return "", fmt.Errorf("failed to list pods in namespace %s: %w", pvcNamespace, err)
++	}
++
++	// Filter pods that use this PVC and are in a running/pending state
++	type podInfo struct {
++		name   string
++		vmName string
++	}
++
++	var podsUsingPVC []podInfo
++
++	for _, item := range podList.Items {
++		// Get pod phase from status
++		phase, _, _ := unstructured.NestedString(item.Object, "status", "phase")
++		if phase == "Succeeded" || phase == "Failed" {
++			continue
++		}
++
++		// Check if pod uses the PVC
++		volumes, found, _ := unstructured.NestedSlice(item.Object, "spec", "volumes")
++		if !found {
++			continue
++		}
++
++		for _, vol := range volumes {
++			volMap, ok := vol.(map[string]interface{})
++			if !ok {
++				continue
++			}
++
++			pvc, found, _ := unstructured.NestedMap(volMap, "persistentVolumeClaim")
++			if !found {
++				continue
++			}
++
++			claimName, _, _ := unstructured.NestedString(pvc, "claimName")
++			if claimName == pvcName {
++				// Extract VM name, handling both regular and hotplug disk pods
++				vmName, err := d.getVMNameFromPod(ctx, &item)
++				if err != nil {
++					d.log.WithError(err).WithField("pod", item.GetName()).Warn("failed to get VM name from pod")
++					// Continue with empty vmName - will be caught by strict mode check
++					vmName = ""
++				}
++
++				podsUsingPVC = append(podsUsingPVC, podInfo{
++					name:   item.GetName(),
++					vmName: vmName,
++				})
++
++				break
++			}
++		}
++	}
++
++	// If 0 or 1 pod uses the PVC, no conflict possible
++	if len(podsUsingPVC) <= 1 {
++		// Return VM name if there's exactly one pod
++		if len(podsUsingPVC) == 1 {
++			d.log.WithFields(logrus.Fields{
++				"volumeID":     volumeID,
++				"vmName":       podsUsingPVC[0].vmName,
++				"podCount":     1,
++				"pvcNamespace": pvcNamespace,
++				"pvcName":      pvcName,
++			}).Info("validateRWXBlockAttachment: single pod found, returning VM name")
++
++			return podsUsingPVC[0].vmName, nil
++		}
++
++		d.log.WithFields(logrus.Fields{
++			"volumeID":     volumeID,
++			"pvcNamespace": pvcNamespace,
++			"pvcName":      pvcName,
++		}).Info("validateRWXBlockAttachment: no pods found using PVC")
++
++		return "", nil
++	}
++
++	// Check that all pods belong to the same VM
++	var vmName string
++	for _, pod := range podsUsingPVC {
++		if pod.vmName == "" {
++			// Strict mode: if any pod doesn't have the KubeVirt label and there are multiple pods,
++			// deny the attachment
++			return "", fmt.Errorf("RWX block volume %s/%s is used by multiple pods but pod %s does not have the %s label; "+
++				"RWX block volumes with allow-two-primaries are only supported for KubeVirt live migration",
++				pvcNamespace, pvcName, pod.name, KubeVirtVMLabel)
++		}
++
++		if vmName == "" {
++			vmName = pod.vmName
++		} else if vmName != pod.vmName {
++			// Different VMs are trying to use the same volume
++			return "", fmt.Errorf("RWX block volume %s/%s is being used by pods from different VMs (%s and %s); "+
++				"this is not supported - RWX block volumes with allow-two-primaries are only for live migration of a single VM",
++				pvcNamespace, pvcName, vmName, pod.vmName)
++		}
++	}
++
++	d.log.WithFields(logrus.Fields{
++		"pvcNamespace": pvcNamespace,
++		"pvcName":      pvcName,
++		"vmName":       vmName,
++		"podCount":     len(podsUsingPVC),
++	}).Debug("RWX block attachment validated: all pods belong to the same VM (likely live migration)")
++
++	return vmName, nil
++}
++
++// validateRWXBlockOnNode performs node-side validation of RWX block volumes using local filesystem check.
++// This provides protection against the edge case where two pods from different VMs land on the same node.
++// Since ControllerPublishVolume is called only once per (volumeID, nodeID) pair, not per pod,
++// we need to check if the volume is already mounted for another pod on this node.
++func (d Driver) validateRWXBlockOnNode(ctx context.Context, volumeID, targetPath string) error {
++	// Extract base directory for this volume (contains subdirectories per pod UID)
++	baseDir := filepath.Dir(targetPath)
++
++	// List existing mounts for this volume
++	entries, err := os.ReadDir(baseDir)
++	if err != nil {
++		if os.IsNotExist(err) {
++			// Directory doesn't exist yet - first mount
++			return nil
++		}
++
++		d.log.WithError(err).Warn("cannot check existing mounts for RWX validation")
++
++		return nil
++	}
++
++	// If there are already other mounts, block the second one
++	if len(entries) > 0 {
++		d.log.WithFields(logrus.Fields{
++			"volumeID":       volumeID,
++			"existingMounts": len(entries),
++			"baseDir":        baseDir,
++		}).Warn("blocking RWX block volume mount: already mounted for another pod on this node")
++
++		return fmt.Errorf("RWX block volume is already mounted for another pod on this node - " +
++			"multiple pods on the same node sharing a block device is not supported (only for live migration across nodes)")
++	}
++
++	return nil
++}
++
+ // ControllerPublishVolume https://github.com/container-storage-interface/spec/blob/v1.9.0/spec.md#controllerpublishvolume
+ func (d Driver) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+ 	if req.GetVolumeId() == "" {
+@@ -751,6 +1010,15 @@ func (d Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controller
+ 	// ReadWriteMany block volume
+ 	rwxBlock := req.VolumeCapability.AccessMode.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER && req.VolumeCapability.GetBlock() != nil
+ 
++	// Validate RWX block attachment to prevent misuse of allow-two-primaries
++	if rwxBlock {
++		_, err := d.validateRWXBlockAttachment(ctx, req.GetVolumeId())
++		if err != nil {
++			return nil, status.Errorf(codes.FailedPrecondition,
++				"ControllerPublishVolume failed for %s: %v", req.GetVolumeId(), err)
++		}
++	}
++
+ 	devPath, err := d.Assignments.Attach(ctx, req.GetVolumeId(), req.GetNodeId(), rwxBlock)
+ 	if err != nil {
+ 		return nil, status.Errorf(codes.Internal,
+diff --git a/pkg/driver/rwx_validation_test.go b/pkg/driver/rwx_validation_test.go
+new file mode 100644
+index 0000000..92c1046
+--- /dev/null
++++ b/pkg/driver/rwx_validation_test.go
+@@ -0,0 +1,353 @@
++/*
++CSI Driver for Linstor
++Copyright © 2018 LINBIT USA, LLC
++
++This program is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 2 of the License, or
++(at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, see <http://www.gnu.org/licenses/>.
++*/
++
++package driver
++
++import (
++	"context"
++	"testing"
++
++	"github.com/sirupsen/logrus"
++	"github.com/stretchr/testify/assert"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++	dynamicfake "k8s.io/client-go/dynamic/fake"
++)
++
++func TestValidateRWXBlockAttachment(t *testing.T) {
++	testCases := []struct {
++		name        string
++		pods        []*unstructured.Unstructured
++		pvcName     string
++		namespace   string
++		expectError bool
++		errorMsg    string
++	}{
++		{
++			name:        "no pods using PVC",
++			pods:        []*unstructured.Unstructured{},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "single pod using PVC",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("pod1", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "two pods same VM (live migration)",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("virt-launcher-vm1-abc", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("virt-launcher-vm1-xyz", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "two pods different VMs (should fail)",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("virt-launcher-vm1-abc", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("virt-launcher-vm2-xyz", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm2"}, "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: true,
++			errorMsg:    "different VMs",
++		},
++		{
++			name: "pod without KubeVirt label when multiple pods exist (strict mode)",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("pod1", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("pod2", "default", "test-pvc", map[string]string{}, "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: true,
++			errorMsg:    "does not have the vm.kubevirt.io/name label",
++		},
++		{
++			name: "completed pods should be ignored",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("pod1", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("pod2", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm2"}, "Succeeded"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "failed pods should be ignored",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("pod1", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("pod2", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm2"}, "Failed"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "pods in different namespace should not conflict",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("pod1", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("pod2", "other", "test-pvc", map[string]string{KubeVirtVMLabel: "vm2"}, "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "pods using different PVCs should not conflict",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("pod1", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("pod2", "default", "other-pvc", map[string]string{KubeVirtVMLabel: "vm2"}, "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "three pods from same VM (multi-node live migration scenario)",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("virt-launcher-vm1-a", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("virt-launcher-vm1-b", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createUnstructuredPod("virt-launcher-vm1-c", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Pending"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "hotplug disk pod with virt-launcher (should succeed)",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("virt-launcher-vm1-abc", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createHotplugDiskPod("hp-volume-xyz", "default", "test-pvc", "virt-launcher-vm1-abc", "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
++			name: "hotplug disks from different VMs (should fail)",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("virt-launcher-vm1-abc", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createHotplugDiskPod("hp-volume-vm1", "default", "test-pvc", "virt-launcher-vm1-abc", "Running"),
++				createUnstructuredPod("virt-launcher-vm2-xyz", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm2"}, "Running"),
++				createHotplugDiskPod("hp-volume-vm2", "default", "test-pvc", "virt-launcher-vm2-xyz", "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: true,
++			errorMsg:    "different VMs",
++		},
++	}
++
++	for _, tc := range testCases {
++		t.Run(tc.name, func(t *testing.T) {
++			// Create fake dynamic client with test pods and PV
++			scheme := runtime.NewScheme()
++
++			// Create PV object that references the PVC
++			pv := createUnstructuredPV("test-volume-id", tc.namespace, tc.pvcName)
++
++			objects := make([]runtime.Object, 0, len(tc.pods)+1)
++			objects = append(objects, pv)
++
++			for _, pod := range tc.pods {
++				objects = append(objects, pod)
++			}
++
++			gvrToListKind := map[schema.GroupVersionResource]string{
++				podGVR: "PodList",
++				pvGVR:  "PersistentVolumeList",
++			}
++			client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind, objects...)
++
++			// Create driver with fake client
++			logger := logrus.NewEntry(logrus.New())
++			logger.Logger.SetLevel(logrus.DebugLevel)
++
++			driver := &Driver{
++				kubeClient: client,
++				log:        logger,
++			}
++
++			// Run validation
++			vmName, err := driver.validateRWXBlockAttachment(context.Background(), "test-volume-id")
++
++			if tc.expectError {
++				assert.Error(t, err)
++
++				if tc.errorMsg != "" {
++					assert.Contains(t, err.Error(), tc.errorMsg)
++				}
++			} else {
++				assert.NoError(t, err)
++				// VM name is returned when there are pods using the volume
++				if len(tc.pods) > 0 {
++					assert.NotEmpty(t, vmName)
++				}
++			}
++		})
++	}
++}
++
++func TestValidateRWXBlockAttachmentNoKubeClient(t *testing.T) {
++	// When not running in Kubernetes (no client), validation should be skipped
++	logger := logrus.NewEntry(logrus.New())
++	driver := &Driver{
++		kubeClient: nil,
++		log:        logger,
++	}
++
++	vmName, err := driver.validateRWXBlockAttachment(context.Background(), "test-volume-id")
++	assert.NoError(t, err)
++	assert.Empty(t, vmName)
++}
++
++func TestValidateRWXBlockAttachmentPVNotFound(t *testing.T) {
++	// When PV is not found, validation should be skipped with warning
++	scheme := runtime.NewScheme()
++
++	gvrToListKind := map[schema.GroupVersionResource]string{
++		podGVR: "PodList",
++		pvGVR:  "PersistentVolumeList",
++	}
++	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind)
++
++	logger := logrus.NewEntry(logrus.New())
++	logger.Logger.SetLevel(logrus.DebugLevel)
++
++	driver := &Driver{
++		kubeClient: client,
++		log:        logger,
++	}
++
++	vmName, err := driver.validateRWXBlockAttachment(context.Background(), "non-existent-pv")
++	assert.NoError(t, err)
++	assert.Empty(t, vmName)
++}
++
++// createUnstructuredPod creates an unstructured pod object for testing.
++func createUnstructuredPod(name, namespace, pvcName string, labels map[string]string, phase string) *unstructured.Unstructured {
++	pod := &unstructured.Unstructured{
++		Object: map[string]interface{}{
++			"apiVersion": "v1",
++			"kind":       "Pod",
++			"metadata": map[string]interface{}{
++				"name":      name,
++				"namespace": namespace,
++				"labels":    toStringInterfaceMap(labels),
++			},
++			"spec": map[string]interface{}{
++				"volumes": []interface{}{
++					map[string]interface{}{
++						"name": "data",
++						"persistentVolumeClaim": map[string]interface{}{
++							"claimName": pvcName,
++						},
++					},
++				},
++			},
++			"status": map[string]interface{}{
++				"phase": phase,
++			},
++		},
++	}
++
++	return pod
++}
++
++// createUnstructuredPV creates an unstructured PersistentVolume object for testing.
++func createUnstructuredPV(name, pvcNamespace, pvcName string) *unstructured.Unstructured {
++	pv := &unstructured.Unstructured{
++		Object: map[string]interface{}{
++			"apiVersion": "v1",
++			"kind":       "PersistentVolume",
++			"metadata": map[string]interface{}{
++				"name": name,
++			},
++			"spec": map[string]interface{}{
++				"claimRef": map[string]interface{}{
++					"name":      pvcName,
++					"namespace": pvcNamespace,
++				},
++			},
++		},
++	}
++
++	return pv
++}
++
++// toStringInterfaceMap converts map[string]string to map[string]interface{}.
++func toStringInterfaceMap(m map[string]string) map[string]interface{} {
++	result := make(map[string]interface{})
++
++	for k, v := range m {
++		result[k] = v
++	}
++
++	return result
++}
++
++// createHotplugDiskPod creates a hotplug disk pod that references a virt-launcher pod via ownerReferences.
++func createHotplugDiskPod(name, namespace, pvcName, ownerPodName, phase string) *unstructured.Unstructured {
++	pod := &unstructured.Unstructured{
++		Object: map[string]interface{}{
++			"apiVersion": "v1",
++			"kind":       "Pod",
++			"metadata": map[string]interface{}{
++				"name":      name,
++				"namespace": namespace,
++				"labels": map[string]interface{}{
++					"kubevirt.io": "hotplug-disk",
++				},
++				"ownerReferences": []interface{}{
++					map[string]interface{}{
++						"apiVersion":         "v1",
++						"kind":               "Pod",
++						"name":               ownerPodName,
++						"controller":         true,
++						"blockOwnerDeletion": true,
++					},
++				},
++			},
++			"spec": map[string]interface{}{
++				"volumes": []interface{}{
++					map[string]interface{}{
++						"name": "data",
++						"persistentVolumeClaim": map[string]interface{}{
++							"claimName": pvcName,
++						},
++					},
++				},
++			},
++			"status": map[string]interface{}{
++				"phase": phase,
++			},
++		},
++	}
++
++	return pod
++}

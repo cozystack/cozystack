@@ -8,3 +8,8 @@ linstor:
     enabled: true
     minutes: 30
     allowCleanup: true
+
+linstorCSI:
+  image:
+    repository: ghcr.io/cozystack/cozystack/linstor-csi
+    tag: latest@sha256:e8329b3e07c47ec73a7d9644535639fd80dbe5c27a7e03181b999ebe072a3a2e
