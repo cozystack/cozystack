@@ -77,8 +77,8 @@ func (r *FluxPlunger) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Res
 			// Unsuspend the HelmRelease
 			logger.Info("Secret was already deleted in previous run, removing suspend", "latest", latestVersion, "processed", latestVersion+1)
 			if err := r.unsuspendHelmRelease(ctx, hr); err != nil {
-				logger.Error(err, "Failed to unsuspend HelmRelease")
-				return ctrl.Result{}, err
+				logger.Info("Could not unsuspend HelmRelease, will retry on next reconcile", "error", err.Error())
+				return ctrl.Result{}, nil
 			}
 			return ctrl.Result{}, nil
 		}
@@ -133,8 +133,10 @@ func (r *FluxPlunger) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Res
 	// Suspend the HelmRelease
 	logger.Info("Suspending HelmRelease")
 	if err := r.suspendHelmRelease(ctx, hr); err != nil {
-		logger.Error(err, "Failed to suspend HelmRelease")
-		return ctrl.Result{}, err
+		// Optimistic lock conflicts are normal - FluxCD also updates HelmRelease
+		// Don't return error, just log and let controller-runtime requeue on next update
+		logger.Info("Could not suspend HelmRelease, will retry on next reconcile", "error", err.Error())
+		return ctrl.Result{}, nil
 	}
 
 	// Delete the latest secret
@@ -147,15 +149,15 @@ func (r *FluxPlunger) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Res
 	// Update annotation with processed version
 	logger.Info("Updating annotation with processed version", "version", latestVersion)
 	if err := r.updateProcessedVersionAnnotation(ctx, hr, latestVersion); err != nil {
-		logger.Error(err, "Failed to update annotation")
-		return ctrl.Result{}, err
+		logger.Info("Could not update annotation, will retry on next reconcile", "error", err.Error())
+		return ctrl.Result{}, nil
 	}
 
 	// Unsuspend the HelmRelease
 	logger.Info("Unsuspending HelmRelease")
 	if err := r.unsuspendHelmRelease(ctx, hr); err != nil {
-		logger.Error(err, "Failed to unsuspend HelmRelease")
-		return ctrl.Result{}, err
+		logger.Info("Could not unsuspend HelmRelease, will retry on next reconcile", "error", err.Error())
+		return ctrl.Result{}, nil
 	}
 
 	logger.Info("Successfully processed HelmRelease", "version", latestVersion)
