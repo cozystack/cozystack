@@ -1,3 +1,2 @@
-hami:
-  global:
-    imageTag: "v2.7.0"
+devicePlugin:
+  runtimeClassName: nvidia
