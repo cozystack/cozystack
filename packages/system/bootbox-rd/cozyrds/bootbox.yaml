@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: bootbox-rd
+      kind: ExternalArtifact
+      name: cozystack-bootbox-application-default-bootbox
       namespace: cozy-system
   dashboard:
     category: Administration

@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: vm-instance-rd
+      kind: ExternalArtifact
+      name: cozystack-vm-instance-application-default-vm-instance
       namespace: cozy-system
   dashboard:
     category: IaaS

@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: tenant-rd
+      kind: ExternalArtifact
+      name: cozystack-tenant-application-default-tenant
       namespace: cozy-system
   dashboard:
     category: Administration

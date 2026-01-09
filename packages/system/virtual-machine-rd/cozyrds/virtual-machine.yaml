@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: virtual-machine-rd
+      kind: ExternalArtifact
+      name: cozystack-virtual-machine-application-default-virtual-machine
       namespace: cozy-system
   dashboard:
     category: IaaS

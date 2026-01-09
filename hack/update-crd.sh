@@ -118,8 +118,8 @@ export KEYS_ORDER="$(
 # Update only necessary fields in-place
 # - openAPISchema is loaded from file as a multi-line string (block scalar)
 # - labels ensure cozystack.io/ui: "true"
-# - prefix = "<name>-"
-# - sourceRef derived from directory (apps|extra)
+# - prefix = "<name>-" or "" for extra
+# - chartRef points to ExternalArtifact created by Package controller
 yq -i '
   .apiVersion = (.apiVersion // "cozystack.io/v1alpha1") |
   .kind       = (.kind       // "CozystackResourceDefinition") |
@@ -128,10 +128,9 @@ yq -i '
   (.spec.application.openAPISchema style="literal") |
   .spec.release.prefix = (strenv(PREFIX)) |
   .spec.release.labels."cozystack.io/ui" = "true" |
-  .spec.release.chart.name = strenv(RES_NAME) |
-  .spec.release.chart.sourceRef.kind = "HelmRepository" |
-  .spec.release.chart.sourceRef.name = strenv(SOURCE_NAME) |
-  .spec.release.chart.sourceRef.namespace = "cozy-public" |
+  .spec.release.chartRef.kind = "ExternalArtifact" |
+  .spec.release.chartRef.name = ("cozystack-" + strenv(RES_NAME) + "-application-default-" + strenv(RES_NAME)) |
+  .spec.release.chartRef.namespace = "cozy-system" |
   .spec.dashboard.description = strenv(DESCRIPTION) |
   .spec.dashboard.icon = strenv(ICON_B64) |
   .spec.dashboard.keysOrder = env(KEYS_ORDER)

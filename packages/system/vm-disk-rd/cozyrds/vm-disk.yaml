@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: vm-disk-rd
+      kind: ExternalArtifact
+      name: cozystack-vm-disk-application-default-vm-disk
       namespace: cozy-system
   dashboard:
     category: IaaS

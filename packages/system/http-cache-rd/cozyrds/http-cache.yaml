@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: http-cache-rd
+      kind: ExternalArtifact
+      name: cozystack-http-cache-application-default-http-cache
       namespace: cozy-system
   dashboard:
     category: NaaS

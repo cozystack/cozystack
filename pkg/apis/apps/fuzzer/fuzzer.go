@@ -17,7 +17,7 @@ limitations under the License.
 package fuzzer
 
 import (
-	"github.com/cozystack/cozystack/pkg/apis/apps"
+	"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	fuzz "github.com/google/gofuzz"
 
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
@@ -26,7 +26,7 @@ import (
 // Funcs returns the fuzzer functions for the apps api group.
 var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
-		func(s *apps.ApplicationSpec, c fuzz.Continue) {
+		func(s *v1alpha1.Application, c fuzz.Continue) {
 			c.FuzzNoCustom(s) // fuzz self without calling this function again
 		},
 	}

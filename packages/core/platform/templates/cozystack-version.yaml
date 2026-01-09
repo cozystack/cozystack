@@ -1,0 +1,11 @@
+{{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace "cozystack-version" }}
+{{- if not $configMap }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: {{ .Release.Namespace }}
+data:
+  version: {{ .Values.migrations.targetVersion | quote }}
+{{- end }}

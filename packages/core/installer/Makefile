@@ -28,7 +28,7 @@ image-operator:
 		--cache-to type=inline \
 		--metadata-file images/cozystack-operator.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/cozystack-operator:$(call settag,$(TAG))@$$(yq --exit-status '.["containerimage.digest"]' images/cozystack-operator.json --output-format json --raw-output)" \
+	IMAGE="$(REGISTRY)/cozystack-operator:$(call settag,$(TAG))@$$(yq -e '.["containerimage.digest"]' images/cozystack-operator.json -o json -r)" \
 		yq --inplace '.cozystackOperator.image = strenv(IMAGE)' values.yaml
 	rm -f images/cozystack-operator.json
 
@@ -40,8 +40,8 @@ image-packages: update-version
 		--source=https://github.com/cozystack/cozystack \
 		--revision="$$(git describe --tags):$$(git rev-parse HEAD)" \
 		2>&1 | tee images/cozystack-packages.log
-	REPO="oci://$(REGISTRY)/cozystack-packages" \
-	DIGEST=$$(awk --field-separator @ '/artifact successfully pushed/ {print $$2}' images/cozystack-packages.log) && \
+	export REPO="oci://$(REGISTRY)/cozystack-packages" \
+	export DIGEST=$$(awk --field-separator @ '/artifact successfully pushed/ {print $$2}' images/cozystack-packages.log) && \
 		rm -f images/cozystack-packages.log && \
 		test -n "$$DIGEST" && \
 		yq --inplace '.cozystackOperator.platformSourceUrl = strenv(REPO)' values.yaml && \

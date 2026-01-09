@@ -17,6 +17,6 @@ image:
 		--cache-to type=inline \
 		--metadata-file images/grafana-dashboards.json \
 		$(BUILDX_ARGS)
-	echo "$(REGISTRY)/grafana-dashboards:$(call settag,$(TAG))@$$(yq --exit-status '.["containerimage.digest"]' images/grafana-dashboards.json --output-format json --raw-output)" \
+	echo "$(REGISTRY)/grafana-dashboards:$(call settag,$(TAG))@$$(yq --exit-status '.["containerimage.digest"]' images/grafana-dashboards.json --output-format json -r)" \
 		> images/grafana-dashboards.tag
 	rm -f images/grafana-dashboards.json

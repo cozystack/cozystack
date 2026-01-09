@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: postgres-rd
+      kind: ExternalArtifact
+      name: cozystack-postgres-application-default-postgres
       namespace: cozy-system
   dashboard:
     category: PaaS

@@ -12,8 +12,8 @@ spec:
       chart: cozy-prometheus-operator-crds
       reconcileStrategy: Revision
       sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
+        kind: OCIRepository
+        name: cozystack-packages
         namespace: cozy-system
       version: '>= 0.0.0-0'
   kubeConfig:

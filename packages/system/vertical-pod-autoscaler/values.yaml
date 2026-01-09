@@ -1,4 +1,4 @@
-vpaForVPA: true
+vpaForVPA: false
 
 vertical-pod-autoscaler:
   crds:

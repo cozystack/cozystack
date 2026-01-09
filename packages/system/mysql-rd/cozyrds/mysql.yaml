@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: mysql-rd
+      kind: ExternalArtifact
+      name: cozystack-mysql-application-default-mysql
       namespace: cozy-system
   dashboard:
     category: PaaS

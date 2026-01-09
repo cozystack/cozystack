@@ -1,3 +1,28 @@
+diff --git a/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java b/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java
+index abc123def..def456abc 100644
+--- a/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java
++++ b/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java
+@@ -83,6 +83,8 @@ import java.util.TreeMap;
+ import java.util.TreeSet;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.function.Function;
++import java.nio.file.Files;
++import java.nio.file.Paths;
+
+ @Singleton
+ public class DeviceHandlerImpl implements DeviceHandler
+@@ -1646,7 +1648,10 @@ public class DeviceHandlerImpl implements DeviceHandler
+     private void updateDiscGran(VlmProviderObject<Resource> vlmData) throws DatabaseException, StorageException
+     {
+         String devicePath = vlmData.getDevicePath();
+-        if (devicePath != null && vlmData.exists())
++        // Check if device path physically exists before calling lsblk
++        // This is important for DRBD devices which might be temporarily unavailable during adjust
++        // (drbdadm adjust brings devices down/up, and kernel might not have created the device node yet)
++        if (devicePath != null && vlmData.exists() && Files.exists(Paths.get(devicePath)))
+         {
+             if (vlmData.getDiscGran() == VlmProviderObject.UNINITIALIZED_SIZE)
+             {
 diff --git a/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java b/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java
 index 01967a3..871d830 100644
 --- a/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java

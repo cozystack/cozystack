@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: rabbitmq-rd
+      kind: ExternalArtifact
+      name: cozystack-rabbitmq-application-default-rabbitmq
       namespace: cozy-system
   dashboard:
     category: PaaS

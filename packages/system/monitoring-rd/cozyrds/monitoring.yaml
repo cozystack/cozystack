@@ -15,8 +15,8 @@ spec:
       cozystack.io/ui: "true"
       internal.cozystack.io/tenantmodule: "true"
     chartRef:
-      kind: OCIRepository
-      name: monitoring-rd
+      kind: ExternalArtifact
+      name: cozystack-monitoring-application-default-monitoring
       namespace: cozy-system
   dashboard:
     category: Administration

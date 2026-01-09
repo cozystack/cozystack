@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: nats-rd
+      kind: ExternalArtifact
+      name: cozystack-nats-application-default-nats
       namespace: cozy-system
   dashboard:
     category: PaaS
