@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-bucket-application-default-bucket
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     singular: Bucket
     plural: Buckets
     category: IaaS

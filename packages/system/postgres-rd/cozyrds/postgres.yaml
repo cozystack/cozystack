@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-postgres-application-default-postgres
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: PaaS
     singular: PostgreSQL
     plural: PostgreSQL

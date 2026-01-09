@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-http-cache-application-default-http-cache
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: NaaS
     singular: HTTP Cache
     plural: HTTP Cache

@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-kubernetes-application-default-kubernetes
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: IaaS
     singular: Kubernetes
     plural: Kubernetes

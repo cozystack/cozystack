@@ -17,7 +17,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-seaweedfs-application-default-seaweedfs
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: Administration
     singular: SeaweedFS
     plural: SeaweedFS

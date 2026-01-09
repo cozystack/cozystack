@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-kafka-application-default-kafka
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: PaaS
     singular: Kafka
     plural: Kafka

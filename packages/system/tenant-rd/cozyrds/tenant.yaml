@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-tenant-application-default-tenant
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: Administration
     singular: Tenant
     plural: Tenants

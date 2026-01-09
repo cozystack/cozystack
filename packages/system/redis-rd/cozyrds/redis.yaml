@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-redis-application-default-redis
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: PaaS
     singular: Redis
     plural: Redis

@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-rabbitmq-application-default-rabbitmq
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: PaaS
     singular: RabbitMQ
     plural: RabbitMQ

@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-mysql-application-default-mysql
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: PaaS
     singular: MySQL
     plural: MySQL

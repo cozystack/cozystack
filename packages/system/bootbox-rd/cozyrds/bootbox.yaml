@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-bootbox-application-default-bootbox
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: Administration
     singular: BootBox
     plural: BootBox

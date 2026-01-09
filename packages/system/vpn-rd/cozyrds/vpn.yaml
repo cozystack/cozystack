@@ -16,7 +16,8 @@ spec:
     chartRef:
       kind: ExternalArtifact
       name: cozystack-vpn-application-default-vpn
-      namespace: cozy-system  dashboard:
+      namespace: cozy-system
+  dashboard:
     category: NaaS
     singular: VPN
     plural: VPN
