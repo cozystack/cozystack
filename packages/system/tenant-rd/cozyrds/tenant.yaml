@@ -17,6 +17,12 @@ spec:
       kind: ExternalArtifact
       name: cozystack-tenant-application-default-tenant
       namespace: cozy-system
+    chart:
+      name: tenant
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-apps
+        namespace: cozy-public
   dashboard:
     category: Administration
     singular: Tenant
