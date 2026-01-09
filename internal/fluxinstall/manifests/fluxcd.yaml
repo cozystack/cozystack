@@ -11940,10 +11940,12 @@ spec:
       tolerations:
         - key: node.kubernetes.io/not-ready
           operator: Exists
-        - effect: NoExecute
-          key: node.kubernetes.io/unreachable
+        - key: node.kubernetes.io/unreachable
           operator: Exists
-          tolerationSeconds: 300
+        - key: node.cilium.io/agent-not-ready
+          operator: Exists
+        - key: node.cloudprovider.kubernetes.io/uninitialized
+          operator: Exists
       volumes:
         - emptyDir: {}
           name: data
