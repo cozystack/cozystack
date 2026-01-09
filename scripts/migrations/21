@@ -3,7 +3,16 @@
 
 set -euo pipefail
 
+for crd in $(kubectl get crd -o name | grep 'fluxcd.io$'); do
+  kubectl annotate $crd fluxcd.controlplane.io/prune=disabled
+done
+
 kubectl delete hr -n cozy-fluxcd fluxcd --ignore-not-found
+kubectl delete hr -n cozy-fluxcd fluxcd-operator --ignore-not-found
+
+for crd in $(kubectl get crd -o name | grep 'fluxcd.io$'); do
+  kubectl label $crd fluxcd.controlplane.io/name- fluxcd.controlplane.io/namespace-
+done
 
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
