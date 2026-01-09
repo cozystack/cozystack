@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.capi-providers-core
+  name: cozystack.capi-provider-core
 spec:
   sourceRef:
     kind: OCIRepository

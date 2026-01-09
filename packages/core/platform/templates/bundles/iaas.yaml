@@ -10,10 +10,10 @@
 {{include "cozystack.platform.package.optional.default" (list "cozystack.gpu-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-operator" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.capi-providers-bootstrap" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.capi-providers-core" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.capi-providers-cpprovider" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.capi-providers-infraprovider" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-bootstrap-kubeadm" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-core" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-cp-kamaji" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-infra-kubevirt" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubernetes-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.virtual-machine-application" $) }}
