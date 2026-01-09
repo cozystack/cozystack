@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/mariadb-backup:0.0.0@sha256:1c0beb1b23a109b0e13727b4c73d2c74830e11cede92858ab20101b66f45a858
+ghcr.io/cozystack/cozystack/mariadb-backup:0.0.0@sha256:aca403030ff5d831415d72367866fdf291fab73ee2cfddbe4c93c2915a316ab1
