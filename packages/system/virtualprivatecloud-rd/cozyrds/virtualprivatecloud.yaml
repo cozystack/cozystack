@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: virtualprivatecloud-rd
+      kind: ExternalArtifact
+      name: cozystack-virtualprivatecloud-application-default-virtualprivatecloud
       namespace: cozy-system
     chart:
       name: virtualprivatecloud

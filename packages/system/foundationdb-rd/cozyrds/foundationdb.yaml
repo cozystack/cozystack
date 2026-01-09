@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: foundationdb-rd
+      kind: ExternalArtifact
+      name: cozystack-foundationdb-application-default-foundationdb
       namespace: cozy-system
   dashboard:
     category: PaaS

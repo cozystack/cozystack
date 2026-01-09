@@ -15,8 +15,8 @@ spec:
       cozystack.io/ui: "true"
       internal.cozystack.io/tenantmodule: "true"
     chartRef:
-      kind: OCIRepository
-      name: ingress-rd
+      kind: ExternalArtifact
+      name: cozystack-ingress-application-default-ingress
       namespace: cozy-system
     chart:
       name: ingress

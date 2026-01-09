@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: vpn-rd
+      kind: ExternalArtifact
+      name: cozystack-vpn-application-default-vpn
       namespace: cozy-system
     chart:
       name: vpn

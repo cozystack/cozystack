@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: kafka-rd
+      kind: ExternalArtifact
+      name: cozystack-kafka-application-default-kafka
       namespace: cozy-system
     chart:
       name: kafka

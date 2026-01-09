@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: bucket-rd
+      kind: ExternalArtifact
+      name: cozystack-bucket-application-default-bucket
       namespace: cozy-system
     chart:
       name: bucket

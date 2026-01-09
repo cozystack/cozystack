@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: tcp-balancer-rd
+      kind: ExternalArtifact
+      name: cozystack-tcp-balancer-application-default-tcp-balancer
       namespace: cozy-system
     chart:
       name: tcp-balancer

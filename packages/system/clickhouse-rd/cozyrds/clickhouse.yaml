@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: clickhouse-rd
+      kind: ExternalArtifact
+      name: cozystack-clickhouse-application-default-clickhouse
       namespace: cozy-system
     chart:
       name: clickhouse

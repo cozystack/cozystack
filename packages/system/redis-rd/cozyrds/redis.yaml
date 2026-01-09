@@ -14,8 +14,8 @@ spec:
     labels:
       cozystack.io/ui: "true"
     chartRef:
-      kind: OCIRepository
-      name: redis-rd
+      kind: ExternalArtifact
+      name: cozystack-redis-application-default-redis
       namespace: cozy-system
     chart:
       name: redis
