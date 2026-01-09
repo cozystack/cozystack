@@ -247,6 +247,11 @@ func (r *FluxPlunger) suspendHelmRelease(ctx context.Context, hr *helmv2.HelmRel
 		return fmt.Errorf("failed to get latest HelmRelease: %w", err)
 	}
 
+	// If already suspended, nothing to do
+	if latestHR.Spec.Suspend {
+		return nil
+	}
+
 	patch := client.MergeFromWithOptions(latestHR.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	latestHR.Spec.Suspend = true
 
@@ -260,6 +265,11 @@ func (r *FluxPlunger) unsuspendHelmRelease(ctx context.Context, hr *helmv2.HelmR
 	latestHR := &helmv2.HelmRelease{}
 	if err := r.Get(ctx, key, latestHR); err != nil {
 		return fmt.Errorf("failed to get latest HelmRelease: %w", err)
+	}
+
+	// If already unsuspended, nothing to do
+	if !latestHR.Spec.Suspend {
+		return nil
 	}
 
 	patch := client.MergeFromWithOptions(latestHR.DeepCopy(), client.MergeFromWithOptimisticLock{})
@@ -289,13 +299,28 @@ func (r *FluxPlunger) updateProcessedVersionAnnotation(ctx context.Context, hr *
 
 // SetupWithManager sets up the controller with the Manager
 func (r *FluxPlunger) SetupWithManager(mgr ctrl.Manager) error {
-	// Only watch HelmReleases that have the specific error
+	// Watch HelmReleases that either:
+	// 1. Have the specific error, OR
+	// 2. Are suspended with our annotation (to handle crash recovery)
 	pred := predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		hr, ok := obj.(*helmv2.HelmRelease)
 		if !ok {
 			return false
 		}
-		return hasNoDeployedReleasesError(hr)
+
+		// Always process if has error
+		if hasNoDeployedReleasesError(hr) {
+			return true
+		}
+
+		// Also process suspended HelmReleases with our annotation (crash recovery)
+		if hr.Spec.Suspend && hr.Annotations != nil {
+			if _, exists := hr.Annotations[annotationLastProcessedVersion]; exists {
+				return true
+			}
+		}
+
+		return false
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).
