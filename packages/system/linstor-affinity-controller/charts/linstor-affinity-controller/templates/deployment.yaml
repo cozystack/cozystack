@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "linstor-affinity-controller.fullname" . }}
+  labels:
+    {{- include "linstor-affinity-controller.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "linstor-affinity-controller.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "linstor-affinity-controller.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "linstor-affinity-controller.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          args:
+            - /linstor-affinity-controller
+            {{- if .Values.monitoring }}
+            - --metrics-address=:8001
+            {{- end }}
+            {{- range $opt, $val := .Values.options }}
+            - --{{ $opt | kebabcase }}={{ $val }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.monitoring }}
+          ports:
+          - name: metrics
+            protocol: TCP
+            containerPort: 8001
+          {{- end }}
+          env:
+            - name: LEASE_LOCK_NAME
+              value: {{ include "linstor-affinity-controller.fullname" . }}
+            - name: LEASE_HOLDER_IDENTITY
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+                  apiVersion: v1
+            - name: LS_CONTROLLERS
+              value: {{ include "linstor-affinity-controller.linstorEndpoint" . }}
+            {{- if include "linstor-affinity-controller.linstorClientSecretName" . }}
+            - name: LS_USER_CERTIFICATE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-affinity-controller.linstorClientSecretName" . }}
+                  key: tls.crt
+            - name: LS_USER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-affinity-controller.linstorClientSecretName" . }}
+                  key: tls.key
+            - name: LS_ROOT_CA
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "linstor-affinity-controller.linstorClientSecretName" . }}
+                  key: ca.crt
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              port: 8000
+              path: /readyz
+          livenessProbe:
+            httpGet:
+              port: 8000
+              path: /healthz
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

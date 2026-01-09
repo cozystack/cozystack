@@ -1,0 +1,4 @@
+linstor-affinity-controller:
+  linstor:
+    endpoint: "https://linstor-controller.cozy-linstor.svc:3371"
+    clientSecret: "linstor-client-tls"
