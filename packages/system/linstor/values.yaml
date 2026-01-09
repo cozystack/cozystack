@@ -1,15 +1,13 @@
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
-    tag: latest@sha256:417532baa2801288147cd9ac9ae260751c1a7754f0b829725d09b72a770c111a
-
+    tag: 1.32.3@sha256:c6fbe1825514a3059088175968a651d7e10f477590023a33f1a9e6584fd98e04
 linstor:
   autoDiskful:
     enabled: true
     minutes: 30
     allowCleanup: true
-
 linstorCSI:
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
-    tag: latest@sha256:e8329b3e07c47ec73a7d9644535639fd80dbe5c27a7e03181b999ebe072a3a2e
+    tag: v1.10.5@sha256:69b61b5f598226f2aec0e78264a66c2ac111ebf8775bf9c41e31efa974947241
