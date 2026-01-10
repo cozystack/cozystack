@@ -28,7 +28,7 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	fields "k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/fields"
 	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -42,6 +42,7 @@ import (
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -257,26 +258,32 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// Initialize variables for selector mapping
-	var helmFieldSelector string
-	var helmLabelSelector string
+	var helmLabelSelector labels.Selector
 
-	// Process field.selector
-	if options.FieldSelector != nil {
-		fs, err := fields.ParseSelector(options.FieldSelector.String())
-		if err != nil {
-			klog.Errorf("Invalid field selector: %v", err)
-			return nil, fmt.Errorf("invalid field selector: %v", err)
-		}
-		// Check if selector is for metadata.name
-		if name, exists := fs.RequiresExactMatch("metadata.name"); exists {
-			// Convert Application name to HelmRelease name
-			mappedName := r.releaseConfig.Prefix + name
-			// Create new field.selector for HelmRelease
-			helmFieldSelector = fields.OneTermEqualSelector("metadata.name", mappedName).String()
-		} else {
-			// If field.selector contains other fields, map them directly
-			helmFieldSelector = fs.String()
-		}
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(options.FieldSelector)
+	if err != nil {
+		klog.Errorf("Error parsing field selector: %v", err)
+		return nil, err
+	}
+
+	// If field selector specifies namespace different from context, return empty list
+	if fieldFilter.Namespace != "" && namespace != "" && namespace != fieldFilter.Namespace {
+		klog.V(6).Infof("Field selector namespace %s doesn't match context namespace %s, returning empty list", fieldFilter.Namespace, namespace)
+		return &appsv1alpha1.ApplicationList{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+				Kind:       r.kindName + "List",
+			},
+		}, nil
+	}
+
+	// Convert Application name to HelmRelease name for manual filtering
+	var filterByName string
+	if fieldFilter.Name != "" {
+		filterByName = r.releaseConfig.Prefix + fieldFilter.Name
 	}
 
 	// Process label.selector
@@ -315,21 +322,16 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			labelRequirements = append(labelRequirements, prefixedReqs...)
 		}
 	}
-	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
 	klog.V(6).Infof("Using label selector: %s for kind: %s, group: %s", helmLabelSelector, r.kindName, r.gvk.Group)
 
-	// Set ListOptions for HelmRelease with selector mapping
-	metaOptions := metav1.ListOptions{
-		FieldSelector: helmFieldSelector,
-		LabelSelector: helmLabelSelector,
-	}
-
-	// List HelmReleases with mapped selectors
+	// List HelmReleases with label selector only
+	// Field selectors are not supported by controller-runtime cache, so we filter manually below
 	hrList := &helmv2.HelmReleaseList{}
 	err = r.c.List(ctx, hrList, &client.ListOptions{
-		Namespace: namespace,
-		Raw:       &metaOptions,
+		Namespace:     namespace,
+		LabelSelector: helmLabelSelector,
 	})
 	if err != nil {
 		klog.Errorf("Error listing HelmReleases: %v", err)
@@ -345,6 +347,16 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	// Note: All HelmReleases already match the required labels due to server-side label selector filtering
 	for i := range hrList.Items {
 		hr := &hrList.Items[i]
+
+		// Apply manual field selector filtering (metadata.name and metadata.namespace)
+		// controller-runtime cache doesn't support field selectors
+		// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+		if filterByName != "" && hr.Name != filterByName {
+			continue
+		}
+		if !fieldFilter.MatchesNamespace(hr.Namespace) {
+			continue
+		}
 
 		app, err := r.ConvertHelmReleaseToApplication(hr)
 		if err != nil {
@@ -569,27 +581,21 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 
 	// Initialize variables for selector mapping
-	var helmFieldSelector string
-	var helmLabelSelector string
+	var helmLabelSelector labels.Selector
 
-	// Process field.selector
-	if options.FieldSelector != nil {
-		fs, err := fields.ParseSelector(options.FieldSelector.String())
-		if err != nil {
-			klog.Errorf("Invalid field selector: %v", err)
-			return nil, fmt.Errorf("invalid field selector: %v", err)
-		}
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(options.FieldSelector)
+	if err != nil {
+		klog.Errorf("Error parsing field selector: %v", err)
+		return nil, err
+	}
 
-		// Check if selector is for metadata.name
-		if name, exists := fs.RequiresExactMatch("metadata.name"); exists {
-			// Convert Application name to HelmRelease name
-			mappedName := r.releaseConfig.Prefix + name
-			// Create new field.selector for HelmRelease
-			helmFieldSelector = fields.OneTermEqualSelector("metadata.name", mappedName).String()
-		} else {
-			// If field.selector contains other fields, map them directly
-			helmFieldSelector = fs.String()
-		}
+	// Convert Application name to HelmRelease name for manual filtering
+	var filterByName string
+	if fieldFilter.Name != "" {
+		filterByName = r.releaseConfig.Prefix + fieldFilter.Name
 	}
 
 	// Process label.selector
@@ -628,21 +634,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 			labelRequirements = append(labelRequirements, prefixedReqs...)
 		}
 	}
-	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
-	// Set ListOptions for HelmRelease with selector mapping
-	metaOptions := metav1.ListOptions{
-		Watch:           true,
-		ResourceVersion: options.ResourceVersion,
-		FieldSelector:   helmFieldSelector,
-		LabelSelector:   helmLabelSelector,
-	}
-
-	// Start watch on HelmRelease with mapped selectors
+	// Start watch on HelmRelease with label selector only
+	// Field selectors are not supported by controller-runtime cache
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
 	hrList := &helmv2.HelmReleaseList{}
 	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
-		Namespace: namespace,
-		Raw:       &metaOptions,
+		Namespace:     namespace,
+		LabelSelector: helmLabelSelector,
 	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
@@ -679,6 +679,16 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				hr, ok := event.Object.(*helmv2.HelmRelease)
 				if !ok {
 					klog.V(4).Infof("Expected HelmRelease object, got %T", event.Object)
+					continue
+				}
+
+				// Apply manual field selector filtering (metadata.name and metadata.namespace)
+				// controller-runtime cache doesn't support field selectors
+				// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+				if filterByName != "" && hr.Name != filterByName {
+					continue
+				}
+				if !fieldFilter.MatchesNamespace(hr.Namespace) {
 					continue
 				}
 

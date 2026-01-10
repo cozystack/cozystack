@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
 )
 
@@ -248,9 +249,22 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		}
 	}
 
-	fieldSel := ""
-	if opts.FieldSelector != nil {
-		fieldSel = opts.FieldSelector.String()
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(opts.FieldSelector)
+	if err != nil {
+		return nil, err
+	}
+
+	// If field selector specifies namespace different from context, return empty list
+	if fieldFilter.Namespace != "" && ns != "" && ns != fieldFilter.Namespace {
+		return &corev1alpha1.TenantSecretList{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       kindTenantSecretList,
+			},
+		}, nil
 	}
 
 	list := &corev1.SecretList{}
@@ -258,10 +272,6 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		&client.ListOptions{
 			Namespace:     ns,
 			LabelSelector: ls,
-			Raw: &metav1.ListOptions{
-				LabelSelector: ls.String(),
-				FieldSelector: fieldSel,
-			},
 		})
 	if err != nil {
 		return nil, err
@@ -276,6 +286,15 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	}
 
 	for i := range list.Items {
+		// Apply manual field selector filtering (metadata.name and metadata.namespace)
+		// controller-runtime cache doesn't support field selectors
+		// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+		if !fieldFilter.MatchesName(list.Items[i].Name) {
+			continue
+		}
+		if !fieldFilter.MatchesNamespace(list.Items[i].Namespace) {
+			continue
+		}
 		out.Items = append(out.Items, *secretToTenant(&list.Items[i]))
 	}
 	sorting.ByNamespacedName[corev1alpha1.TenantSecret, *corev1alpha1.TenantSecret](out.Items)
@@ -413,11 +432,6 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
 		Namespace:     ns,
 		LabelSelector: ls,
-		Raw: &metav1.ListOptions{
-			Watch:           true,
-			LabelSelector:   ls.String(),
-			ResourceVersion: opts.ResourceVersion,
-		},
 	})
 	if err != nil {
 		return nil, err
