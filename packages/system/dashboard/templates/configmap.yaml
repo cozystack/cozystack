@@ -1,6 +1,6 @@
 {{- $brandingConfig:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
 
-{{- $tenantText := "v0.39.3" }}
+{{- $tenantText := "v0.39.4" }}
 {{- $footerText := "Cozystack" }}
 {{- $titleText := "Cozystack Dashboard" }}
 {{- $logoText := "" }}
