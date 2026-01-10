@@ -33,11 +33,11 @@ else
   kubectl rollout status deploy/cozystack-api -n cozy-system --timeout=5m || exit 1
 fi
 
-helm upgrade --install -n cozy-system cozystack-controller ./packages/system/cozystack-controller/ --take-ownership
+cozyhr -n cozy-system -C ./packages/system/cozystack-controller apply cozystack-controller --take-ownership
 echo "Waiting for cozystack-controller"
 kubectl rollout status deploy/cozystack-controller -n cozy-system --timeout=5m || exit 1
 
-helm upgrade --install -n cozy-system lineage-controller-webhook ./packages/system/lineage-controller-webhook/ --take-ownership
+cozyhr -n cozy-system -C ./packages/system/lineage-controller-webhook/ apply lineage-controller-webhook --take-ownership
 echo "Waiting for lineage-webhook"
 kubectl rollout status ds/lineage-controller-webhook -n cozy-system --timeout=5m || exit 1
 

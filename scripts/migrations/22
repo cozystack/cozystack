@@ -3,6 +3,17 @@
 
 set -euo pipefail
 
+# Migrate Victoria Metrics Operator CRDs to prometheus-operator-crds Helm release
+for crd in $(kubectl get crd -o name | grep 'coreos\.com$'); do
+  kubectl annotate $crd meta.helm.sh/release-namespace=cozy-victoria-metrics-operator meta.helm.sh/release-name=prometheus-operator-crds --overwrite
+  kubectl label $crd app.kubernetes.io/managed-by=Helm helm.toolkit.fluxcd.io/namespace=cozy-victoria-metrics-operator helm.toolkit.fluxcd.io/name=prometheus-operator-crds --overwrite
+done
+kubectl delete secret -n cozy-victoria-metrics-operator -l name=victoria-metrics-operator,owner=helm --ignore-not-found
+
+# Remove CozyStack Resource Definitions HR
+kubectl delete hr -n cozy-system cozystack-resource-definitions --ignore-not-found --wait=false
+kubectl delete cozystackresourcedefinitions.cozystack.io --all --ignore-not-found --wait=false
+
 echo "Migrating HelmReleases: adding application labels for tenant-* namespaces"
 
 # Function to determine application type from HelmRelease name
@@ -153,6 +164,16 @@ kubectl get helmreleases --all-namespaces -l cozystack.io/ui=true -o json | \
     # Apply labels using kubectl label --overwrite
     kubectl label helmrelease -n "$namespace" "$name" --overwrite $labels
     echo "Added application labels to $namespace/$name: $labels"
+  done
+
+echo "Migrating PostgreSQL HelmReleases: adding default version v17"
+
+# Patch all PostgreSQL HelmReleases to add spec.values.version: v17
+kubectl get helmreleases --all-namespaces -l apps.cozystack.io/application.kind=PostgreSQL -o json | \
+  jq -r '.items[] | select(.spec.values.version == null) | "\(.metadata.namespace)|\(.metadata.name)"' | \
+  while IFS='|' read -r namespace name; do
+    echo "Patching PostgreSQL HelmRelease $namespace/$name to add version v17"
+    kubectl patch helmrelease -n "$namespace" "$name" --type=merge -p '{"spec":{"values":{"version":"v17"}}}'
   done
 
 echo "Migration completed"

@@ -3,14 +3,25 @@
 
 set -euo pipefail
 
+# Disable pruning on Flux CRDs
 for crd in $(kubectl get crd -o name | grep 'fluxcd.io$'); do
   kubectl annotate $crd fluxcd.controlplane.io/prune=disabled
 done
 
-kubectl delete hr -n cozy-fluxcd fluxcd --ignore-not-found
-kubectl delete hr -n cozy-fluxcd fluxcd-operator --ignore-not-found
+# Remove flux instance
+if kubectl get fluxinstance flux -n cozy-fluxcd >/dev/null 2>&1; then
+  kubectl annotate fluxinstance flux -n cozy-fluxcd fluxcd.controlplane.io/reconcile=disabled
+  kubectl delete fluxinstance flux -n cozy-fluxcd
+fi
+kubectl delete deploy -n cozy-fluxcd -l app.kubernetes.io/part-of=flux --ignore-not-found
+kubectl delete hr -n cozy-fluxcd fluxcd --ignore-not-found --wait=false
 
-for crd in $(kubectl get crd -o name | grep 'fluxcd.io$'); do
+# Remove fluxcd-operator
+kubectl delete hr -n cozy-fluxcd fluxcd-operator --ignore-not-found --wait=false
+kubectl delete deploy -n cozy-fluxcd flux-operator --ignore-not-found
+
+# Remove labels from CRDs
+for crd in $(kubectl get crd -o name | grep 'fluxcd\.io$'); do
   kubectl label $crd fluxcd.controlplane.io/name- fluxcd.controlplane.io/namespace-
 done
 
