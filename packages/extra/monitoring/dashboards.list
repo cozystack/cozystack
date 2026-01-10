@@ -39,3 +39,7 @@ goldpinger/goldpinger
 clickhouse/altinity-clickhouse-operator-dashboard
 storage/linstor
 seaweedfs/seaweedfs
+hubble/overview
+hubble/dns-namespace
+hubble/l7-http-metrics
+hubble/network-overview
