@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/cluster-autoscaler:0.0.0@sha256:372ad087ae96bd0cd642e2b0855ec7ffb1369d6cf4f0b92204725557c11bc0ff
+ghcr.io/cozystack/cozystack/cluster-autoscaler:0.0.0@sha256:6f2b1d6b0b2bdc66f1cbb30c59393369cbf070cb8f5fec748f176952273483cc
