@@ -8,5 +8,7 @@ Custom patches for piraeus-server (linstor-server) v1.32.3.
   - Upstream: [#475](https://github.com/LINBIT/linstor-server/pull/475)
 - **force-metadata-check-on-disk-add.diff** — Create metadata during toggle-disk from diskless to diskful
   - Upstream: [#474](https://github.com/LINBIT/linstor-server/pull/474)
-- **skip-adjust-when-device-inaccessible.diff** — Skip DRBD adjust/res file regeneration when child layer device is inaccessible
-  - Upstream: [#471](https://github.com/LINBIT/linstor-server/pull/471)
+- **fix-duplicate-tcp-ports.diff** — Prevent duplicate TCP ports after toggle-disk operations
+  - Upstream: [#476](https://github.com/LINBIT/linstor-server/pull/476)
+- **skip-adjust-when-device-inaccessible.diff** — Fix resources stuck in StandAlone after reboot, Unknown state race condition, and encrypted resource deletion
+  - Upstream: [#477](https://github.com/LINBIT/linstor-server/pull/477)

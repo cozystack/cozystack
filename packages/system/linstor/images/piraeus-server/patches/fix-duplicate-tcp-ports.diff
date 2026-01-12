@@ -1,0 +1,87 @@
+From 1250abe99d64a0501795e37d3b6af62410002239 Mon Sep 17 00:00:00 2001
+From: Andrei Kvapil <kvapss@gmail.com>
+Date: Mon, 12 Jan 2026 13:44:46 +0100
+Subject: [PATCH] fix(drbd): prevent duplicate TCP ports after toggle-disk
+ operations
+
+Remove redundant ensureStackDataExists() call with empty payload from
+resetStoragePools() method that was causing TCP port conflicts after
+toggle-disk operations.
+
+Root Cause:
+-----------
+The resetStoragePools() method, introduced in 2019 (commit 95cc17d0b8),
+calls ensureStackDataExists() with an empty LayerPayload. This worked
+correctly when TCP ports were stored at RscDfn level.
+
+After the TCP port migration to per-node level (commit f754943463, May
+2025), this empty payload results in DrbdRscData being created without
+TCP ports assigned. The controller then sends a Pojo with an empty port
+Set to satellites.
+
+On satellites, when DrbdRscData is initialized with an empty port list,
+initPorts() uses preferredNewPortsRef from peer resources. Since
+SatelliteDynamicNumberPool.tryAllocate() always returns true (no-op),
+any port from preferredNewPortsRef is accepted without conflict checking,
+leading to duplicate TCP port assignments.
+
+Impact:
+-------
+This regression affects toggle-disk operations, particularly:
+- Snapshot creation/restore operations
+- Manual toggle-disk operations
+- Any operation calling resetStoragePools()
+
+Symptoms include:
+- DRBD resources failing to adjust with "port is also used" errors
+- Resources stuck in StandAlone or Connecting states
+- Multiple resources on the same node using identical TCP ports
+
+Solution:
+---------
+Remove the ensureStackDataExists() call from resetStoragePools() as it
+is redundant. The calling code (e.g., CtrlRscToggleDiskApiCallHandler
+line 1071) already invokes ensureStackDataExists() with the correct
+payload immediately after resetStoragePools().
+
+This fix ensures:
+1. resetStoragePools() only resets storage pool assignments
+2. Layer data creation with proper TCP ports happens via the caller's
+   ensureStackDataExists() with correct payload
+3. No DrbdRscData objects are created without TCP port assignments
+
+Related Issues:
+---------------
+Fixes #454 - Duplicate TCP ports after backup/restore operations
+Related to user reports of resources stuck in StandAlone after node
+reboots when toggle-disk or backup operations were in progress.
+
+Testing:
+--------
+Verified that:
+- Toggle-disk operations no longer create resources without TCP ports
+- Backup/restore operations complete without TCP port conflicts
+- Resources maintain unique TCP ports across toggle-disk cycles
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+Signed-off-by: Andrei Kvapil <kvapss@gmail.com>
+---
+ .../linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java  | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java b/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
+index 3538b380c..4f589145e 100644
+--- a/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
++++ b/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
+@@ -276,8 +276,6 @@ public class CtrlRscLayerDataFactory
+ 
+                 rscDataToProcess.addAll(rscData.getChildren());
+             }
+-
+-            ensureStackDataExists(rscRef, null, new LayerPayload());
+         }
+         catch (AccessDeniedException exc)
+         {
+-- 
+2.39.5 (Apple Git-154)
+
