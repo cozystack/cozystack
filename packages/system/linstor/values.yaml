@@ -1,4 +1,4 @@
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
-    tag: 1.32.3@sha256:c6fbe1825514a3059088175968a651d7e10f477590023a33f1a9e6584fd98e04
+    tag: 1.32.3@sha256:1138c8dc0a117360ef70e2e2ab97bc2696419b63f46358f7668c7e01a96c419b
