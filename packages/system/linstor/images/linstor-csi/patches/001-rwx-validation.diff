@@ -1,100 +1,202 @@
+diff --git a/cmd/linstor-csi/linstor-csi.go b/cmd/linstor-csi/linstor-csi.go
+index 143f6cee..bd28e06e 100644
+--- a/cmd/linstor-csi/linstor-csi.go
++++ b/cmd/linstor-csi/linstor-csi.go
+@@ -41,22 +41,23 @@ import (
+ 
+ func main() {
+ 	var (
+-		lsEndpoint            = flag.String("linstor-endpoint", "", "Controller API endpoint for LINSTOR")
+-		lsSkipTLSVerification = flag.Bool("linstor-skip-tls-verification", false, "If true, do not verify tls")
+-		csiEndpoint           = flag.String("csi-endpoint", "unix:///var/lib/kubelet/plugins/linstor.csi.linbit.com/csi.sock", "CSI endpoint")
+-		node                  = flag.String("node", "", "Node ID to pass to node service")
+-		logLevel              = flag.String("log-level", "info", "Enable debug log output. Choose from: panic, fatal, error, warn, info, debug")
+-		rps                   = flag.Float64("linstor-api-requests-per-second", 0, "Maximum allowed number of LINSTOR API requests per second. Default: Unlimited")
+-		burst                 = flag.Int("linstor-api-burst", 1, "Maximum number of API requests allowed before being limited by requests-per-second. Default: 1 (no bursting)")
+-		bearerTokenFile       = flag.String("bearer-token", "", "Read the bearer token from the given file and use it for authentication.")
+-		propNs                = flag.String("property-namespace", linstor.NamespcAuxiliary, "Limit the reported topology keys to properties from the given namespace.")
+-		labelBySP             = flag.Bool("label-by-storage-pool", true, "Set to false to disable labeling of nodes based on their configured storage pools.")
+-		nodeCacheTimeout      = flag.Duration("node-cache-timeout", 1*time.Minute, "Duration for which the results of node and storage pool related API responses should be cached.")
+-		resourceCacheTimeout  = flag.Duration("resource-cache-timeout", 30*time.Second, "Duration for which the results of resource related API responses should be cached.")
+-		resyncAfter           = flag.Duration("resync-after", 5*time.Minute, "Duration after which reconciliations (such as for VolumeSnapshotClasses) should be rerun. Set to 0 to disable.")
+-		enableRWX             = flag.Bool("enable-rwx", false, "Enable RWX support via NFS (requires running in Kubernetes).")
+-		namespace             = flag.String("nfs-service-namespace", "", "The namespace the NFS service is running in.")
+-		reactorConfigMapName  = flag.String("nfs-reactor-config-map-name", "linstor-csi-nfs-reactor-config", "Name of the config map used to store promoter configuration")
++		lsEndpoint                = flag.String("linstor-endpoint", "", "Controller API endpoint for LINSTOR")
++		lsSkipTLSVerification     = flag.Bool("linstor-skip-tls-verification", false, "If true, do not verify tls")
++		csiEndpoint               = flag.String("csi-endpoint", "unix:///var/lib/kubelet/plugins/linstor.csi.linbit.com/csi.sock", "CSI endpoint")
++		node                      = flag.String("node", "", "Node ID to pass to node service")
++		logLevel                  = flag.String("log-level", "info", "Enable debug log output. Choose from: panic, fatal, error, warn, info, debug")
++		rps                       = flag.Float64("linstor-api-requests-per-second", 0, "Maximum allowed number of LINSTOR API requests per second. Default: Unlimited")
++		burst                     = flag.Int("linstor-api-burst", 1, "Maximum number of API requests allowed before being limited by requests-per-second. Default: 1 (no bursting)")
++		bearerTokenFile           = flag.String("bearer-token", "", "Read the bearer token from the given file and use it for authentication.")
++		propNs                    = flag.String("property-namespace", linstor.NamespcAuxiliary, "Limit the reported topology keys to properties from the given namespace.")
++		labelBySP                 = flag.Bool("label-by-storage-pool", true, "Set to false to disable labeling of nodes based on their configured storage pools.")
++		nodeCacheTimeout          = flag.Duration("node-cache-timeout", 1*time.Minute, "Duration for which the results of node and storage pool related API responses should be cached.")
++		resourceCacheTimeout      = flag.Duration("resource-cache-timeout", 30*time.Second, "Duration for which the results of resource related API responses should be cached.")
++		resyncAfter               = flag.Duration("resync-after", 5*time.Minute, "Duration after which reconciliations (such as for VolumeSnapshotClasses) should be rerun. Set to 0 to disable.")
++		enableRWX                 = flag.Bool("enable-rwx", false, "Enable RWX support via NFS (requires running in Kubernetes).")
++		namespace                 = flag.String("nfs-service-namespace", "", "The namespace the NFS service is running in.")
++		reactorConfigMapName      = flag.String("nfs-reactor-config-map-name", "linstor-csi-nfs-reactor-config", "Name of the config map used to store promoter configuration")
++		disableRWXBlockValidation = flag.Bool("disable-rwx-block-validation", false, "Disable KubeVirt VM ownership validation for RWX block volumes.")
+ 	)
+ 
+ 	flag.Var(&volume.DefaultRemoteAccessPolicy, "default-remote-access-policy", "")
+@@ -169,6 +170,10 @@ func main() {
+ 		opts = append(opts, driver.ConfigureRWX(*namespace, *reactorConfigMapName))
+ 	}
+ 
++	if *disableRWXBlockValidation {
++		opts = append(opts, driver.DisableRWXBlockValidation())
++	}
++
+ 	drv, err := driver.NewDriver(opts...)
+ 	if err != nil {
+ 		log.Fatal(err)
 diff --git a/pkg/driver/driver.go b/pkg/driver/driver.go
-index bea69a8..69e71a6 100644
+index bea69a8b..a39674b6 100644
 --- a/pkg/driver/driver.go
 +++ b/pkg/driver/driver.go
-@@ -707,6 +707,219 @@ func (d Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest)
- 	return &csi.DeleteVolumeResponse{}, nil
+@@ -83,6 +83,8 @@ type Driver struct {
+ 	topologyPrefix string
+ 	// resyncAfter is the interval after which reconciliations should be retried
+ 	resyncAfter time.Duration
++	// disableRWXBlockValidation disables KubeVirt VM ownership validation for RWX block volumes
++	disableRWXBlockValidation bool
+ 
+ 	// Embed for forward compatibility.
+ 	csi.UnimplementedIdentityServer
+@@ -300,6 +302,17 @@ func ResyncAfter(resyncAfter time.Duration) func(*Driver) error {
+ 	}
  }
  
++// DisableRWXBlockValidation disables the KubeVirt VM ownership validation for RWX block volumes.
++// When disabled, the driver will not check if multiple pods using the same RWX block volume
++// belong to the same VM. This may be needed in environments where the validation causes issues
++// or when using RWX block volumes outside of KubeVirt.
++func DisableRWXBlockValidation() func(*Driver) error {
++	return func(d *Driver) error {
++		d.disableRWXBlockValidation = true
++		return nil
++	}
++}
++
+ // GetPluginInfo https://github.com/container-storage-interface/spec/blob/v1.9.0/spec.md#getplugininfo
+ func (d Driver) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
+ 	return &csi.GetPluginInfoResponse{
+@@ -751,6 +764,14 @@ func (d Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controller
+ 	// ReadWriteMany block volume
+ 	rwxBlock := req.VolumeCapability.AccessMode.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER && req.VolumeCapability.GetBlock() != nil
+ 
++	// Validate RWX block attachment to prevent misuse of allow-two-primaries
++	if rwxBlock && !d.disableRWXBlockValidation {
++		if _, err := utils.ValidateRWXBlockAttachment(ctx, d.kubeClient, d.log, req.GetVolumeId()); err != nil {
++			return nil, status.Errorf(codes.FailedPrecondition,
++				"ControllerPublishVolume failed for %s: %v", req.GetVolumeId(), err)
++		}
++	}
++
+ 	devPath, err := d.Assignments.Attach(ctx, req.GetVolumeId(), req.GetNodeId(), rwxBlock)
+ 	if err != nil {
+ 		return nil, status.Errorf(codes.Internal,
+diff --git a/pkg/utils/rwx_validation.go b/pkg/utils/rwx_validation.go
+new file mode 100644
+index 00000000..9fe82768
+--- /dev/null
++++ b/pkg/utils/rwx_validation.go
+@@ -0,0 +1,263 @@
++/*
++CSI Driver for Linstor
++Copyright © 2018 LINBIT USA, LLC
++
++This program is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 2 of the License, or
++(at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, see <http://www.gnu.org/licenses/>.
++*/
++
++package utils
++
++import (
++	"context"
++	"fmt"
++
++	"github.com/sirupsen/logrus"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++	"k8s.io/client-go/dynamic"
++)
++
 +// KubeVirtVMLabel is the label that KubeVirt adds to pods to identify the VM they belong to.
 +const KubeVirtVMLabel = "vm.kubevirt.io/name"
 +
 +// KubeVirtHotplugDiskLabel is the label that KubeVirt adds to hotplug disk pods.
 +const KubeVirtHotplugDiskLabel = "kubevirt.io"
 +
-+// podGVR is the GroupVersionResource for pods.
-+var podGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
++// PodGVR is the GroupVersionResource for pods.
++var PodGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 +
-+// pvGVR is the GroupVersionResource for persistent volumes.
-+var pvGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"}
++// PVGVR is the GroupVersionResource for persistent volumes.
++var PVGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"}
 +
-+// getVMNameFromPod extracts the VM name from a pod, handling both regular virt-launcher pods
-+// and hotplug disk pods (which reference the virt-launcher pod via ownerReferences).
-+func (d Driver) getVMNameFromPod(ctx context.Context, pod *unstructured.Unstructured) (string, error) {
-+	labels := pod.GetLabels()
-+	if labels == nil {
-+		return "", nil
-+	}
-+
-+	// Direct case: pod has vm.kubevirt.io/name label (virt-launcher pod)
-+	if vmName, ok := labels[KubeVirtVMLabel]; ok && vmName != "" {
-+		return vmName, nil
-+	}
-+
-+	// Hotplug disk case: pod has kubevirt.io: hotplug-disk label
-+	// Follow ownerReferences to find the virt-launcher pod
-+	if hotplugValue, ok := labels[KubeVirtHotplugDiskLabel]; ok && hotplugValue == "hotplug-disk" {
-+		ownerRefs := pod.GetOwnerReferences()
-+		for _, owner := range ownerRefs {
-+			if owner.Kind != "Pod" || owner.Controller == nil || !*owner.Controller {
-+				continue
-+			}
-+
-+			// Get the owner pod (virt-launcher)
-+			ownerPod, err := d.kubeClient.Resource(podGVR).Namespace(pod.GetNamespace()).Get(ctx, owner.Name, metav1.GetOptions{})
-+			if err != nil {
-+				return "", fmt.Errorf("failed to get owner pod %s: %w", owner.Name, err)
-+			}
-+
-+			// Extract VM name from owner pod
-+			ownerLabels := ownerPod.GetLabels()
-+			if ownerLabels != nil {
-+				if vmName, ok := ownerLabels[KubeVirtVMLabel]; ok && vmName != "" {
-+					d.log.WithFields(logrus.Fields{
-+						"hotplugPod":   pod.GetName(),
-+						"virtLauncher": owner.Name,
-+						"vmName":       vmName,
-+					}).Debug("resolved VM name from hotplug disk pod via owner reference")
-+
-+					return vmName, nil
-+				}
-+			}
-+
-+			return "", fmt.Errorf("owner pod %s does not have %s label", owner.Name, KubeVirtVMLabel)
-+		}
-+
-+		return "", fmt.Errorf("hotplug disk pod %s has no controller owner reference", pod.GetName())
-+	}
-+
-+	return "", nil
-+}
-+
-+// validateRWXBlockAttachment checks that RWX block volumes are only used by pods belonging to the same VM.
++// ValidateRWXBlockAttachment checks that RWX block volumes are only used by pods belonging to the same VM.
 +// This prevents misuse of allow-two-primaries while still permitting live migration.
 +// Returns the VM name if validation passes, or an error if:
 +// - Multiple pods from different VMs are trying to use the same volume
 +// - A pod without the KubeVirt VM label is trying to use a volume already attached elsewhere (strict mode)
 +// Returns empty string for VM name when no pods are using the volume or validation is skipped.
-+func (d Driver) validateRWXBlockAttachment(ctx context.Context, volumeID string) (string, error) {
-+	d.log.WithField("volumeID", volumeID).Info("validateRWXBlockAttachment called")
++func ValidateRWXBlockAttachment(ctx context.Context, kubeClient dynamic.Interface, log *logrus.Entry, volumeID string) (string, error) {
++	log.WithField("volumeID", volumeID).Info("validateRWXBlockAttachment called")
 +
-+	if d.kubeClient == nil {
++	if kubeClient == nil {
 +		// Not running in Kubernetes, skip validation
-+		d.log.Warn("validateRWXBlockAttachment: kubeClient is nil, skipping validation")
++		log.Warn("validateRWXBlockAttachment: kubeClient is nil, skipping validation")
 +		return "", nil
 +	}
 +
-+	// Get PV to find PVC reference (volumeID == PV name in CSI)
-+	pv, err := d.kubeClient.Resource(pvGVR).Get(ctx, volumeID, metav1.GetOptions{})
++	// Get PV to find PVC reference
++	pv, err := kubeClient.Resource(PVGVR).Get(ctx, volumeID, metav1.GetOptions{})
 +	if err != nil {
-+		d.log.WithError(err).Warn("cannot validate RWX attachment: failed to get PV")
++		log.WithError(err).Warn("cannot validate RWX attachment: failed to get PV")
++		return "", nil
++	}
++
++	// Verify that PV's volumeHandle matches the volumeID
++	volumeHandle, found, err := unstructured.NestedString(pv.Object, "spec", "csi", "volumeHandle")
++	if err != nil {
++		log.WithError(err).Warnf("cannot validate RWX attachment: failed to read volumeHandle for PV %s", volumeID)
++
++		return "", nil
++	}
++
++	if !found {
++		log.Warnf("cannot validate RWX attachment: volumeHandle not found for PV %s", volumeID)
++
++		return "", nil
++	}
++
++	if volumeHandle != volumeID {
++		log.WithFields(logrus.Fields{
++			"volumeID":     volumeID,
++			"volumeHandle": volumeHandle,
++		}).Warn("cannot validate RWX attachment: PV volumeHandle does not match volumeID")
++
 +		return "", nil
 +	}
 +
 +	// Extract claimRef from PV
 +	claimRef, found, _ := unstructured.NestedMap(pv.Object, "spec", "claimRef")
 +	if !found {
-+		d.log.Warn("cannot validate RWX attachment: PV has no claimRef")
++		log.Warn("cannot validate RWX attachment: PV has no claimRef")
 +		return "", nil
 +	}
 +
@@ -102,12 +204,12 @@ index bea69a8..69e71a6 100644
 +	pvcNamespace, _, _ := unstructured.NestedString(claimRef, "namespace")
 +
 +	if pvcNamespace == "" || pvcName == "" {
-+		d.log.Warn("cannot validate RWX attachment: PVC name or namespace is empty in claimRef")
++		log.Warn("cannot validate RWX attachment: PVC name or namespace is empty in claimRef")
 +		return "", nil
 +	}
 +
 +	// List all pods in the namespace
-+	podList, err := d.kubeClient.Resource(podGVR).Namespace(pvcNamespace).List(ctx, metav1.ListOptions{})
++	podList, err := kubeClient.Resource(PodGVR).Namespace(pvcNamespace).List(ctx, metav1.ListOptions{})
 +	if err != nil {
 +		return "", fmt.Errorf("failed to list pods in namespace %s: %w", pvcNamespace, err)
 +	}
@@ -139,28 +241,25 @@ index bea69a8..69e71a6 100644
 +				continue
 +			}
 +
-+			pvc, found, _ := unstructured.NestedMap(volMap, "persistentVolumeClaim")
-+			if !found {
++			claimName, found, _ := unstructured.NestedString(volMap, "persistentVolumeClaim", "claimName")
++			if !found || claimName != pvcName {
 +				continue
 +			}
 +
-+			claimName, _, _ := unstructured.NestedString(pvc, "claimName")
-+			if claimName == pvcName {
-+				// Extract VM name, handling both regular and hotplug disk pods
-+				vmName, err := d.getVMNameFromPod(ctx, &item)
-+				if err != nil {
-+					d.log.WithError(err).WithField("pod", item.GetName()).Warn("failed to get VM name from pod")
-+					// Continue with empty vmName - will be caught by strict mode check
-+					vmName = ""
-+				}
-+
-+				podsUsingPVC = append(podsUsingPVC, podInfo{
-+					name:   item.GetName(),
-+					vmName: vmName,
-+				})
-+
-+				break
++			// Extract VM name, handling both regular and hotplug disk pods
++			vmName, err := GetVMNameFromPod(ctx, kubeClient, log, &item)
++			if err != nil {
++				log.WithError(err).WithField("pod", item.GetName()).Warn("failed to get VM name from pod")
++				// Continue with empty vmName - will be caught by strict mode check
++				vmName = ""
 +			}
++
++			podsUsingPVC = append(podsUsingPVC, podInfo{
++				name:   item.GetName(),
++				vmName: vmName,
++			})
++
++			break
 +		}
 +	}
 +
@@ -168,7 +267,7 @@ index bea69a8..69e71a6 100644
 +	if len(podsUsingPVC) <= 1 {
 +		// Return VM name if there's exactly one pod
 +		if len(podsUsingPVC) == 1 {
-+			d.log.WithFields(logrus.Fields{
++			log.WithFields(logrus.Fields{
 +				"volumeID":     volumeID,
 +				"vmName":       podsUsingPVC[0].vmName,
 +				"podCount":     1,
@@ -179,7 +278,7 @@ index bea69a8..69e71a6 100644
 +			return podsUsingPVC[0].vmName, nil
 +		}
 +
-+		d.log.WithFields(logrus.Fields{
++		log.WithFields(logrus.Fields{
 +			"volumeID":     volumeID,
 +			"pvcNamespace": pvcNamespace,
 +			"pvcName":      pvcName,
@@ -209,7 +308,7 @@ index bea69a8..69e71a6 100644
 +		}
 +	}
 +
-+	d.log.WithFields(logrus.Fields{
++	log.WithFields(logrus.Fields{
 +		"pvcNamespace": pvcNamespace,
 +		"pvcName":      pvcName,
 +		"vmName":       vmName,
@@ -219,30 +318,62 @@ index bea69a8..69e71a6 100644
 +	return vmName, nil
 +}
 +
- // ControllerPublishVolume https://github.com/container-storage-interface/spec/blob/v1.9.0/spec.md#controllerpublishvolume
- func (d Driver) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
- 	if req.GetVolumeId() == "" {
-@@ -751,6 +964,14 @@ func (d Driver) ControllerPublishVolume(ctx context.Context, req *csi.Controller
- 	// ReadWriteMany block volume
- 	rwxBlock := req.VolumeCapability.AccessMode.GetMode() == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER && req.VolumeCapability.GetBlock() != nil
- 
-+	// Validate RWX block attachment to prevent misuse of allow-two-primaries
-+	if rwxBlock {
-+		if _, err := d.validateRWXBlockAttachment(ctx, req.GetVolumeId()); err != nil {
-+			return nil, status.Errorf(codes.FailedPrecondition,
-+				"ControllerPublishVolume failed for %s: %v", req.GetVolumeId(), err)
-+		}
++// GetVMNameFromPod extracts the VM name from a pod, handling both regular virt-launcher pods
++// and hotplug disk pods (which reference the virt-launcher pod via ownerReferences).
++func GetVMNameFromPod(ctx context.Context, kubeClient dynamic.Interface, log *logrus.Entry, pod *unstructured.Unstructured) (string, error) {
++	labels := pod.GetLabels()
++	if labels == nil {
++		return "", nil
 +	}
 +
- 	devPath, err := d.Assignments.Attach(ctx, req.GetVolumeId(), req.GetNodeId(), rwxBlock)
- 	if err != nil {
- 		return nil, status.Errorf(codes.Internal,
-diff --git a/pkg/driver/rwx_validation_test.go b/pkg/driver/rwx_validation_test.go
++	// Direct case: pod has vm.kubevirt.io/name label (virt-launcher pod)
++	if vmName, ok := labels[KubeVirtVMLabel]; ok && vmName != "" {
++		return vmName, nil
++	}
++
++	// Hotplug disk case: pod has kubevirt.io: hotplug-disk label
++	// Follow ownerReferences to find the virt-launcher pod
++	if hotplugValue, ok := labels[KubeVirtHotplugDiskLabel]; ok && hotplugValue == "hotplug-disk" {
++		ownerRefs := pod.GetOwnerReferences()
++		for _, owner := range ownerRefs {
++			if owner.Kind != "Pod" || owner.Controller == nil || !*owner.Controller {
++				continue
++			}
++
++			// Get the owner pod (virt-launcher)
++			ownerPod, err := kubeClient.Resource(PodGVR).Namespace(pod.GetNamespace()).Get(ctx, owner.Name, metav1.GetOptions{})
++			if err != nil {
++				return "", fmt.Errorf("failed to get owner pod %s: %w", owner.Name, err)
++			}
++
++			// Extract VM name from owner pod
++			ownerLabels := ownerPod.GetLabels()
++			if ownerLabels != nil {
++				if vmName, ok := ownerLabels[KubeVirtVMLabel]; ok && vmName != "" {
++					log.WithFields(logrus.Fields{
++						"hotplugPod":   pod.GetName(),
++						"virtLauncher": owner.Name,
++						"vmName":       vmName,
++					}).Debug("resolved VM name from hotplug disk pod via owner reference")
++
++					return vmName, nil
++				}
++			}
++
++			return "", fmt.Errorf("owner pod %s does not have %s label", owner.Name, KubeVirtVMLabel)
++		}
++
++		return "", fmt.Errorf("hotplug disk pod %s has no controller owner reference", pod.GetName())
++	}
++
++	return "", nil
++}
+diff --git a/pkg/utils/rwx_validation_test.go b/pkg/utils/rwx_validation_test.go
 new file mode 100644
-index 0000000..92c1046
+index 00000000..d75690f9
 --- /dev/null
-+++ b/pkg/driver/rwx_validation_test.go
-@@ -0,0 +1,353 @@
++++ b/pkg/utils/rwx_validation_test.go
+@@ -0,0 +1,342 @@
 +/*
 +CSI Driver for Linstor
 +Copyright © 2018 LINBIT USA, LLC
@@ -261,7 +392,7 @@ index 0000000..92c1046
 +along with this program; if not, see <http://www.gnu.org/licenses/>.
 +*/
 +
-+package driver
++package utils
 +
 +import (
 +	"context"
@@ -424,22 +555,17 @@ index 0000000..92c1046
 +			}
 +
 +			gvrToListKind := map[schema.GroupVersionResource]string{
-+				podGVR: "PodList",
-+				pvGVR:  "PersistentVolumeList",
++				PodGVR: "PodList",
++				PVGVR:  "PersistentVolumeList",
 +			}
 +			client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind, objects...)
 +
-+			// Create driver with fake client
++			// Create logger
 +			logger := logrus.NewEntry(logrus.New())
 +			logger.Logger.SetLevel(logrus.DebugLevel)
 +
-+			driver := &Driver{
-+				kubeClient: client,
-+				log:        logger,
-+			}
-+
 +			// Run validation
-+			vmName, err := driver.validateRWXBlockAttachment(context.Background(), "test-volume-id")
++			vmName, err := ValidateRWXBlockAttachment(context.Background(), client, logger, "test-volume-id")
 +
 +			if tc.expectError {
 +				assert.Error(t, err)
@@ -461,12 +587,8 @@ index 0000000..92c1046
 +func TestValidateRWXBlockAttachmentNoKubeClient(t *testing.T) {
 +	// When not running in Kubernetes (no client), validation should be skipped
 +	logger := logrus.NewEntry(logrus.New())
-+	driver := &Driver{
-+		kubeClient: nil,
-+		log:        logger,
-+	}
 +
-+	vmName, err := driver.validateRWXBlockAttachment(context.Background(), "test-volume-id")
++	vmName, err := ValidateRWXBlockAttachment(context.Background(), nil, logger, "test-volume-id")
 +	assert.NoError(t, err)
 +	assert.Empty(t, vmName)
 +}
@@ -476,20 +598,15 @@ index 0000000..92c1046
 +	scheme := runtime.NewScheme()
 +
 +	gvrToListKind := map[schema.GroupVersionResource]string{
-+		podGVR: "PodList",
-+		pvGVR:  "PersistentVolumeList",
++		PodGVR: "PodList",
++		PVGVR:  "PersistentVolumeList",
 +	}
 +	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind)
 +
 +	logger := logrus.NewEntry(logrus.New())
 +	logger.Logger.SetLevel(logrus.DebugLevel)
 +
-+	driver := &Driver{
-+		kubeClient: client,
-+		log:        logger,
-+	}
-+
-+	vmName, err := driver.validateRWXBlockAttachment(context.Background(), "non-existent-pv")
++	vmName, err := ValidateRWXBlockAttachment(context.Background(), client, logger, "non-existent-pv")
 +	assert.NoError(t, err)
 +	assert.Empty(t, vmName)
 +}
@@ -537,6 +654,9 @@ index 0000000..92c1046
 +				"claimRef": map[string]interface{}{
 +					"name":      pvcName,
 +					"namespace": pvcNamespace,
++				},
++				"csi": map[string]interface{}{
++					"volumeHandle": name,
 +				},
 +			},
 +		},
