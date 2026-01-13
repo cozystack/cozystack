@@ -1,4 +1,4 @@
 portSecurity: true
 routes: ""
-image: ghcr.io/cozystack/cozystack/kubeovn-plunger:v0.38.2@sha256:76c8af24cbec0261718c13c0150aa81c238a956626d4fd7baa8970b47fb3a6f0
+image: ghcr.io/cozystack/cozystack/kubeovn-plunger:v0.40.1@sha256:2a17dfa8eec0fc6b2adb564742e74f35bd68ac0d29e5ab1d007496aff3c0e97d
 ovnCentralName: ovn-central

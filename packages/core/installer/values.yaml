@@ -1,5 +1,5 @@
 cozystack:
-  image: ghcr.io/cozystack/cozystack/installer:v0.38.2@sha256:9ff92b655de6f9bea3cba4cd42dcffabd9aace6966dcfb1cc02dda2420ea4a15
+  image: ghcr.io/cozystack/cozystack/installer:v0.40.1@sha256:69a8f95b8ddcf122a8859a957017b3d9e33c5eca3bfbf30c112c109e355f4f1c
 cozystackOperator:
   enabled: false
   image: ghcr.io/cozystack/cozystack/cozystack-operator:latest@sha256:f7f6e0fd9e896b7bfa642d0bfa4378bc14e646bc5c2e86e2e09a82770ef33181
