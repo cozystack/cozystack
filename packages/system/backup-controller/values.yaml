@@ -1,0 +1,14 @@
+backupController:
+  image: ""
+  replicas: 2
+  debug: false
+  metrics:
+    enabled: true
+    bindAddress: ":8443"
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
