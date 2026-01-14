@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
@@ -41,12 +43,41 @@ func init() {
 	ctx = logr.NewContext(context.Background(), l)
 }
 
+// labelsMapper implements AppMapper using HelmRelease labels.
+type labelsMapper struct{}
+
+func (m *labelsMapper) Map(hr *helmv2.HelmRelease) (string, string, string, error) {
+	if hr.Labels == nil {
+		return "", "", "", fmt.Errorf("cannot map helm release %s/%s: labels are nil", hr.Namespace, hr.Name)
+	}
+
+	appKind, ok := hr.Labels["apps.cozystack.io/application.kind"]
+	if !ok {
+		return "", "", "", fmt.Errorf("cannot map helm release %s/%s: missing application.kind label", hr.Namespace, hr.Name)
+	}
+
+	appGroup, ok := hr.Labels["apps.cozystack.io/application.group"]
+	if !ok {
+		return "", "", "", fmt.Errorf("cannot map helm release %s/%s: missing application.group label", hr.Namespace, hr.Name)
+	}
+
+	appName, ok := hr.Labels["apps.cozystack.io/application.name"]
+	if !ok {
+		return "", "", "", fmt.Errorf("cannot map helm release %s/%s: missing application.name label", hr.Namespace, hr.Name)
+	}
+
+	apiVersion := fmt.Sprintf("%s/v1alpha1", appGroup)
+	prefix := strings.TrimSuffix(hr.Name, appName)
+
+	return apiVersion, appKind, prefix, nil
+}
+
 func TestWalkingOwnershipGraph(t *testing.T) {
 	obj, err := dynClient.Resource(schema.GroupVersionResource{"", "v1", "pods"}).Namespace(os.Args[1]).Get(ctx, os.Args[2], metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodes := WalkOwnershipGraph(ctx, dynClient, mapper, &stubMapper{}, obj)
+	nodes := WalkOwnershipGraph(ctx, dynClient, mapper, &labelsMapper{}, obj)
 	for _, node := range nodes {
 		fmt.Printf("%#v\n", node)
 	}

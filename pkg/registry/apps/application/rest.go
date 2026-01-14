@@ -973,17 +973,10 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			UID:             app.UID,
 		},
 		Spec: helmv2.HelmReleaseSpec{
-			Chart: &helmv2.HelmChartTemplate{
-				Spec: helmv2.HelmChartTemplateSpec{
-					Chart:             r.releaseConfig.Chart.Name,
-					Version:           ">= 0.0.0-0",
-					ReconcileStrategy: "Revision",
-					SourceRef: helmv2.CrossNamespaceObjectReference{
-						Kind:      r.releaseConfig.Chart.SourceRef.Kind,
-						Name:      r.releaseConfig.Chart.SourceRef.Name,
-						Namespace: r.releaseConfig.Chart.SourceRef.Namespace,
-					},
-				},
+			ChartRef: &helmv2.CrossNamespaceSourceReference{
+				Kind:      r.releaseConfig.ChartRef.Kind,
+				Name:      r.releaseConfig.ChartRef.Name,
+				Namespace: r.releaseConfig.ChartRef.Namespace,
 			},
 			Interval: metav1.Duration{Duration: 5 * time.Minute},
 			Install: &helmv2.Install{

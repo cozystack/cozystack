@@ -22,6 +22,11 @@ const (
 	HRLabel      = "helm.toolkit.fluxcd.io/name"
 )
 
+// AppMapper maps HelmRelease to application metadata.
+type AppMapper interface {
+	Map(*helmv2.HelmRelease) (apiVersion, kind, prefix string, err error)
+}
+
 type ObjectID struct {
 	APIVersion string
 	Kind       string
