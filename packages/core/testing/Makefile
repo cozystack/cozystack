@@ -31,7 +31,8 @@ copy-nocloud-image:
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
 
 copy-installer-manifest:
-	docker cp ../../../_out/assets/cozystack-installer.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-installer.yaml
+	docker cp ../../../_out/assets/cozystack-crds.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-crds.yaml
+	docker cp ../../../_out/assets/cozystack-operator.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-operator.yaml
 
 prepare-cluster: copy-nocloud-image
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'

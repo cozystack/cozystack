@@ -23,6 +23,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
 // rootCmd represents the base command when called without any subcommands.
 var rootCmd = &cobra.Command{
 	Use:               "cozypkg",
@@ -44,6 +47,6 @@ func Execute() error {
 }
 
 func init() {
-	// Commands are registered in their respective init() functions
+	rootCmd.Version = Version
 }
 

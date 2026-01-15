@@ -37,10 +37,31 @@ build: build-deps
 
 manifests:
 	mkdir -p _out/assets
-	(cd packages/core/installer/; helm template --namespace cozy-installer installer .) > _out/assets/cozystack-installer.yaml
+	helm template installer packages/core/installer -n cozy-system \
+		-s templates/crds.yaml \
+		> _out/assets/cozystack-crds.yaml
+	helm template installer packages/core/installer -n cozy-system \
+		-s templates/cozystack-operator.yaml \
+		-s templates/packagesource.yaml \
+		> _out/assets/cozystack-operator.yaml
 
-assets:
+cozypkg:
+	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg ./cmd/cozypkg
+
+assets: assets-talos assets-cozypkg
+
+assets-talos:
 	make -C packages/core/talos assets
+
+assets-cozypkg: assets-cozypkg-linux-amd64 assets-cozypkg-linux-arm64 assets-cozypkg-darwin-amd64 assets-cozypkg-darwin-arm64 assets-cozypkg-windows-amd64 assets-cozypkg-windows-arm64
+	(cd _out/assets/ && sha256sum cozypkg-*.tar.gz) > _out/assets/cozypkg-checksums.txt
+
+assets-cozypkg-%:
+	$(eval EXT := $(if $(filter windows,$(firstword $(subst -, ,$*))),.exe,))
+	mkdir -p _out/assets
+	GOOS=$(firstword $(subst -, ,$*)) GOARCH=$(lastword $(subst -, ,$*)) go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg-$*/cozypkg$(EXT) ./cmd/cozypkg
+	cp LICENSE _out/bin/cozypkg-$*/LICENSE
+	tar -C _out/bin/cozypkg-$* -czf _out/assets/cozypkg-$*.tar.gz LICENSE cozypkg$(EXT)
 
 test:
 	make -C packages/core/testing apply

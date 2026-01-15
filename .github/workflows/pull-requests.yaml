@@ -71,11 +71,17 @@ jobs:
           name: pr-patch
           path: _out/assets/pr.patch
      
-      - name: Upload installer
+      - name: Upload CRDs
         uses: actions/upload-artifact@v4
         with:
-          name: cozystack-installer
-          path: _out/assets/cozystack-installer.yaml
+          name: cozystack-crds
+          path: _out/assets/cozystack-crds.yaml
+
+      - name: Upload operator
+        uses: actions/upload-artifact@v4
+        with:
+          name: cozystack-operator
+          path: _out/assets/cozystack-operator.yaml
 
       - name: Upload Talos image
         uses: actions/upload-artifact@v4
@@ -88,8 +94,9 @@ jobs:
     runs-on: ubuntu-latest
     if: contains(github.event.pull_request.labels.*.name, 'release')
     outputs:
-     installer_id: ${{ steps.fetch_assets.outputs.installer_id }}
-     disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
+      crds_id:      ${{ steps.fetch_assets.outputs.crds_id }}
+      operator_id:  ${{ steps.fetch_assets.outputs.operator_id }}
+      disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
     steps:
       - name: Checkout code
@@ -132,14 +139,16 @@ jobs:
               return;
             }
             const find = (n) => draft.assets.find(a => a.name === n)?.id;
-            const installerId = find('cozystack-installer.yaml');
-            const diskId      = find('nocloud-amd64.raw.xz');
-            if (!installerId || !diskId) {
+            const crdsId     = find('cozystack-crds.yaml');
+            const operatorId = find('cozystack-operator.yaml');
+            const diskId     = find('nocloud-amd64.raw.xz');
+            if (!crdsId || !operatorId || !diskId) {
               core.setFailed('Required assets missing in draft release');
               return;
             }
-            core.setOutput('installer_id', installerId);
-            core.setOutput('disk_id',      diskId);
+            core.setOutput('crds_id',     crdsId);
+            core.setOutput('operator_id', operatorId);
+            core.setOutput('disk_id',     diskId);
 
 
   prepare_env:
@@ -224,11 +233,18 @@ jobs:
         run: mkdir -p _out/assets
 
       # ▸ Regular PR path – download artefacts produced by the *build* job
-      - name: "Download installer (regular PR)"
+      - name: "Download CRDs (regular PR)"
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
         uses: actions/download-artifact@v4
         with:
-          name: cozystack-installer
+          name: cozystack-crds
+          path: _out/assets
+
+      - name: "Download operator (regular PR)"
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        uses: actions/download-artifact@v4
+        with:
+          name: cozystack-operator
           path: _out/assets
 
       # ▸ Release PR path – fetch artefacts from the corresponding draft release
@@ -237,8 +253,11 @@ jobs:
         run: |
           mkdir -p _out/assets
           curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
-            -o _out/assets/cozystack-installer.yaml \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.installer_id }}"
+            -o _out/assets/cozystack-crds.yaml \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.crds_id }}"
+          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
+            -o _out/assets/cozystack-operator.yaml \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.operator_id }}"
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
  
