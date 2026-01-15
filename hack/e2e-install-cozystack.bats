@@ -1,8 +1,12 @@
 #!/usr/bin/env bats
 
 @test "Required installer assets exist" {
-  if [ ! -f _out/assets/cozystack-installer.yaml ]; then
-    echo "Missing: _out/assets/cozystack-installer.yaml" >&2
+  if [ ! -f _out/assets/cozystack-crds.yaml ]; then
+    echo "Missing: _out/assets/cozystack-crds.yaml" >&2
+    exit 1
+  fi
+  if [ ! -f _out/assets/cozystack-operator.yaml ]; then
+    echo "Missing: _out/assets/cozystack-operator.yaml" >&2
     exit 1
   fi
 }
@@ -12,7 +16,8 @@
   kubectl create namespace cozy-system --dry-run=client -o yaml | kubectl apply -f -
 
   # Apply installer manifests (CRDs + operator)
-  kubectl apply -f _out/assets/cozystack-installer.yaml
+  kubectl apply -f _out/assets/cozystack-crds.yaml
+  kubectl apply -f _out/assets/cozystack-operator.yaml
 
   # Wait for the operator deployment to become available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
