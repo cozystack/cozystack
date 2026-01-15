@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.keycloak
+  name: cozystack.capi-provider-core
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,14 +13,11 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.postgres-operator
-    libraries:
-    - name: cozy-lib
-      path: library/cozy-lib
+    - cozystack.capi-operator
     components:
-    - name: keycloak
-      path: system/keycloak
-      libraries: ["cozy-lib"]
+    - name: capi-providers-core
+      path: system/capi-providers-core
       install:
-        namespace: cozy-keycloak
-        releaseName: keycloak
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-core

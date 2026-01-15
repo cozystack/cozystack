@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.keycloak
+  name: cozystack.ingress-nginx
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,14 +13,10 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.postgres-operator
-    libraries:
-    - name: cozy-lib
-      path: library/cozy-lib
+    - cozystack.prometheus-operator-crds
     components:
-    - name: keycloak
-      path: system/keycloak
-      libraries: ["cozy-lib"]
+    - name: ingress-nginx
+      path: system/ingress-nginx
       install:
-        namespace: cozy-keycloak
-        releaseName: keycloak
+        namespace: cozy-ingress-nginx
+        releaseName: ingress-nginx

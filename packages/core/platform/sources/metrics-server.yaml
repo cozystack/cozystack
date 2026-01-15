@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.capi-providers-core
+  name: cozystack.metrics-server
 spec:
   sourceRef:
     kind: OCIRepository
@@ -13,11 +13,10 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.capi-operator
+    - cozystack.prometheus-operator-crds
     components:
-    - name: capi-providers-core
-      path: system/capi-providers-core
+    - name: metrics-server
+      path: system/metrics-server
       install:
-        privileged: true
-        namespace: cozy-cluster-api
-        releaseName: capi-providers-core
+        namespace: cozy-metrics-server
+        releaseName: metrics-server

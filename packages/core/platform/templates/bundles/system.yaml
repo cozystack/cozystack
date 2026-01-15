@@ -1,0 +1,72 @@
+{{- if .Values.bundles.system.enabled }}
+
+# Networking
+{{- if eq .Values.bundles.system.variant "isp-full" }}
+{{- $networkingComponents := dict -}}
+{{- if .Values.networking -}}
+{{- $kubeovnValues := dict "kube-ovn" (dict
+  "ipv4" (dict
+    "POD_CIDR" .Values.networking.podCIDR
+    "POD_GATEWAY" .Values.networking.podGateway
+    "SVC_CIDR" .Values.networking.serviceCIDR
+    "JOIN_CIDR" .Values.networking.joinCIDR)) -}}
+{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- end -}}
+{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
+{{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozy-proxy" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.multus" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.metallb" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.reloader" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $) }}
+{{- end }}
+
+{{- if eq .Values.bundles.system.variant "isp-hosted" }}
+{{include "cozystack.platform.package" (list "cozystack.networking" "noop" $) }}
+{{- end }}
+
+# Cozystack Engine
+{{- if .Values.authentication.oidc.enabled }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.keycloak-operator" $) }}
+{{- else }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "default" $) }}
+{{- end }}
+
+# Common Packages
+{{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}
+{{- $tenantComponents := dict -}}
+{{- $tenantClusterValues := dict "_cluster" (dict "oidc-enabled" (ternary "true" "false" .Values.authentication.oidc.enabled)) -}}
+{{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
+{{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
+{{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.backupstrategy-controller" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.monitoring-agents" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.goldpinger" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.prometheus-operator-crds" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.grafana-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.etcd-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.postgres-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.objectstorage-controller" $) }}
+
+# Optional System Packages (controlled via bundles.enabledPackages)
+{{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.bootbox" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
+
+{{- end }}

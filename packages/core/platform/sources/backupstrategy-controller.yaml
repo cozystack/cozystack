@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.capi-providers-bootstrap
+  name: cozystack.backupstrategy-controller
 spec:
   sourceRef:
     kind: OCIRepository
@@ -10,14 +10,13 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-  - name: kubevirt
+  - name: default
     dependsOn:
     - cozystack.networking
-    - cozystack.capi-operator
     components:
-    - name: capi-providers-bootstrap
-      path: system/capi-providers-bootstrap
+    - name: backupstrategy-controller
+      path: system/backupstrategy-controller
       install:
         privileged: true
-        namespace: cozy-cluster-api
-        releaseName: capi-providers-bootstrap
+        namespace: cozy-backupstrategy-controller
+        releaseName: backupstrategy-controller

@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.capi-providers-infraprovider
+  name: cozystack.capi-provider-infra-kubevirt
 spec:
   sourceRef:
     kind: OCIRepository
@@ -10,6 +10,18 @@ spec:
     namespace: cozy-system
     path: /
   variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-operator
+    - cozystack.kubevirt
+    components:
+    - name: capi-providers-infraprovider
+      path: system/capi-providers-infraprovider
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-infraprovider
   - name: kubevirt
     dependsOn:
     - cozystack.networking
