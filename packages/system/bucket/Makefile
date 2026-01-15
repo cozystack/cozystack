@@ -2,8 +2,8 @@ S3MANAGER_TAG=v0.5.0
 
 export NAME=s3manager-system
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 update:
 	@echo Nothing to update

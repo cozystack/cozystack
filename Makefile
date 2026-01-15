@@ -1,5 +1,7 @@
 .PHONY: manifests assets unit-tests helm-unit-tests
 
+include hack/common-envs.mk
+
 build-deps:
 	@command -V find docker skopeo jq gh helm > /dev/null
 	@yq --version | grep -q "mikefarah" || (echo "mikefarah/yq is required" && exit 1)

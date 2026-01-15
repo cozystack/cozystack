@@ -1,7 +1,7 @@
 NAME=flux-aio
 NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 
 show:
 	cozyhr show -n $(NAMESPACE) $(NAME) --plain

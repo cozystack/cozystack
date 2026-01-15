@@ -1,7 +1,7 @@
 export NAME=metrics-server
 export NAMESPACE=cozy-monitoring
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

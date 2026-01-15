@@ -1,7 +1,7 @@
 NAME=installer
 NAMESPACE=cozy-system
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 
 pre-checks:
 	../../../hack/pre-checks.sh

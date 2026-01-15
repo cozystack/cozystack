@@ -1,7 +1,7 @@
 NAME=platform
 NAMESPACE=cozy-system
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 
 show:
 	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain
