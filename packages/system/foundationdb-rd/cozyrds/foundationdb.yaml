@@ -13,12 +13,11 @@ spec:
     prefix: foundationdb-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: foundationdb
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-foundationdb-application-default-foundationdb
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: FoundationDB

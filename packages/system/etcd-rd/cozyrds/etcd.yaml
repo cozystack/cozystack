@@ -13,13 +13,12 @@ spec:
     prefix: ""
     labels:
       cozystack.io/ui: "true"
+      sharding.fluxcd.io/key: tenants
       internal.cozystack.io/tenantmodule: "true"
-    chart:
-      name: etcd
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-extra
-        namespace: cozy-public
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-etcd-application-default-etcd
+      namespace: cozy-system
   dashboard:
     category: Administration
     singular: Etcd

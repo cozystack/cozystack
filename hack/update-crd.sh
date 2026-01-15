@@ -65,6 +65,15 @@ case "$PWD" in
   *"/extra/"*) SOURCE_NAME="cozystack-extra" ;;
 esac
 
+# Determine variant from PackageSource file
+# Look for packages/core/platform/sources/${NAME}-application.yaml
+PACKAGE_SOURCE_FILE="../../core/platform/sources/${NAME}-application.yaml"
+if [[ -f "$PACKAGE_SOURCE_FILE" ]]; then
+  VARIANT="$(yq -r '.spec.variants[0].name // "default"' "$PACKAGE_SOURCE_FILE")"
+else
+  VARIANT="default"
+fi
+
 # If file doesn't exist, create a minimal skeleton
 OUT="${OUT:-$CRD_DIR/$NAME.yaml}"
 if [[ ! -f "$OUT" ]]; then
@@ -86,6 +95,7 @@ fi
 export DESCRIPTION="$DESC"
 export ICON_B64="$ICON_B64"
 export SOURCE_NAME="$SOURCE_NAME"
+export VARIANT="$VARIANT"
 export SCHEMA_JSON_MIN="$(jq -c . "$SCHEMA_JSON")"
 
 # Generate keysOrder from values.yaml
@@ -118,8 +128,8 @@ export KEYS_ORDER="$(
 # Update only necessary fields in-place
 # - openAPISchema is loaded from file as a multi-line string (block scalar)
 # - labels ensure cozystack.io/ui: "true"
-# - prefix = "<name>-"
-# - sourceRef derived from directory (apps|extra)
+# - prefix = "<name>-" or "" for extra
+# - chartRef points to ExternalArtifact created by Package controller
 yq -i '
   .apiVersion = (.apiVersion // "cozystack.io/v1alpha1") |
   .kind       = (.kind       // "CozystackResourceDefinition") |
@@ -128,10 +138,9 @@ yq -i '
   (.spec.application.openAPISchema style="literal") |
   .spec.release.prefix = (strenv(PREFIX)) |
   .spec.release.labels."cozystack.io/ui" = "true" |
-  .spec.release.chart.name = strenv(RES_NAME) |
-  .spec.release.chart.sourceRef.kind = "HelmRepository" |
-  .spec.release.chart.sourceRef.name = strenv(SOURCE_NAME) |
-  .spec.release.chart.sourceRef.namespace = "cozy-public" |
+  .spec.release.chartRef.kind = "ExternalArtifact" |
+  .spec.release.chartRef.name = ("cozystack-" + strenv(RES_NAME) + "-application-" + strenv(VARIANT) + "-" + strenv(RES_NAME)) |
+  .spec.release.chartRef.namespace = "cozy-system" |
   .spec.dashboard.description = strenv(DESCRIPTION) |
   .spec.dashboard.icon = strenv(ICON_B64) |
   .spec.dashboard.keysOrder = env(KEYS_ORDER)
