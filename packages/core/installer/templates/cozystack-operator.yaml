@@ -1,4 +1,3 @@
-{{- if .Values.cozystackOperator.enabled }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -78,47 +77,3 @@ spec:
       - key: "node.cilium.io/agent-not-ready"
         operator: "Exists"
         effect: "NoSchedule"
----
-apiVersion: cozystack.io/v1alpha1
-kind: PackageSource
-metadata:
-  name: cozystack.cozystack-platform
-  annotations:
-    operator.cozystack.io/skip-cozystack-values: "true"
-spec:
-  sourceRef:
-    kind: OCIRepository
-    name: cozystack-packages
-    namespace: cozy-system
-    path: /
-  variants:
-  - name: default
-    components:
-    - install:
-        namespace: cozy-system
-        releaseName: cozystack-platform
-      name: cozystack-platform
-      path: core/platform
-      valuesFiles:
-      - values.yaml
-  - name: isp-full
-    components:
-    - install:
-        namespace: cozy-system
-        releaseName: cozystack-platform
-      name: cozystack-platform
-      path: core/platform
-      valuesFiles:
-      - values.yaml
-      - values-isp-full.yaml
-  - name: isp-hosted
-    components:
-    - install:
-        namespace: cozy-system
-        releaseName: cozystack-platform
-      name: cozystack-platform
-      path: core/platform
-      valuesFiles:
-      - values.yaml
-      - values-isp-hosted.yaml
-{{- end }}
