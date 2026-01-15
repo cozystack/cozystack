@@ -14,55 +14,55 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackresourcedefinitions,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cozystack.io,resources=applicationdefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;update;patch
 
-// CozystackResourceDefinitionHelmReconciler reconciles CozystackResourceDefinitions
-// and updates related HelmReleases when a CozyRD changes.
+// ApplicationDefinitionHelmReconciler reconciles ApplicationDefinitions
+// and updates related HelmReleases when an ApplicationDefinition changes.
 // This controller does NOT watch HelmReleases to avoid mutual reconciliation storms
 // with Flux's helm-controller.
-type CozystackResourceDefinitionHelmReconciler struct {
+type ApplicationDefinitionHelmReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-func (r *CozystackResourceDefinitionHelmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ApplicationDefinitionHelmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Get the CozystackResourceDefinition that triggered this reconciliation
-	crd := &cozyv1alpha1.CozystackResourceDefinition{}
-	if err := r.Get(ctx, req.NamespacedName, crd); err != nil {
-		logger.Error(err, "failed to get CozystackResourceDefinition", "name", req.Name)
+	// Get the ApplicationDefinition that triggered this reconciliation
+	appDef := &cozyv1alpha1.ApplicationDefinition{}
+	if err := r.Get(ctx, req.NamespacedName, appDef); err != nil {
+		logger.Error(err, "failed to get ApplicationDefinition", "name", req.Name)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Update HelmReleases related to this specific CozyRD
-	if err := r.updateHelmReleasesForCRD(ctx, crd); err != nil {
-		logger.Error(err, "failed to update HelmReleases for CRD", "crd", crd.Name)
+	// Update HelmReleases related to this specific ApplicationDefinition
+	if err := r.updateHelmReleasesForAppDef(ctx, appDef); err != nil {
+		logger.Error(err, "failed to update HelmReleases for ApplicationDefinition", "appDef", appDef.Name)
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *CozystackResourceDefinitionHelmReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ApplicationDefinitionHelmReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		Named("cozystackresourcedefinition-helm-reconciler").
-		For(&cozyv1alpha1.CozystackResourceDefinition{}).
+		Named("applicationdefinition-helm-reconciler").
+		For(&cozyv1alpha1.ApplicationDefinition{}).
 		Complete(r)
 }
 
-// updateHelmReleasesForCRD updates all HelmReleases that match the application labels from CozystackResourceDefinition
-func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleasesForCRD(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+// updateHelmReleasesForAppDef updates all HelmReleases that match the application labels from ApplicationDefinition
+func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx context.Context, appDef *cozyv1alpha1.ApplicationDefinition) error {
 	logger := log.FromContext(ctx)
 
 	// Use application labels to find HelmReleases
 	// Labels: apps.cozystack.io/application.kind and apps.cozystack.io/application.group
-	applicationKind := crd.Spec.Application.Kind
+	applicationKind := appDef.Spec.Application.Kind
 
 	// Validate that applicationKind is non-empty
 	if applicationKind == "" {
-		logger.V(4).Info("Skipping HelmRelease update: Application.Kind is empty", "crd", crd.Name)
+		logger.V(4).Info("Skipping HelmRelease update: Application.Kind is empty", "appDef", appDef.Name)
 		return nil
 	}
 
@@ -83,12 +83,12 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleasesForCRD(ctx
 		return err
 	}
 
-	logger.V(4).Info("Found HelmReleases to update", "crd", crd.Name, "kind", applicationKind, "count", len(hrList.Items))
+	logger.V(4).Info("Found HelmReleases to update", "appDef", appDef.Name, "kind", applicationKind, "count", len(hrList.Items))
 
 	// Update each HelmRelease
 	for i := range hrList.Items {
 		hr := &hrList.Items[i]
-		if err := r.updateHelmReleaseChart(ctx, hr, crd); err != nil {
+		if err := r.updateHelmReleaseChart(ctx, hr, appDef); err != nil {
 			logger.Error(err, "failed to update HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
 			continue
 		}
@@ -124,24 +124,24 @@ func valuesFromEqual(a, b []helmv2.ValuesReference) bool {
 	return true
 }
 
-// updateHelmReleaseChart updates the chart and valuesFrom in HelmRelease based on CozystackResourceDefinition
-func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleaseChart(ctx context.Context, hr *helmv2.HelmRelease, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+// updateHelmReleaseChart updates the chart and valuesFrom in HelmRelease based on ApplicationDefinition
+func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context.Context, hr *helmv2.HelmRelease, appDef *cozyv1alpha1.ApplicationDefinition) error {
 	logger := log.FromContext(ctx)
 	hrCopy := hr.DeepCopy()
 	updated := false
 
 	// Validate ChartRef configuration exists
-	if crd.Spec.Release.ChartRef == nil ||
-		crd.Spec.Release.ChartRef.Kind == "" ||
-		crd.Spec.Release.ChartRef.Name == "" ||
-		crd.Spec.Release.ChartRef.Namespace == "" {
-		logger.Error(fmt.Errorf("invalid ChartRef in CRD"), "Skipping HelmRelease chartRef update: ChartRef is nil or incomplete",
-			"crd", crd.Name)
+	if appDef.Spec.Release.ChartRef == nil ||
+		appDef.Spec.Release.ChartRef.Kind == "" ||
+		appDef.Spec.Release.ChartRef.Name == "" ||
+		appDef.Spec.Release.ChartRef.Namespace == "" {
+		logger.Error(fmt.Errorf("invalid ChartRef in ApplicationDefinition"), "Skipping HelmRelease chartRef update: ChartRef is nil or incomplete",
+			"appDef", appDef.Name)
 		return nil
 	}
 
-	// Use ChartRef directly from CRD
-	expectedChartRef := crd.Spec.Release.ChartRef
+	// Use ChartRef directly from ApplicationDefinition
+	expectedChartRef := appDef.Spec.Release.ChartRef
 
 	// Check if chartRef needs to be updated
 	if hrCopy.Spec.ChartRef == nil {
@@ -164,12 +164,12 @@ func (r *CozystackResourceDefinitionHelmReconciler) updateHelmReleaseChart(ctx c
 		updated = true
 	}
 
-	// Check and update labels from CozystackResourceDefinition
-	if len(crd.Spec.Release.Labels) > 0 {
+	// Check and update labels from ApplicationDefinition
+	if len(appDef.Spec.Release.Labels) > 0 {
 		if hrCopy.Labels == nil {
 			hrCopy.Labels = make(map[string]string)
 		}
-		for key, value := range crd.Spec.Release.Labels {
+		for key, value := range appDef.Spec.Release.Labels {
 			if hrCopy.Labels[key] != value {
 				logger.V(4).Info("Updating HelmRelease label", "name", hr.Name, "namespace", hr.Namespace, "label", key, "value", value)
 				hrCopy.Labels[key] = value

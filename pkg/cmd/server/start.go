@@ -124,7 +124,7 @@ func (o *CozyServerOptions) Complete() error {
 		return fmt.Errorf("client initialization failed: %w", err)
 	}
 
-	crdList := &v1alpha1.CozystackResourceDefinitionList{}
+	crdList := &v1alpha1.ApplicationDefinitionList{}
 
 	// Retry with exponential backoff for at least 30 minutes
 	const maxRetryDuration = 30 * time.Minute
@@ -142,11 +142,11 @@ func (o *CozyServerOptions) Complete() error {
 
 		// Check if we've exceeded the maximum retry duration
 		if time.Since(startTime) >= maxRetryDuration {
-			return fmt.Errorf("failed to list CozystackResourceDefinitions after %v: %w", maxRetryDuration, err)
+			return fmt.Errorf("failed to list ApplicationDefinitions after %v: %w", maxRetryDuration, err)
 		}
 
 		// Log the error and wait before retrying
-		fmt.Printf("Failed to list CozystackResourceDefinitions (retrying in %v): %v\n", delay, err)
+		fmt.Printf("Failed to list ApplicationDefinitions (retrying in %v): %v\n", delay, err)
 		time.Sleep(delay)
 
 		delay = time.Duration(float64(delay) * 1.5)

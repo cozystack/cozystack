@@ -26,7 +26,7 @@ CONTROLLER_GEN="go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4"
 TMPDIR=$(mktemp -d)
 OPERATOR_CRDDIR=packages/core/installer/definitions
 COZY_CONTROLLER_CRDDIR=packages/system/cozystack-controller/definitions
-COZY_RD_CRDDIR=packages/system/cozystack-resource-definition-crd/definition
+COZY_RD_CRDDIR=packages/system/application-definition-crd/definition
 BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
 BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
 
@@ -66,8 +66,8 @@ $CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/..." output:crd:arti
 mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
 mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml
 
-mv ${TMPDIR}/cozystack.io_cozystackresourcedefinitions.yaml \
-        ${COZY_RD_CRDDIR}/cozystack.io_cozystackresourcedefinitions.yaml
+mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
+        ${COZY_RD_CRDDIR}/cozystack.io_applicationdefinitions.yaml
 
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
 mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/

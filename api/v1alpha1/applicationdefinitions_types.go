@@ -24,45 +24,45 @@ import (
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
 
-// CozystackResourceDefinition is the Schema for the cozystackresourcedefinitions API
-type CozystackResourceDefinition struct {
+// ApplicationDefinition is the Schema for the applicationdefinitions API
+type ApplicationDefinition struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec CozystackResourceDefinitionSpec `json:"spec,omitempty"`
+	Spec ApplicationDefinitionSpec `json:"spec,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// CozystackResourceDefinitionList contains a list of CozystackResourceDefinitions
-type CozystackResourceDefinitionList struct {
+// ApplicationDefinitionList contains a list of ApplicationDefinitions
+type ApplicationDefinitionList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []CozystackResourceDefinition `json:"items"`
+	Items           []ApplicationDefinition `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&CozystackResourceDefinition{}, &CozystackResourceDefinitionList{})
+	SchemeBuilder.Register(&ApplicationDefinition{}, &ApplicationDefinitionList{})
 }
 
-type CozystackResourceDefinitionSpec struct {
+type ApplicationDefinitionSpec struct {
 	// Application configuration
-	Application CozystackResourceDefinitionApplication `json:"application"`
+	Application ApplicationDefinitionApplication `json:"application"`
 	// Release configuration
-	Release CozystackResourceDefinitionRelease `json:"release"`
+	Release ApplicationDefinitionRelease `json:"release"`
 
 	// Secret selectors
-	Secrets CozystackResourceDefinitionResources `json:"secrets,omitempty"`
+	Secrets ApplicationDefinitionResources `json:"secrets,omitempty"`
 	// Service selectors
-	Services CozystackResourceDefinitionResources `json:"services,omitempty"`
+	Services ApplicationDefinitionResources `json:"services,omitempty"`
 	// Ingress selectors
-	Ingresses CozystackResourceDefinitionResources `json:"ingresses,omitempty"`
+	Ingresses ApplicationDefinitionResources `json:"ingresses,omitempty"`
 
 	// Dashboard configuration for this resource
-	Dashboard *CozystackResourceDefinitionDashboard `json:"dashboard,omitempty"`
+	Dashboard *ApplicationDefinitionDashboard `json:"dashboard,omitempty"`
 }
 
-type CozystackResourceDefinitionApplication struct {
+type ApplicationDefinitionApplication struct {
 	// Kind of the application, used for UI and API
 	Kind string `json:"kind"`
 	// OpenAPI schema for the application, used for API validation
@@ -73,7 +73,7 @@ type CozystackResourceDefinitionApplication struct {
 	Singular string `json:"singular"`
 }
 
-type CozystackResourceDefinitionRelease struct {
+type ApplicationDefinitionRelease struct {
 	// Reference to the chart source
 	ChartRef *helmv2.CrossNamespaceSourceReference `json:"chartRef"`
 	// Labels for the release
@@ -82,7 +82,7 @@ type CozystackResourceDefinitionRelease struct {
 	Prefix string `json:"prefix"`
 }
 
-// CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
+// ApplicationDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
 // A resource matches this selector only if it satisfies ALL criteria:
 // - Label selector conditions (matchExpressions and matchLabels)
 // - AND has a name that matches one of the names in resourceNames (if specified)
@@ -105,7 +105,7 @@ type CozystackResourceDefinitionRelease struct {
 //	    - "{{ .name }}-secret"
 //	    - "{{ .kind }}-{{ .name }}-tls"
 //	    - "specificname"
-type CozystackResourceDefinitionResourceSelector struct {
+type ApplicationDefinitionResourceSelector struct {
 	metav1.LabelSelector `json:",inline"`
 	// ResourceNames is a list of resource names to match
 	// If specified, the resource must have one of these exact names to match the selector
@@ -113,16 +113,16 @@ type CozystackResourceDefinitionResourceSelector struct {
 	ResourceNames []string `json:"resourceNames,omitempty"`
 }
 
-type CozystackResourceDefinitionResources struct {
+type ApplicationDefinitionResources struct {
 	// Exclude contains an array of resource selectors that target resources.
 	// If a resource matches the selector in any of the elements in the array, it is
 	// hidden from the user, regardless of the matches in the include array.
-	Exclude []*CozystackResourceDefinitionResourceSelector `json:"exclude,omitempty"`
+	Exclude []*ApplicationDefinitionResourceSelector `json:"exclude,omitempty"`
 	// Include contains an array of resource selectors that target resources.
 	// If a resource matches the selector in any of the elements in the array, and
 	// matches none of the selectors in the exclude array that resource is marked
 	// as a tenant resource and is visible to users.
-	Include []*CozystackResourceDefinitionResourceSelector `json:"include,omitempty"`
+	Include []*ApplicationDefinitionResourceSelector `json:"include,omitempty"`
 }
 
 // ---- Dashboard types ----
@@ -139,8 +139,8 @@ const (
 	DashboardTabYAML      DashboardTab = "yaml"
 )
 
-// CozystackResourceDefinitionDashboard describes how this resource appears in the UI.
-type CozystackResourceDefinitionDashboard struct {
+// ApplicationDefinitionDashboard describes how this resource appears in the UI.
+type ApplicationDefinitionDashboard struct {
 	// Human-readable name shown in the UI (e.g., "Bucket")
 	Singular string `json:"singular"`
 	// Plural human-readable name (e.g., "Buckets")

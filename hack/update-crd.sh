@@ -79,7 +79,7 @@ OUT="${OUT:-$CRD_DIR/$NAME.yaml}"
 if [[ ! -f "$OUT" ]]; then
   cat >"$OUT" <<EOF
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: ${NAME}
 spec: {}
@@ -132,7 +132,7 @@ export KEYS_ORDER="$(
 # - chartRef points to ExternalArtifact created by Package controller
 yq -i '
   .apiVersion = (.apiVersion // "cozystack.io/v1alpha1") |
-  .kind       = (.kind       // "CozystackResourceDefinition") |
+  .kind       = (.kind       // "ApplicationDefinition") |
   .metadata.name = strenv(RES_NAME) |
   .spec.application.openAPISchema = strenv(SCHEMA_JSON_MIN) |
   (.spec.application.openAPISchema style="literal") |

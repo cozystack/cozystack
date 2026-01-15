@@ -4,20 +4,20 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: cozystackresourcedefinitions.cozystack.io
+  name: applicationdefinitions.cozystack.io
 spec:
   group: cozystack.io
   names:
-    kind: CozystackResourceDefinition
-    listKind: CozystackResourceDefinitionList
-    plural: cozystackresourcedefinitions
-    singular: cozystackresourcedefinition
+    kind: ApplicationDefinition
+    listKind: ApplicationDefinitionList
+    plural: applicationdefinitions
+    singular: applicationdefinition
   scope: Cluster
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: CozystackResourceDefinition is the Schema for the cozystackresourcedefinitions
+        description: ApplicationDefinition is the Schema for the applicationdefinitions
           API
         properties:
           apiVersion:
@@ -135,7 +135,7 @@ spec:
                       If a resource matches the selector in any of the elements in the array, it is
                       hidden from the user, regardless of the matches in the include array.
                     items:
-                      description: "CozystackResourceDefinitionResourceSelector extends
+                      description: "ApplicationDefinitionResourceSelector extends
                         metav1.LabelSelector with resourceNames support.\nA resource
                         matches this selector only if it satisfies ALL criteria:\n-
                         Label selector conditions (matchExpressions and matchLabels)\n-
@@ -210,7 +210,7 @@ spec:
                       matches none of the selectors in the exclude array that resource is marked
                       as a tenant resource and is visible to users.
                     items:
-                      description: "CozystackResourceDefinitionResourceSelector extends
+                      description: "ApplicationDefinitionResourceSelector extends
                         metav1.LabelSelector with resourceNames support.\nA resource
                         matches this selector only if it satisfies ALL criteria:\n-
                         Label selector conditions (matchExpressions and matchLabels)\n-
@@ -332,7 +332,7 @@ spec:
                       If a resource matches the selector in any of the elements in the array, it is
                       hidden from the user, regardless of the matches in the include array.
                     items:
-                      description: "CozystackResourceDefinitionResourceSelector extends
+                      description: "ApplicationDefinitionResourceSelector extends
                         metav1.LabelSelector with resourceNames support.\nA resource
                         matches this selector only if it satisfies ALL criteria:\n-
                         Label selector conditions (matchExpressions and matchLabels)\n-
@@ -407,7 +407,7 @@ spec:
                       matches none of the selectors in the exclude array that resource is marked
                       as a tenant resource and is visible to users.
                     items:
-                      description: "CozystackResourceDefinitionResourceSelector extends
+                      description: "ApplicationDefinitionResourceSelector extends
                         metav1.LabelSelector with resourceNames support.\nA resource
                         matches this selector only if it satisfies ALL criteria:\n-
                         Label selector conditions (matchExpressions and matchLabels)\n-
@@ -485,7 +485,7 @@ spec:
                       If a resource matches the selector in any of the elements in the array, it is
                       hidden from the user, regardless of the matches in the include array.
                     items:
-                      description: "CozystackResourceDefinitionResourceSelector extends
+                      description: "ApplicationDefinitionResourceSelector extends
                         metav1.LabelSelector with resourceNames support.\nA resource
                         matches this selector only if it satisfies ALL criteria:\n-
                         Label selector conditions (matchExpressions and matchLabels)\n-
@@ -560,7 +560,7 @@ spec:
                       matches none of the selectors in the exclude array that resource is marked
                       as a tenant resource and is visible to users.
                     items:
-                      description: "CozystackResourceDefinitionResourceSelector extends
+                      description: "ApplicationDefinitionResourceSelector extends
                         metav1.LabelSelector with resourceNames support.\nA resource
                         matches this selector only if it satisfies ALL criteria:\n-
                         Label selector conditions (matchExpressions and matchLabels)\n-

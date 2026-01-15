@@ -23,7 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-type CozystackResourceDefinitionReconciler struct {
+type ApplicationDefinitionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
@@ -36,21 +36,21 @@ type CozystackResourceDefinitionReconciler struct {
 	CozystackAPIKind string
 }
 
-func (r *CozystackResourceDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ApplicationDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// Only handle debounced restart logic
-	// HelmRelease reconciliation is handled by CozystackResourceDefinitionHelmReconciler
+	// HelmRelease reconciliation is handled by ApplicationDefinitionHelmReconciler
 	return r.debouncedRestart(ctx)
 }
 
-func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ApplicationDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Debounce == 0 {
 		r.Debounce = 5 * time.Second
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		Named("cozystackresource-controller").
+		Named("applicationdefinition-controller").
 		Watches(
-			&cozyv1alpha1.CozystackResourceDefinition{},
+			&cozyv1alpha1.ApplicationDefinition{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 				r.mu.Lock()
 				r.lastEvent = time.Now()
@@ -66,22 +66,22 @@ func (r *CozystackResourceDefinitionReconciler) SetupWithManager(mgr ctrl.Manage
 		Complete(r)
 }
 
-type crdHashView struct {
-	Name string                                       `json:"name"`
-	Spec cozyv1alpha1.CozystackResourceDefinitionSpec `json:"spec"`
+type appDefHashView struct {
+	Name string                                `json:"name"`
+	Spec cozyv1alpha1.ApplicationDefinitionSpec `json:"spec"`
 }
 
-func (r *CozystackResourceDefinitionReconciler) computeConfigHash(ctx context.Context) (string, error) {
-	list := &cozyv1alpha1.CozystackResourceDefinitionList{}
+func (r *ApplicationDefinitionReconciler) computeConfigHash(ctx context.Context) (string, error) {
+	list := &cozyv1alpha1.ApplicationDefinitionList{}
 	if err := r.List(ctx, list); err != nil {
 		return "", err
 	}
 
-	slices.SortFunc(list.Items, sortCozyRDs)
+	slices.SortFunc(list.Items, sortAppDefs)
 
-	views := make([]crdHashView, 0, len(list.Items))
+	views := make([]appDefHashView, 0, len(list.Items))
 	for i := range list.Items {
-		views = append(views, crdHashView{
+		views = append(views, appDefHashView{
 			Name: list.Items[i].Name,
 			Spec: list.Items[i].Spec,
 		})
@@ -94,7 +94,7 @@ func (r *CozystackResourceDefinitionReconciler) computeConfigHash(ctx context.Co
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Context) (ctrl.Result, error) {
+func (r *ApplicationDefinitionReconciler) debouncedRestart(ctx context.Context) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	r.mu.Lock()
@@ -132,7 +132,7 @@ func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Con
 		r.mu.Lock()
 		r.lastHandled = le
 		r.mu.Unlock()
-		logger.Info("No changes in CRD config; skipping restart", "hash", newHash)
+		logger.Info("No changes in ApplicationDefinition config; skipping restart", "hash", newHash)
 		return ctrl.Result{}, nil
 	}
 
@@ -151,7 +151,7 @@ func (r *CozystackResourceDefinitionReconciler) debouncedRestart(ctx context.Con
 	return ctrl.Result{}, nil
 }
 
-func (r *CozystackResourceDefinitionReconciler) getWorkload(
+func (r *ApplicationDefinitionReconciler) getWorkload(
 	ctx context.Context,
 	key types.NamespacedName,
 ) (tpl *corev1.PodTemplateSpec, obj client.Object, patch client.Patch, err error) {
@@ -178,7 +178,7 @@ func (r *CozystackResourceDefinitionReconciler) getWorkload(
 	return tpl, obj, patch, nil
 }
 
-func sortCozyRDs(a, b cozyv1alpha1.CozystackResourceDefinition) int {
+func sortAppDefs(a, b cozyv1alpha1.ApplicationDefinition) int {
 	if a.Name == b.Name {
 		return 0
 	}

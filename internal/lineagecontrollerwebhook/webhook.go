@@ -33,8 +33,8 @@ const (
 	ManagerNameKey   = "apps.cozystack.io/application.name"
 )
 
-// getResourceSelectors returns the appropriate CozystackResourceDefinitionResources for a given GroupKind
-func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.CozystackResourceDefinition) *cozyv1alpha1.CozystackResourceDefinitionResources {
+// getResourceSelectors returns the appropriate ApplicationDefinitionResources for a given GroupKind
+func (h *LineageControllerWebhook) getResourceSelectors(gk schema.GroupKind, crd *cozyv1alpha1.ApplicationDefinition) *cozyv1alpha1.ApplicationDefinitionResources {
 	switch {
 	case gk.Group == "" && gk.Kind == "Secret":
 		return &crd.Spec.Secrets
