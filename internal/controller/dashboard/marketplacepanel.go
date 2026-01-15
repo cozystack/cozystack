@@ -16,7 +16,7 @@ import (
 )
 
 // ensureMarketplacePanel creates or updates a MarketplacePanel resource for the given CRD
-func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) (reconcile.Result, error) {
+func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 
 	mp := &dashv1alpha1.MarketplacePanel{}

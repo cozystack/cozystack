@@ -21,7 +21,7 @@ import (
 //
 //	metadata.name: stock-namespace-<group>.<version>.<plural>
 //	spec.id:       stock-namespace-/<group>/<version>/<plural>
-func (m *Manager) ensureCustomColumnsOverride(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) (controllerutil.OperationResult, error) {
+func (m *Manager) ensureCustomColumnsOverride(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) (controllerutil.OperationResult, error) {
 	g, v, kind := pickGVK(crd)
 	plural := pickPlural(kind, crd)
 	// Details page segment uses lowercase kind, mirroring your example

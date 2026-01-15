@@ -204,20 +204,20 @@ func main() {
 	if reconcileDeployment {
 		cozyAPIKind = "Deployment"
 	}
-	if err = (&controller.CozystackResourceDefinitionReconciler{
+	if err = (&controller.ApplicationDefinitionReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
 		CozystackAPIKind: cozyAPIKind,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
+		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionReconciler")
 		os.Exit(1)
 	}
 
-	if err = (&controller.CozystackResourceDefinitionHelmReconciler{
+	if err = (&controller.ApplicationDefinitionHelmReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionHelmReconciler")
+		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionHelmReconciler")
 		os.Exit(1)
 	}
 

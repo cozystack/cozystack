@@ -41,7 +41,7 @@ func AddToScheme(s *runtime.Scheme) error {
 }
 
 // Manager owns logic for creating/updating dashboard resources derived from CRDs.
-// It’s easy to extend: add new ensure* methods and wire them into EnsureForCRD.
+// It’s easy to extend: add new ensure* methods and wire them into EnsureForAppDef.
 type Manager struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -56,7 +56,7 @@ func NewManager(c client.Client, scheme *runtime.Scheme) *Manager {
 func (m *Manager) SetupWithManager(mgr ctrl.Manager) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("dashboard-reconciler").
-		For(&cozyv1alpha1.CozystackResourceDefinition{}).
+		For(&cozyv1alpha1.ApplicationDefinition{}).
 		Complete(m); err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (m *Manager) SetupWithManager(mgr ctrl.Manager) error {
 func (m *Manager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
 
-	crd := &cozyv1alpha1.CozystackResourceDefinition{}
+	crd := &cozyv1alpha1.ApplicationDefinition{}
 
 	err := m.Get(ctx, types.NamespacedName{Name: req.Name}, crd)
 	if err != nil {
@@ -85,10 +85,10 @@ func (m *Manager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, err
 	}
 
-	return m.EnsureForCRD(ctx, crd)
+	return m.EnsureForAppDef(ctx, crd)
 }
 
-// EnsureForCRD is the single entry-point used by the controller.
+// EnsureForAppDef is the single entry-point used by the controller.
 // Add more ensure* calls here as you implement support for other resources:
 //
 //   - ensureBreadcrumb            (implemented)
@@ -99,7 +99,7 @@ func (m *Manager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 //   - ensureMarketplacePanel      (implemented)
 //   - ensureSidebar               (implemented)
 //   - ensureTableUriMapping 	     (implemented)
-func (m *Manager) EnsureForCRD(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) (reconcile.Result, error) {
+func (m *Manager) EnsureForAppDef(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) (reconcile.Result, error) {
 	// Early return if crd.Spec.Dashboard is nil to prevent oscillation
 	if crd.Spec.Dashboard == nil {
 		return reconcile.Result{}, nil
@@ -148,7 +148,7 @@ func (m *Manager) InitializeStaticResources(ctx context.Context) error {
 }
 
 // addDashboardLabels adds standard dashboard management labels to a resource
-func (m *Manager) addDashboardLabels(obj client.Object, crd *cozyv1alpha1.CozystackResourceDefinition, resourceType string) {
+func (m *Manager) addDashboardLabels(obj client.Object, crd *cozyv1alpha1.ApplicationDefinition, resourceType string) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)
@@ -197,7 +197,7 @@ func (m *Manager) getStaticResourceSelector() client.MatchingLabels {
 // CleanupOrphanedResources removes dashboard resources that are no longer needed
 // This should be called after cache warming to ensure all current resources are known
 func (m *Manager) CleanupOrphanedResources(ctx context.Context) error {
-	var crdList cozyv1alpha1.CozystackResourceDefinitionList
+	var crdList cozyv1alpha1.ApplicationDefinitionList
 	if err := m.List(ctx, &crdList, &client.ListOptions{}); err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (m *Manager) CleanupOrphanedResources(ctx context.Context) error {
 }
 
 // buildExpectedResourceSet creates a map of expected resource names by type
-func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.CozystackResourceDefinition) map[string]map[string]bool {
+func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.ApplicationDefinition) map[string]map[string]bool {
 	expected := make(map[string]map[string]bool)
 
 	// Initialize maps for each resource type

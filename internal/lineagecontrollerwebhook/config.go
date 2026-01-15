@@ -14,14 +14,14 @@ type appRef struct {
 }
 
 type runtimeConfig struct {
-	appCRDMap map[appRef]*cozyv1alpha1.CozystackResourceDefinition
+	appCRDMap map[appRef]*cozyv1alpha1.ApplicationDefinition
 }
 
 func (l *LineageControllerWebhook) initConfig() {
 	l.initOnce.Do(func() {
 		if l.config.Load() == nil {
 			l.config.Store(&runtimeConfig{
-				appCRDMap: make(map[appRef]*cozyv1alpha1.CozystackResourceDefinition),
+				appCRDMap: make(map[appRef]*cozyv1alpha1.ApplicationDefinition),
 			})
 		}
 	})

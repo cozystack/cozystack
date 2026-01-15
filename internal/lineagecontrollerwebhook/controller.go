@@ -8,23 +8,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// +kubebuilder:rbac:groups=cozystack.io,resources=cozystackresourcedefinitions,verbs=list;watch;get
+// +kubebuilder:rbac:groups=cozystack.io,resources=applicationdefinitions,verbs=list;watch;get
 
 func (c *LineageControllerWebhook) SetupWithManagerAsController(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cozyv1alpha1.CozystackResourceDefinition{}).
+		For(&cozyv1alpha1.ApplicationDefinition{}).
 		Complete(c)
 }
 
 func (c *LineageControllerWebhook) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	l := log.FromContext(ctx)
-	crds := &cozyv1alpha1.CozystackResourceDefinitionList{}
+	crds := &cozyv1alpha1.ApplicationDefinitionList{}
 	if err := c.List(ctx, crds); err != nil {
-		l.Error(err, "failed reading CozystackResourceDefinitions")
+		l.Error(err, "failed reading ApplicationDefinitions")
 		return ctrl.Result{}, err
 	}
 	cfg := &runtimeConfig{
-		appCRDMap: make(map[appRef]*cozyv1alpha1.CozystackResourceDefinition),
+		appCRDMap: make(map[appRef]*cozyv1alpha1.ApplicationDefinition),
 	}
 	for _, crd := range crds.Items {
 		appRef := appRef{

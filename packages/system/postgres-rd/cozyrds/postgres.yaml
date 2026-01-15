@@ -1,5 +1,5 @@
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: postgres
 spec:
