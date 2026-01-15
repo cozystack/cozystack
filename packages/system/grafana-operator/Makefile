@@ -1,8 +1,8 @@
 export NAME=grafana-operator
 export NAMESPACE=cozy-grafana-operator
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

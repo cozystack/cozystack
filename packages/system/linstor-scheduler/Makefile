@@ -1,7 +1,7 @@
 export NAME=linstor-scheduler
 export NAMESPACE=cozy-linstor
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

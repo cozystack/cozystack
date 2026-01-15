@@ -1,7 +1,7 @@
 export NAME=prometheus-operator-crds
 export NAMESPACE=cozy-victoria-metrics-operator
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts

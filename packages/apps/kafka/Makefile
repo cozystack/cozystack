@@ -1,4 +1,4 @@
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 PRESET_ENUM := ["nano","micro","small","medium","large","xlarge","2xlarge"]
 
 generate:

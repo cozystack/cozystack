@@ -1,8 +1,8 @@
 export NAME=linstor
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 LINSTOR_VERSION ?= 1.32.3
 LINSTOR_CSI_VERSION ?= v1.10.5

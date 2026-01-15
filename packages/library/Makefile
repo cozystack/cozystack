@@ -1,7 +1,7 @@
 OUT=../../_out/repos/library
 CHARTS := $(shell find . -maxdepth 2 -name Chart.yaml | awk -F/ '{print $$2}')
 
-include ../../scripts/common-envs.mk
+include ../../hack/common-envs.mk
 
 repo:
 	rm -rf "$(OUT)"
