@@ -30,9 +30,27 @@ image-matchbox:
 
 assets: talos-iso talos-nocloud talos-metal talos-kernel talos-initramfs
 
-talos-initramfs talos-kernel talos-installer talos-iso talos-nocloud talos-metal:
+talos-initramfs:
+	test -f ../../../_out/assets/initramfs-metal-amd64.xz || $(MAKE) build-talos-initramfs
+
+talos-kernel:
+	test -f ../../../_out/assets/kernel-amd64 || $(MAKE) build-talos-kernel
+
+talos-installer:
+	test -f ../../../_out/assets/installer-amd64.tar || $(MAKE) build-talos-installer
+
+talos-iso:
+	test -f ../../../_out/assets/metal-amd64.iso || $(MAKE) build-talos-iso
+
+talos-nocloud:
+	test -f ../../../_out/assets/nocloud-amd64.raw.xz || $(MAKE) build-talos-nocloud
+
+talos-metal:
+	test -f ../../../_out/assets/metal-amd64.raw.xz || $(MAKE) build-talos-metal
+
+build-talos-initramfs build-talos-kernel build-talos-installer build-talos-iso build-talos-nocloud build-talos-metal:
 	mkdir -p ../../../_out/assets
-	cat images/talos/profiles/$(subst talos-,,$@).yaml | \
+	cat images/talos/profiles/$(subst build-talos-,,$@).yaml | \
 		docker run --rm -i -v /dev:/dev --privileged "ghcr.io/siderolabs/imager:$(TALOS_VERSION)" --tar-to-stdout - | \
 		tar -C ../../../_out/assets -xzf-
 
