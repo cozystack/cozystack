@@ -74,19 +74,18 @@ spec:
           image: {{ .Values.global.registry.address }}/{{ .Values.global.images.kubeovn.repository }}:{{ .Values.global.images.kubeovn.tag }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-          {{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
           - /kube-ovn/start-controller.sh
           - --default-ls={{ .Values.networking.DEFAULT_SUBNET }}
-          - --default-cidr={{ index $cozyConfig.data "ipv4-pod-cidr" }}
-          - --default-gateway={{ index $cozyConfig.data "ipv4-pod-gateway" }}
+          - --default-cidr={{ .Values.ipv4.POD_CIDR }}
+          - --default-gateway={{ .Values.ipv4.POD_GATEWAY }}
           - --default-gateway-check={{- .Values.func.CHECK_GATEWAY }}
           - --default-logical-gateway={{- .Values.func.LOGICAL_GATEWAY }}
           - --default-u2o-interconnection={{- .Values.func.U2O_INTERCONNECTION }}
           - --default-exclude-ips={{- .Values.networking.EXCLUDE_IPS }}
           - --cluster-router={{ .Values.networking.DEFAULT_VPC }}
           - --node-switch={{ .Values.networking.NODE_SUBNET }}
-          - --node-switch-cidr={{ index $cozyConfig.data "ipv4-join-cidr" }}
-          - --service-cluster-ip-range={{ index $cozyConfig.data "ipv4-svc-cidr" }}
+          - --node-switch-cidr={{ .Values.ipv4.JOIN_CIDR }}
+          - --service-cluster-ip-range={{ .Values.ipv4.SVC_CIDR }}
           {{- if .Values.global.logVerbosity }}
           - --v={{ .Values.global.logVerbosity }}
           {{- end }}

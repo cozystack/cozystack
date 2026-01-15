@@ -135,29 +135,22 @@ spec:
                       If a resource matches the selector in any of the elements in the array, it is
                       hidden from the user, regardless of the matches in the include array.
                     items:
-                      description: |-
-                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
-                        A resource matches this selector only if it satisfies ALL criteria:
-                        - Label selector conditions (matchExpressions and matchLabels)
-                        - AND has a name that matches one of the names in resourceNames (if specified)
-
-                        The resourceNames field supports Go templates with the following variables available:
-                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
-                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
-                        - {{ .namespace }}: The namespace of the resource being processed
-
-                        Example YAML:
-                          secrets:
-                            include:
-                            - matchExpressions:
-                              - key: badlabel
-                                operator: DoesNotExist
-                              matchLabels:
-                                goodlabel: goodvalue
-                              resourceNames:
-                              - "{{ .name }}-secret"
-                              - "{{ .kind }}-{{ .name }}-tls"
-                              - "specificname"
+                      description: "CozystackResourceDefinitionResourceSelector extends
+                        metav1.LabelSelector with resourceNames support.\nA resource
+                        matches this selector only if it satisfies ALL criteria:\n-
+                        Label selector conditions (matchExpressions and matchLabels)\n-
+                        AND has a name that matches one of the names in resourceNames
+                        (if specified)\n\nThe resourceNames field supports Go templates
+                        with the following variables available:\n- {{ .name }}: The
+                        name of the managing application (from apps.cozystack.io/application.name)\n-
+                        {{ .kind }}: The lowercased kind of the managing application
+                        (from apps.cozystack.io/application.kind)\n- {{ .namespace
+                        }}: The namespace of the resource being processed\n\nExample
+                        YAML:\n\n\tsecrets:\n\t  include:\n\t  - matchExpressions:\n\t
+                        \   - key: badlabel\n\t      operator: DoesNotExist\n\t    matchLabels:\n\t
+                        \     goodlabel: goodvalue\n\t    resourceNames:\n\t    -
+                        \"{{ .name }}-secret\"\n\t    - \"{{ .kind }}-{{ .name }}-tls\"\n\t
+                        \   - \"specificname\""
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector
@@ -217,29 +210,22 @@ spec:
                       matches none of the selectors in the exclude array that resource is marked
                       as a tenant resource and is visible to users.
                     items:
-                      description: |-
-                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
-                        A resource matches this selector only if it satisfies ALL criteria:
-                        - Label selector conditions (matchExpressions and matchLabels)
-                        - AND has a name that matches one of the names in resourceNames (if specified)
-
-                        The resourceNames field supports Go templates with the following variables available:
-                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
-                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
-                        - {{ .namespace }}: The namespace of the resource being processed
-
-                        Example YAML:
-                          secrets:
-                            include:
-                            - matchExpressions:
-                              - key: badlabel
-                                operator: DoesNotExist
-                              matchLabels:
-                                goodlabel: goodvalue
-                              resourceNames:
-                              - "{{ .name }}-secret"
-                              - "{{ .kind }}-{{ .name }}-tls"
-                              - "specificname"
+                      description: "CozystackResourceDefinitionResourceSelector extends
+                        metav1.LabelSelector with resourceNames support.\nA resource
+                        matches this selector only if it satisfies ALL criteria:\n-
+                        Label selector conditions (matchExpressions and matchLabels)\n-
+                        AND has a name that matches one of the names in resourceNames
+                        (if specified)\n\nThe resourceNames field supports Go templates
+                        with the following variables available:\n- {{ .name }}: The
+                        name of the managing application (from apps.cozystack.io/application.name)\n-
+                        {{ .kind }}: The lowercased kind of the managing application
+                        (from apps.cozystack.io/application.kind)\n- {{ .namespace
+                        }}: The namespace of the resource being processed\n\nExample
+                        YAML:\n\n\tsecrets:\n\t  include:\n\t  - matchExpressions:\n\t
+                        \   - key: badlabel\n\t      operator: DoesNotExist\n\t    matchLabels:\n\t
+                        \     goodlabel: goodvalue\n\t    resourceNames:\n\t    -
+                        \"{{ .name }}-secret\"\n\t    - \"{{ .kind }}-{{ .name }}-tls\"\n\t
+                        \   - \"specificname\""
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector
@@ -296,34 +282,34 @@ spec:
               release:
                 description: Release configuration
                 properties:
-                  chart:
-                    description: Helm chart configuration
+                  chartRef:
+                    description: Reference to the chart source
                     properties:
-                      name:
-                        description: Name of the Helm chart
+                      apiVersion:
+                        description: APIVersion of the referent.
                         type: string
-                      sourceRef:
-                        description: Source reference for the Helm chart
-                        properties:
-                          kind:
-                            default: HelmRepository
-                            description: Kind of the source reference
-                            type: string
-                          name:
-                            description: Name of the source reference
-                            type: string
-                          namespace:
-                            default: cozy-public
-                            description: Namespace of the source reference
-                            type: string
-                        required:
-                        - kind
-                        - name
-                        - namespace
-                        type: object
+                      kind:
+                        description: Kind of the referent.
+                        enum:
+                        - OCIRepository
+                        - HelmChart
+                        - ExternalArtifact
+                        type: string
+                      name:
+                        description: Name of the referent.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace of the referent, defaults to the namespace of the Kubernetes
+                          resource object that contains the reference.
+                        maxLength: 63
+                        minLength: 1
+                        type: string
                     required:
+                    - kind
                     - name
-                    - sourceRef
                     type: object
                   labels:
                     additionalProperties:
@@ -334,7 +320,7 @@ spec:
                     description: Prefix for the release name
                     type: string
                 required:
-                - chart
+                - chartRef
                 - prefix
                 type: object
               secrets:
@@ -346,29 +332,22 @@ spec:
                       If a resource matches the selector in any of the elements in the array, it is
                       hidden from the user, regardless of the matches in the include array.
                     items:
-                      description: |-
-                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
-                        A resource matches this selector only if it satisfies ALL criteria:
-                        - Label selector conditions (matchExpressions and matchLabels)
-                        - AND has a name that matches one of the names in resourceNames (if specified)
-
-                        The resourceNames field supports Go templates with the following variables available:
-                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
-                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
-                        - {{ .namespace }}: The namespace of the resource being processed
-
-                        Example YAML:
-                          secrets:
-                            include:
-                            - matchExpressions:
-                              - key: badlabel
-                                operator: DoesNotExist
-                              matchLabels:
-                                goodlabel: goodvalue
-                              resourceNames:
-                              - "{{ .name }}-secret"
-                              - "{{ .kind }}-{{ .name }}-tls"
-                              - "specificname"
+                      description: "CozystackResourceDefinitionResourceSelector extends
+                        metav1.LabelSelector with resourceNames support.\nA resource
+                        matches this selector only if it satisfies ALL criteria:\n-
+                        Label selector conditions (matchExpressions and matchLabels)\n-
+                        AND has a name that matches one of the names in resourceNames
+                        (if specified)\n\nThe resourceNames field supports Go templates
+                        with the following variables available:\n- {{ .name }}: The
+                        name of the managing application (from apps.cozystack.io/application.name)\n-
+                        {{ .kind }}: The lowercased kind of the managing application
+                        (from apps.cozystack.io/application.kind)\n- {{ .namespace
+                        }}: The namespace of the resource being processed\n\nExample
+                        YAML:\n\n\tsecrets:\n\t  include:\n\t  - matchExpressions:\n\t
+                        \   - key: badlabel\n\t      operator: DoesNotExist\n\t    matchLabels:\n\t
+                        \     goodlabel: goodvalue\n\t    resourceNames:\n\t    -
+                        \"{{ .name }}-secret\"\n\t    - \"{{ .kind }}-{{ .name }}-tls\"\n\t
+                        \   - \"specificname\""
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector
@@ -428,29 +407,22 @@ spec:
                       matches none of the selectors in the exclude array that resource is marked
                       as a tenant resource and is visible to users.
                     items:
-                      description: |-
-                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
-                        A resource matches this selector only if it satisfies ALL criteria:
-                        - Label selector conditions (matchExpressions and matchLabels)
-                        - AND has a name that matches one of the names in resourceNames (if specified)
-
-                        The resourceNames field supports Go templates with the following variables available:
-                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
-                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
-                        - {{ .namespace }}: The namespace of the resource being processed
-
-                        Example YAML:
-                          secrets:
-                            include:
-                            - matchExpressions:
-                              - key: badlabel
-                                operator: DoesNotExist
-                              matchLabels:
-                                goodlabel: goodvalue
-                              resourceNames:
-                              - "{{ .name }}-secret"
-                              - "{{ .kind }}-{{ .name }}-tls"
-                              - "specificname"
+                      description: "CozystackResourceDefinitionResourceSelector extends
+                        metav1.LabelSelector with resourceNames support.\nA resource
+                        matches this selector only if it satisfies ALL criteria:\n-
+                        Label selector conditions (matchExpressions and matchLabels)\n-
+                        AND has a name that matches one of the names in resourceNames
+                        (if specified)\n\nThe resourceNames field supports Go templates
+                        with the following variables available:\n- {{ .name }}: The
+                        name of the managing application (from apps.cozystack.io/application.name)\n-
+                        {{ .kind }}: The lowercased kind of the managing application
+                        (from apps.cozystack.io/application.kind)\n- {{ .namespace
+                        }}: The namespace of the resource being processed\n\nExample
+                        YAML:\n\n\tsecrets:\n\t  include:\n\t  - matchExpressions:\n\t
+                        \   - key: badlabel\n\t      operator: DoesNotExist\n\t    matchLabels:\n\t
+                        \     goodlabel: goodvalue\n\t    resourceNames:\n\t    -
+                        \"{{ .name }}-secret\"\n\t    - \"{{ .kind }}-{{ .name }}-tls\"\n\t
+                        \   - \"specificname\""
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector
@@ -513,29 +485,22 @@ spec:
                       If a resource matches the selector in any of the elements in the array, it is
                       hidden from the user, regardless of the matches in the include array.
                     items:
-                      description: |-
-                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
-                        A resource matches this selector only if it satisfies ALL criteria:
-                        - Label selector conditions (matchExpressions and matchLabels)
-                        - AND has a name that matches one of the names in resourceNames (if specified)
-
-                        The resourceNames field supports Go templates with the following variables available:
-                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
-                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
-                        - {{ .namespace }}: The namespace of the resource being processed
-
-                        Example YAML:
-                          secrets:
-                            include:
-                            - matchExpressions:
-                              - key: badlabel
-                                operator: DoesNotExist
-                              matchLabels:
-                                goodlabel: goodvalue
-                              resourceNames:
-                              - "{{ .name }}-secret"
-                              - "{{ .kind }}-{{ .name }}-tls"
-                              - "specificname"
+                      description: "CozystackResourceDefinitionResourceSelector extends
+                        metav1.LabelSelector with resourceNames support.\nA resource
+                        matches this selector only if it satisfies ALL criteria:\n-
+                        Label selector conditions (matchExpressions and matchLabels)\n-
+                        AND has a name that matches one of the names in resourceNames
+                        (if specified)\n\nThe resourceNames field supports Go templates
+                        with the following variables available:\n- {{ .name }}: The
+                        name of the managing application (from apps.cozystack.io/application.name)\n-
+                        {{ .kind }}: The lowercased kind of the managing application
+                        (from apps.cozystack.io/application.kind)\n- {{ .namespace
+                        }}: The namespace of the resource being processed\n\nExample
+                        YAML:\n\n\tsecrets:\n\t  include:\n\t  - matchExpressions:\n\t
+                        \   - key: badlabel\n\t      operator: DoesNotExist\n\t    matchLabels:\n\t
+                        \     goodlabel: goodvalue\n\t    resourceNames:\n\t    -
+                        \"{{ .name }}-secret\"\n\t    - \"{{ .kind }}-{{ .name }}-tls\"\n\t
+                        \   - \"specificname\""
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector
@@ -595,29 +560,22 @@ spec:
                       matches none of the selectors in the exclude array that resource is marked
                       as a tenant resource and is visible to users.
                     items:
-                      description: |-
-                        CozystackResourceDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.
-                        A resource matches this selector only if it satisfies ALL criteria:
-                        - Label selector conditions (matchExpressions and matchLabels)
-                        - AND has a name that matches one of the names in resourceNames (if specified)
-
-                        The resourceNames field supports Go templates with the following variables available:
-                        - {{ .name }}: The name of the managing application (from apps.cozystack.io/application.name)
-                        - {{ .kind }}: The lowercased kind of the managing application (from apps.cozystack.io/application.kind)
-                        - {{ .namespace }}: The namespace of the resource being processed
-
-                        Example YAML:
-                          secrets:
-                            include:
-                            - matchExpressions:
-                              - key: badlabel
-                                operator: DoesNotExist
-                              matchLabels:
-                                goodlabel: goodvalue
-                              resourceNames:
-                              - "{{ .name }}-secret"
-                              - "{{ .kind }}-{{ .name }}-tls"
-                              - "specificname"
+                      description: "CozystackResourceDefinitionResourceSelector extends
+                        metav1.LabelSelector with resourceNames support.\nA resource
+                        matches this selector only if it satisfies ALL criteria:\n-
+                        Label selector conditions (matchExpressions and matchLabels)\n-
+                        AND has a name that matches one of the names in resourceNames
+                        (if specified)\n\nThe resourceNames field supports Go templates
+                        with the following variables available:\n- {{ .name }}: The
+                        name of the managing application (from apps.cozystack.io/application.name)\n-
+                        {{ .kind }}: The lowercased kind of the managing application
+                        (from apps.cozystack.io/application.kind)\n- {{ .namespace
+                        }}: The namespace of the resource being processed\n\nExample
+                        YAML:\n\n\tsecrets:\n\t  include:\n\t  - matchExpressions:\n\t
+                        \   - key: badlabel\n\t      operator: DoesNotExist\n\t    matchLabels:\n\t
+                        \     goodlabel: goodvalue\n\t    resourceNames:\n\t    -
+                        \"{{ .name }}-secret\"\n\t    - \"{{ .kind }}-{{ .name }}-tls\"\n\t
+                        \   - \"specificname\""
                       properties:
                         matchExpressions:
                           description: matchExpressions is a list of label selector

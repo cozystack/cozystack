@@ -14,9 +14,13 @@ spec:
     dependsOn:
     - cozystack.networking
     - cozystack.postgres-operator
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
     components:
     - name: keycloak
       path: system/keycloak
+      libraries: ["cozy-lib"]
       install:
         namespace: cozy-keycloak
         releaseName: keycloak

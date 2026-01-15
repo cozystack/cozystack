@@ -13,12 +13,11 @@ spec:
     prefix: vm-instance-
     labels:
       cozystack.io/ui: "true"
-    chart:
-      name: vm-instance
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-vm-instance-application-kubevirt-vm-instance
+      namespace: cozy-system
   dashboard:
     category: IaaS
     singular: VM Instance

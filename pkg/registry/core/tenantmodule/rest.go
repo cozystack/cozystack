@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -669,11 +670,19 @@ func (r *REST) buildTableFromTenantModule(module corev1alpha1.TenantModule) meta
 	return table
 }
 
-// getVersion returns the module version or a placeholder if unknown
+// getVersion extracts and returns only the revision from the version string
+// If version is in format "0.1.4+abcdef", returns "abcdef"
+// Otherwise returns the original string or "<unknown>" if empty
 func getVersion(version string) string {
 	if version == "" {
 		return "<unknown>"
 	}
+	// Check if version contains "+" separator
+	if idx := strings.LastIndex(version, "+"); idx >= 0 && idx < len(version)-1 {
+		// Return only the part after "+"
+		return version[idx+1:]
+	}
+	// If no "+" found, return original version
 	return version
 }
 

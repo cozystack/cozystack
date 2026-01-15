@@ -1,0 +1,30 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-root
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    cozystack.io/ui: "true"
+    sharding.fluxcd.io/key: tenants
+    apps.cozystack.io/application.kind: Tenant
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: tenant-root
+  name: tenant-root
+  namespace: tenant-root
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-tenant-application-default-tenant
+    namespace: cozy-system
+  interval: 1m0s
+  timeout: 5m0s
+  values:
+    _cluster:
+      oidc-enabled: {{ .Values.oidcEnabled | quote }}
+      root-host: {{ .Values.rootHost | quote }}
