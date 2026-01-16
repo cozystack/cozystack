@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
 )
 
@@ -150,16 +152,43 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
+	// Get starting resourceVersion from options
+	var startingRV uint64
+	if opts.ResourceVersion != "" {
+		if rv, err := strconv.ParseUint(opts.ResourceVersion, 10, 64); err == nil {
+			startingRV = rv
+		}
+	}
+
 	events := make(chan watch.Event)
 	pw := watch.NewProxyWatcher(events)
 
 	go func() {
 		defer pw.Stop()
+
 		for ev := range nsWatch.ResultChan() {
+			// Handle bookmark events
+			if ev.Type == watch.Bookmark {
+				if ns, ok := ev.Object.(*corev1.Namespace); ok {
+					out := &corev1alpha1.TenantNamespace{
+						TypeMeta: metav1.TypeMeta{
+							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+							Kind:       "TenantNamespace",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							ResourceVersion: ns.ResourceVersion,
+						},
+					}
+					events <- watch.Event{Type: watch.Bookmark, Object: out}
+				}
+				continue
+			}
+
 			ns, ok := ev.Object.(*corev1.Namespace)
 			if !ok || !strings.HasPrefix(ns.Name, prefix) {
 				continue
 			}
+
 			out := &corev1alpha1.TenantNamespace{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: corev1alpha1.SchemeGroupVersion.String(),
@@ -174,6 +203,18 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 					Annotations:       ns.Annotations,
 				},
 			}
+
+			// Skip ADDED events based on resourceVersion comparison
+			// Only skip when client provided resourceVersion (they already have objects from List)
+			if ev.Type == watch.Added && startingRV > 0 {
+				objRV, parseErr := strconv.ParseUint(out.ResourceVersion, 10, 64)
+				// Skip objects client already has (objRV <= startingRV)
+				if parseErr == nil && objRV <= startingRV {
+					continue
+				}
+			}
+			// When startingRV == 0, always send ADDED events (client wants full state)
+
 			events <- watch.Event{Type: ev.Type, Object: out}
 		}
 	}()
@@ -227,12 +268,19 @@ func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alph
 		set[n] = struct{}{}
 	}
 
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := src.ResourceVersion
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(src)
+	}
+
 	out := &corev1alpha1.TenantNamespaceList{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       "TenantNamespaceList",
 		},
-		ListMeta: metav1.ListMeta{ResourceVersion: src.ResourceVersion},
+		ListMeta: metav1.ListMeta{ResourceVersion: listRV},
 	}
 
 	for i := range src.Items {
