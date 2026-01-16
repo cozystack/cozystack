@@ -19,7 +19,6 @@ spec:
       - name: cozystack-controller
         image: "{{ .Values.cozystackController.image }}"
         args:
-        - --cozystack-version={{ .Values.cozystackController.cozystackVersion }}
         {{- if .Values.cozystackController.debug }}
         - --zap-log-level=debug
         {{- else }}

@@ -2,6 +2,7 @@ FROM golang:1.25-alpine as builder
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 
 RUN apk add --no-cache make git
 
@@ -12,7 +13,7 @@ RUN go mod download
 
 # Build cozystack-operator
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-  -ldflags="-w -s" \
+  -ldflags="-w -s -X github.com/cozystack/cozystack/pkg/version.Version=${VERSION}" \
   -o /cozystack-operator \
   ./cmd/cozystack-operator
 
