@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ import (
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
 	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
@@ -249,7 +251,7 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		return nil, err
 	}
 
-	klog.V(6).Infof("Attempting to list HelmReleases in namespace %s with options: %v", namespace, options)
+	klog.V(6).Infof("List called for %s in namespace %q", r.kindName, namespace)
 
 	// Get resource name from the request (if any)
 	var resourceName string
@@ -402,12 +404,20 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 
 	// Create ApplicationList with proper kind
 	appList := r.NewList().(*appsv1alpha1.ApplicationList)
-	appList.SetResourceVersion(hrList.GetResourceVersion())
+
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := hrList.GetResourceVersion()
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(hrList)
+	}
+	appList.SetResourceVersion(listRV)
 	appList.Items = items
 
 	sorting.ByNamespacedName[appsv1alpha1.Application, *appsv1alpha1.Application](appList.Items)
 
-	klog.V(6).Infof("Successfully listed %d Application resources in namespace %s", len(items), namespace)
+	klog.V(6).Infof("List returning %d items for %s in namespace %q, resourceVersion=%q",
+		len(items), r.kindName, namespace, appList.GetResourceVersion())
 	return appList, nil
 }
 
@@ -572,7 +582,8 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		return nil, err
 	}
 
-	klog.V(6).Infof("Setting up watch for HelmReleases in namespace %s with options: %v", namespace, options)
+	klog.V(6).Infof("Watch called for %s in namespace %q, resourceVersion=%q",
+		r.kindName, namespace, options.ResourceVersion)
 
 	// Get request information, including resource name if specified
 	var resourceName string
@@ -636,6 +647,20 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
+	// Handle SendInitialEvents for WatchList feature (Kubernetes 1.27+)
+	// When sendInitialEvents=true, the client expects:
+	// 1. All existing resources as ADDED events
+	// 2. A Bookmark event with "k8s.io/initial-events-end": "true" annotation
+	// controller-runtime cache already sends ADDED events for all cached objects,
+	// so we just need to send the bookmark after those initial events
+	sendInitialEvents := options.SendInitialEvents != nil && *options.SendInitialEvents
+
+	// Create a custom watcher to transform events
+	customW := &customWatcher{
+		resultChan: make(chan watch.Event),
+		stopChan:   make(chan struct{}),
+	}
+
 	// Start watch on HelmRelease with label selector only
 	// Field selectors are not supported by controller-runtime cache
 	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
@@ -648,25 +673,99 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
 		return nil, err
 	}
-
-	// Create a custom watcher to transform events
-	customW := &customWatcher{
-		resultChan: make(chan watch.Event),
-		stopChan:   make(chan struct{}),
-		underlying: helmWatcher,
-	}
+	customW.underlying = helmWatcher
 
 	go func() {
 		defer close(customW.resultChan)
 		defer customW.underlying.Stop()
+
+		// Track whether we've sent the initial-events-end bookmark
+		initialEventsEndSent := !sendInitialEvents // If not sendInitialEvents, consider it already sent
+		var lastResourceVersion string
+
+		// Get the starting resourceVersion from options
+		// If client provides resourceVersion (e.g., from a previous List), we should skip
+		// objects with resourceVersion <= startingRV (client already has them)
+		var startingRV uint64
+		if options.ResourceVersion != "" {
+			if rv, err := strconv.ParseUint(options.ResourceVersion, 10, 64); err == nil {
+				startingRV = rv
+			}
+		}
+
+		// Helper function to send initial-events-end bookmark
+		sendInitialEventsEndBookmark := func() {
+			if initialEventsEndSent {
+				return
+			}
+			initialEventsEndSent = true
+
+			bookmarkApp := &appsv1alpha1.Application{}
+			bookmarkApp.SetResourceVersion(lastResourceVersion)
+			bookmarkApp.TypeMeta = metav1.TypeMeta{
+				APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+				Kind:       r.kindName,
+			}
+			bookmarkApp.SetAnnotations(map[string]string{
+				"k8s.io/initial-events-end": "true",
+			})
+			bookmarkEvent := watch.Event{
+				Type:   watch.Bookmark,
+				Object: bookmarkApp,
+			}
+			klog.V(6).Infof("Sending initial-events-end bookmark with RV=%s", lastResourceVersion)
+			select {
+			case customW.resultChan <- bookmarkEvent:
+			case <-customW.stopChan:
+			case <-ctx.Done():
+			}
+		}
+
+		// Process watch events
 		for {
 			select {
 			case event, ok := <-customW.underlying.ResultChan():
 				if !ok {
-					// The watcher has been closed, attempt to re-establish the watch
-					klog.Warning("HelmRelease watcher closed, attempting to re-establish")
-					// Implement retry logic or exit based on your requirements
+					// The watcher has been closed
+					klog.Warning("HelmRelease watcher closed")
+					// Send initial-events-end bookmark before closing if not yet sent
+					sendInitialEventsEndBookmark()
 					return
+				}
+
+				// Handle bookmark events - these are critical for informer sync
+				if event.Type == watch.Bookmark {
+					if hr, ok := event.Object.(*helmv2.HelmRelease); ok {
+						lastResourceVersion = hr.GetResourceVersion()
+
+						// If sendInitialEvents and we haven't sent initial-events-end yet,
+						// add the annotation to this bookmark
+						bookmarkApp := &appsv1alpha1.Application{}
+						bookmarkApp.SetResourceVersion(lastResourceVersion)
+						bookmarkApp.TypeMeta = metav1.TypeMeta{
+							APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+							Kind:       r.kindName,
+						}
+						if !initialEventsEndSent {
+							initialEventsEndSent = true
+							bookmarkApp.SetAnnotations(map[string]string{
+								"k8s.io/initial-events-end": "true",
+							})
+							klog.V(6).Infof("Sending initial-events-end bookmark with RV=%s", lastResourceVersion)
+						}
+						bookmarkEvent := watch.Event{
+							Type:   watch.Bookmark,
+							Object: bookmarkApp,
+						}
+						select {
+						case customW.resultChan <- bookmarkEvent:
+						case <-customW.stopChan:
+							return
+						case <-ctx.Done():
+							return
+						}
+					}
+					continue
 				}
 
 				// Check if the object is a *v1.Status
@@ -681,6 +780,9 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					klog.V(4).Infof("Expected HelmRelease object, got %T", event.Object)
 					continue
 				}
+
+				// Update lastResourceVersion for bookmark
+				lastResourceVersion = hr.GetResourceVersion()
 
 				// Apply manual field selector filtering (metadata.name and metadata.namespace)
 				// controller-runtime cache doesn't support field selectors
@@ -716,6 +818,23 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 						continue
 					}
 				}
+
+				// If this is not an ADDED event and we haven't sent initial-events-end, send it now
+				if event.Type != watch.Added && !initialEventsEndSent {
+					sendInitialEventsEndBookmark()
+				}
+
+				// Skip ADDED events based on resourceVersion comparison
+				if event.Type == watch.Added && startingRV > 0 {
+					objRV, parseErr := strconv.ParseUint(app.ResourceVersion, 10, 64)
+					// Skip objects client already has (objRV <= startingRV)
+					if parseErr == nil && objRV <= startingRV {
+						klog.V(6).Infof("Skipping ADDED event for %s/%s (objRV=%d <= startingRV=%d)",
+							app.Namespace, app.Name, objRV, startingRV)
+						continue
+					}
+				}
+				// When startingRV == 0, always send ADDED events (client wants full state)
 
 				// Create watch event with Application object
 				appEvent := watch.Event{

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -289,7 +291,14 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		APIVersion: "core.cozystack.io/v1alpha1",
 		Kind:       r.kindName + "List",
 	}
-	moduleList.SetResourceVersion(hrList.GetResourceVersion())
+
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := hrList.GetResourceVersion()
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(hrList)
+	}
+	moduleList.SetResourceVersion(listRV)
 	moduleList.Items = items
 
 	sorting.ByNamespacedName[corev1alpha1.TenantModule, *corev1alpha1.TenantModule](moduleList.Items)
@@ -349,6 +358,14 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 
 	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
+	// Get starting resourceVersion from options
+	var startingRV uint64
+	if options.ResourceVersion != "" {
+		if rv, err := strconv.ParseUint(options.ResourceVersion, 10, 64); err == nil {
+			startingRV = rv
+		}
+	}
+
 	// Start watch on HelmRelease with label selector only
 	// Field selectors are not supported by controller-runtime cache
 	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
@@ -372,20 +389,43 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	go func() {
 		defer close(customW.resultChan)
 		defer customW.underlying.Stop()
+
 		for {
 			select {
 			case event, ok := <-customW.underlying.ResultChan():
 				if !ok {
-					// The watcher has been closed, attempt to re-establish the watch
-					klog.Warning("HelmRelease watcher closed, attempting to re-establish")
-					// Implement retry logic or exit based on your requirements
+					klog.Warning("HelmRelease watcher closed")
 					return
+				}
+
+				// Handle bookmark events
+				if event.Type == watch.Bookmark {
+					if hr, ok := event.Object.(*helmv2.HelmRelease); ok {
+						bookmarkModule := &corev1alpha1.TenantModule{}
+						bookmarkModule.SetResourceVersion(hr.GetResourceVersion())
+						bookmarkModule.TypeMeta = metav1.TypeMeta{
+							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+							Kind:       r.kindName,
+						}
+						bookmarkEvent := watch.Event{
+							Type:   watch.Bookmark,
+							Object: bookmarkModule,
+						}
+						select {
+						case customW.resultChan <- bookmarkEvent:
+						case <-customW.stopChan:
+							return
+						case <-ctx.Done():
+							return
+						}
+					}
+					continue
 				}
 
 				// Check if the object is a *v1.Status
 				if status, ok := event.Object.(*metav1.Status); ok {
 					klog.V(4).Infof("Received Status object in HelmRelease watch: %v", status.Message)
-					continue // Skip processing this event
+					continue
 				}
 
 				// Proceed with processing HelmRelease objects
@@ -395,9 +435,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue
 				}
 
-				// Apply manual field selector filtering (metadata.name and metadata.namespace)
-				// controller-runtime cache doesn't support field selectors
-				// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+				// Apply manual field selector filtering
 				if !fieldFilter.MatchesName(hr.Name) {
 					continue
 				}
@@ -415,6 +453,17 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					klog.Errorf("Error converting HelmRelease to TenantModule: %v", err)
 					continue
 				}
+
+				// Skip ADDED events based on resourceVersion comparison
+				// Only skip when client provided resourceVersion (they already have objects from List)
+				if event.Type == watch.Added && startingRV > 0 {
+					objRV, parseErr := strconv.ParseUint(module.ResourceVersion, 10, 64)
+					// Skip objects client already has (objRV <= startingRV)
+					if parseErr == nil && objRV <= startingRV {
+						continue
+					}
+				}
+				// When startingRV == 0, always send ADDED events (client wants full state)
 
 				// Apply field.selector by name if specified
 				if resourceName != "" && module.Name != resourceName {

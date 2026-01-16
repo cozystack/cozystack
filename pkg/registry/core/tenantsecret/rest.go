@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
 )
@@ -277,12 +279,19 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		return nil, err
 	}
 
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := list.ResourceVersion
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(list)
+	}
+
 	out := &corev1alpha1.TenantSecretList{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       kindTenantSecretList,
 		},
-		ListMeta: list.ListMeta,
+		ListMeta: metav1.ListMeta{ResourceVersion: listRV},
 	}
 
 	for i := range list.Items {
@@ -432,9 +441,21 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
 		Namespace:     ns,
 		LabelSelector: ls,
+		Raw: &metav1.ListOptions{
+			Watch:           true,
+			ResourceVersion: opts.ResourceVersion,
+		},
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Get starting resourceVersion from options
+	var startingRV uint64
+	if opts.ResourceVersion != "" {
+		if rv, err := strconv.ParseUint(opts.ResourceVersion, 10, 64); err == nil {
+			startingRV = rv
+		}
 	}
 
 	ch := make(chan watch.Event)
@@ -442,12 +463,43 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 	go func() {
 		defer proxy.Stop()
+
 		for ev := range base.ResultChan() {
+			// Handle bookmark events
+			if ev.Type == watch.Bookmark {
+				if sec, ok := ev.Object.(*corev1.Secret); ok {
+					out := &corev1alpha1.TenantSecret{
+						TypeMeta: metav1.TypeMeta{
+							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+							Kind:       kindTenantSecret,
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							ResourceVersion: sec.ResourceVersion,
+						},
+					}
+					ch <- watch.Event{Type: watch.Bookmark, Object: out}
+				}
+				continue
+			}
+
 			sec, ok := ev.Object.(*corev1.Secret)
 			if !ok || sec == nil {
 				continue
 			}
+
 			tenant := secretToTenant(sec)
+
+			// Skip ADDED events based on resourceVersion comparison
+			// Only skip when client provided resourceVersion (they already have objects from List)
+			if ev.Type == watch.Added && startingRV > 0 {
+				objRV, parseErr := strconv.ParseUint(tenant.ResourceVersion, 10, 64)
+				// Skip objects client already has (objRV <= startingRV)
+				if parseErr == nil && objRV <= startingRV {
+					continue
+				}
+			}
+			// When startingRV == 0, always send ADDED events (client wants full state)
+
 			ch <- watch.Event{
 				Type:   ev.Type,
 				Object: tenant,
