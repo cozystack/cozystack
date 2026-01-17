@@ -52,6 +52,7 @@ import (
 	"github.com/cozystack/cozystack/internal/cozyvaluesreplicator"
 	"github.com/cozystack/cozystack/internal/fluxinstall"
 	"github.com/cozystack/cozystack/internal/operator"
+	"github.com/cozystack/cozystack/internal/telemetry"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -77,7 +78,9 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var installFlux bool
-	var cozystackVersion string
+	var disableTelemetry bool
+	var telemetryEndpoint string
+	var telemetryInterval string
 	var cozyValuesSecretName string
 	var cozyValuesSecretNamespace string
 	var cozyValuesNamespaceSelector string
@@ -95,8 +98,12 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&installFlux, "install-flux", false, "Install Flux components before starting reconcile loop")
-	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
-		"Version of Cozystack")
+	flag.BoolVar(&disableTelemetry, "disable-telemetry", false,
+		"Disable telemetry collection")
+	flag.StringVar(&telemetryEndpoint, "telemetry-endpoint", "https://telemetry.cozystack.io",
+		"Endpoint for sending telemetry data")
+	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
+		"Interval between telemetry data collection (e.g. 15m, 1h)")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-packages", "Name for the generated platform source resource (default: cozystack-packages)")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
@@ -238,6 +245,32 @@ func main() {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+
+	// Parse telemetry interval
+	interval, err := time.ParseDuration(telemetryInterval)
+	if err != nil {
+		setupLog.Error(err, "invalid telemetry interval")
+		os.Exit(1)
+	}
+
+	// Configure telemetry
+	telemetryConfig := telemetry.Config{
+		Disabled: disableTelemetry,
+		Endpoint: telemetryEndpoint,
+		Interval: interval,
+	}
+
+	// Initialize telemetry collector
+	collector, err := telemetry.NewOperatorCollector(mgr.GetClient(), &telemetryConfig, config)
+	if err != nil {
+		setupLog.V(1).Info("unable to create telemetry collector, telemetry will be disabled", "error", err)
+	}
+
+	if collector != nil {
+		if err := mgr.Add(collector); err != nil {
+			setupLog.V(1).Info("unable to set up telemetry collector, continuing without telemetry", "error", err)
+		}
 	}
 
 	setupLog.Info("Starting controller manager")

@@ -2,6 +2,7 @@ FROM golang:1.25-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 
 WORKDIR /workspace
 
@@ -13,7 +14,9 @@ COPY pkg pkg/
 COPY cmd cmd/
 COPY internal internal/
 
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -ldflags="-extldflags=-static" -o /cozystack-controller cmd/cozystack-controller/main.go
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build \
+    -ldflags="-extldflags=-static -X github.com/cozystack/cozystack/pkg/version.Version=${VERSION}" \
+    -o /cozystack-controller cmd/cozystack-controller/main.go
 
 FROM scratch
 
