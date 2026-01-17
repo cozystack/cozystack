@@ -12,8 +12,8 @@ spec:
   release:
     prefix: vpn-
     labels:
-      cozystack.io/ui: "true"
       sharding.fluxcd.io/key: tenants
+      cozystack.io/application: vpn
     chartRef:
       kind: ExternalArtifact
       name: cozystack-vpn-application-default-vpn
