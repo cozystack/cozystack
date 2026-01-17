@@ -22,3 +22,4 @@ cilium:
   rollOutCiliumPods: true
   operator:
     rollOutPods: true
+    replicas: 1
