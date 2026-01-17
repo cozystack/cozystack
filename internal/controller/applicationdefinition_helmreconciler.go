@@ -69,11 +69,10 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 	applicationGroup := "apps.cozystack.io" // All applications use this group
 
 	// Build label selector for HelmReleases
-	// Only reconcile HelmReleases with cozystack.io/ui=true label
+	// Only reconcile HelmReleases with apps.cozystack.io/application.* labels
 	labelSelector := client.MatchingLabels{
 		"apps.cozystack.io/application.kind":  applicationKind,
 		"apps.cozystack.io/application.group": applicationGroup,
-		"cozystack.io/ui":                     "true",
 	}
 
 	// List all HelmReleases with matching labels

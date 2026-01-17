@@ -5,7 +5,6 @@ metadata:
   name: etcd
   namespace: {{ include "tenant.name" . }}
   labels:
-    cozystack.io/ui: "true"
     sharding.fluxcd.io/key: tenants
     internal.cozystack.io/tenantmodule: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}

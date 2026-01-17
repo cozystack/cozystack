@@ -10,7 +10,6 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
   labels:
-    cozystack.io/ui: "true"
     sharding.fluxcd.io/key: tenants
     apps.cozystack.io/application.kind: Tenant
     apps.cozystack.io/application.group: apps.cozystack.io
