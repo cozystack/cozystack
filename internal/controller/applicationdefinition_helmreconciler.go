@@ -69,16 +69,15 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 	applicationGroup := "apps.cozystack.io" // All applications use this group
 
 	// Build label selector for HelmReleases
-	// Only reconcile HelmReleases with cozystack.io/ui=true label
+	// Only reconcile HelmReleases with cozystack.io/application label
 	labelSelector := client.MatchingLabels{
 		"apps.cozystack.io/application.kind":  applicationKind,
 		"apps.cozystack.io/application.group": applicationGroup,
-		"cozystack.io/ui":                     "true",
 	}
 
-	// List all HelmReleases with matching labels
+	// List all HelmReleases with matching labels and cozystack.io/application label present
 	hrList := &helmv2.HelmReleaseList{}
-	if err := r.List(ctx, hrList, labelSelector); err != nil {
+	if err := r.List(ctx, hrList, labelSelector, client.HasLabels{"cozystack.io/application"}); err != nil {
 		logger.Error(err, "failed to list HelmReleases", "kind", applicationKind, "group", applicationGroup)
 		return err
 	}

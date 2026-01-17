@@ -5,7 +5,7 @@ metadata:
   name: seaweedfs
   namespace: {{ include "tenant.name" . }}
   labels:
-    cozystack.io/ui: "true"
+    cozystack.io/application: seaweedfs
     sharding.fluxcd.io/key: tenants
     internal.cozystack.io/tenantmodule: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}

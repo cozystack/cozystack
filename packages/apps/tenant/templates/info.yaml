@@ -4,7 +4,7 @@ metadata:
   name: info
   namespace: {{ include "tenant.name" . }}
   labels:
-    cozystack.io/ui: "true"
+    cozystack.io/application: info
     sharding.fluxcd.io/key: tenants
     internal.cozystack.io/tenantmodule: "true"
     app.kubernetes.io/instance: {{ .Release.Name }}

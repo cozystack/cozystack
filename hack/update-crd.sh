@@ -127,7 +127,7 @@ export KEYS_ORDER="$(
 
 # Update only necessary fields in-place
 # - openAPISchema is loaded from file as a multi-line string (block scalar)
-# - labels ensure cozystack.io/ui: "true"
+# - labels ensure cozystack.io/application: "<name>"
 # - prefix = "<name>-" or "" for extra
 # - chartRef points to ExternalArtifact created by Package controller
 yq -i '
@@ -137,7 +137,7 @@ yq -i '
   .spec.application.openAPISchema = strenv(SCHEMA_JSON_MIN) |
   (.spec.application.openAPISchema style="literal") |
   .spec.release.prefix = (strenv(PREFIX)) |
-  .spec.release.labels."cozystack.io/ui" = "true" |
+  .spec.release.labels."cozystack.io/application" = strenv(RES_NAME) |
   .spec.release.chartRef.kind = "ExternalArtifact" |
   .spec.release.chartRef.name = ("cozystack-" + strenv(RES_NAME) + "-application-" + strenv(VARIANT) + "-" + strenv(RES_NAME)) |
   .spec.release.chartRef.namespace = "cozy-system" |

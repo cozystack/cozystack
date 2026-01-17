@@ -12,9 +12,9 @@ spec:
   release:
     prefix: ""
     labels:
-      cozystack.io/ui: "true"
       sharding.fluxcd.io/key: tenants
       internal.cozystack.io/tenantmodule: "true"
+      cozystack.io/application: etcd
     chartRef:
       kind: ExternalArtifact
       name: cozystack-etcd-application-default-etcd
