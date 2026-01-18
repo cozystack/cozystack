@@ -57,10 +57,6 @@ type BackupSpec struct {
 	// +optional
 	PlanRef *corev1.LocalObjectReference `json:"planRef,omitempty"`
 
-	// StorageRef refers to the Storage object that describes where the backup
-	// artifact is stored.
-	StorageRef corev1.TypedLocalObjectReference `json:"storageRef"`
-
 	// StrategyRef refers to the driver-specific BackupStrategy that was used
 	// to create this backup. This allows the driver to later perform restores.
 	StrategyRef corev1.TypedLocalObjectReference `json:"strategyRef"`

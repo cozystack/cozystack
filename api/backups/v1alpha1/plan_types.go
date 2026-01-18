@@ -65,15 +65,13 @@ type PlanList struct {
 type PlanSpec struct {
 	// ApplicationRef holds a reference to the managed application,
 	// whose state and configuration must be backed up.
+	// If apiGroup is not specified, it defaults to "apps.cozystack.io".
 	ApplicationRef corev1.TypedLocalObjectReference `json:"applicationRef"`
 
-	// StorageRef holds a reference to the Storage object that
-	// describes the location where the backup will be stored.
-	StorageRef corev1.TypedLocalObjectReference `json:"storageRef"`
-
-	// StrategyRef holds a reference to the Strategy object that
-	// describes, how a backup copy is to be created.
-	StrategyRef corev1.TypedLocalObjectReference `json:"strategyRef"`
+	// BackupClassName references a BackupClass that contains strategy and storage configuration.
+	// The BackupClass will be resolved to determine the appropriate strategy and storage
+	// based on the ApplicationRef.
+	BackupClassName string `json:"backupClassName"`
 
 	// Schedule specifies when backup copies are created.
 	Schedule PlanSchedule `json:"schedule"`
