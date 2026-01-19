@@ -3,24 +3,24 @@
 arch: amd64
 platform: nocloud
 secureboot: false
-version: v1.11.3
+version: v1.11.6
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
   initramfs:
     path: /usr/install/amd64/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer:v1.11.3"
+    imageRef: "ghcr.io/siderolabs/installer:v1.11.6"
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/amd-ucode:20250917@sha256:ff11ee9f1565d9f9b095a3dc41fb7962b211169b2ef05d658a488398cb98e2d2
-    - imageRef: ghcr.io/siderolabs/amdgpu:20250917-v1.11.3@sha256:527b694ddbc4b40e9529d736bfe9874cc786773aa5a1070bbefe77feb9a8a304
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20250917@sha256:ac6aaaa0d3312e72279a5cde7de0d71fb61774aa2f97a4e56dd914a9f1dde4d1
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20250917@sha256:c25225c371e81485c64f339864ede410b560f07eb0fc2702a73315e977a6323d
-    - imageRef: ghcr.io/siderolabs/i915:20250917-v1.11.3@sha256:e8db985ff2ef702d5f3989b0138e1b9dd5ac5e885a3adefa5b42ee6fa32b7027
-    - imageRef: ghcr.io/siderolabs/intel-ucode:20250812@sha256:31142ac037235e6779eea9f638e6399080a1f09e7c323ffa30b37488004057a5
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20250917@sha256:7094e5db6931a1b68240416b65ddc0f3b546bd9b8520e3cfb1ddebcbfc83e890
-    - imageRef: ghcr.io/siderolabs/drbd:9.2.14-v1.11.3@sha256:4393756875751e2664a04e96c1ccff84c99958ca819dd93b46b82ad8f3b4be67
-    - imageRef: ghcr.io/siderolabs/zfs:2.3.3-v1.11.3@sha256:3c0b34a760914980ac234e66f130d829e428018e46420b7bca33219b1cc2dd87
+    - imageRef: ghcr.io/siderolabs/amd-ucode:20251125@sha256:aa2c684933d28cf10ef785f0d94f91d6d098e164374114648867cf81c2b585fe
+    - imageRef: ghcr.io/siderolabs/amdgpu:20251125-v1.11.6@sha256:4161f6de768d921a236aee8b06ee3eb18c4b93cfc178e3ae0f756e3a40929a93
+    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20251125@sha256:a7665b8c96cbdcf15dff6e39495ec389f576adf8a68ecfe20d6760884656d14c
+    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20251125@sha256:01458f60448e166eeb641ee989b941725cbe6759e10afe2251c6d1b1ca5ba1b7
+    - imageRef: ghcr.io/siderolabs/i915:20251125-v1.11.6@sha256:6896f63864d8ceed4a65f00304c1b26d90224127b37312d2e4bf33df14778e84
+    - imageRef: ghcr.io/siderolabs/intel-ucode:20250812@sha256:ba7a22ab69dfc8070d52fb70f58955257f0b586419f63573fb1e4618f57790eb
+    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20251125@sha256:485ef0a0b58328ded511e9a76014c353da24bb147c8b2929068827e5f9a22326
+    - imageRef: ghcr.io/siderolabs/drbd:9.2.16-v1.11.6@sha256:f87f92f25e203a3d49ced3d5bfe9d19278c309b157a5c049ff8c1fd53cf77707
+    - imageRef: ghcr.io/siderolabs/zfs:2.3.5-v1.11.6@sha256:29122979dce73dfd5c00d0a376de50905a9c4af99e0f18f91d77df2f6bdd0265
 output:
   kind: image
   imageOptions: { diskSize: 1306525696, diskFormat: raw }
