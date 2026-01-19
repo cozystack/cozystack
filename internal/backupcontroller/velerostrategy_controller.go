@@ -206,13 +206,6 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-// NOTE: The following functions were removed as they are no longer used after migrating to BackupClass API:
-// - resolveBucketStorageRef: Previously resolved S3 credentials from Bucket storageRef
-// - createS3CredsForVelero: Previously created Velero S3 credentials secrets
-// - createBackupStorageLocation: Previously created Velero BackupStorageLocation resources
-// - createVolumeSnapshotLocation: Previously created Velero VolumeSnapshotLocation resources
-// These functions may be needed in the future if we decide to support StorageRef resolution through BackupClass.
-
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()
@@ -288,7 +281,6 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 
 func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, veleroBackup *velerov1.Backup, resolved *ResolvedBackupConfig) (*backupsv1alpha1.Backup, error) {
 	logger := getLogger(ctx)
-	_ = logger // logger may be used in future
 
 	// Get takenAt from Velero Backup creation timestamp or status
 	takenAt := metav1.Now()
@@ -325,8 +317,6 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: backupJob.Spec.ApplicationRef,
-			// StorageRef is not set as it's now resolved from BackupClass parameters
-			// The storage location is managed via Velero's BackupStorageLocation
 			StrategyRef:    resolved.StrategyRef,
 			TakenAt:        takenAt,
 			DriverMetadata: driverMetadata,
