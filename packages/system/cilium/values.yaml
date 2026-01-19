@@ -19,5 +19,6 @@ cilium:
     digest: "sha256:c14a0bcb1a1531c72725b3a4c40aefa2bcd5c129810bf58ea8e37d3fcff2a326"
   envoy:
     enabled: false
-  bpf:
-    lbExternalClusterIP: true
+  rollOutCiliumPods: true
+  operator:
+    rollOutPods: true

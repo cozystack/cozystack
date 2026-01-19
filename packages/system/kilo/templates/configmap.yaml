@@ -1,0 +1,25 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubeconfig-in-cluster
+  namespace: cozy-kilo
+data:
+  kubeconfig: |
+    apiVersion: v1
+    clusters:
+    - cluster:
+        certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        server: https://127.0.0.1:7445
+      name: local
+    contexts:
+    - context:
+        cluster: local
+        user: service-account
+      name: local
+    current-context: local
+    kind: Config
+    users:
+    - name: service-account
+      user:
+        tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token

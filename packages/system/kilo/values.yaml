@@ -1,0 +1,10 @@
+kilo:
+  image:
+    pullPolicy: IfNotPresent
+    tag: 0.6.0@sha256:5115b6ea3f7f492763e8bfe5b4ae23d0b65bde20162b00d5a42420918b20d328
+    repository: 999669/kilo
+  podCIDR: 10.244.0.0/16
+  serviceCIDR: 10.96.0.0/16
+  joinCIDR: 100.64.0.0/16
+  meshGranularity: location
+  cleanUpInterface: false

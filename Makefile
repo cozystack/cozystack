@@ -27,6 +27,7 @@ build: build-deps
 	make -C packages/system/dashboard image
 	make -C packages/system/metallb image
 	make -C packages/system/kamaji image
+	make -C packages/system/kilo image
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
 	make -C packages/system/grafana-operator image
