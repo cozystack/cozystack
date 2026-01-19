@@ -20,15 +20,10 @@ const (
 // This function is exported so it can be used by other packages (e.g., factory).
 func NormalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedLocalObjectReference {
 	if ref.APIGroup == nil || *ref.APIGroup == "" {
-		defaultGroup := DefaultApplicationAPIGroup
-		ref.APIGroup = &defaultGroup
+		apiGroup := DefaultApplicationAPIGroup
+		ref.APIGroup = &apiGroup
 	}
 	return ref
-}
-
-// normalizeApplicationRef is an internal alias for consistency within this package.
-func normalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedLocalObjectReference {
-	return NormalizeApplicationRef(ref)
 }
 
 // ResolvedBackupConfig contains the resolved strategy and storage configuration
@@ -49,7 +44,7 @@ func ResolveBackupClass(
 	applicationRef corev1.TypedLocalObjectReference,
 ) (*ResolvedBackupConfig, error) {
 	// Normalize applicationRef (default apiGroup if not specified)
-	applicationRef = normalizeApplicationRef(applicationRef)
+	applicationRef = NormalizeApplicationRef(applicationRef)
 
 	// Get BackupClass
 	backupClass := &backupsv1alpha1.BackupClass{}

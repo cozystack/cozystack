@@ -46,7 +46,7 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Normalize ApplicationRef (default apiGroup if not specified)
-	normalizedAppRef := normalizeApplicationRef(j.Spec.ApplicationRef)
+	normalizedAppRef := NormalizeApplicationRef(j.Spec.ApplicationRef)
 
 	// Resolve BackupClass
 	resolved, err := ResolveBackupClass(ctx, r.Client, j.Spec.BackupClassName, normalizedAppRef)
