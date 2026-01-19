@@ -30,7 +30,6 @@ func NormalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedL
 // from a BackupClass.
 type ResolvedBackupConfig struct {
 	StrategyRef corev1.TypedLocalObjectReference
-	StorageRef  *corev1.TypedLocalObjectReference // Optional, may come from parameters
 	Parameters  map[string]string
 }
 
