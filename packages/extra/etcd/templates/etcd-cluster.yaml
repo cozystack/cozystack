@@ -46,6 +46,15 @@ spec:
         - name: metrics
           containerPort: 2381
           protocol: TCP
+        startupProbe:
+          failureThreshold: 300
+          periodSeconds: 5
+        livenessProbe:
+          failureThreshold: 10
+          periodSeconds: 10
+        readinessProbe:
+          failureThreshold: 3
+          periodSeconds: 5
         {{- with .Values.resources }}
         resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 10 }}
         {{- end }}
