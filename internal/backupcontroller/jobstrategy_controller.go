@@ -11,6 +11,6 @@ import (
 
 func (r *BackupJobReconciler) reconcileJob(ctx context.Context, j *backupsv1alpha1.BackupJob, resolved *ResolvedBackupConfig) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
-	_ = resolved // TODO: Use resolved config when implementing job strategy
+	_ = resolved // Use resolved BackupClass parameters when implementing your job strategy
 	return ctrl.Result{}, nil
 }
