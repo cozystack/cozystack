@@ -1,0 +1,22 @@
+name: K3s Agent Runner
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  k3s-agent:
+    runs-on: [oracle-vm-24cpu-96gb-x86-64]
+    steps:
+      - name: Install Netbird
+        run: curl -fsSL https://pkgs.netbird.io/install.sh | sh
+
+      - name: Connect to Netbird network
+        run: netbird up --setup-key BDA55E96-B8D1-409A-BE69-257E45B2FB00
+
+      - name: Install K3s agent
+        run: |
+          curl -sfL https://get.k3s.io | K3S_URL=https://cozy-runner-1.netbird.cloud:6443 K3S_TOKEN=K10b6132e362bdf2b2a82870c42327b81ce256dc78974ffd075fb545c27fc9038b5::server:e72fc4191c4729c7f00364c9bf764afa sh -s - --kubelet-arg="node-ip=$(netbird status --ipv4)"
+
+      - name: Keep alive
+        run: sleep infinity
