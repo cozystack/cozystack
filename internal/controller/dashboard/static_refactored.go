@@ -134,7 +134,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 		createCustomColumnsOverride("factory-details-v1.services", []any{
 			createCustomColumnWithSpecificColor("Name", "Service", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("ClusterIP", ".spec.clusterIP"),
-			createStringColumn("LoadbalancerIP", ".spec.loadBalancerIP"),
+			createStringColumn("LoadbalancerIP", ".status.loadBalancer.ingress[0].ip"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
