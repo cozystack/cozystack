@@ -38,7 +38,7 @@ spec:
         {{- with .Values.kilo.serviceCIDR }}
         - --service-cidr={{ . }}
         {{- end }}
-        {{- with .Values.kilo.joinCIDR }}
+        {{- with .Values.kilo.transitCIDR }}
         - --subnet={{ . }}
         {{- end }}
         - --internal-cidr=$(NODE_IP)/32

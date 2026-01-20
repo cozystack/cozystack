@@ -5,6 +5,6 @@ kilo:
     repository: 999669/kilo
   podCIDR: 10.244.0.0/16
   serviceCIDR: 10.96.0.0/16
-  joinCIDR: 100.64.0.0/16
+  transitCIDR: 100.66.0.0/16
   meshGranularity: location
   cleanUpInterface: false
