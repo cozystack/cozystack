@@ -123,7 +123,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	if len(veleroBackupList.Items) == 0 {
 		// Create Velero Backup
 		logger.Debug("Velero Backup not found, creating new one")
-		if err := r.createVeleroBackup(ctx, j, veleroStrategy); err != nil {
+		if err := r.createVeleroBackup(ctx, j, veleroStrategy, resolved); err != nil {
 			logger.Error(err, "failed to create Velero Backup")
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Velero Backup: %v", err))
 		}
@@ -230,7 +230,7 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	return ctrl.Result{}, nil
 }
 
-func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, strategy *strategyv1alpha1.Velero) error {
+func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, strategy *strategyv1alpha1.Velero, resolved *ResolvedBackupConfig) error {
 	logger := getLogger(ctx)
 	logger.Debug("createVeleroBackup called", "strategy", strategy.Name)
 
@@ -247,7 +247,12 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		return err
 	}
 
-	veleroBackupSpec, err := template.Template(&strategy.Spec.Template.Spec, app.Object)
+	templateContext := map[string]interface{}{
+		"Application": app.Object,
+		"Parameters":  resolved.Parameters,
+	}
+
+	veleroBackupSpec, err := template.Template(&strategy.Spec.Template.Spec, templateContext)
 	if err != nil {
 		return err
 	}
