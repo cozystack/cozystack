@@ -190,14 +190,15 @@ func TestCreateVeleroBackup_TemplateContext(t *testing.T) {
 
 	// Verify template context was used correctly:
 	// 1. Application.metadata.name should be replaced with "test-vm"
-	if veleroBackup.Spec.LabelSelector != nil {
-		if appLabel, ok := veleroBackup.Spec.LabelSelector.MatchLabels["app"]; ok {
-			if appLabel != "test-vm" {
-				t.Errorf("Template context Application.metadata.name not applied correctly. Expected 'test-vm', got '%s'", appLabel)
-			}
-		} else {
-			t.Error("Template context Application.metadata.name not found in label selector")
+	if veleroBackup.Spec.LabelSelector == nil {
+		t.Fatal("Expected LabelSelector to be set by template")
+	}
+	if appLabel, ok := veleroBackup.Spec.LabelSelector.MatchLabels["app"]; ok {
+		if appLabel != "test-vm" {
+			t.Errorf("Template context Application.metadata.name not applied correctly. Expected 'test-vm', got '%s'", appLabel)
 		}
+	} else {
+		t.Error("Template context Application.metadata.name not found in label selector")
 	}
 
 	// 2. Parameters.backupStorageLocationName should be replaced with "default-storage"
