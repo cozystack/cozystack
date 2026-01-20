@@ -12,13 +12,11 @@ spec:
   release:
     prefix: mongodb-
     labels:
-      cozystack.io/ui: "true"
-    chart:
-      name: mongodb
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-mongodb-application-default-mongodb
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: MongoDB

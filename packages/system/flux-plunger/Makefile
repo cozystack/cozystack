@@ -2,7 +2,7 @@ export NAME=flux-plunger
 export NAMESPACE=cozy-fluxcd
 
 include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 image:
 	docker buildx build -f images/flux-plunger/Dockerfile ../../../ \
