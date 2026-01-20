@@ -72,7 +72,9 @@ spec:
       tolerations:
       - key: "node.kubernetes.io/not-ready"
         operator: "Exists"
-        effect: "NoSchedule"
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
       - key: "node.cilium.io/agent-not-ready"
         operator: "Exists"
-        effect: "NoSchedule"
+      - key: "node.cloudprovider.kubernetes.io/uninitialized"
+        operator: "Exists"
