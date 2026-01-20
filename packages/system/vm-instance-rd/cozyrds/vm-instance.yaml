@@ -12,7 +12,6 @@ spec:
   release:
     prefix: vm-instance-
     labels:
-      cozystack.io/ui: "true"
       sharding.fluxcd.io/key: tenants
     chartRef:
       kind: ExternalArtifact

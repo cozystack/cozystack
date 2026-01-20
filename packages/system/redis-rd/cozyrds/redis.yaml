@@ -12,7 +12,6 @@ spec:
   release:
     prefix: redis-
     labels:
-      cozystack.io/ui: "true"
       sharding.fluxcd.io/key: tenants
     chartRef:
       kind: ExternalArtifact

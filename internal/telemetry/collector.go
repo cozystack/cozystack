@@ -22,8 +22,6 @@ import (
 const (
 	// ApplicationKindLabel is the label used to identify application kind on HelmReleases
 	ApplicationKindLabel = "apps.cozystack.io/application.kind"
-	// UILabel is the label used to identify UI-managed HelmReleases
-	UILabel = "cozystack.io/ui"
 )
 
 // Collector handles telemetry data collection for cozystack-controller
@@ -100,9 +98,9 @@ func (c *Collector) collect(ctx context.Context) {
 		}
 	}
 
-	// Get all HelmReleases with cozystack.io/ui=true label in one request
+	// Get all HelmReleases with apps.cozystack.io/application.kind label in one request
 	var hrList helmv2.HelmReleaseList
-	if err := c.client.List(ctx, &hrList, client.MatchingLabels{UILabel: "true"}); err != nil {
+	if err := c.client.List(ctx, &hrList, client.HasLabels{ApplicationKindLabel}); err != nil {
 		logger.Info(fmt.Sprintf("Failed to list HelmReleases: %v", err))
 		return
 	}

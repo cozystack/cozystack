@@ -74,12 +74,12 @@ spec:
           
           echo "Deleting Applications"
           kubectl delete helmreleases.helm.toolkit.fluxcd.io -n "$NAMESPACE" \
-            -l 'cozystack.io/ui=true,internal.cozystack.io/tenantmodule!=true' \
+            -l 'apps.cozystack.io/application.kind,internal.cozystack.io/tenantmodule!=true' \
             --ignore-not-found=true --wait=true
-          
+
           echo "Deleting Tenant Modules"
           kubectl delete helmreleases.helm.toolkit.fluxcd.io -n "$NAMESPACE" \
-            -l 'cozystack.io/ui=true,internal.cozystack.io/tenantmodule=true' \
+            -l 'apps.cozystack.io/application.kind,internal.cozystack.io/tenantmodule=true' \
             --ignore-not-found=true --wait=true
           
           echo "Cleanup completed successfully"
