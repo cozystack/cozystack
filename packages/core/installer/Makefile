@@ -10,29 +10,26 @@ show:
 	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain
 
 apply:
-	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl apply --filename -
+	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl apply -f -
 
 diff:
-	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl diff --filename -
+	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl diff -f -
 
 image: pre-checks image-operator image-packages
 
-update-version:
-	TAG="$(call settag,$(TAG))" \
-		yq --inplace '.cozystackOperator.cozystackVersion = strenv(TAG)' values.yaml
-
 image-operator:
-	docker buildx build --file images/cozystack-operator/Dockerfile ../../.. \
+	docker buildx build -f images/cozystack-operator/Dockerfile ../../.. \
 		--tag $(REGISTRY)/cozystack-operator:$(call settag,$(TAG)) \
+		--build-arg VERSION=$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/cozystack-operator:latest \
 		--cache-to type=inline \
 		--metadata-file images/cozystack-operator.json \
 		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/cozystack-operator:$(call settag,$(TAG))@$$(yq -e '.["containerimage.digest"]' images/cozystack-operator.json -o json -r)" \
-		yq --inplace '.cozystackOperator.image = strenv(IMAGE)' values.yaml
+		yq -i '.cozystackOperator.image = strenv(IMAGE)' values.yaml
 	rm -f images/cozystack-operator.json
 
-image-packages: update-version
+image-packages:
 	mkdir -p ../../../_out/assets images
 	flux push artifact \
 		oci://$(REGISTRY)/cozystack-packages:$(call settag,$(TAG)) \
@@ -41,8 +38,8 @@ image-packages: update-version
 		--revision="$$(git describe --tags):$$(git rev-parse HEAD)" \
 		2>&1 | tee images/cozystack-packages.log
 	export REPO="oci://$(REGISTRY)/cozystack-packages" \
-	export DIGEST=$$(awk --field-separator @ '/artifact successfully pushed/ {print $$2}' images/cozystack-packages.log) && \
+	export DIGEST=$$(awk -F @ '/artifact successfully pushed/ {print $$2}' images/cozystack-packages.log) && \
 		rm -f images/cozystack-packages.log && \
 		test -n "$$DIGEST" && \
-		yq --inplace '.cozystackOperator.platformSourceUrl = strenv(REPO)' values.yaml && \
-		yq --inplace '.cozystackOperator.platformSourceRef = "digest=" + strenv(DIGEST)' values.yaml
+		yq -i '.cozystackOperator.platformSourceUrl = strenv(REPO)' values.yaml && \
+		yq -i '.cozystackOperator.platformSourceRef = "digest=" + strenv(DIGEST)' values.yaml

@@ -68,7 +68,6 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
-	var cozystackVersion string
 	var reconcileDeployment bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -87,8 +86,6 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
-	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
-		"Version of Cozystack")
 	flag.BoolVar(&reconcileDeployment, "reconcile-deployment", false,
 		"If set, the Cozystack API server is assumed to run as a Deployment, else as a DaemonSet.")
 	opts := zap.Options{
@@ -106,10 +103,9 @@ func main() {
 
 	// Configure telemetry
 	telemetryConfig := telemetry.Config{
-		Disabled:         disableTelemetry,
-		Endpoint:         telemetryEndpoint,
-		Interval:         interval,
-		CozystackVersion: cozystackVersion,
+		Disabled: disableTelemetry,
+		Endpoint: telemetryEndpoint,
+		Interval: interval,
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))

@@ -55,7 +55,6 @@ spec:
         - --install-flux=true
         - --metrics-bind-address=0
         - --health-probe-bind-address=
-        - --cozystack-version={{ .Values.cozystackOperator.cozystackVersion }}
         {{- if .Values.cozystackOperator.disableTelemetry }}
         - --disable-telemetry
         {{- end }}

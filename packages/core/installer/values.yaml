@@ -2,4 +2,3 @@ cozystackOperator:
   image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.0.0-alpha.1@sha256:d1beb9728b5be3ff6ee59eab071ac739cbb69d95f4bae173baa56323e97b0e5a
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
   platformSourceRef: 'digest=sha256:ab03446b256c0faa9de0656854319f3b56e1252dab6f7b51bc6c95609d192556'
-  cozystackVersion: v1.0.0-alpha.1
