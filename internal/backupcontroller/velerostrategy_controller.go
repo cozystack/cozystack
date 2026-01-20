@@ -303,7 +303,7 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 
 	// Create a basic artifact referencing the Velero backup
 	artifact := &backupsv1alpha1.BackupArtifact{
-		URI: fmt.Sprintf("velero://%s/%s", backupJob.Namespace, veleroBackup.Name),
+		URI: fmt.Sprintf("velero://%s/%s", veleroBackup.Namespace, veleroBackup.Name),
 	}
 
 	backup := &backupsv1alpha1.Backup{

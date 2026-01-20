@@ -321,7 +321,7 @@ type BackupSpec struct {
 }
 ```
 
-**Note:** Parameters are no stored directly in `Backup`. Instead, they are resolved from `BackupClass` parameters when the backup was created. The storage location is managed by the driver (e.g., Velero's `BackupStorageLocation`) and referenced via parameters in the `BackupClass`.
+**Note:** Parameters are not stored directly in `Backup`. Instead, they are resolved from `BackupClass` parameters when the backup was created. The storage location is managed by the driver (e.g., Velero's `BackupStorageLocation`) and referenced via parameters in the `BackupClass`.
 
 **Key fields (status)**
 
@@ -469,8 +469,10 @@ The Cozystack backups core API:
 * Uses a single group, `backups.cozystack.io`, for all core CRDs.
 * Cleanly separates:
 
-  * **When & where** (Plan + Storage) – core-owned.
+  * **When** (Plan schedule) – core-owned.
+  * **How & where** (BackupClass) – central configuration unit that encapsulates strategy and parameters (e.g., storage reference) per application type, resolved per BackupJob/Plan.
+  * **Execution** (BackupJob) – created by Plan when schedule fires, resolves BackupClass to get strategy and parameters, then delegates to driver.
   * **What backup artifacts exist** (Backup) – driver-created but cluster-visible.
-  * **Execution lifecycle** (BackupJob, RestoreJob) – shared contract boundary.
+  * **Restore lifecycle** (RestoreJob) – shared contract boundary.
 * Allows multiple strategy drivers to implement backup/restore logic without entangling their implementation with the core API.
 
