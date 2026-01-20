@@ -14,7 +14,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -88,6 +91,17 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// index BackupJob by backupClassName for efficient lookups when BackupClass changes
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &backupsv1alpha1.BackupJob{}, "spec.backupClassName", func(obj client.Object) []string {
+		job := obj.(*backupsv1alpha1.BackupJob)
+		if job.Spec.BackupClassName == "" {
+			return []string{}
+		}
+		return []string{job.Spec.BackupClassName}
+	}); err != nil {
+		return err
+	}
+
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
@@ -102,5 +116,27 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.BackupJob{}).
+		// Requeue BackupJobs when their referenced BackupClass changes
+		WatchesRawSource(source.Kind(
+			mgr.GetCache(),
+			&backupsv1alpha1.BackupClass{},
+			handler.TypedEnqueueRequestsFromMapFunc(func(ctx context.Context, bc *backupsv1alpha1.BackupClass) []reconcile.Request {
+				var jobs backupsv1alpha1.BackupJobList
+				if err := r.List(ctx, &jobs, client.MatchingFields{"spec.backupClassName": bc.Name}); err != nil {
+					return nil
+				}
+
+				reqs := make([]reconcile.Request, 0, len(jobs.Items))
+				for _, job := range jobs.Items {
+					reqs = append(reqs, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Namespace: job.Namespace,
+							Name:      job.Name,
+						},
+					})
+				}
+				return reqs
+			}),
+		)).
 		Complete(r)
 }

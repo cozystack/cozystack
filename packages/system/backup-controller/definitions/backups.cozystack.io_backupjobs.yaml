@@ -50,6 +50,7 @@ spec:
                 description: |-
                   ApplicationRef holds a reference to the managed application whose state
                   is being backed up.
+                  If apiGroup is not specified, it defaults to "apps.cozystack.io".
                 properties:
                   apiGroup:
                     description: |-
@@ -68,6 +69,12 @@ spec:
                 - name
                 type: object
                 x-kubernetes-map-type: atomic
+              backupClassName:
+                description: |-
+                  BackupClassName references a BackupClass that contains strategy and storage configuration.
+                  The BackupClass will be resolved to determine the appropriate strategy and storage
+                  based on the ApplicationRef.
+                type: string
               planRef:
                 description: |-
                   PlanRef refers to the Plan that requested this backup run.
@@ -84,54 +91,9 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
-              storageRef:
-                description: |-
-                  StorageRef holds a reference to the Storage object that describes where
-                  the backup will be stored.
-                properties:
-                  apiGroup:
-                    description: |-
-                      APIGroup is the group for the resource being referenced.
-                      If APIGroup is not specified, the specified Kind must be in the core API group.
-                      For any other third-party types, APIGroup is required.
-                    type: string
-                  kind:
-                    description: Kind is the type of resource being referenced
-                    type: string
-                  name:
-                    description: Name is the name of resource being referenced
-                    type: string
-                required:
-                - kind
-                - name
-                type: object
-                x-kubernetes-map-type: atomic
-              strategyRef:
-                description: |-
-                  StrategyRef holds a reference to the driver-specific BackupStrategy object
-                  that describes how the backup should be created.
-                properties:
-                  apiGroup:
-                    description: |-
-                      APIGroup is the group for the resource being referenced.
-                      If APIGroup is not specified, the specified Kind must be in the core API group.
-                      For any other third-party types, APIGroup is required.
-                    type: string
-                  kind:
-                    description: Kind is the type of resource being referenced
-                    type: string
-                  name:
-                    description: Name is the name of resource being referenced
-                    type: string
-                required:
-                - kind
-                - name
-                type: object
-                x-kubernetes-map-type: atomic
             required:
             - applicationRef
-            - storageRef
-            - strategyRef
+            - backupClassName
             type: object
           status:
             description: BackupJobStatus represents the observed state of a BackupJob.

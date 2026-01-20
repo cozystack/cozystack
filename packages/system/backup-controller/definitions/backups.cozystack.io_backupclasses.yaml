@@ -4,22 +4,23 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: plans.backups.cozystack.io
+  name: backupclasses.backups.cozystack.io
 spec:
   group: backups.cozystack.io
   names:
-    kind: Plan
-    listKind: PlanList
-    plural: plans
-    singular: plan
-  scope: Namespaced
+    kind: BackupClass
+    listKind: BackupClassList
+    plural: backupclasses
+    singular: backupclass
+  scope: Cluster
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
-          Plan describes the schedule, method and storage location for the
-          backup of a given target application.
+          BackupClass defines a class of backup configurations that can be referenced
+          by BackupJob and Plan resources. It encapsulates strategy and storage configuration
+          per application type.
         properties:
           apiVersion:
             description: |-
@@ -39,62 +40,74 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              PlanSpec references the storage, the strategy, the application to be
-              backed up and specifies the timetable on which the backups will run.
+            description: BackupClassSpec defines the desired state of a BackupClass.
             properties:
-              applicationRef:
-                description: |-
-                  ApplicationRef holds a reference to the managed application,
-                  whose state and configuration must be backed up.
-                  If apiGroup is not specified, it defaults to "apps.cozystack.io".
-                properties:
-                  apiGroup:
-                    description: |-
-                      APIGroup is the group for the resource being referenced.
-                      If APIGroup is not specified, the specified Kind must be in the core API group.
-                      For any other third-party types, APIGroup is required.
-                    type: string
-                  kind:
-                    description: Kind is the type of resource being referenced
-                    type: string
-                  name:
-                    description: Name is the name of resource being referenced
-                    type: string
-                required:
-                - kind
-                - name
-                type: object
-                x-kubernetes-map-type: atomic
-              backupClassName:
-                description: |-
-                  BackupClassName references a BackupClass that contains strategy and storage configuration.
-                  The BackupClass will be resolved to determine the appropriate strategy and storage
-                  based on the ApplicationRef.
-                type: string
-              schedule:
-                description: Schedule specifies when backup copies are created.
-                properties:
-                  cron:
-                    description: |-
-                      Cron contains the cron spec for scheduling backups. Must be
-                      specified if the schedule type is `cron`. Since only `cron` is
-                      supported, omitting this field is not allowed.
-                    type: string
-                  type:
-                    description: |-
-                      Type is the type of schedule specification. Supported values are
-                      [`cron`]. If omitted, defaults to `cron`.
-                    type: string
-                type: object
+              strategies:
+                description: Strategies is a list of backup strategies, each matching
+                  a specific application type.
+                items:
+                  description: BackupClassStrategy defines a backup strategy for a
+                    specific application type.
+                  properties:
+                    application:
+                      description: Application specifies which application types this
+                        strategy applies to.
+                      properties:
+                        apiGroup:
+                          description: |-
+                            APIGroup is the API group of the application.
+                            If not specified, defaults to "apps.cozystack.io".
+                          type: string
+                        kind:
+                          description: Kind is the kind of the application (e.g.,
+                            VirtualMachine, MySQL).
+                          type: string
+                      required:
+                      - kind
+                      type: object
+                    parameters:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Parameters holds strategy-specific and storage-specific parameters.
+                        Common parameters include:
+                        - backupStorageLocationName: Name of Velero BackupStorageLocation
+                      type: object
+                    strategyRef:
+                      description: StrategyRef references the driver-specific BackupStrategy
+                        (e.g., Velero).
+                      properties:
+                        apiGroup:
+                          description: |-
+                            APIGroup is the group for the resource being referenced.
+                            If APIGroup is not specified, the specified Kind must be in the core API group.
+                            For any other third-party types, APIGroup is required.
+                          type: string
+                        kind:
+                          description: Kind is the type of resource being referenced
+                          type: string
+                        name:
+                          description: Name is the name of resource being referenced
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                      x-kubernetes-map-type: atomic
+                  required:
+                  - application
+                  - strategyRef
+                  type: object
+                type: array
             required:
-            - applicationRef
-            - backupClassName
-            - schedule
+            - strategies
             type: object
           status:
+            description: BackupClassStatus defines the observed state of a BackupClass.
             properties:
               conditions:
+                description: Conditions represents the latest available observations
+                  of a BackupClass's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -152,10 +165,6 @@ spec:
                 type: array
             type: object
         type: object
-    selectableFields:
-    - jsonPath: .spec.applicationRef.apiGroup
-    - jsonPath: .spec.applicationRef.kind
-    - jsonPath: .spec.applicationRef.name
     served: true
     storage: true
     subresources:
