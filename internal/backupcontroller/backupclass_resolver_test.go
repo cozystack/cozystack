@@ -5,19 +5,20 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
+	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
 
 func TestNormalizeApplicationRef(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    corev1.TypedLocalObjectReference
-		expected string
+		expected corev1.TypedLocalObjectReference
 	}{
 		{
 			name: "apiGroup not specified - should default to apps.cozystack.io",
@@ -25,7 +26,11 @@ func TestNormalizeApplicationRef(t *testing.T) {
 				Kind: "VirtualMachine",
 				Name: "vm1",
 			},
-			expected: DefaultApplicationAPIGroup,
+			expected: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				Kind:     "VirtualMachine",
+				Name:     "vm1",
+			},
 		},
 		{
 			name: "apiGroup is nil - should default to apps.cozystack.io",
@@ -34,7 +39,11 @@ func TestNormalizeApplicationRef(t *testing.T) {
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
-			expected: DefaultApplicationAPIGroup,
+			expected: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				Kind:     "VirtualMachine",
+				Name:     "vm1",
+			},
 		},
 		{
 			name: "apiGroup is empty string - should default to apps.cozystack.io",
@@ -43,7 +52,11 @@ func TestNormalizeApplicationRef(t *testing.T) {
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
-			expected: DefaultApplicationAPIGroup,
+			expected: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				Kind:     "VirtualMachine",
+				Name:     "vm1",
+			},
 		},
 		{
 			name: "apiGroup is explicitly set - should keep it",
@@ -52,7 +65,11 @@ func TestNormalizeApplicationRef(t *testing.T) {
 				Kind:     "CustomApp",
 				Name:     "custom-app",
 			},
-			expected: "custom.api.group.io",
+			expected: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("custom.api.group.io"),
+				Kind:     "CustomApp",
+				Name:     "custom-app",
+			},
 		},
 		{
 			name: "apiGroup is apps.cozystack.io - should keep it",
@@ -61,26 +78,19 @@ func TestNormalizeApplicationRef(t *testing.T) {
 				Kind:     "VirtualMachine",
 				Name:     "vm1",
 			},
-			expected: DefaultApplicationAPIGroup,
+			expected: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr(DefaultApplicationAPIGroup),
+				Kind:     "VirtualMachine",
+				Name:     "vm1",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := NormalizeApplicationRef(tt.input)
-			if result.APIGroup == nil {
-				t.Errorf("NormalizeApplicationRef() returned nil APIGroup, expected %s", tt.expected)
-				return
-			}
-			if *result.APIGroup != tt.expected {
-				t.Errorf("NormalizeApplicationRef() APIGroup = %v, want %v", *result.APIGroup, tt.expected)
-			}
-			// Verify other fields are preserved
-			if result.Kind != tt.input.Kind {
-				t.Errorf("NormalizeApplicationRef() Kind = %v, want %v", result.Kind, tt.input.Kind)
-			}
-			if result.Name != tt.input.Name {
-				t.Errorf("NormalizeApplicationRef() Name = %v, want %v", result.Name, tt.input.Name)
+			if !apiequality.Semantic.DeepEqual(result, tt.expected) {
+				t.Errorf("NormalizeApplicationRef() = %v, want %v", result, tt.expected)
 			}
 		})
 	}
@@ -98,13 +108,13 @@ func TestResolveBackupClass(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		backupClass     *backupsv1alpha1.BackupClass
-		applicationRef  corev1.TypedLocalObjectReference
-		backupClassName string
-		wantErr         bool
-		expectedKind    string
-		expectedParams  map[string]string
+		name                string
+		backupClass         *backupsv1alpha1.BackupClass
+		applicationRef      corev1.TypedLocalObjectReference
+		backupClassName     string
+		wantErr             bool
+		expectedStrategyRef *corev1.TypedLocalObjectReference
+		expectedParams      map[string]string
 	}{
 		{
 			name: "successful resolution - matches VirtualMachine strategy",
@@ -149,7 +159,11 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 			backupClassName: "velero",
 			wantErr:         false,
-			expectedKind:    "VirtualMachine",
+			expectedStrategyRef: &corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("strategy.backups.cozystack.io"),
+				Kind:     "Velero",
+				Name:     "velero-strategy-vm",
+			},
 			expectedParams: map[string]string{
 				"backupStorageLocationName": "default",
 			},
@@ -186,7 +200,11 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 			backupClassName: "velero",
 			wantErr:         false,
-			expectedKind:    "MySQL",
+			expectedStrategyRef: &corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("strategy.backups.cozystack.io"),
+				Kind:     "Velero",
+				Name:     "velero-strategy-mysql",
+			},
 			expectedParams: map[string]string{
 				"backupStorageLocationName": "mysql-storage",
 			},
@@ -222,7 +240,11 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 			backupClassName: "velero",
 			wantErr:         false,
-			expectedKind:    "VirtualMachine",
+			expectedStrategyRef: &corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("strategy.backups.cozystack.io"),
+				Kind:     "Velero",
+				Name:     "velero-strategy-vm",
+			},
 			expectedParams: map[string]string{
 				"backupStorageLocationName": "default",
 			},
@@ -331,22 +353,17 @@ func TestResolveBackupClass(t *testing.T) {
 				return
 			}
 
-			// Verify strategy ref
-			if resolved.StrategyRef.Kind != "Velero" {
-				t.Errorf("ResolveBackupClass() StrategyRef.Kind = %v, want Velero", resolved.StrategyRef.Kind)
+			// Verify strategy ref using apimachinery equality
+			if tt.expectedStrategyRef != nil {
+				if !apiequality.Semantic.DeepEqual(resolved.StrategyRef, *tt.expectedStrategyRef) {
+					t.Errorf("ResolveBackupClass() StrategyRef = %v, want %v", resolved.StrategyRef, *tt.expectedStrategyRef)
+				}
 			}
 
-			// Verify parameters
+			// Verify parameters using apimachinery equality
 			if tt.expectedParams != nil {
-				for key, expectedValue := range tt.expectedParams {
-					actualValue, ok := resolved.Parameters[key]
-					if !ok {
-						t.Errorf("ResolveBackupClass() Parameters[%s] not found", key)
-						continue
-					}
-					if actualValue != expectedValue {
-						t.Errorf("ResolveBackupClass() Parameters[%s] = %v, want %v", key, actualValue, expectedValue)
-					}
+				if !apiequality.Semantic.DeepEqual(resolved.Parameters, tt.expectedParams) {
+					t.Errorf("ResolveBackupClass() Parameters = %v, want %v", resolved.Parameters, tt.expectedParams)
 				}
 			}
 		})
