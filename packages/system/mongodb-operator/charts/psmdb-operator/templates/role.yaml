@@ -1,0 +1,167 @@
+{{- if .Values.rbac.create }}
+{{- if or .Values.watchNamespace .Values.watchAllNamespaces }}
+kind: ClusterRole
+{{- else }}
+kind: Role
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ include "psmdb-operator.fullname" . }}
+{{- if not (or .Values.watchNamespace .Values.watchAllNamespaces) }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+  labels:
+{{ include "psmdb-operator.labels" . | indent 4 }}
+rules:
+  - apiGroups:
+    - psmdb.percona.com
+    resources:
+    - perconaservermongodbs
+    - perconaservermongodbs/status
+    - perconaservermongodbs/finalizers
+    - perconaservermongodbbackups
+    - perconaservermongodbbackups/status
+    - perconaservermongodbbackups/finalizers
+    - perconaservermongodbrestores
+    - perconaservermongodbrestores/status
+    - perconaservermongodbrestores/finalizers
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+{{- if or .Values.watchNamespace .Values.watchAllNamespaces }}
+  - apiGroups:
+    - admissionregistration.k8s.io
+    resources:
+    - validatingwebhookconfigurations
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+  - apiGroups:
+    - ""
+    resources:
+    - nodes
+    verbs:
+    - get
+    - list
+    - watch
+{{- end }}
+  - apiGroups:
+    - ""
+    resources:
+    - pods
+    - pods/exec
+    - services
+    - persistentvolumeclaims
+    - secrets
+    - configmaps
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+  - apiGroups:
+    - apps
+    resources:
+    - deployments
+    - replicasets
+    - statefulsets
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+  - apiGroups:
+    - batch
+    resources:
+    - cronjobs
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+  - apiGroups:
+    - policy
+    resources:
+    - poddisruptionbudgets
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+  - apiGroups:
+    - coordination.k8s.io
+    resources:
+    - leases
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+  - apiGroups:
+    - events.k8s.io
+    - ""
+    resources:
+    - events
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - patch
+  - apiGroups:
+    - certmanager.k8s.io
+    - cert-manager.io
+    resources:
+    - issuers
+    - certificates
+    - certificaterequests
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+    - deletecollection
+  - apiGroups:
+    - net.gke.io
+    - multicluster.x-k8s.io
+    resources:
+    - serviceexports
+    - serviceimports
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+    - deletecollection
+{{- end }}
