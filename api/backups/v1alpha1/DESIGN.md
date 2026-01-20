@@ -100,13 +100,13 @@ Describe **when**, **how**, and **where** to back up a specific managed applicat
 ```go
 type PlanSpec struct {
     // Application to back up.
+    // If apiGroup is not specified, it defaults to "apps.cozystack.io".
     ApplicationRef corev1.TypedLocalObjectReference `json:"applicationRef"`
 
-    // Where backups should be stored.
-    StorageRef corev1.TypedLocalObjectReference `json:"storageRef"`
-
-    // Driver-specific BackupStrategy to use.
-    StrategyRef corev1.TypedLocalObjectReference `json:"strategyRef"`
+    // BackupClassName references a BackupClass that contains strategy and other parameters (e.g. storage reference).
+    // The BackupClass will be resolved to determine the appropriate strategy and parameters
+    // based on the ApplicationRef.
+    BackupClassName string `json:"backupClassName"`
 
     // When backups should run.
     Schedule PlanSchedule `json:"schedule"`
@@ -145,11 +145,11 @@ Core Plan controller:
    * Create a `BackupJob` in the same namespace:
 
      * `spec.planRef.name = plan.Name`
-     * `spec.applicationRef = plan.spec.applicationRef`
-     * `spec.storageRef = plan.spec.storageRef`
-     * `spec.strategyRef = plan.spec.strategyRef`
-     * `spec.triggeredBy = "Plan"`
+     * `spec.applicationRef = plan.spec.applicationRef` (normalized with default apiGroup if not specified)
+     * `spec.backupClassName = plan.spec.backupClassName`
    * Set `ownerReferences` so the `BackupJob` is owned by the `Plan`.
+
+**Note:** The `BackupJob` controller resolves the `BackupClass` to determine the appropriate strategy and parameters, based on the `ApplicationRef`. The strategy template is processed with a context containing the `Application` object and `Parameters` from the `BackupClass`.
 
 The Plan controller does **not**:
 
@@ -159,17 +159,64 @@ The Plan controller does **not**:
 
 ---
 
-### 4.2 Storage
+### 4.2 BackupClass
 
-**API Shape**
+**Group/Kind**
+`backups.cozystack.io/v1alpha1, Kind=BackupClass`
 
-TBD
+**Purpose**
+Define a class of backup configurations that encapsulate strategy and parameters per application type. `BackupClass` is a cluster-scoped resource that allows admins to configure backup strategies and parameters in a reusable way.
 
-**Storage usage**
+**Key fields (spec)**
 
-* `Plan` and `BackupJob` reference `Storage` via `TypedLocalObjectReference`.
-* Drivers read `Storage` to know how/where to store or read artifacts.
-* Core treats `Storage` spec as opaque; it does not directly talk to S3 or buckets.
+```go
+type BackupClassSpec struct {
+    // Strategies is a list of backup strategies, each matching a specific application type.
+    Strategies []BackupClassStrategy `json:"strategies"`
+}
+
+type BackupClassStrategy struct {
+    // StrategyRef references the driver-specific BackupStrategy (e.g., Velero).
+    StrategyRef corev1.TypedLocalObjectReference `json:"strategyRef"`
+
+    // Application specifies which application types this strategy applies to.
+    // If apiGroup is not specified, it defaults to "apps.cozystack.io".
+    Application ApplicationSelector `json:"application"`
+
+    // Parameters holds strategy-specific parameters, like storage reference.
+    // Common parameters include:
+    // - backupStorageLocationName: Name of Velero BackupStorageLocation
+    // +optional
+    Parameters map[string]string `json:"parameters,omitempty"`
+}
+
+type ApplicationSelector struct {
+    // APIGroup is the API group of the application.
+    // If not specified, defaults to "apps.cozystack.io".
+    // +optional
+    APIGroup *string `json:"apiGroup,omitempty"`
+
+    // Kind is the kind of the application (e.g., VirtualMachine, MySQL).
+    Kind string `json:"kind"`
+}
+```
+
+**BackupClass resolution**
+
+* When a `BackupJob` or `Plan` references a `BackupClass` via `backupClassName`, the controller:
+  1. Fetches the `BackupClass` by name.
+  2. Matches the `ApplicationRef` against strategies in the `BackupClass`:
+     * Normalizes `ApplicationRef.apiGroup` (defaults to `"apps.cozystack.io"` if not specified).
+     * Finds a strategy where `ApplicationSelector` matches the `ApplicationRef` (apiGroup and kind).
+  3. Returns the matched `StrategyRef` and `Parameters`.
+* Strategy templates (e.g., Velero's `backupTemplate.spec`) are processed with a context containing:
+  * `Application`: The application object being backed up.
+  * `Parameters`: The parameters from the matched `BackupClassStrategy`.
+
+**Parameters**
+
+* Parameters are passed via `Parameters` in the `BackupClass` (e.g., `backupStorageLocationName` for Velero).
+* The driver uses these parameters to resolve the actual resources (e.g., Velero's `BackupStorageLocation` CRD).
 
 ---
 
@@ -189,16 +236,13 @@ type BackupJobSpec struct {
     PlanRef *corev1.LocalObjectReference `json:"planRef,omitempty"`
 
     // Application to back up.
+    // If apiGroup is not specified, it defaults to "apps.cozystack.io".
     ApplicationRef corev1.TypedLocalObjectReference `json:"applicationRef"`
 
-    // Storage to use.
-    StorageRef corev1.TypedLocalObjectReference `json:"storageRef"`
-
-    // Driver-specific BackupStrategy to use.
-    StrategyRef corev1.TypedLocalObjectReference `json:"strategyRef"`
-
-    // Informational: what triggered this run ("Plan", "Manual", etc.).
-    TriggeredBy string `json:"triggeredBy,omitempty"`
+    // BackupClassName references a BackupClass that contains strategy and related parameters
+    // The BackupClass will be resolved to determine the appropriate strategy and parameters
+    // based on the ApplicationRef.
+    BackupClassName string `json:"backupClassName"`
 }
 ```
 
@@ -223,7 +267,9 @@ type BackupJobStatus struct {
 * Each driver controller:
 
   * Watches `BackupJob`.
-  * Reconciles runs where `spec.strategyRef.apiGroup/kind` matches its **strategy type(s)**.
+  * Resolves the `BackupClass` referenced by `spec.backupClassName`.
+  * Matches the `ApplicationRef` against strategies in the `BackupClass` to find the appropriate strategy.
+  * Reconciles runs where the resolved strategy's `apiGroup/kind` matches its **strategy type(s)**.
 * Driver responsibilities:
 
   1. On first reconcile:
@@ -232,7 +278,12 @@ type BackupJobStatus struct {
      * Set `status.phase = Running`.
   2. Resolve inputs:
 
-     * Read `Strategy` (driver-owned CRD), `Storage`, `Application`, optionally `Plan`.
+     * Resolve `BackupClass` from `spec.backupClassName`.
+     * Match `ApplicationRef` against `BackupClass` strategies to get `StrategyRef` and `Parameters`.
+     * Read `Strategy` (driver-owned CRD) from `StrategyRef`.
+     * Read `Application` from `ApplicationRef`.
+     * Extract parameters from `Parameters` (e.g., `backupStorageLocationName` for Velero).
+     * Process strategy template with context: `Application` object and `Parameters` from `BackupClass`.
   3. Execute backup logic (implementation-specific).
   4. On success:
 
@@ -264,12 +315,13 @@ Represent a single **backup artifact** for a given application, decoupled from a
 type BackupSpec struct {
     ApplicationRef corev1.TypedLocalObjectReference `json:"applicationRef"`
     PlanRef        *corev1.LocalObjectReference     `json:"planRef,omitempty"`
-    StorageRef     corev1.TypedLocalObjectReference `json:"storageRef"`
     StrategyRef    corev1.TypedLocalObjectReference `json:"strategyRef"`
     TakenAt        metav1.Time                      `json:"takenAt"`
     DriverMetadata map[string]string                `json:"driverMetadata,omitempty"`
 }
 ```
+
+**Note:** Parameters are no stored directly in `Backup`. Instead, they are resolved from `BackupClass` parameters when the backup was created. The storage location is managed by the driver (e.g., Velero's `BackupStorageLocation`) and referenced via parameters in the `BackupClass`.
 
 **Key fields (status)**
 
@@ -290,7 +342,8 @@ type BackupStatus struct {
   * Creates a `Backup` in the same namespace (typically owned by the `BackupJob`).
   * Populates `spec` fields with:
 
-    * The application, storage, strategy references.
+    * The application reference.
+    * The strategy reference (resolved from `BackupClass` during `BackupJob` execution).
     * `takenAt`.
     * Optional `driverMetadata`.
   * Sets `status` with:
@@ -305,6 +358,8 @@ type BackupStatus struct {
     * List backups for a given application/plan.
     * Anchor `RestoreJob` operations.
     * Implement higher-level policies (retention) if needed.
+
+**Note:** Parameters are resolved from `BackupClass` when the `BackupJob` is created. The driver uses these parameters to determine where to store backups. The storage location itself is managed by the driver (e.g., Velero's `BackupStorageLocation` CRD) and is not directly referenced in the `Backup` resource. When restoring, the driver resolves the storage location from the original `BackupClass` parameters or from the driver's own metadata.
 
 ---
 
@@ -353,13 +408,13 @@ type RestoreJobStatus struct {
      * Determines effective:
 
        * **Strategy**: `backup.spec.strategyRef`.
-       * **Storage**: `backup.spec.storageRef`.
+       * **Storage**: Resolved from driver metadata or `BackupClass` parameters (e.g., `backupStorageLocationName` stored in `driverMetadata` or resolved from the original `BackupClass`).
        * **Target application**: `spec.targetApplicationRef` or `backup.spec.applicationRef`.
      * If effective strategy’s GVK is one of its supported strategy types → driver is responsible.
   3. Behaviour:
 
      * On first reconcile, set `status.startedAt` and `phase = Running`.
-     * Resolve `Backup`, `Storage`, `Strategy`, target application.
+     * Resolve `Backup`, storage location (from driver metadata or `BackupClass`), `Strategy`, target application.
      * Execute restore logic (implementation-specific).
      * On success:
 
