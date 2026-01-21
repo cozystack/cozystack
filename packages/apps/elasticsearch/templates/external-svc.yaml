@@ -1,0 +1,39 @@
+{{- if .Values.external }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: {{ .Release.Name }}.{{ .Release.Namespace }}.{{ $clusterDomain }}
+spec:
+  type: LoadBalancer
+  selector:
+    common.k8s.elastic.co/type: elasticsearch
+    elasticsearch.k8s.elastic.co/cluster-name: {{ .Release.Name }}
+  ports:
+    - name: https
+      port: 9200
+      targetPort: 9200
+      protocol: TCP
+{{- if .Values.kibana.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-kibana-external
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: {{ .Release.Name }}-kibana.{{ .Release.Namespace }}.{{ $clusterDomain }}
+spec:
+  type: LoadBalancer
+  selector:
+    common.k8s.elastic.co/type: kibana
+    kibana.k8s.elastic.co/name: {{ .Release.Name }}
+  ports:
+    - name: https
+      port: 5601
+      targetPort: 5601
+      protocol: TCP
+{{- end }}
+{{- end }}

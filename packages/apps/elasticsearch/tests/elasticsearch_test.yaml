@@ -1,0 +1,435 @@
+suite: elasticsearch CR tests
+
+templates:
+  - templates/elasticsearch.yaml
+
+tests:
+  ###################
+  # Basic rendering #
+  ###################
+
+  - it: renders Elasticsearch and WorkloadMonitor
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Elasticsearch
+        documentIndex: 0
+      - isKind:
+          of: WorkloadMonitor
+        documentIndex: 1
+
+  - it: sets correct CR name
+    release:
+      name: my-elasticsearch
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-elasticsearch
+        documentIndex: 0
+
+  ##################
+  # Version        #
+  ##################
+
+  - it: defaults to version 9.0.0
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.version
+          value: "9.0.0"
+        documentIndex: 0
+
+  - it: sets version 8.17.0 when v8 selected
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v8
+    asserts:
+      - equal:
+          path: spec.version
+          value: "8.17.0"
+        documentIndex: 0
+
+  - it: sets version 7.17.27 when v7 selected
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v7
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.17.27"
+        documentIndex: 0
+
+  #####################
+  # Node Sets         #
+  #####################
+
+  - it: sets default replica count to 3
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].count
+          value: 3
+        documentIndex: 0
+
+  - it: sets replica count from values
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 5
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].count
+          value: 5
+        documentIndex: 0
+
+  #####################
+  # Node Roles        #
+  #####################
+
+  - it: enables default node roles
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.nodeSets[0].config["node.roles"]
+          content: master
+        documentIndex: 0
+      - contains:
+          path: spec.nodeSets[0].config["node.roles"]
+          content: data
+        documentIndex: 0
+      - contains:
+          path: spec.nodeSets[0].config["node.roles"]
+          content: ingest
+        documentIndex: 0
+
+  - it: disables master role when configured
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      nodeRoles:
+        master: false
+        data: true
+        ingest: true
+    asserts:
+      - notContains:
+          path: spec.nodeSets[0].config["node.roles"]
+          content: master
+        documentIndex: 0
+
+  - it: enables ml role when configured
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      nodeRoles:
+        master: true
+        data: true
+        ingest: true
+        ml: true
+    asserts:
+      - contains:
+          path: spec.nodeSets[0].config["node.roles"]
+          content: ml
+        documentIndex: 0
+
+  ###########################
+  # Topology Spread Policy  #
+  ###########################
+
+  - it: uses soft topology spread by default (ScheduleAnyway)
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].podTemplate.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: ScheduleAnyway
+        documentIndex: 0
+      - equal:
+          path: spec.nodeSets[0].podTemplate.spec.topologySpreadConstraints[1].whenUnsatisfiable
+          value: ScheduleAnyway
+        documentIndex: 0
+
+  - it: uses hard topology spread when configured (DoNotSchedule)
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      topologySpreadPolicy: hard
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].podTemplate.spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+        documentIndex: 0
+      - equal:
+          path: spec.nodeSets[0].podTemplate.spec.topologySpreadConstraints[1].whenUnsatisfiable
+          value: DoNotSchedule
+        documentIndex: 0
+
+  - it: sets correct topology keys
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].podTemplate.spec.topologySpreadConstraints[0].topologyKey
+          value: kubernetes.io/hostname
+        documentIndex: 0
+      - equal:
+          path: spec.nodeSets[0].podTemplate.spec.topologySpreadConstraints[1].topologyKey
+          value: topology.kubernetes.io/zone
+        documentIndex: 0
+
+  #####################
+  # Storage           #
+  #####################
+
+  - it: sets storage size from values
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      size: 50Gi
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].volumeClaimTemplates[0].spec.resources.requests.storage
+          value: 50Gi
+        documentIndex: 0
+
+  - it: sets storageClass when provided
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      storageClass: fast-ssd
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].volumeClaimTemplates[0].spec.storageClassName
+          value: fast-ssd
+        documentIndex: 0
+
+  - it: does not set storageClass when empty and replicas > 1
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      storageClass: ""
+      replicas: 3
+    asserts:
+      - notExists:
+          path: spec.nodeSets[0].volumeClaimTemplates[0].spec.storageClassName
+        documentIndex: 0
+
+  - it: sets replicated storageClass when single replica and no storageClass
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      storageClass: ""
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.nodeSets[0].volumeClaimTemplates[0].spec.storageClassName
+          value: replicated
+        documentIndex: 0
+
+  #####################
+  # Users             #
+  #####################
+
+  - it: does not include auth section when no users defined
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users: {}
+    asserts:
+      - notExists:
+          path: spec.auth
+        documentIndex: 0
+
+  - it: includes auth fileRealm when users defined
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser:
+          roles:
+            - viewer
+    asserts:
+      - exists:
+          path: spec.auth.fileRealm
+        documentIndex: 0
+      - equal:
+          path: spec.auth.fileRealm[0].secretName
+          value: test-es-user-myuser
+        documentIndex: 0
+
+  - it: references multiple user secrets
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        user1:
+          roles:
+            - viewer
+        user2:
+          roles:
+            - editor
+    asserts:
+      - lengthEqual:
+          path: spec.auth.fileRealm
+          count: 2
+        documentIndex: 0
+
+  ###########################
+  # TLS                     #
+  ###########################
+
+  - it: enables TLS with self-signed certificate
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.http.tls.selfSignedCertificate.disabled
+          value: false
+        documentIndex: 0
+
+  ###########################
+  # WorkloadMonitor         #
+  ###########################
+
+  - it: creates WorkloadMonitor with correct metadata
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-es
+        documentIndex: 1
+      - equal:
+          path: spec.kind
+          value: elasticsearch
+        documentIndex: 1
+      - equal:
+          path: spec.type
+          value: elasticsearch
+        documentIndex: 1
+
+  - it: sets replicas in WorkloadMonitor
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+        documentIndex: 1
+
+  - it: sets minReplicas to 1
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.minReplicas
+          value: 1
+        documentIndex: 1
+
+  - it: sets correct selector labels
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.selector["common.k8s.elastic.co/type"]
+          value: elasticsearch
+        documentIndex: 1
+      - equal:
+          path: spec.selector["elasticsearch.k8s.elastic.co/cluster-name"]
+          value: mydb
+        documentIndex: 1

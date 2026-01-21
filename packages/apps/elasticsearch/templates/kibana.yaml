@@ -1,0 +1,24 @@
+{{- if .Values.kibana.enabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+---
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  version: {{ include "elasticsearch.versionMap" $ }}
+  count: {{ .Values.kibana.replicas | default 1 }}
+  elasticsearchRef:
+    name: {{ .Release.Name }}
+  config:
+    monitoring.ui.ccs.enabled: false
+  podTemplate:
+    spec:
+      containers:
+        - name: kibana
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.kibana.resourcesPreset | default "small") .Values.kibana.resources $) | nindent 12 }}
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: false
+{{- end }}
