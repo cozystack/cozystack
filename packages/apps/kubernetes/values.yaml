@@ -76,9 +76,13 @@ host: ""
 ## @typedef {struct} GatewayAPIAddon - Gateway API addon.
 ## @field {bool} enabled - Enable Gateway API.
 
+## @enum {string} IngressNginxExposeMethod - Method to expose the controller
+## @value Proxied
+## @value LoadBalancer
+
 ## @typedef {struct} IngressNginxAddon - Ingress-NGINX controller.
 ## @field {bool} enabled - Enable the controller (requires nodes labeled `ingress-nginx`).
-## @field {string} exposeMethod - Method to expose the controller. Allowed values: `Proxied`, `LoadBalancer`.
+## @field {IngressNginxExposeMethod} exposeMethod - Method to expose the controller. Allowed values: `Proxied`, `LoadBalancer`.
 ## @field {[]string} hosts - Domains routed to this tenant cluster when `exposeMethod` is `Proxied`.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
