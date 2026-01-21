@@ -17,11 +17,6 @@
       "type": "boolean",
       "default": false
     },
-    "isolated": {
-      "description": "Enforce tenant namespace with network policies (default: true).",
-      "type": "boolean",
-      "default": true
-    },
     "monitoring": {
       "description": "Deploy own Monitoring Stack.",
       "type": "boolean",

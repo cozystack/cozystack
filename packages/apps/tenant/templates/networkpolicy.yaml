@@ -1,4 +1,3 @@
-{{- if .Values.isolated }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -220,4 +219,3 @@ spec:
   - toEndpoints:
     - matchLabels:
         cozystack.io/service: ingress
-{{- end }}
