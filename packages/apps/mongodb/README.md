@@ -52,15 +52,6 @@ Run `helm upgrade` after MongoDB is ready to populate the credentials secret wit
 | `version`          | MongoDB major version to deploy.                                                                                                  | `string`   | `v8`    |
 
 
-### Image configuration
-
-| Name            | Description                            | Type     | Value                                   |
-| --------------- | -------------------------------------- | -------- | --------------------------------------- |
-| `images`        | Container images used by the operator. | `object` | `{}`                                    |
-| `images.pmm`    | PMM client image for monitoring.       | `string` | `percona/pmm-client:2.44.1`             |
-| `images.backup` | Percona Backup for MongoDB image.      | `string` | `percona/percona-backup-mongodb:2.11.0` |
-
-
 ### Sharding configuration
 
 | Name                                | Description                                                        | Type       | Value   |
