@@ -14,10 +14,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -116,27 +113,5 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.BackupJob{}).
-		// Requeue BackupJobs when their referenced BackupClass changes
-		WatchesRawSource(source.Kind(
-			mgr.GetCache(),
-			&backupsv1alpha1.BackupClass{},
-			handler.TypedEnqueueRequestsFromMapFunc(func(ctx context.Context, bc *backupsv1alpha1.BackupClass) []reconcile.Request {
-				var jobs backupsv1alpha1.BackupJobList
-				if err := r.List(ctx, &jobs, client.MatchingFields{"spec.backupClassName": bc.Name}); err != nil {
-					return nil
-				}
-
-				reqs := make([]reconcile.Request, 0, len(jobs.Items))
-				for _, job := range jobs.Items {
-					reqs = append(reqs, reconcile.Request{
-						NamespacedName: types.NamespacedName{
-							Namespace: job.Namespace,
-							Name:      job.Name,
-						},
-					})
-				}
-				return reqs
-			}),
-		)).
 		Complete(r)
 }
