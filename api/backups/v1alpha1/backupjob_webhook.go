@@ -9,7 +9,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -22,16 +21,12 @@ func SetupBackupJobWebhookWithManager(mgr ctrl.Manager) error {
 
 // +kubebuilder:webhook:path=/mutate-backups-cozystack-io-v1alpha1-backupjob,mutating=true,failurePolicy=fail,sideEffects=None,groups=backups.cozystack.io,resources=backupjobs,verbs=create;update,versions=v1alpha1,name=mbackupjob.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Defaulter = &BackupJob{}
-
 // Default implements webhook.Defaulter so a webhook will be registered for the type
 func (j *BackupJob) Default() {
 	// No defaults needed for BackupJob currently
 }
 
 // +kubebuilder:webhook:path=/validate-backups-cozystack-io-v1alpha1-backupjob,mutating=false,failurePolicy=fail,sideEffects=None,groups=backups.cozystack.io,resources=backupjobs,verbs=create;update,versions=v1alpha1,name=vbackupjob.kb.io,admissionReviewVersions=v1
-
-var _ webhook.Validator = &BackupJob{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
 func (j *BackupJob) ValidateCreate() (admission.Warnings, error) {
