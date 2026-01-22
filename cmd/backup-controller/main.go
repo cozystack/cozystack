@@ -168,6 +168,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Register BackupJob webhook for validation (immutability of backupClassName)
+	if err = backupsv1alpha1.SetupBackupJobWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "BackupJob")
+		os.Exit(1)
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
