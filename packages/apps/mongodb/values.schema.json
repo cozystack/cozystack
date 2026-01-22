@@ -78,27 +78,6 @@
       "type": "boolean",
       "default": false
     },
-    "images": {
-      "description": "Container images used by the operator.",
-      "type": "object",
-      "default": {},
-      "required": [
-        "backup",
-        "pmm"
-      ],
-      "properties": {
-        "backup": {
-          "description": "Percona Backup for MongoDB image.",
-          "type": "string",
-          "default": "percona/percona-backup-mongodb:2.11.0"
-        },
-        "pmm": {
-          "description": "PMM client image for monitoring.",
-          "type": "string",
-          "default": "percona/pmm-client:2.44.1"
-        }
-      }
-    },
     "replicas": {
       "description": "Number of MongoDB replicas in replica set.",
       "type": "integer",
