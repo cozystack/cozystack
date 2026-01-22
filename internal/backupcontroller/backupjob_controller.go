@@ -45,29 +45,42 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	if j.Spec.StrategyRef.APIGroup == nil {
-		logger.V(1).Info("BackupJob has nil StrategyRef.APIGroup, skipping", "backupjob", j.Name)
+	// Normalize ApplicationRef (default apiGroup if not specified)
+	normalizedAppRef := NormalizeApplicationRef(j.Spec.ApplicationRef)
+
+	// Resolve BackupClass
+	resolved, err := ResolveBackupClass(ctx, r.Client, j.Spec.BackupClassName, normalizedAppRef)
+	if err != nil {
+		logger.Error(err, "failed to resolve BackupClass", "backupClassName", j.Spec.BackupClassName)
+		return ctrl.Result{}, err
+	}
+
+	strategyRef := resolved.StrategyRef
+
+	// Validate strategyRef
+	if strategyRef.APIGroup == nil {
+		logger.V(1).Info("BackupJob resolved StrategyRef has nil APIGroup, skipping", "backupjob", j.Name)
 		return ctrl.Result{}, nil
 	}
 
-	if *j.Spec.StrategyRef.APIGroup != strategyv1alpha1.GroupVersion.Group {
-		logger.V(1).Info("BackupJob StrategyRef.APIGroup doesn't match, skipping",
+	if *strategyRef.APIGroup != strategyv1alpha1.GroupVersion.Group {
+		logger.V(1).Info("BackupJob resolved StrategyRef.APIGroup doesn't match, skipping",
 			"backupjob", j.Name,
 			"expected", strategyv1alpha1.GroupVersion.Group,
-			"got", *j.Spec.StrategyRef.APIGroup)
+			"got", *strategyRef.APIGroup)
 		return ctrl.Result{}, nil
 	}
 
-	logger.Info("processing BackupJob", "backupjob", j.Name, "strategyKind", j.Spec.StrategyRef.Kind)
-	switch j.Spec.StrategyRef.Kind {
+	logger.Info("processing BackupJob", "backupjob", j.Name, "strategyKind", strategyRef.Kind, "backupClassName", j.Spec.BackupClassName)
+	switch strategyRef.Kind {
 	case strategyv1alpha1.JobStrategyKind:
-		return r.reconcileJob(ctx, j)
+		return r.reconcileJob(ctx, j, resolved)
 	case strategyv1alpha1.VeleroStrategyKind:
-		return r.reconcileVelero(ctx, j)
+		return r.reconcileVelero(ctx, j, resolved)
 	default:
-		logger.V(1).Info("BackupJob StrategyRef.Kind not supported, skipping",
+		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
-			"kind", j.Spec.StrategyRef.Kind,
+			"kind", strategyRef.Kind,
 			"supported", []string{strategyv1alpha1.JobStrategyKind, strategyv1alpha1.VeleroStrategyKind})
 		return ctrl.Result{}, nil
 	}
@@ -75,6 +88,17 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// index BackupJob by backupClassName for efficient lookups when BackupClass changes
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &backupsv1alpha1.BackupJob{}, "spec.backupClassName", func(obj client.Object) []string {
+		job := obj.(*backupsv1alpha1.BackupJob)
+		if job.Spec.BackupClassName == "" {
+			return []string{}
+		}
+		return []string{job.Spec.BackupClassName}
+	}); err != nil {
+		return err
+	}
+
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
