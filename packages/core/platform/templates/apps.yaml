@@ -61,7 +61,10 @@ stringData:
       {{- $clusterConfig | toYaml | nindent 6 }}
       {{- with $cozystackBranding.data }}
       branding:
-        {{- . | toYaml | nindent 8 }}
+        # to keep strings with single quotes
+        {{- range $k, $v := . }}
+        {{ $k }}: {{ $v | quote }}
+        {{- end }}
       {{- end }}
       {{- with $cozystackScheduling.data }}
       scheduling:
