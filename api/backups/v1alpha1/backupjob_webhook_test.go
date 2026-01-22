@@ -66,7 +66,8 @@ func TestBackupJob_ValidateCreate(t *testing.T) {
 					BackupClassName: "   ",
 				},
 			},
-			wantErr: false, // Whitespace is technically not empty, but this is acceptable
+			wantErr: true,
+			errMsg:  "backupClassName is required and cannot be empty",
 		},
 	}
 
@@ -170,7 +171,7 @@ func TestBackupJob_ValidateUpdate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "update when old backupClassName is empty should allow setting it",
+			name: "update when old backupClassName is empty should be rejected",
 			old: &BackupJob{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-job",
@@ -197,7 +198,8 @@ func TestBackupJob_ValidateUpdate(t *testing.T) {
 					BackupClassName: "velero", // Setting it for the first time
 				},
 			},
-			wantErr: false, // Allowed because old was empty
+			wantErr: true,
+			errMsg:  "backupClassName is immutable",
 		},
 		{
 			name: "update changing from non-empty to different non-empty should be rejected",

@@ -4,6 +4,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,7 +24,7 @@ func SetupBackupJobWebhookWithManager(mgr ctrl.Manager) error {
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type
 func (j *BackupJob) Default() {
-	// No defaults needed for BackupJob currently
+	j.Spec.ApplicationRef = NormalizeApplicationRef(j.Spec.ApplicationRef)
 }
 
 // +kubebuilder:webhook:path=/validate-backups-cozystack-io-v1alpha1-backupjob,mutating=false,failurePolicy=fail,sideEffects=None,groups=backups.cozystack.io,resources=backupjobs,verbs=create;update,versions=v1alpha1,name=vbackupjob.kb.io,admissionReviewVersions=v1
@@ -34,7 +35,7 @@ func (j *BackupJob) ValidateCreate() (admission.Warnings, error) {
 	logger.Info("validating BackupJob creation", "name", j.Name, "namespace", j.Namespace)
 
 	// Validate that backupClassName is set
-	if j.Spec.BackupClassName == "" {
+	if strings.TrimSpace(j.Spec.BackupClassName) == "" {
 		return nil, fmt.Errorf("backupClassName is required and cannot be empty")
 	}
 
@@ -52,7 +53,7 @@ func (j *BackupJob) ValidateUpdate(old runtime.Object) (admission.Warnings, erro
 	}
 
 	// Enforce immutability of backupClassName
-	if oldJob.Spec.BackupClassName != "" && oldJob.Spec.BackupClassName != j.Spec.BackupClassName {
+	if oldJob.Spec.BackupClassName != j.Spec.BackupClassName {
 		return nil, fmt.Errorf("backupClassName is immutable and cannot be changed from %q to %q", oldJob.Spec.BackupClassName, j.Spec.BackupClassName)
 	}
 

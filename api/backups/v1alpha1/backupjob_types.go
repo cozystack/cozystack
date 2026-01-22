@@ -24,6 +24,10 @@ func init() {
 const (
 	OwningJobNameLabel      = thisGroup + "/owned-by.BackupJobName"
 	OwningJobNamespaceLabel = thisGroup + "/owned-by.BackupJobNamespace"
+
+	// DefaultApplicationAPIGroup is the default API group for applications
+	// when not specified in ApplicationRef or ApplicationSelector.
+	DefaultApplicationAPIGroup = "apps.cozystack.io"
 )
 
 // BackupJobPhase represents the lifecycle phase of a BackupJob.
@@ -113,4 +117,14 @@ type BackupJobList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []BackupJob `json:"items"`
+}
+
+// NormalizeApplicationRef sets the default apiGroup to DefaultApplicationAPIGroup if it's not specified.
+// This function is exported so it can be used by other packages (e.g., controllers, factories).
+func NormalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedLocalObjectReference {
+	if ref.APIGroup == nil || *ref.APIGroup == "" {
+		apiGroup := DefaultApplicationAPIGroup
+		ref.APIGroup = &apiGroup
+	}
+	return ref
 }

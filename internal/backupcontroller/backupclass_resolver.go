@@ -13,17 +13,14 @@ import (
 const (
 	// DefaultApplicationAPIGroup is the default API group for applications
 	// when not specified in ApplicationRef or ApplicationSelector.
-	DefaultApplicationAPIGroup = "apps.cozystack.io"
+	// Deprecated: Use backupsv1alpha1.DefaultApplicationAPIGroup instead.
+	DefaultApplicationAPIGroup = backupsv1alpha1.DefaultApplicationAPIGroup
 )
 
-// NormalizeApplicationRef sets the default apiGroup to "apps.cozystack.io" if it's not specified.
-// This function is exported so it can be used by other packages (e.g., factory).
+// NormalizeApplicationRef sets the default apiGroup to DefaultApplicationAPIGroup if it's not specified.
+// Deprecated: Use backupsv1alpha1.NormalizeApplicationRef instead.
 func NormalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedLocalObjectReference {
-	if ref.APIGroup == nil || *ref.APIGroup == "" {
-		apiGroup := DefaultApplicationAPIGroup
-		ref.APIGroup = &apiGroup
-	}
-	return ref
+	return backupsv1alpha1.NormalizeApplicationRef(ref)
 }
 
 // ResolvedBackupConfig contains the resolved strategy and storage configuration
@@ -52,7 +49,7 @@ func ResolveBackupClass(
 	}
 
 	// Determine application API group (already normalized, but extract for matching)
-	appAPIGroup := DefaultApplicationAPIGroup
+	appAPIGroup := backupsv1alpha1.DefaultApplicationAPIGroup
 	if applicationRef.APIGroup != nil {
 		appAPIGroup = *applicationRef.APIGroup
 	}
@@ -60,7 +57,7 @@ func ResolveBackupClass(
 	// Find matching strategy
 	for _, strategy := range backupClass.Spec.Strategies {
 		// Normalize strategy's application selector (default apiGroup if not specified)
-		strategyAPIGroup := DefaultApplicationAPIGroup
+		strategyAPIGroup := backupsv1alpha1.DefaultApplicationAPIGroup
 		if strategy.Application.APIGroup != nil && *strategy.Application.APIGroup != "" {
 			strategyAPIGroup = *strategy.Application.APIGroup
 		}

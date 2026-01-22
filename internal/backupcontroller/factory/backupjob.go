@@ -9,25 +9,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const (
-	// defaultApplicationAPIGroup is the default API group for applications
-	// when not specified in ApplicationRef.
-	defaultApplicationAPIGroup = "apps.cozystack.io"
-)
-
-// normalizeApplicationRef sets the default apiGroup to "apps.cozystack.io" if it's not specified.
-// This is a local copy to avoid import cycle with backupcontroller package.
-func normalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedLocalObjectReference {
-	if ref.APIGroup == nil || *ref.APIGroup == "" {
-		apiGroup := defaultApplicationAPIGroup
-		ref.APIGroup = &apiGroup
-	}
-	return ref
-}
-
 func BackupJob(p *backupsv1alpha1.Plan, scheduledFor time.Time) *backupsv1alpha1.BackupJob {
 	// Normalize ApplicationRef (default apiGroup if not specified)
-	appRef := normalizeApplicationRef(*p.Spec.ApplicationRef.DeepCopy())
+	appRef := backupsv1alpha1.NormalizeApplicationRef(*p.Spec.ApplicationRef.DeepCopy())
 
 	job := &backupsv1alpha1.BackupJob{
 		ObjectMeta: metav1.ObjectMeta{
