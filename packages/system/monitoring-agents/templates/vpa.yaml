@@ -9,6 +9,7 @@ spec:
     name: vmagent
   updatePolicy:
     updateMode: Auto
+    minReplicas: 1
   resourcePolicy:
     containerPolicies:
       - containerName: config-reloader
