@@ -113,7 +113,7 @@ func TestResolveBackupClass(t *testing.T) {
 		applicationRef      corev1.TypedLocalObjectReference
 		backupClassName     string
 		wantErr             bool
-		expectedStrategyRef *corev1.TypedLocalObjectReference
+		expectedStrategyRef *backupsv1alpha1.TypedClusterObjectReference
 		expectedParams      map[string]string
 	}{
 		{
@@ -125,7 +125,7 @@ func TestResolveBackupClass(t *testing.T) {
 				Spec: backupsv1alpha1.BackupClassSpec{
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
-							StrategyRef: corev1.TypedLocalObjectReference{
+							StrategyRef: backupsv1alpha1.TypedClusterObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",
@@ -138,7 +138,7 @@ func TestResolveBackupClass(t *testing.T) {
 							},
 						},
 						{
-							StrategyRef: corev1.TypedLocalObjectReference{
+							StrategyRef: backupsv1alpha1.TypedClusterObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-mysql",
@@ -159,7 +159,7 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 			backupClassName: "velero",
 			wantErr:         false,
-			expectedStrategyRef: &corev1.TypedLocalObjectReference{
+			expectedStrategyRef: &backupsv1alpha1.TypedClusterObjectReference{
 				APIGroup: stringPtr("strategy.backups.cozystack.io"),
 				Kind:     "Velero",
 				Name:     "velero-strategy-vm",
@@ -177,7 +177,7 @@ func TestResolveBackupClass(t *testing.T) {
 				Spec: backupsv1alpha1.BackupClassSpec{
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
-							StrategyRef: corev1.TypedLocalObjectReference{
+							StrategyRef: backupsv1alpha1.TypedClusterObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-mysql",
@@ -200,7 +200,7 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 			backupClassName: "velero",
 			wantErr:         false,
-			expectedStrategyRef: &corev1.TypedLocalObjectReference{
+			expectedStrategyRef: &backupsv1alpha1.TypedClusterObjectReference{
 				APIGroup: stringPtr("strategy.backups.cozystack.io"),
 				Kind:     "Velero",
 				Name:     "velero-strategy-mysql",
@@ -218,7 +218,7 @@ func TestResolveBackupClass(t *testing.T) {
 				Spec: backupsv1alpha1.BackupClassSpec{
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
-							StrategyRef: corev1.TypedLocalObjectReference{
+							StrategyRef: backupsv1alpha1.TypedClusterObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",
@@ -240,7 +240,7 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 			backupClassName: "velero",
 			wantErr:         false,
-			expectedStrategyRef: &corev1.TypedLocalObjectReference{
+			expectedStrategyRef: &backupsv1alpha1.TypedClusterObjectReference{
 				APIGroup: stringPtr("strategy.backups.cozystack.io"),
 				Kind:     "Velero",
 				Name:     "velero-strategy-vm",
@@ -275,7 +275,7 @@ func TestResolveBackupClass(t *testing.T) {
 				Spec: backupsv1alpha1.BackupClassSpec{
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
-							StrategyRef: corev1.TypedLocalObjectReference{
+							StrategyRef: backupsv1alpha1.TypedClusterObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",
@@ -303,7 +303,7 @@ func TestResolveBackupClass(t *testing.T) {
 				Spec: backupsv1alpha1.BackupClassSpec{
 					Strategies: []backupsv1alpha1.BackupClassStrategy{
 						{
-							StrategyRef: corev1.TypedLocalObjectReference{
+							StrategyRef: backupsv1alpha1.TypedClusterObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
 								Name:     "velero-strategy-vm",

@@ -26,7 +26,7 @@ func NormalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedL
 // ResolvedBackupConfig contains the resolved strategy and storage configuration
 // from a BackupClass.
 type ResolvedBackupConfig struct {
-	StrategyRef corev1.TypedLocalObjectReference
+	StrategyRef backupsv1alpha1.TypedClusterObjectReference
 	Parameters  map[string]string
 }
 

@@ -137,7 +137,7 @@ func TestCreateVeleroBackup_TemplateContext(t *testing.T) {
 
 	// Create ResolvedBackupConfig with parameters
 	resolved := &ResolvedBackupConfig{
-		StrategyRef: corev1.TypedLocalObjectReference{
+		StrategyRef: backupsv1alpha1.TypedClusterObjectReference{
 			APIGroup: stringPtr("strategy.backups.cozystack.io"),
 			Kind:     "Velero",
 			Name:     "velero-strategy",
