@@ -43,19 +43,6 @@ external: false
 version: v8
 
 ##
-## @section Image configuration
-##
-
-## @typedef {struct} Images - Container image configuration.
-## @field {string} pmm - PMM client image for monitoring.
-## @field {string} backup - Percona Backup for MongoDB image.
-
-## @param {Images} images - Container images used by the operator.
-images:
-  pmm: "percona/pmm-client:2.44.1"
-  backup: "percona/percona-backup-mongodb:2.11.0"
-
-##
 ## @section Sharding configuration
 ##
 

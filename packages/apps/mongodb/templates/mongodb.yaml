@@ -23,7 +23,7 @@ spec:
 
   pmm:
     enabled: false
-    image: {{ .Values.images.pmm }}
+    image: percona/pmm-client:2.44.1
     serverHost: ""
 
   sharding:
@@ -123,7 +123,7 @@ spec:
 
   backup:
     enabled: {{ .Values.backup.enabled | default false }}
-    image: {{ .Values.images.backup }}
+    image: percona/percona-backup-mongodb:2.11.0
     {{- if .Values.backup.enabled }}
     storages:
       s3-storage:
