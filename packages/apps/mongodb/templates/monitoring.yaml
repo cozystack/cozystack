@@ -1,0 +1,46 @@
+---
+# metrics-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-metrics
+  namespace: {{ .Release.Namespace}}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/name: percona-server-mongodb
+    app.kubernetes.io/part-of: percona-server-mongodb
+    app.kubernetes.io/managed-by: percona-server-mongodb-operator
+spec:
+  type: ClusterIP
+  ports:
+  - name: http-metrics
+    port: 9216
+    targetPort: 9216
+    protocol: TCP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }} 
+    app.kubernetes.io/replset: rs0
+    app.kubernetes.io/name: percona-server-mongodb
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Release.Name }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    release: prometheus-stack
+    app.kubernetes.io/component: metrics
+spec:
+  jobLabel: app.kubernetes.io/instance
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: metrics
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  endpoints:
+  - port: http-metrics
+    interval: 30s
+    path: /metrics

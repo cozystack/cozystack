@@ -101,7 +101,28 @@ spec:
       expose:
         enabled: false
     {{- end }}
-
+      sidecars:
+      - name: metrics
+        image: percona/mongodb_exporter:0.40
+        args: 
+          - --compatible-mode
+          - --collect-all
+        ports:
+        - containerPort: 9216
+          protocol: TCP
+        env:
+          - name: MONGODB_URI
+            value: "mongodb://{{ .Release.Name }}-rs0.{{ .Release.Namespace }}.svc.cozy.local:27017/admin?directConnection=true&authMechanism=SCRAM-SHA-256"
+          - name: MONGODB_USER
+            valueFrom:
+              secretKeyRef:
+                name: internal-{{ .Release.Name }}-users
+                key: MONGODB_CLUSTER_ADMIN_USER
+          - name: MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: internal-{{ .Release.Name }}-users
+                key: MONGODB_CLUSTER_ADMIN_PASSWORD
   {{- if .Values.users }}
   users:
     {{- range $username, $user := .Values.users }}
