@@ -1,78 +1,52 @@
-{{/*
-Get IP-addresses of master nodes
-*/}}
-{{- define "cozystack.master-node-ips" -}}
-{{- $nodes := lookup "v1" "Node" "" "" -}}
-{{- $ips := list -}}
-{{- range $node := $nodes.items -}}
-  {{- if eq (index $node.metadata.labels "node-role.kubernetes.io/control-plane") "" -}}
-    {{- range $address := $node.status.addresses -}}
-      {{- if eq $address.type "InternalIP" -}}
-        {{- $ips = append $ips $address.address -}}
-        {{- break -}}
-      {{- end -}}
-    {{- end -}}
-  {{- end -}}
+{{- define "cozystack.platform.package" -}}
+{{- $name := index . 0 -}}
+{{- $variant := default "default" (index . 1) -}}
+{{- $root := default $ (index . 2) -}}
+{{- $components := dict -}}
+{{- if gt (len .) 3 -}}
+{{- $components = index . 3 -}}
 {{- end -}}
-{{ join "," $ips }}
+{{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
+{{- if not (has $name $disabled) -}}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: {{ $name }}
+spec:
+  variant: {{ $variant }}
+{{- if $components }}
+  components:
+{{ toYaml $components | indent 4 }}
+{{- end }}
+{{- end -}}
 {{- end -}}
 
-{{- define "cozystack.defaultDashboardValues" -}}
-kubeapps:
-{{- if .Capabilities.APIVersions.Has "source.toolkit.fluxcd.io/v1" }}
-{{- with (lookup "source.toolkit.fluxcd.io/v1" "HelmRepository" "cozy-public" "").items }}
-  redis:
-    master:
-      podAnnotations:
-        {{- range $index, $repo := . }}
-        {{- with (($repo.status).artifact).revision }}
-        repository.cozystack.io/{{ $repo.metadata.name }}: {{ quote . }}
-        {{- end }}
-        {{- end }}
-{{- end }}
-{{- end }}
-  frontend:
-    resourcesPreset: "none"
-  dashboard:
-    resourcesPreset: "none"
-    {{- $cozystackBranding:= lookup "v1" "ConfigMap" "cozy-system" "cozystack-branding" }}
-    {{- $branding := dig "data" "branding" "" $cozystackBranding }}
-    {{- if $branding }}
-    customLocale:
-      "Kubeapps": {{ $branding }}
-    {{- end }}
-    customStyle: |
-      {{- $logoImage := dig "data" "logo" "" $cozystackBranding }}
-      {{- if $logoImage }}
-      .kubeapps-logo {
-        background-image: {{ $logoImage }}
-      }
-      {{- end }}
-      #serviceaccount-selector {
-        display: none;
-      }
-      .login-moreinfo {
-        display: none;
-      }
-      a[href="#/docs"] {
-        display: none;
-      }
-      .login-group .clr-form-control .clr-control-label {
-        display: none;
-      }
-      .appview-separator div.appview-first-row div.center {
-        display: none;
-      }
-      .appview-separator div.appview-first-row section[aria-labelledby="app-secrets"] {
-        display: none;
-      }
-      .appview-first-row section[aria-labelledby="access-urls-title"] {
-        width: 100%;
-      }
-      .header-version {
-        display: none;
-      }
-      .label.label-info-secondary {
-        display: none;
-      }
-{{- end }}
+{{- define "cozystack.platform.package.default" -}}
+{{- $name := index . 0 -}}
+{{- $root := index . 1 -}}
+{{- include "cozystack.platform.package" (list $name "default" $root) }}
+{{- end -}}
+
+{{- define "cozystack.platform.package.optional" -}}
+{{- $name := index . 0 -}}
+{{- $variant := default "default" (index . 1) -}}
+{{- $root := default $ (index . 2) -}}
+{{- $disabled := default (list) $root.Values.bundles.disabledPackages -}}
+{{- $enabled := default (list) $root.Values.bundles.enabledPackages -}}
+{{- if and (has $name $enabled) (not (has $name $disabled)) -}}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: {{ $name }}
+spec:
+  variant: {{ $variant }}
+{{- end -}}
+{{- end -}}
+
+{{- define "cozystack.platform.package.optional.default" -}}
+{{- $name := index . 0 -}}
+{{- $root := index . 1 -}}
+{{- include "cozystack.platform.package.optional" (list $name "default" $root) }}
+{{- end -}}

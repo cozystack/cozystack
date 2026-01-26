@@ -16,16 +16,21 @@ spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
       tolerations:
-      - key: "node-role.kubernetes.io/control-plane"
-        operator: "Exists"
-        effect: "NoSchedule"
-      - key: "node-role.kubernetes.io/master"
-        operator: "Exists"
-        effect: "NoSchedule"
+      - operator: Exists
       serviceAccountName: lineage-controller-webhook
       containers:
       - name: lineage-controller-webhook
         image: "{{ .Values.lineageControllerWebhook.image }}"
+        {{- if .Values.lineageControllerWebhook.localK8sAPIEndpoint.enabled }}
+        env:
+        - name: KUBERNETES_SERVICE_HOST
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: KUBERNETES_SERVICE_PORT
+          value: "6443"
+        {{- end }}
         args:
         {{- if .Values.lineageControllerWebhook.debug }}
         - --zap-log-level=debug

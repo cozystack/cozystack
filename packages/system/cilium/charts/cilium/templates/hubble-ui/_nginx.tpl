@@ -31,10 +31,11 @@ server {
         sub_filter '<base href="/"/>' '<base href="{{ .Values.hubble.ui.baseUrl }}"/>';
         {{- end }}
         location {{ .Values.hubble.ui.baseUrl }} {
+            if ($http_user_agent ~* "kube-probe") { access_log off; }
             {{- if not (eq .Values.hubble.ui.baseUrl "/") }}
             rewrite ^{{ (trimSuffix "/" .Values.hubble.ui.baseUrl) }}(/.*)$ $1 break;
             {{- end }}
-            # double `/index.html` is required here 
+            # double `/index.html` is required here
             try_files $uri $uri/ /index.html /index.html;
         }
 

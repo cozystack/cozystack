@@ -1,0 +1,109 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cozystack-engine
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+    components:
+    - name: application-definition-crd
+      path: system/application-definition-crd
+      install:
+        namespace: cozy-system
+        releaseName: application-definition-crd
+    - name: cozystack-controller
+      path: system/cozystack-controller
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-controller
+        dependsOn:
+        - application-definition-crd
+    - name: cozystack-api
+      path: system/cozystack-api
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-api
+        dependsOn:
+        - cozystack-controller
+        - application-definition-crd
+    - name: lineage-controller-webhook
+      path: system/lineage-controller-webhook
+      install:
+        namespace: cozy-system
+        releaseName: lineage-controller-webhook
+        dependsOn:
+        - cozystack-controller
+        - application-definition-crd
+    - name: dashboard
+      path: system/dashboard
+      install:
+        namespace: cozy-dashboard
+        releaseName: dashboard
+        dependsOn:
+        - cozystack-api
+        - cozystack-controller
+        - application-definition-crd
+  - name: oidc
+    dependsOn:
+    - cozystack.networking
+    - cozystack.keycloak
+    - cozystack.keycloak-operator
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+    components:
+    - name: application-definition-crd
+      path: system/application-definition-crd
+      install:
+        namespace: cozy-system
+        releaseName: application-definition-crd
+    - name: cozystack-controller
+      path: system/cozystack-controller
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-controller
+        dependsOn:
+        - application-definition-crd
+    - name: cozystack-api
+      path: system/cozystack-api
+      install:
+        namespace: cozy-system
+        releaseName: cozystack-api
+        dependsOn:
+        - cozystack-controller
+        - application-definition-crd
+    - name: lineage-controller-webhook
+      path: system/lineage-controller-webhook
+      install:
+        namespace: cozy-system
+        releaseName: lineage-controller-webhook
+        dependsOn:
+        - cozystack-controller
+        - application-definition-crd
+    - name: dashboard
+      path: system/dashboard
+      install:
+        namespace: cozy-dashboard
+        releaseName: dashboard
+        dependsOn:
+        - cozystack-api
+        - cozystack-controller
+        - keycloak-configure
+        - application-definition-crd
+    - name: keycloak-configure
+      path: system/keycloak-configure
+      install:
+        namespace: cozy-keycloak
+        releaseName: keycloak-configure
+        dependsOn: []

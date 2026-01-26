@@ -1,44 +1,50 @@
+##
 ## @section Common parameters
 ##
-## @param replicas {int} Number of HAProxy replicas
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each TCP Balancer replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of HAProxy replicas.
 replicas: 2
-## @param resources {*resources} Explicit CPU and memory configuration for each TCP Balancer replica.  When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each replica
-## @field resources.memory {*quantity} Memory (RAM) available to each replica
-#resources: {}
-# resources:
-#   cpu: 4000m
-#   memory: 4Gi
-## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each TCP Balancer replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="nano" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "nano"
-##
-## @param external {bool} Enable external access from outside the cluster
+
+## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
-
+##
 ## @section Application-specific parameters
 ##
-## @param httpAndHttps {httpAndHttps} HTTP and HTTPS configuration
-## @field httpAndHttps.mode {string enum:"tcp,tcp-with-proxy"} Mode for balancer. Allowed values: `tcp` and `tcp-with-proxy`
-## @field httpAndHttps.targetPorts {targetPorts} Target ports configuration
-## @field targetPorts.http {int} HTTP port number.
-## @field targetPorts.https {int} HTTPS port number.
-## @field httpAndHttps.endpoints {[]string} Endpoint addresses list
-## Example:
-##
-## httpAndHttps:
-##   mode: tcp
-##   targetPorts:
-##     http: 80
-##     https: 443
-##   endpoints:
-##    - 10.100.3.1
-##    - 10.100.3.11
-##    - 10.100.3.2
-##    - 10.100.3.12
-##    - 10.100.3.3
-##    - 10.100.3.13
 
+## @enum {string} Mode - Mode for balancer.
+## @value tcp
+## @value tcp-with-proxy
+
+## @typedef {struct} TargetPorts - Target ports configuration.
+## @field {int} http - HTTP port number.
+## @field {int} https - HTTPS port number.
+
+## @typedef {struct} HttpAndHttps - HTTP and HTTPS configuration.
+## @field {Mode} mode - Mode for balancer.
+## @field {TargetPorts} targetPorts - Target ports configuration.
+## @field {[]string} endpoints - Endpoint addresses list.
+
+## @param {HttpAndHttps} httpAndHttps - HTTP and HTTPS configuration.
 httpAndHttps:
   mode: tcp
   targetPorts:
@@ -46,14 +52,14 @@ httpAndHttps:
     https: 443
   endpoints: []
 
-## @param whitelistHTTP {bool} Secure HTTP by whitelisting client networks, `false` by default.
-## @param whitelist {[]string} List of allowed client networks
+## @param {bool} whitelistHTTP - Secure HTTP by whitelisting client networks (default: false).
+whitelistHTTP: false
 ## Example:
 ## whitelistHTTP: true
 ## whitelist:
 ## - "1.2.3.4"
 ## - "10.100.0.0/16"
 ##
-whitelistHTTP: false
-whitelist: []
 
+## @param {[]string} whitelist - List of allowed client networks.
+whitelist: []

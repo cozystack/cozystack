@@ -34,23 +34,19 @@
 {{- end }}
 
 {{- if not (eq .Values.topology "Client") }}
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
+{{- $ingress := .Values._namespace.ingress }}
+{{- $host := .Values._namespace.host }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
 spec:
-  chart:
-    spec:
-      chart: cozy-seaweedfs
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-seaweedfs-application-default-seaweedfs-system
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:
@@ -60,6 +56,9 @@ spec:
     force: true
     remediation:
       retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
   values:
     global:
       serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"

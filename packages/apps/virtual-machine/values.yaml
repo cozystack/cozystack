@@ -1,76 +1,98 @@
-
+##
 ## @section Common parameters
 ##
-## @param external {bool} Enable external access from outside the cluster
+
+## @enum {string} ExternalMethod - Method to pass through traffic to the VM.
+## @value PortList - Forward selected ports only.
+## @value WholeIP - Forward all traffic for the IP.
+
+## @enum {string} SystemImage - The base image for the virtual machine.
+## @value ubuntu
+## @value cirros
+## @value alpine
+## @value fedora
+## @value talos
+
+## @typedef {struct} SystemDisk - System disk configuration.
+## @field {SystemImage} image - The base image for the virtual machine.
+## @field {string} storage - The size of the disk allocated for the virtual machine.
+## @field {string} [storageClass] - StorageClass used to store the data.
+
+## @typedef {struct} Subnet - Additional subnets
+## @field {string} [name] - Subnet name
+
+## @typedef {struct} GPU - GPU device configuration.
+## @field {string} name - The name of the GPU resource to attach.
+
+## @typedef {struct} Resources - Resource configuration for the virtual machine.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [sockets] - Number of CPU sockets (vCPU topology).
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @param {bool} external - Enable external access from outside the cluster.
 external: false
-## @param externalMethod {string enum:"PortList,WholeIP"} Specify method to pass through the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`
+
+## @param {ExternalMethod} externalMethod - Method to pass through traffic to the VM.
 externalMethod: "PortList"
-## @param externalPorts {[]int} Specify ports to forward from outside the cluster
+
+## @param {[]int} externalPorts - Ports to forward from outside the cluster.
 externalPorts:
   - 22
 
-## @param running {bool} if the virtual machine should be running
+## @param {bool} running - Whether the virtual machine should be running.
 running: true
 
-## @param instanceType {string} Virtual Machine instance type
-## @param instanceProfile {string} Virtual Machine preferences profile
-##
+## @param {string} instanceType - Virtual Machine instance type.
+## @param {string} instanceProfile - Virtual Machine preferences profile.
 instanceType: "u1.medium"
 instanceProfile: ubuntu
 
-## @param systemDisk {systemDisk} System disk configuration
-## @field systemDisk.image {string enum:"ubuntu,cirros,alpine,fedora,talos"} The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos`
-## @field systemDisk.storage {string} The size of the disk allocated for the virtual machine
-## @field systemDisk.storageClass {*string} StorageClass used to store the data
-##
+## @param {SystemDisk} systemDisk - System disk configuration.
 systemDisk:
   image: ubuntu
   storage: 5Gi
   storageClass: replicated
 
-## @param gpus {[]gpu} List of GPUs to attach
-## @field gpu.name {string} The name of the GPU to attach. This should match the GPU resource name in the cluster.
+## @param {[]Subnet} subnets - Additional subnets
+subnets: []
+## Example:
+## subnets:
+##   - name: subnet-84dbec17
+##   - name: subnet-aa8896b5
+##   - name: subnet-e9b97196
+
+## @param {[]GPU} gpus - List of GPUs to attach.
+gpus: []
 ## Example:
 ## gpus:
 ## - name: nvidia.com/GA102GL_A10
-gpus: []
 
-
-## @param resources {*resources} Resources
-## @field resources.cpu {*quantity} The number of CPU cores allocated to the virtual machine
-## @field resources.sockets {*quantity} The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)
-## @field resources.memory {*quantity} The amount of memory allocated to the virtual machine
+## @param {Resources} [resources] - Resource configuration for the virtual machine.
+resources: {}
 ## Example:
 ## resources:
 ##   cpu: "4"
 ##   sockets: "1"
 ##   memory: "8Gi"
-resources: {}
 
-## @param sshKeys {[]string} List of SSH public keys for authentication. Can be a single key or a list of keys.
+## @param {[]string} sshKeys - List of SSH public keys for authentication.
+sshKeys: []
 ## Example:
 ## sshKeys:
 ##   - ssh-rsa ...
 ##   - ssh-ed25519 ...
 ##
-sshKeys: []
 
-## @param cloudInit {string} Cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/reference/examples.html).
-## - https://cloudinit.readthedocs.io/en/latest/explanation/format.html
-## - https://cloudinit.readthedocs.io/en/latest/reference/examples.html
+## @param {string} cloudInit - Cloud-init user data.
+cloudInit: ""
 ## Example:
 ## cloudInit: |
 ##   #cloud-config
 ##   password: ubuntu
 ##   chpasswd: { expire: False }
 ##
-cloudInit: ""
 
-## @param cloudInitSeed {string} A seed string to generate an SMBIOS UUID for the VM.
-## Change it to any new value to force a full cloud-init reconfiguration. Change it when you want to apply
-## to an existing VM settings that are usually written only once, like new SSH keys or new network configuration.
-## An empty value does nothing (and the existing UUID is not reverted). Please note that changing this value
-## does not trigger a VM restart. You must perform the restart separately.
+## @param {string} cloudInitSeed - Seed string to generate SMBIOS UUID for the VM.
+cloudInitSeed: ""
 ## Example:
 ## cloudInitSeed: "upd1"
-cloudInitSeed: ""

@@ -1,0 +1,20 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "subnets": {
+      "description": "Subnets of a VPC",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "cidr": {
+            "description": "IP address range",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

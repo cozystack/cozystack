@@ -1,46 +1,63 @@
-{{- define "cozystack.namespace-anotations" }}
-{{- $context := index . 0 }}
-{{- $existingNS := index . 1 }}
-{{- range $x := list "etcd" "monitoring" "ingress" "seaweedfs" }}
-{{- if (index $context.Values $x) }}
-namespace.cozystack.io/{{ $x }}: "{{ include "tenant.name" $context }}"
-{{- else }}
-namespace.cozystack.io/{{ $x }}: "{{ index $existingNS.metadata.annotations (printf "namespace.cozystack.io/%s" $x) | required (printf "namespace %s has no namespace.cozystack.io/%s annotation" $context.Release.Namespace $x) }}"
-{{- end }}
-{{- end }}
-{{- end }}
-
+{{/* Lookup for namespace uid (needed for ownerReferences) */}}
 {{- $existingNS := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if not $existingNS }}
 {{- fail (printf "error lookup existing namespace: %s" .Release.Namespace) }}
 {{- end }}
 
 {{- if ne (include "tenant.name" .) "tenant-root" }}
+{{/* Compute namespace values once for use in both Secret and labels */}}
+{{- $tenantName := include "tenant.name" . }}
+{{- $parentNamespace := .Values._namespace | default dict }}
+{{- $parentHost := $parentNamespace.host | default "" }}
+
+{{/* Compute host */}}
+{{- $computedHost := "" }}
+{{- if .Values.host }}
+{{- $computedHost = .Values.host }}
+{{- else if $parentHost }}
+{{- $computedHost = printf "%s.%s" (splitList "-" $tenantName | last) $parentHost }}
+{{- end }}
+
+{{/* Compute service references */}}
+{{- $etcd := $parentNamespace.etcd | default "" }}
+{{- if .Values.etcd }}
+{{- $etcd = $tenantName }}
+{{- end }}
+
+{{- $ingress := $parentNamespace.ingress | default "" }}
+{{- if .Values.ingress }}
+{{- $ingress = $tenantName }}
+{{- end }}
+
+{{- $monitoring := $parentNamespace.monitoring | default "" }}
+{{- if .Values.monitoring }}
+{{- $monitoring = $tenantName }}
+{{- end }}
+
+{{- $seaweedfs := $parentNamespace.seaweedfs | default "" }}
+{{- if .Values.seaweedfs }}
+{{- $seaweedfs = $tenantName }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ include "tenant.name" . }}
+  name: {{ $tenantName }}
   {{- if hasPrefix "tenant-" .Release.Namespace }}
-  annotations:
-    {{- if .Values.host }}
-    namespace.cozystack.io/host: "{{ .Values.host }}"
-    {{- else }}
-    {{ $parentHost := index $existingNS.metadata.annotations "namespace.cozystack.io/host" | required (printf "namespace %s has no namespace.cozystack.io/host annotation" .Release.Namespace) }}
-    namespace.cozystack.io/host: "{{ splitList "-" (include "tenant.name" .) | last }}.{{ $parentHost }}"
-    {{- end }}
-    {{- include "cozystack.namespace-anotations" (list . $existingNS) | nindent 4 }}
   labels:
-    tenant.cozystack.io/{{ include "tenant.name" $ }}: ""
-    {{- if hasPrefix "tenant-" .Release.Namespace }}
+    tenant.cozystack.io/{{ $tenantName }}: ""
     {{- $parts := splitList "-" .Release.Namespace }}
     {{- range $i, $v := $parts }}
     {{- if ne $i 0 }}
     tenant.cozystack.io/{{ join "-" (slice $parts 0 (add $i 1)) }}: ""
     {{- end }}
     {{- end }}
-    {{- end }}
-    {{- include "cozystack.namespace-anotations" (list $ $existingNS) | nindent 4 }}
+    {{/* Labels for network policies */}}
+    namespace.cozystack.io/etcd: {{ $etcd | quote }}
+    namespace.cozystack.io/ingress: {{ $ingress | quote }}
+    namespace.cozystack.io/monitoring: {{ $monitoring | quote }}
+    namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
+    namespace.cozystack.io/host: {{ $computedHost | quote }}
     alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
   ownerReferences:
   - apiVersion: v1
@@ -50,4 +67,23 @@ metadata:
     name: {{ .Release.Namespace }}
     uid: {{ $existingNS.metadata.uid }}
   {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cozystack-values
+  namespace: {{ $tenantName }}
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
+type: Opaque
+stringData:
+  values.yaml: |
+    _cluster:
+      {{- .Values._cluster | toYaml | nindent 6 }}
+    _namespace:
+      etcd: {{ $etcd | quote }}
+      ingress: {{ $ingress | quote }}
+      monitoring: {{ $monitoring | quote }}
+      seaweedfs: {{ $seaweedfs | quote }}
+      host: {{ $computedHost | quote }}
 {{- end }}

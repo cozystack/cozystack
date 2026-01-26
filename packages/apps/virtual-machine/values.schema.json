@@ -3,20 +3,22 @@
   "type": "object",
   "properties": {
     "cloudInit": {
-      "description": "Cloud-init user data config. See cloud-init documentation for more details: [format](https://cloudinit.readthedocs.io/en/latest/explanation/format.html), [examples](https://cloudinit.readthedocs.io/en/latest/reference/examples.html).",
-      "type": "string"
+      "description": "Cloud-init user data.",
+      "type": "string",
+      "default": ""
     },
     "cloudInitSeed": {
-      "description": "A seed string to generate an SMBIOS UUID for the VM.",
-      "type": "string"
+      "description": "Seed string to generate SMBIOS UUID for the VM.",
+      "type": "string",
+      "default": ""
     },
     "external": {
-      "description": "Enable external access from outside the cluster",
+      "description": "Enable external access from outside the cluster.",
       "type": "boolean",
       "default": false
     },
     "externalMethod": {
-      "description": "Specify method to pass through the traffic to the virtual machine. Allowed values: `WholeIP` and `PortList`",
+      "description": "Method to pass through traffic to the VM.",
       "type": "string",
       "default": "PortList",
       "enum": [
@@ -25,7 +27,7 @@
       ]
     },
     "externalPorts": {
-      "description": "Specify ports to forward from outside the cluster",
+      "description": "Ports to forward from outside the cluster.",
       "type": "array",
       "default": [
         22
@@ -35,7 +37,7 @@
       }
     },
     "gpus": {
-      "description": "List of GPUs to attach",
+      "description": "List of GPUs to attach.",
       "type": "array",
       "default": [],
       "items": {
@@ -45,14 +47,14 @@
         ],
         "properties": {
           "name": {
-            "description": "The name of the GPU to attach. This should match the GPU resource name in the cluster.",
+            "description": "The name of the GPU resource to attach.",
             "type": "string"
           }
         }
       }
     },
     "instanceProfile": {
-      "description": "Virtual Machine preferences profile",
+      "description": "Virtual Machine preferences profile.",
       "type": "string",
       "default": "ubuntu",
       "enum": [
@@ -102,17 +104,17 @@
       ]
     },
     "instanceType": {
-      "description": "Virtual Machine instance type",
+      "description": "Virtual Machine instance type.",
       "type": "string",
       "default": "u1.medium"
     },
     "resources": {
-      "description": "Resources",
+      "description": "Resource configuration for the virtual machine.",
       "type": "object",
       "default": {},
       "properties": {
         "cpu": {
-          "description": "The number of CPU cores allocated to the virtual machine",
+          "description": "Number of CPU cores allocated.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -125,7 +127,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "The amount of memory allocated to the virtual machine",
+          "description": "Amount of memory allocated.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -138,7 +140,7 @@
           "x-kubernetes-int-or-string": true
         },
         "sockets": {
-          "description": "The number of CPU sockets allocated to the virtual machine (used to define vCPU topology)",
+          "description": "Number of CPU sockets (vCPU topology).",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -153,20 +155,34 @@
       }
     },
     "running": {
-      "description": "if the virtual machine should be running",
+      "description": "Whether the virtual machine should be running.",
       "type": "boolean",
       "default": true
     },
     "sshKeys": {
-      "description": "List of SSH public keys for authentication. Can be a single key or a list of keys.",
+      "description": "List of SSH public keys for authentication.",
       "type": "array",
       "default": [],
       "items": {
         "type": "string"
       }
     },
+    "subnets": {
+      "description": "Additional subnets",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Subnet name",
+            "type": "string"
+          }
+        }
+      }
+    },
     "systemDisk": {
-      "description": "System disk configuration",
+      "description": "System disk configuration.",
       "type": "object",
       "default": {},
       "required": [
@@ -175,7 +191,7 @@
       ],
       "properties": {
         "image": {
-          "description": "The base image for the virtual machine. Allowed values: `ubuntu`, `cirros`, `alpine`, `fedora` and `talos`",
+          "description": "The base image for the virtual machine.",
           "type": "string",
           "default": "ubuntu",
           "enum": [
@@ -187,12 +203,12 @@
           ]
         },
         "storage": {
-          "description": "The size of the disk allocated for the virtual machine",
+          "description": "The size of the disk allocated for the virtual machine.",
           "type": "string",
           "default": "5Gi"
         },
         "storageClass": {
-          "description": "StorageClass used to store the data",
+          "description": "StorageClass used to store the data.",
           "type": "string",
           "default": "replicated"
         }

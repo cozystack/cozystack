@@ -1,0 +1,48 @@
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java b/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java
+index 36c52ccf8..c0bb7b967 100644
+--- a/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java
+@@ -894,12 +894,16 @@ public class ConfFileBuilder
+         if (((Volume) vlmData.getVolume()).getFlags().isUnset(localAccCtx, Volume.Flags.DELETE))
+         {
+             final String disk;
++            // Check if we're in toggle-disk operation (adding disk to diskless resource)
++            boolean isDiskAdding = vlmData.getVolume().getAbsResource().getStateFlags().isSomeSet(
++                localAccCtx, Resource.Flags.DISK_ADD_REQUESTED, Resource.Flags.DISK_ADDING);
+             if ((!isPeerRsc && vlmData.getDataDevice() == null) ||
+                 (isPeerRsc &&
+                 // FIXME: vlmData.getRscLayerObject().getFlags should be used here
+                      vlmData.getVolume().getAbsResource().disklessForDrbdPeers(accCtx)
+                 ) ||
+-                (!isPeerRsc &&
++                // For toggle-disk: if dataDevice is set and we're adding disk, use the actual device
++                (!isPeerRsc && !isDiskAdding &&
+                 // FIXME: vlmData.getRscLayerObject().getFlags should be used here
+                      vlmData.getVolume().getAbsResource().isDrbdDiskless(accCtx)
+                 )
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/luks/CryptSetupCommands.java b/satellite/src/main/java/com/linbit/linstor/layer/luks/CryptSetupCommands.java
+index 54dd5c19f..018de58cf 100644
+--- a/satellite/src/main/java/com/linbit/linstor/layer/luks/CryptSetupCommands.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/luks/CryptSetupCommands.java
+@@ -34,6 +34,9 @@ public class CryptSetupCommands implements Luks
+     private static final Version V2_1_0 = new Version(2, 1, 0);
+     private static final Version V2_0_0 = new Version(2, 0, 0);
+     private static final String PBDKF_MAX_MEMORY_KIB = "262144";  // 256 MiB
++    // Fixed LUKS2 data offset in 512-byte sectors (16 MiB = 32768 sectors)
++    // This ensures consistent LUKS header size across all nodes regardless of system defaults
++    private static final String LUKS2_DATA_OFFSET_SECTORS = "32768";
+
+     @SuppressWarnings("unused")
+     private final ErrorReporter errorReporter;
+@@ -78,6 +81,11 @@ public class CryptSetupCommands implements Luks
+             command.add(CRYPTSETUP);
+             command.add("-q");
+             command.add("luksFormat");
++            // Always specify explicit offset to ensure consistent LUKS header size across all nodes
++            // Without this, different systems may create LUKS with different header sizes (16MiB vs 32MiB)
++            // which causes "Low.dev. smaller than requested DRBD-dev. size" errors during toggle-disk
++            command.add("--offset");
++            command.add(LUKS2_DATA_OFFSET_SECTORS);
+             if (version.greaterOrEqual(V2_0_0))
+             {
+                 command.add("--pbkdf-memory");

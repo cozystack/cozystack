@@ -1,0 +1,15 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Subnet - Subnet of a VPC
+## @field {string} [cidr] - IP address range
+
+## @param {map[string]Subnet} subnets - Subnets of a VPC
+subnets: {}
+## Example:
+## subnets:
+##   mysubnet0:
+##     cidr: "172.16.0.0/24"
+##   mysubnet1:
+##     cidr: "172.16.1.0/24"

@@ -2,7 +2,7 @@ name: Automatic Backport
 
 on:
   pull_request_target:
-    types: [closed]   # fires when PR is closed (merged)
+    types: [closed, labeled]   # fires when PR is closed (merged) or labeled
 
 concurrency:
   group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -13,22 +13,46 @@ permissions:
   pull-requests: write
 
 jobs:
-  backport:
+  # Determine which backports are needed
+  prepare:
     if: |
       github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'backport')
+      (
+        contains(github.event.pull_request.labels.*.name, 'backport') ||
+        contains(github.event.pull_request.labels.*.name, 'backport-previous') ||
+        (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous'))
+      )
     runs-on: [self-hosted]
-
+    outputs:
+      backport_current: ${{ steps.labels.outputs.backport }}
+      backport_previous: ${{ steps.labels.outputs.backport_previous }}
+      current_branch: ${{ steps.branches.outputs.current_branch }}
+      previous_branch: ${{ steps.branches.outputs.previous_branch }}
     steps:
-      # 1. Decide which maintenance branch should receive the back‑port
-      - name: Determine target maintenance branch
-        id: target
+      - name: Check which labels are present
+        id: labels
         uses: actions/github-script@v7
         with:
           script: |
-            let rel;
+            const pr = context.payload.pull_request;
+            const labels = pr.labels.map(l => l.name);
+            const isBackport = labels.includes('backport');
+            const isBackportPrevious = labels.includes('backport-previous');
+            
+            core.setOutput('backport', isBackport ? 'true' : 'false');
+            core.setOutput('backport_previous', isBackportPrevious ? 'true' : 'false');
+            
+            console.log(`backport label: ${isBackport}, backport-previous label: ${isBackportPrevious}`);
+      
+      - name: Determine target branches
+        id: branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Get latest release
+            let latestRelease;
             try {
-              rel = await github.rest.repos.getLatestRelease({
+              latestRelease = await github.rest.repos.getLatestRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo
               });
@@ -36,18 +60,70 @@ jobs:
               core.setFailed('No existing releases found; cannot determine backport target.');
               return;
             }
-            const [maj, min] = rel.data.tag_name.replace(/^v/, '').split('.');
-            const branch = `release-${maj}.${min}`;
-            core.setOutput('branch', branch);
-            console.log(`Latest release ${rel.data.tag_name}; backporting to ${branch}`);
+            
+            const [maj, min] = latestRelease.data.tag_name.replace(/^v/, '').split('.');
+            const currentBranch = `release-${maj}.${min}`;
+            const prevMin = parseInt(min) - 1;
+            const previousBranch = prevMin >= 0 ? `release-${maj}.${prevMin}` : '';
+            
+            core.setOutput('current_branch', currentBranch);
+            core.setOutput('previous_branch', previousBranch);
+            
+            console.log(`Current branch: ${currentBranch}, Previous branch: ${previousBranch || 'N/A'}`);
+            
+            // Verify previous branch exists if we need it
+            if (previousBranch && '${{ steps.labels.outputs.backport_previous }}' === 'true') {
+              try {
+                await github.rest.repos.getBranch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  branch: previousBranch
+                });
+                console.log(`Previous branch ${previousBranch} exists`);
+              } catch (e) {
+                core.setFailed(`Previous branch ${previousBranch} does not exist.`);
+                return;
+              }
+            }
+
+  backport:
+    needs: prepare
+    if: |
+      github.event.pull_request.merged == true &&
+      (needs.prepare.outputs.backport_current == 'true' || needs.prepare.outputs.backport_previous == 'true')
+    runs-on: [self-hosted]
+    strategy:
+      matrix:
+        backport_type: [current, previous]
+    steps:
+      # 1. Determine target branch based on matrix
+      - name: Set target branch
+        id: target
+        if: |
+          (matrix.backport_type == 'current' && needs.prepare.outputs.backport_current == 'true') ||
+          (matrix.backport_type == 'previous' && needs.prepare.outputs.backport_previous == 'true')
+        run: |
+          if [ "${{ matrix.backport_type }}" == "current" ]; then
+            echo "branch=${{ needs.prepare.outputs.current_branch }}" >> $GITHUB_OUTPUT
+            echo "Target branch: ${{ needs.prepare.outputs.current_branch }}"
+          else
+            echo "branch=${{ needs.prepare.outputs.previous_branch }}" >> $GITHUB_OUTPUT
+            echo "Target branch: ${{ needs.prepare.outputs.previous_branch }}"
+          fi
+      
       # 2. Checkout (required by backport‑action)
       - name: Checkout repository
+        if: steps.target.outcome == 'success'
         uses: actions/checkout@v4
 
       # 3. Create the back‑port pull request
       - name: Create back‑port PR
-        uses: korthout/backport-action@v3
+        id: backport
+        if: steps.target.outcome == 'success'
+        uses: korthout/backport-action@v3.2.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           label_pattern: '' # don't read labels for targets
           target_branches: ${{ steps.target.outputs.branch }}
+          merge_commits: skip
+          conflict_resolution: draft_commit_conflicts

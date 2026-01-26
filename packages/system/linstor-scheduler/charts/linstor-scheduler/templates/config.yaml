@@ -1,0 +1,46 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "linstor-scheduler.fullname" . }}
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+data:
+{{- if semverCompare ">= 1.22-0" (include "linstor-scheduler.kubeVersion" .) }}
+  scheduler-config.yaml: |-
+{{- if semverCompare ">= 1.25-0" (include "linstor-scheduler.kubeVersion" .) }}
+      apiVersion: kubescheduler.config.k8s.io/v1
+{{- else if semverCompare ">= 1.23-0" (include "linstor-scheduler.kubeVersion" .) }}
+      apiVersion: kubescheduler.config.k8s.io/v1beta3
+{{- else }}
+      apiVersion: kubescheduler.config.k8s.io/v1beta2
+{{- end }}
+      kind: KubeSchedulerConfiguration
+      profiles:
+        - schedulerName: {{ include "linstor-scheduler.fullname" . }}
+      extenders:
+        - urlPrefix: http://localhost:8099
+          filterVerb: filter
+          prioritizeVerb: prioritize
+          weight: 5
+          enableHTTPS: false
+          httpTimeout: 10s
+          nodeCacheCapable: false
+{{- else }}
+  policy.cfg: |-
+    {
+      "kind": "Policy",
+      "apiVersion": "v1",
+      "extenders": [
+        {
+          "urlPrefix": "http://localhost:8099",
+          "apiVersion": "v1beta1",
+          "filterVerb": "filter",
+          "prioritizeVerb": "prioritize",
+          "weight": 5,
+          "enableHttps": false,
+          "nodeCacheCapable": false
+        }
+      ]
+    }
+{{- end }}

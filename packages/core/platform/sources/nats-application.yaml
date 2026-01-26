@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.nats-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: nats-system
+          path: system/nats
+        - name: nats
+          path: apps/nats
+          libraries: ["cozy-lib"]
+        - name: nats-rd
+          path: system/nats-rd
+          install:
+            namespace: cozy-system
+            releaseName: nats-rd

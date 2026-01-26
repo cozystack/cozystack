@@ -8,7 +8,7 @@ spec:
     name: {{ .Release.Name }}-credentials
     key: root
 
-  image: "mariadb:11.0.2"
+  image: "mariadb:{{ include "mysql.versionMap" $ }}"
 
   port: 3306
 
@@ -36,6 +36,10 @@ spec:
     #  podIndex: 0
     #  automaticFailover: true
   {{- end }}
+
+  podMetadata:
+    labels:
+      "policy.cozystack.io/allow-to-apiserver": "true"
 
   metrics:
     enabled: true

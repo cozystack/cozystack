@@ -16,4 +16,4 @@ maintainers:
   name: mmontes11
 name: mariadb-operator-crds
 type: application
-version: 0.38.1
+version: 25.10.2

@@ -148,48 +148,48 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 
 ### Common parameters
 
-| Name                                       | Description                                                                                                                                | Type        | Value                    |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------- | ------------------------ |
-| `cluster`                                  | Cluster configuration                                                                                                                      | `object`    | `{}`                     |
-| `cluster.processCounts`                    | Process counts for different roles                                                                                                         | `object`    | `{}`                     |
-| `cluster.processCounts.stateless`          | Number of stateless processes (-1 for automatic)                                                                                           | `int`       | `-1`                     |
-| `cluster.processCounts.storage`            | Number of storage processes (determines cluster size)                                                                                      | `int`       | `3`                      |
-| `cluster.processCounts.cluster_controller` | Number of cluster controller processes                                                                                                     | `int`       | `1`                      |
-| `cluster.version`                          | Version of FoundationDB to use                                                                                                             | `string`    | `7.3.63`                 |
-| `cluster.redundancyMode`                   | Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback)                                             | `string`    | `double`                 |
-| `cluster.storageEngine`                    | Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory)                                                                             | `string`    | `ssd-2`                  |
-| `cluster.faultDomain`                      | Fault domain configuration                                                                                                                 | `object`    | `{}`                     |
-| `cluster.faultDomain.key`                  | Fault domain key                                                                                                                           | `string`    | `kubernetes.io/hostname` |
-| `cluster.faultDomain.valueFrom`            | Fault domain value source                                                                                                                  | `string`    | `spec.nodeName`          |
-| `storage`                                  | Storage configuration                                                                                                                      | `object`    | `{}`                     |
-| `storage.size`                             | Size of persistent volumes for each instance                                                                                               | `quantity`  | `16Gi`                   |
-| `storage.storageClass`                     | Storage class (if not set, uses cluster default)                                                                                           | `string`    | `""`                     |
-| `resources`                                | Explicit CPU and memory configuration for each FoundationDB instance. When left empty, the preset defined in `resourcesPreset` is applied. | `*object`   | `null`                   |
-| `resources.cpu`                            | CPU available to each instance                                                                                                             | `*quantity` | `null`                   |
-| `resources.memory`                         | Memory (RAM) available to each instance                                                                                                    | `*quantity` | `null`                   |
-| `resourcesPreset`                          | Default sizing preset used when `resources` is omitted. Allowed values: `small`, `medium`, `large`, `xlarge`, `2xlarge`.                   | `string`    | `medium`                 |
-| `backup`                                   | Backup configuration                                                                                                                       | `object`    | `{}`                     |
-| `backup.enabled`                           | Enable backups                                                                                                                             | `bool`      | `false`                  |
-| `backup.s3`                                | S3 configuration for backups                                                                                                               | `object`    | `{}`                     |
-| `backup.s3.bucket`                         | S3 bucket name                                                                                                                             | `string`    | `""`                     |
-| `backup.s3.endpoint`                       | S3 endpoint URL                                                                                                                            | `string`    | `""`                     |
-| `backup.s3.region`                         | S3 region                                                                                                                                  | `string`    | `us-east-1`              |
-| `backup.s3.credentials`                    | S3 credentials                                                                                                                             | `object`    | `{}`                     |
-| `backup.s3.credentials.accessKeyId`        | S3 access key ID                                                                                                                           | `string`    | `""`                     |
-| `backup.s3.credentials.secretAccessKey`    | S3 secret access key                                                                                                                       | `string`    | `""`                     |
-| `backup.retentionPolicy`                   | Retention policy for backups                                                                                                               | `string`    | `7d`                     |
-| `monitoring`                               | Monitoring configuration                                                                                                                   | `object`    | `{}`                     |
-| `monitoring.enabled`                       | Enable WorkloadMonitor integration                                                                                                         | `bool`      | `true`                   |
+| Name                                       | Description                                                                                                                             | Type       | Value                    |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------ |
+| `cluster`                                  | Cluster configuration.                                                                                                                  | `object`   | `{}`                     |
+| `cluster.processCounts`                    | Process counts for different roles.                                                                                                     | `object`   | `{}`                     |
+| `cluster.processCounts.stateless`          | Number of stateless processes (-1 for automatic).                                                                                       | `int`      | `-1`                     |
+| `cluster.processCounts.storage`            | Number of storage processes (determines cluster size).                                                                                  | `int`      | `3`                      |
+| `cluster.processCounts.cluster_controller` | Number of cluster controller processes.                                                                                                 | `int`      | `1`                      |
+| `cluster.version`                          | Version of FoundationDB to use.                                                                                                         | `string`   | `7.3.63`                 |
+| `cluster.redundancyMode`                   | Database redundancy mode (single, double, triple, three_datacenter, three_datacenter_fallback).                                         | `string`   | `double`                 |
+| `cluster.storageEngine`                    | Storage engine (ssd-2, ssd-redwood-v1, ssd-rocksdb-v1, memory).                                                                         | `string`   | `ssd-2`                  |
+| `cluster.faultDomain`                      | Fault domain configuration.                                                                                                             | `object`   | `{}`                     |
+| `cluster.faultDomain.key`                  | Fault domain key.                                                                                                                       | `string`   | `kubernetes.io/hostname` |
+| `cluster.faultDomain.valueFrom`            | Fault domain value source.                                                                                                              | `string`   | `spec.nodeName`          |
+| `storage`                                  | Storage configuration.                                                                                                                  | `object`   | `{}`                     |
+| `storage.size`                             | Size of persistent volumes for each instance.                                                                                           | `quantity` | `16Gi`                   |
+| `storage.storageClass`                     | Storage class (if not set, uses cluster default).                                                                                       | `string`   | `""`                     |
+| `resources`                                | Explicit CPU and memory configuration for each FoundationDB instance. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`                     |
+| `resources.cpu`                            | CPU available to each instance.                                                                                                         | `quantity` | `""`                     |
+| `resources.memory`                         | Memory (RAM) available to each instance.                                                                                                | `quantity` | `""`                     |
+| `resourcesPreset`                          | Default sizing preset used when `resources` is omitted.                                                                                 | `string`   | `medium`                 |
+| `backup`                                   | Backup configuration.                                                                                                                   | `object`   | `{}`                     |
+| `backup.enabled`                           | Enable backups.                                                                                                                         | `bool`     | `false`                  |
+| `backup.s3`                                | S3 configuration for backups.                                                                                                           | `object`   | `{}`                     |
+| `backup.s3.bucket`                         | S3 bucket name.                                                                                                                         | `string`   | `""`                     |
+| `backup.s3.endpoint`                       | S3 endpoint URL.                                                                                                                        | `string`   | `""`                     |
+| `backup.s3.region`                         | S3 region.                                                                                                                              | `string`   | `us-east-1`              |
+| `backup.s3.credentials`                    | S3 credentials.                                                                                                                         | `object`   | `{}`                     |
+| `backup.s3.credentials.accessKeyId`        | S3 access key ID.                                                                                                                       | `string`   | `""`                     |
+| `backup.s3.credentials.secretAccessKey`    | S3 secret access key.                                                                                                                   | `string`   | `""`                     |
+| `backup.retentionPolicy`                   | Retention policy for backups.                                                                                                           | `string`   | `7d`                     |
+| `monitoring`                               | Monitoring configuration.                                                                                                               | `object`   | `{}`                     |
+| `monitoring.enabled`                       | Enable WorkloadMonitor integration.                                                                                                     | `bool`     | `true`                   |
 
 
 ### FoundationDB configuration
 
-| Name                         | Description                               | Type       | Value     |
-| ---------------------------- | ----------------------------------------- | ---------- | --------- |
-| `customParameters`           | Custom parameters to pass to FoundationDB | `[]string` | `[]`      |
-| `imageType`                  | Container image deployment type           | `string`   | `unified` |
-| `securityContext`            | Security context for containers           | `object`   | `{}`      |
-| `securityContext.runAsUser`  | User ID to run the container              | `int`      | `4059`    |
-| `securityContext.runAsGroup` | Group ID to run the container             | `int`      | `4059`    |
-| `automaticReplacements`      | Enable automatic pod replacements         | `bool`     | `true`    |
+| Name                         | Description                                | Type       | Value     |
+| ---------------------------- | ------------------------------------------ | ---------- | --------- |
+| `customParameters`           | Custom parameters to pass to FoundationDB. | `[]string` | `[]`      |
+| `imageType`                  | Container image deployment type.           | `string`   | `unified` |
+| `securityContext`            | Security context for containers.           | `object`   | `{}`      |
+| `securityContext.runAsUser`  | User ID to run the container.              | `int`      | `4059`    |
+| `securityContext.runAsGroup` | Group ID to run the container.             | `int`      | `4059`    |
+| `automaticReplacements`      | Enable automatic pod replacements.         | `bool`     | `true`    |
 

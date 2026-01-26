@@ -3,22 +3,22 @@
   "type": "object",
   "properties": {
     "external": {
-      "description": "Enable external access from outside the cluster",
+      "description": "Enable external access from outside the cluster.",
       "type": "boolean",
       "default": false
     },
     "replicas": {
-      "description": "Number of RabbitMQ replicas",
+      "description": "Number of RabbitMQ replicas.",
       "type": "integer",
       "default": 3
     },
     "resources": {
-      "description": "Explicit CPU and memory configuration for each RabbitMQ replica.  When left empty, the preset defined in `resourcesPreset` is applied.",
+      "description": "Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.",
       "type": "object",
       "default": {},
       "properties": {
         "cpu": {
-          "description": "CPU available to each replica",
+          "description": "CPU available to each replica.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -31,7 +31,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "Memory (RAM) available to each replica",
+          "description": "Memory (RAM) available to each replica.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -46,7 +46,7 @@
       }
     },
     "resourcesPreset": {
-      "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+      "description": "Default sizing preset used when `resources` is omitted.",
       "type": "string",
       "default": "nano",
       "enum": [
@@ -60,7 +60,7 @@
       ]
     },
     "size": {
-      "description": "Persistent Volume Claim size, available for application data",
+      "description": "Persistent Volume Claim size available for application data.",
       "default": "10Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
       "anyOf": [
@@ -74,25 +74,26 @@
       "x-kubernetes-int-or-string": true
     },
     "storageClass": {
-      "description": "StorageClass used to store the data",
-      "type": "string"
+      "description": "StorageClass used to store the data.",
+      "type": "string",
+      "default": ""
     },
     "users": {
-      "description": "Users configuration",
+      "description": "Users configuration map.",
       "type": "object",
       "default": {},
       "additionalProperties": {
         "type": "object",
         "properties": {
           "password": {
-            "description": "Password for the user",
+            "description": "Password for the user.",
             "type": "string"
           }
         }
       }
     },
     "vhosts": {
-      "description": "Virtual Hosts configuration",
+      "description": "Virtual hosts configuration map.",
       "type": "object",
       "default": {},
       "additionalProperties": {
@@ -102,18 +103,18 @@
         ],
         "properties": {
           "roles": {
-            "description": "Virtual host roles list",
+            "description": "Virtual host roles list.",
             "type": "object",
             "properties": {
               "admin": {
-                "description": "List of admin users",
+                "description": "List of admin users.",
                 "type": "array",
                 "items": {
                   "type": "string"
                 }
               },
               "readonly": {
-                "description": "List of readonly users",
+                "description": "List of readonly users.",
                 "type": "array",
                 "items": {
                   "type": "string"

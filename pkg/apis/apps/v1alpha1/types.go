@@ -21,6 +21,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Application label keys used to identify and filter HelmReleases
+const (
+	ApplicationKindLabel  = "apps.cozystack.io/application.kind"
+	ApplicationGroupLabel = "apps.cozystack.io/application.group"
+	ApplicationNameLabel  = "apps.cozystack.io/application.name"
+)
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // ApplicationList is a list of Application objects.

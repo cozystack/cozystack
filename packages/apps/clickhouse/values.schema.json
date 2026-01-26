@@ -3,7 +3,7 @@
   "type": "object",
   "properties": {
     "backup": {
-      "description": "Backup configuration",
+      "description": "Backup configuration.",
       "type": "object",
       "default": {},
       "required": [
@@ -18,67 +18,64 @@
       ],
       "properties": {
         "cleanupStrategy": {
-          "description": "Retention strategy for cleaning up old backups",
+          "description": "Retention strategy for cleaning up old backups.",
           "type": "string",
           "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
         },
         "enabled": {
-          "description": "Enable regular backups, default is `false`",
+          "description": "Enable regular backups (default: false).",
           "type": "boolean",
           "default": false
         },
         "resticPassword": {
-          "description": "Password for Restic backup encryption",
+          "description": "Password for Restic backup encryption.",
           "type": "string",
           "default": "\u003cpassword\u003e"
         },
         "s3AccessKey": {
-          "description": "Access key for S3, used for authentication",
+          "description": "Access key for S3 authentication.",
           "type": "string",
           "default": "\u003cyour-access-key\u003e"
         },
         "s3Bucket": {
-          "description": "S3 bucket used for storing backups",
+          "description": "S3 bucket used for storing backups.",
           "type": "string",
           "default": "s3.example.org/clickhouse-backups"
         },
         "s3Region": {
-          "description": "AWS S3 region where backups are stored",
+          "description": "AWS S3 region where backups are stored.",
           "type": "string",
           "default": "us-east-1"
         },
         "s3SecretKey": {
-          "description": "Secret key for S3, used for authentication",
+          "description": "Secret key for S3 authentication.",
           "type": "string",
           "default": "\u003cyour-secret-key\u003e"
         },
         "schedule": {
-          "description": "Cron schedule for automated backups",
+          "description": "Cron schedule for automated backups.",
           "type": "string",
           "default": "0 2 * * *"
         }
       }
     },
     "clickhouseKeeper": {
-      "description": "Clickhouse Keeper configuration",
+      "description": "ClickHouse Keeper configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "resourcesPreset"
-      ],
       "properties": {
         "enabled": {
-          "description": "Deploy ClickHouse Keeper for cluster coordination",
+          "description": "Deploy ClickHouse Keeper for cluster coordination.",
           "type": "boolean",
           "default": true
         },
         "replicas": {
-          "description": "Number of Keeper replicas",
+          "description": "Number of Keeper replicas.",
           "type": "integer",
           "default": 3
         },
         "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+          "description": "Default sizing preset.",
           "type": "string",
           "default": "micro",
           "enum": [
@@ -92,7 +89,7 @@
           ]
         },
         "size": {
-          "description": "Persistent Volume Claim size, available for application data",
+          "description": "Persistent Volume Claim size available for application data.",
           "default": "1Gi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -108,7 +105,7 @@
       }
     },
     "logStorageSize": {
-      "description": "Size of Persistent Volume for logs",
+      "description": "Size of Persistent Volume for logs.",
       "default": "2Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
       "anyOf": [
@@ -122,22 +119,22 @@
       "x-kubernetes-int-or-string": true
     },
     "logTTL": {
-      "description": "TTL (expiration time) for `query_log` and `query_thread_log`",
+      "description": "TTL (expiration time) for `query_log` and `query_thread_log`.",
       "type": "integer",
       "default": 15
     },
     "replicas": {
-      "description": "Number of Clickhouse replicas",
+      "description": "Number of ClickHouse replicas.",
       "type": "integer",
       "default": 2
     },
     "resources": {
-      "description": "Explicit CPU and memory configuration for each Clickhouse replica. When left empty, the preset defined in `resourcesPreset` is applied.",
+      "description": "Explicit CPU and memory configuration for each ClickHouse replica. When omitted, the preset defined in `resourcesPreset` is applied.",
       "type": "object",
       "default": {},
       "properties": {
         "cpu": {
-          "description": "CPU available to each replica",
+          "description": "CPU available to each replica.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -150,7 +147,7 @@
           "x-kubernetes-int-or-string": true
         },
         "memory": {
-          "description": "Memory (RAM) available to each replica",
+          "description": "Memory (RAM) available to each replica.",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
             {
@@ -165,7 +162,7 @@
       }
     },
     "resourcesPreset": {
-      "description": "Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.",
+      "description": "Default sizing preset used when `resources` is omitted.",
       "type": "string",
       "default": "small",
       "enum": [
@@ -179,12 +176,12 @@
       ]
     },
     "shards": {
-      "description": "Number of Clickhouse shards",
+      "description": "Number of ClickHouse shards.",
       "type": "integer",
       "default": 1
     },
     "size": {
-      "description": "Persistent Volume Claim size, available for application data",
+      "description": "Persistent Volume Claim size available for application data.",
       "default": "10Gi",
       "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
       "anyOf": [
@@ -198,22 +195,23 @@
       "x-kubernetes-int-or-string": true
     },
     "storageClass": {
-      "description": "StorageClass used to store the data",
-      "type": "string"
+      "description": "StorageClass used to store the data.",
+      "type": "string",
+      "default": ""
     },
     "users": {
-      "description": "Users configuration",
+      "description": "Users configuration map.",
       "type": "object",
       "default": {},
       "additionalProperties": {
         "type": "object",
         "properties": {
           "password": {
-            "description": "Password for the user",
+            "description": "Password for the user.",
             "type": "string"
           },
           "readonly": {
-            "description": "User is `readonly`, default is `false`.",
+            "description": "User is readonly (default: false).",
             "type": "boolean"
           }
         }

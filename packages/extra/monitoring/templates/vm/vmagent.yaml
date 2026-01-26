@@ -1,0 +1,30 @@
+{{- if ne .Release.Namespace "tenant-root" }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAgent
+metadata:
+  name: vmagent
+spec:
+  podMetadata:
+    labels:
+      policy.cozystack.io/allow-to-apiserver: "true"
+  shardCount: 1
+  externalLabels:
+    cluster: {{ .Values.vmagent.externalLabels.cluster }}
+    tenant: {{ .Release.Namespace }}
+  extraArgs:
+    promscrape.maxScrapeSize: "32MB"
+    promscrape.streamParse: "true"
+  remoteWrite:
+  {{- range .Values.vmagent.remoteWrite.urls }}
+  - url: {{ . | quote }}
+  {{- end }}
+
+  scrapeInterval: 30s
+  selectAllByDefault: false
+  podScrapeNamespaceSelector:
+    matchLabels:
+      namespace.cozystack.io/monitoring: {{ .Release.Namespace }}
+  serviceScrapeNamespaceSelector:
+    matchLabels:
+      namespace.cozystack.io/monitoring: {{ .Release.Namespace }}
+{{- end }}

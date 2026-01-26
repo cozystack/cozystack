@@ -1,0 +1,31 @@
+diff --git a/internal/builders/controlplane/deployment.go b/internal/builders/controlplane/deployment.go
+index e7f0b88..d67a851 100644
+--- a/internal/builders/controlplane/deployment.go
++++ b/internal/builders/controlplane/deployment.go
+@@ -376,7 +376,7 @@ func (d Deployment) buildScheduler(podSpec *corev1.PodSpec, tenantControlPlane k
+ 		TimeoutSeconds:      1,
+ 		PeriodSeconds:       10,
+ 		SuccessThreshold:    1,
+-		FailureThreshold:    3,
++		FailureThreshold:    30,
+ 	}
+ 
+ 	switch {
+@@ -469,7 +469,7 @@ func (d Deployment) buildControllerManager(podSpec *corev1.PodSpec, tenantContro
+ 		TimeoutSeconds:      1,
+ 		PeriodSeconds:       10,
+ 		SuccessThreshold:    1,
+-		FailureThreshold:    3,
++		FailureThreshold:    30,
+ 	}
+ 	switch {
+ 	case tenantControlPlane.Spec.ControlPlane.Deployment.Resources == nil:
+@@ -600,7 +600,7 @@ func (d Deployment) buildKubeAPIServer(podSpec *corev1.PodSpec, tenantControlPla
+ 		TimeoutSeconds:      1,
+ 		PeriodSeconds:       10,
+ 		SuccessThreshold:    1,
+-		FailureThreshold:    3,
++		FailureThreshold:    30,
+ 	}
+ 	podSpec.Containers[index].ImagePullPolicy = corev1.PullAlways
+ 	// Volume mounts

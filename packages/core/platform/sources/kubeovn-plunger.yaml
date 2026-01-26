@@ -1,0 +1,23 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.kubeovn-plunger
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.cert-manager
+    - cozystack.networking
+    - cozystack.victoria-metrics-operator
+    components:
+    - name: kubeovn-plunger
+      path: system/kubeovn-plunger
+      install:
+        namespace: cozy-kubeovn
+        releaseName: kubeovn-plunger

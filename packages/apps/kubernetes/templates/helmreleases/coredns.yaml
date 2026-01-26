@@ -11,17 +11,13 @@ metadata:
   labels:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
 spec:
   releaseName: coredns
-  chart:
-    spec:
-      chart: cozy-coredns
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-coredns
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

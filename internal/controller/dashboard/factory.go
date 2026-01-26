@@ -15,7 +15,7 @@ import (
 )
 
 // ensureFactory creates or updates a Factory resource for the given CRD
-func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
 	g, v, kind := pickGVK(crd)
 	plural := pickPlural(kind, crd)
 
@@ -44,6 +44,9 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	if flags.Secrets {
 		tabs = append(tabs, secretsTab(kind))
 	}
+	if prefix, ok := vncTabPrefix(kind); ok {
+		tabs = append(tabs, vncTab(prefix))
+	}
 	tabs = append(tabs, yamlTab(plural))
 
 	// Use unified factory creation
@@ -53,7 +56,6 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		Kind:         kind,
 		Plural:       plural,
 		Title:        strings.ToLower(plural),
-		Size:         BadgeSizeLarge,
 	}
 
 	spec := createUnifiedFactory(config, tabs, []any{resourceFetch})
@@ -61,8 +63,8 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	obj := &dashv1alpha1.Factory{}
 	obj.SetName(factoryName)
 
-	_, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
-		if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
+	_, err := controllerutil.CreateOrUpdate(ctx, m.Client, obj, func() error {
+		if err := controllerutil.SetOwnerReference(crd, obj, m.Scheme); err != nil {
 			return err
 		}
 		// Add dashboard labels to dynamic resources
@@ -115,7 +117,7 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 					"gap":   float64(6),
 				},
 				"children": []any{
-					createUnifiedBadgeFromKind("ns-badge", "Namespace", "namespace", BadgeSizeMedium),
+					createUnifiedBadgeFromKind("ns-badge", "Namespace"),
 					antdLink("namespace-link",
 						"{reqsJsonPath[0]['.metadata.namespace']['-']}",
 						"/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
@@ -150,6 +152,27 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 			"marginBottom": float64(12),
 		}),
 		paramsList,
+	}
+	if kind == "VirtualPrivateCloud" {
+		rightColStack = append(rightColStack,
+			antdFlexVertical("vpc-subnets-block", 4, []any{
+				antdText("vpc-subnets-label", true, "Subnets", nil),
+				map[string]any{
+					"type": "EnrichedTable",
+					"data": map[string]any{
+						"id":                   "vpc-subnets-table",
+						"baseprefix":           "/openapi-ui",
+						"clusterNamePartOfUrl": "{2}",
+						"customizationId":      "virtualprivatecloud-subnets",
+						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/configmaps",
+						"fieldSelector": map[string]any{
+							"metadata.name": "virtualprivatecloud-{6}-subnets",
+						},
+						"pathToItems": []any{"items"},
+					},
+				},
+			}),
+		)
 	}
 
 	return map[string]any{
@@ -222,7 +245,7 @@ func workloadsTab(kind string) map[string]any {
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1alpha1.cozystack.io.workloadmonitors",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":  kind,
 						"apps.cozystack.io/application.name":  "{reqs[0]['metadata','name']}",
@@ -247,7 +270,7 @@ func servicesTab(kind string) map[string]any {
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1.services",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group":  "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":   kind,
 						"apps.cozystack.io/application.name":   "{reqs[0]['metadata','name']}",
@@ -273,7 +296,7 @@ func ingressesTab(kind string) map[string]any {
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-networking.k8s.io.v1.ingresses",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group":  "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":   kind,
 						"apps.cozystack.io/application.name":   "{reqs[0]['metadata','name']}",
@@ -294,12 +317,12 @@ func secretsTab(kind string) map[string]any {
 				"type": "EnrichedTable",
 				"data": map[string]any{
 					"id":                   "secrets-table",
-					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecretstables",
+					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecrets",
 					"clusterNamePartOfUrl": "{2}",
 					"baseprefix":           "/openapi-ui",
-					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecretstables",
+					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecrets",
 					"pathToItems":          []any{"items"},
-					"labelsSelector": map[string]any{
+					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":  kind,
 						"apps.cozystack.io/application.name":  "{reqs[0]['metadata','name']}",
@@ -324,7 +347,38 @@ func yamlTab(plural string) map[string]any {
 					"type":                      "builtin",
 					"typeName":                  plural,
 					"prefillValuesRequestIndex": float64(0),
+					"readOnly":                  true,
 					"substractHeight":           float64(400),
+				},
+			},
+		},
+	}
+}
+
+func vncTabPrefix(kind string) (string, bool) {
+	switch kind {
+	case "VirtualMachine":
+		return "virtual-machine", true
+	case "VMInstance":
+		return "vm-instance", true
+	default:
+		return "", false
+	}
+}
+
+func vncTab(prefix string) map[string]any {
+	return map[string]any{
+		"key":   "vnc",
+		"label": "VNC",
+		"children": []any{
+			map[string]any{
+				"type": "VMVNC",
+				"data": map[string]any{
+					"id":              "vm-vnc",
+					"cluster":         "{2}",
+					"namespace":       "{reqsJsonPath[0]['.metadata.namespace']['-']}",
+					"substractHeight": float64(400),
+					"vmName":          fmt.Sprintf("%s-{reqsJsonPath[0]['.metadata.name']['-']}", prefix),
 				},
 			},
 		},
@@ -503,7 +557,7 @@ type factoryFlags struct {
 
 // factoryFeatureFlags tries several conventional locations so you can evolve the API
 // without breaking the controller. Defaults are false (hidden).
-func factoryFeatureFlags(crd *cozyv1alpha1.CozystackResourceDefinition) factoryFlags {
+func factoryFeatureFlags(crd *cozyv1alpha1.ApplicationDefinition) factoryFlags {
 	var f factoryFlags
 
 	f.Workloads = true

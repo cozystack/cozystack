@@ -1,4 +1,4 @@
-{{- range $path, $_ := .Files.Glob "crds/*" }}
+{{- range $path, $_ := .Files.Glob "definitions/*" }}
 ---
 {{ $.Files.Get $path }}
 {{- end }}

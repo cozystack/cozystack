@@ -13,6 +13,10 @@ spec:
         - name: certgen
           image: {{ include "cilium.image" .Values.certgen.image | quote }}
           imagePullPolicy: {{ .Values.certgen.image.pullPolicy }}
+          {{- with .Values.certgen.resources }}
+          resources:
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
           command:
             - "/usr/bin/cilium-certgen"
           args:
@@ -70,16 +74,6 @@ spec:
                 - name: clustermesh-apiserver-local-cert
                   namespace: {{ include "cilium.namespace" . }}
                   commonName: {{ include "clustermesh-apiserver-generate-certs.local-common-name" . | quote }}
-                  usage:
-                  - signing
-                  - key encipherment
-                  - client auth
-                  validity: {{ $certValidityStr }}
-                {{- end }}
-                {{- if .Values.externalWorkloads.enabled }}
-                - name: clustermesh-apiserver-client-cert
-                  namespace: {{ include "cilium.namespace" . }}
-                  commonName: "externalworkload"
                   usage:
                   - signing
                   - key encipherment

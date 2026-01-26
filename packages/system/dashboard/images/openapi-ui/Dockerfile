@@ -3,9 +3,14 @@ ARG NODE_VERSION=20.18.1
 # openapi-k8s-toolkit
 # imported from https://github.com/cozystack/openapi-k8s-toolkit
 FROM node:${NODE_VERSION}-alpine AS openapi-k8s-toolkit-builder
+RUN apk add git
 WORKDIR /src
-ARG COMMIT=4f57ab295b2a886eb294b0b987554194fbe67dcd
+ARG COMMIT=cb2f122caafaa2fd5455750213d9e633017ec555
 RUN wget -O- https://github.com/cozystack/openapi-k8s-toolkit/archive/${COMMIT}.tar.gz | tar -xzvf- --strip-components=1
+
+COPY openapi-k8s-toolkit/patches /patches
+RUN git apply /patches/*.diff
+
 RUN npm install
 RUN npm install --build-from-source @swc/core
 RUN npm run build
@@ -14,14 +19,14 @@ RUN npm run build
 # openapi-ui
 # imported from https://github.com/cozystack/openapi-ui
 FROM node:${NODE_VERSION}-alpine AS builder
-RUN apk add git
+#RUN apk add git
 WORKDIR /src
 
-ARG COMMIT_REF=65e7fa8b3dc530a36e94c8435622bb09961aef97
+ARG COMMIT_REF=3cfbbf2156b6a5e4a1f283a032019530c0c2d37d
 RUN wget -O- https://github.com/PRO-Robotech/openapi-ui/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=1
 
-COPY patches /patches
-RUN git apply /patches/*.diff
+#COPY openapi-ui/patches /patches
+#RUN git apply /patches/*.diff
 
 ENV PATH=/src/node_modules/.bin:$PATH
 

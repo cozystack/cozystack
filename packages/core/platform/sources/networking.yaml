@@ -1,0 +1,65 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.networking
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: noop
+    components: []
+  - name: cilium
+    dependsOn: []
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+  - name: kubeovn-cilium
+    dependsOn: []
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-kubeovn.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+    - name: kubeovn
+      path: system/kubeovn
+      install:
+        privileged: true
+        namespace: cozy-kubeovn
+        releaseName: kubeovn
+        dependsOn:
+        - cilium

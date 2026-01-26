@@ -1,0 +1,32 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.tenant-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.ingress-application
+        - cozystack.seaweedfs-application
+        - cozystack.info-application
+        - cozystack.monitoring-application
+        - cozystack.etcd-application
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: tenant
+          path: apps/tenant
+          libraries: [cozy-lib]
+        - name: tenant-rd
+          path: system/tenant-rd
+          install:
+            namespace: cozy-system
+            releaseName: tenant-rd

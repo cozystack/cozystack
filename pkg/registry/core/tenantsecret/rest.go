@@ -9,7 +9,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"sort"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -25,9 +25,12 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry"
+	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
 )
 
 // -----------------------------------------------------------------------------
@@ -157,13 +160,15 @@ var (
 )
 
 type REST struct {
-	core corev1client.CoreV1Interface
-	gvr  schema.GroupVersionResource
+	c   client.Client
+	w   client.WithWatch
+	gvr schema.GroupVersionResource
 }
 
-func NewREST(coreCli corev1client.CoreV1Interface) *REST {
+func NewREST(c client.Client, w client.WithWatch) *REST {
 	return &REST{
-		core: coreCli,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -203,11 +208,11 @@ func (r *REST) Create(
 	}
 
 	sec := tenantToSecret(in, nil)
-	out, err := r.core.Secrets(sec.Namespace).Create(ctx, sec, *opts)
+	err := r.c.Create(ctx, sec, &client.CreateOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
-	return secretToTenant(out), nil
+	return secretToTenant(sec), nil
 }
 
 func (r *REST) Get(
@@ -219,9 +224,13 @@ func (r *REST) Get(
 	if err != nil {
 		return nil, err
 	}
-	sec, err := r.core.Secrets(ns).Get(ctx, name, *opts)
+	sec := &corev1.Secret{}
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec, &client.GetOptions{Raw: opts})
 	if err != nil {
 		return nil, err
+	}
+	if sec.Labels == nil || sec.Labels[tsLabelKey] != tsLabelValue {
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 	return secretToTenant(sec), nil
 }
@@ -242,17 +251,39 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		}
 	}
 
-	fieldSel := ""
-	if opts.FieldSelector != nil {
-		fieldSel = opts.FieldSelector.String()
-	}
-
-	list, err := r.core.Secrets(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: ls.String(),
-		FieldSelector: fieldSel,
-	})
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(opts.FieldSelector)
 	if err != nil {
 		return nil, err
+	}
+
+	// If field selector specifies namespace different from context, return empty list
+	if fieldFilter.Namespace != "" && ns != "" && ns != fieldFilter.Namespace {
+		return &corev1alpha1.TenantSecretList{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       kindTenantSecretList,
+			},
+		}, nil
+	}
+
+	list := &corev1.SecretList{}
+	err = r.c.List(ctx, list,
+		&client.ListOptions{
+			Namespace:     ns,
+			LabelSelector: ls,
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := list.ResourceVersion
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(list)
 	}
 
 	out := &corev1alpha1.TenantSecretList{
@@ -260,13 +291,22 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       kindTenantSecretList,
 		},
-		ListMeta: list.ListMeta,
+		ListMeta: metav1.ListMeta{ResourceVersion: listRV},
 	}
 
 	for i := range list.Items {
+		// Apply manual field selector filtering (metadata.name and metadata.namespace)
+		// controller-runtime cache doesn't support field selectors
+		// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+		if !fieldFilter.MatchesName(list.Items[i].Name) {
+			continue
+		}
+		if !fieldFilter.MatchesNamespace(list.Items[i].Namespace) {
+			continue
+		}
 		out.Items = append(out.Items, *secretToTenant(&list.Items[i]))
 	}
-	sort.Slice(out.Items, func(i, j int) bool { return out.Items[i].Name < out.Items[j].Name })
+	sorting.ByNamespacedName[corev1alpha1.TenantSecret, *corev1alpha1.TenantSecret](out.Items)
 	return out, nil
 }
 
@@ -284,9 +324,17 @@ func (r *REST) Update(
 		return nil, false, err
 	}
 
-	cur, err := r.core.Secrets(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, false, err
+	var cur *corev1.Secret
+	previous := &corev1.Secret{}
+	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, previous, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, false, err
+		}
+	} else {
+		if previous.Labels == nil || previous.Labels[tsLabelKey] != tsLabelValue {
+			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
+		cur = previous
 	}
 
 	newObj, err := objInfo.UpdatedObject(ctx, nil)
@@ -296,17 +344,18 @@ func (r *REST) Update(
 	in := newObj.(*corev1alpha1.TenantSecret)
 
 	newSec := tenantToSecret(in, cur)
+	newSec.Namespace = ns
 	if cur == nil {
-		if !forceCreate && err == nil {
+		if !forceCreate {
 			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
-		out, err := r.core.Secrets(ns).Create(ctx, newSec, metav1.CreateOptions{})
-		return secretToTenant(out), true, err
+		err := r.c.Create(ctx, newSec, &client.CreateOptions{Raw: &metav1.CreateOptions{}})
+		return secretToTenant(newSec), true, err
 	}
 
 	newSec.ResourceVersion = cur.ResourceVersion
-	out, err := r.core.Secrets(ns).Update(ctx, newSec, *opts)
-	return secretToTenant(out), false, err
+	err = r.c.Update(ctx, newSec, &client.UpdateOptions{Raw: opts})
+	return secretToTenant(newSec), false, err
 }
 
 func (r *REST) Delete(
@@ -319,7 +368,14 @@ func (r *REST) Delete(
 	if err != nil {
 		return nil, false, err
 	}
-	err = r.core.Secrets(ns).Delete(ctx, name, *opts)
+	current := &corev1.Secret{}
+	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, false, err
+	}
+	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
+		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+	err = r.c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
 	return nil, err == nil, err
 }
 
@@ -331,21 +387,40 @@ func (r *REST) Patch(
 	opts *metav1.PatchOptions,
 	subresources ...string,
 ) (runtime.Object, error) {
+	if len(subresources) > 0 {
+		return nil, fmt.Errorf("TenantSecret does not have subresources")
+	}
 	ns, err := nsFrom(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	out, err := r.core.Secrets(ns).
-		Patch(ctx, name, pt, data, *opts, subresources...)
+	current := &corev1.Secret{}
+	if err := r.c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, current, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, err
+	}
+	if current.Labels == nil || current.Labels[tsLabelKey] != tsLabelValue {
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+	out := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      name,
+		},
+	}
+	patch := client.RawPatch(pt, data)
+	err = r.c.Patch(ctx, out, patch, &client.PatchOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
 
 	// Ensure tenant secret label is preserved
+	if out.Labels == nil {
+		out.Labels = make(map[string]string)
+	}
+
 	if out.Labels[tsLabelKey] != tsLabelValue {
 		out.Labels[tsLabelKey] = tsLabelValue
-		out, _ = r.core.Secrets(ns).Update(ctx, out, metav1.UpdateOptions{})
+		_ = r.c.Update(ctx, out, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
 	}
 
 	return secretToTenant(out), nil
@@ -361,14 +436,26 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
-	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector().String()
-	base, err := r.core.Secrets(ns).Watch(ctx, metav1.ListOptions{
-		Watch:           true,
-		LabelSelector:   ls,
-		ResourceVersion: opts.ResourceVersion,
+	secList := &corev1.SecretList{}
+	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector()
+	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
+		Namespace:     ns,
+		LabelSelector: ls,
+		Raw: &metav1.ListOptions{
+			Watch:           true,
+			ResourceVersion: opts.ResourceVersion,
+		},
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Get starting resourceVersion from options
+	var startingRV uint64
+	if opts.ResourceVersion != "" {
+		if rv, err := strconv.ParseUint(opts.ResourceVersion, 10, 64); err == nil {
+			startingRV = rv
+		}
 	}
 
 	ch := make(chan watch.Event)
@@ -376,12 +463,43 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 	go func() {
 		defer proxy.Stop()
+
 		for ev := range base.ResultChan() {
+			// Handle bookmark events
+			if ev.Type == watch.Bookmark {
+				if sec, ok := ev.Object.(*corev1.Secret); ok {
+					out := &corev1alpha1.TenantSecret{
+						TypeMeta: metav1.TypeMeta{
+							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+							Kind:       kindTenantSecret,
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							ResourceVersion: sec.ResourceVersion,
+						},
+					}
+					ch <- watch.Event{Type: watch.Bookmark, Object: out}
+				}
+				continue
+			}
+
 			sec, ok := ev.Object.(*corev1.Secret)
 			if !ok || sec == nil {
 				continue
 			}
+
 			tenant := secretToTenant(sec)
+
+			// Skip ADDED events based on resourceVersion comparison
+			// Only skip when client provided resourceVersion (they already have objects from List)
+			if ev.Type == watch.Added && startingRV > 0 {
+				objRV, parseErr := strconv.ParseUint(tenant.ResourceVersion, 10, 64)
+				// Skip objects client already has (objRV <= startingRV)
+				if parseErr == nil && objRV <= startingRV {
+					continue
+				}
+			}
+			// When startingRV == 0, always send ADDED events (client wants full state)
+
 			ch <- watch.Event{
 				Type:   ev.Type,
 				Object: tenant,
@@ -419,10 +537,10 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 		for i := range v.Items {
 			tbl.Rows = append(tbl.Rows, row(&v.Items[i]))
 		}
-		tbl.ListMeta.ResourceVersion = v.ListMeta.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	case *corev1alpha1.TenantSecret:
 		tbl.Rows = append(tbl.Rows, row(v))
-		tbl.ListMeta.ResourceVersion = v.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	default:
 		return nil, notAcceptable{r.gvr.GroupResource(), fmt.Sprintf("unexpected %T", obj)}
 	}

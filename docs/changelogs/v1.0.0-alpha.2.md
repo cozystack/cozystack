@@ -1,0 +1,71 @@
+<!--
+https://github.com/cozystack/cozystack/releases/tag/v1.0.0-alpha.2
+-->
+
+> **⚠️ Alpha Release Warning**: This is a pre-release version intended for testing and early adoption. Breaking changes may occur before the stable v1.0.0 release.
+
+## Major Features and Improvements
+
+### New Applications
+
+* **[apps] Add MongoDB managed application**: Added MongoDB as a new managed application, providing a fully managed MongoDB database with automatic scaling, backups, and high availability support ([**@lexfrei**](https://github.com/lexfrei) in #1822).
+
+### Networking
+
+* **[kilo] Introduce kilo**: Added Kilo WireGuard mesh networking support. Kilo provides secure WireGuard-based VPN mesh for connecting Kubernetes nodes across different networks and regions ([**@kvaps**](https://github.com/kvaps) in #1691).
+
+* **[local-ccm] Add local-ccm package**: Added local cloud controller manager package for managing load balancer services in local/bare-metal environments without a cloud provider ([**@kvaps**](https://github.com/kvaps) in #1831).
+
+### Platform
+
+* **[platform] Add flux-plunger controller**: Added flux-plunger controller to automatically fix stuck HelmRelease errors by cleaning up failed resources and retrying reconciliation ([**@kvaps**](https://github.com/kvaps) in #1843).
+
+* **[platform] Split telemetry between operator and controller**: Separated telemetry collection between cozystack-operator and cozystack-controller for better metrics isolation and monitoring capabilities ([**@kvaps**](https://github.com/kvaps) in #1869).
+
+* **[platform] Remove cozystack.io/ui label**: Cleaned up deprecated `cozystack.io/ui` labels from platform components ([**@kvaps**](https://github.com/kvaps) in #1872).
+
+## Improvements
+
+* **[kubernetes] Increase default apiServer resourcesPreset to large**: Increased the default resource preset for kube-apiserver to `large` to ensure more reliable operation under higher workloads ([**@kvaps**](https://github.com/kvaps) in #1875).
+
+* **[kubernetes] Increase kube-apiserver startup probe threshold**: Increased the startup probe threshold for kube-apiserver to allow more time for the API server to become ready ([**@kvaps**](https://github.com/kvaps) in #1876).
+
+* **[etcd] Increase probe thresholds for better recovery**: Increased etcd probe thresholds to provide more time for recovery operations, improving cluster resilience ([**@kvaps**](https://github.com/kvaps) in #1874).
+
+## Fixes
+
+* **[apiserver] Fix Watch resourceVersion and bookmark handling**: Fixed issues with Watch API handling of resourceVersion and bookmarks, ensuring proper event streaming and state synchronization ([**@kvaps**](https://github.com/kvaps) in #1860).
+
+* **[dashboard] Fix view of loadbalancer IP in services window**: Fixed an issue where load balancer IP addresses were not displayed correctly in the services window of the dashboard ([**@IvanHunters**](https://github.com/IvanHunters) in #1884).
+
+## Dependencies
+
+* **[cilium] Update cilium to v1.18.6**: Updated Cilium CNI to v1.18.6 with security fixes and performance improvements ([**@sircthulhu**](https://github.com/sircthulhu) in #1868).
+
+* **Update Talos Linux v1.12.1**: Updated Talos Linux to v1.12.1 with latest features, security patches and improvements ([**@kvaps**](https://github.com/kvaps) in #1877).
+
+## Documentation
+
+* **[website] Add documentation for creating and managing cloned virtual machines**: Added comprehensive guide for VM cloning operations ([**@sircthulhu**](https://github.com/sircthulhu) in [cozystack/website#401](https://github.com/cozystack/website/pull/401)).
+
+* **[website] Simplify NFS driver setup instructions**: Improved NFS driver setup documentation with clearer instructions ([**@kvaps**](https://github.com/kvaps) in [cozystack/website#399](https://github.com/cozystack/website/pull/399)).
+
+* **[website] Update Talos installation docs for Hetzner and Servers.com**: Updated installation documentation with improved instructions for Hetzner and Servers.com environments ([**@kvaps**](https://github.com/kvaps) in [cozystack/website#395](https://github.com/cozystack/website/pull/395)).
+
+* **[website] Add Hetzner RobotLB documentation**: Added documentation for configuring public IP with Hetzner RobotLB ([**@kvaps**](https://github.com/kvaps) in [cozystack/website#394](https://github.com/cozystack/website/pull/394)).
+
+* **[website] Add Hidora organization support details**: Added Hidora to the support page with organization details ([**@matthieu-robin**](https://github.com/matthieu-robin) in [cozystack/website#397](https://github.com/cozystack/website/pull/397), [cozystack/website#398](https://github.com/cozystack/website/pull/398)).
+
+---
+
+## Contributors
+
+* [**@IvanHunters**](https://github.com/IvanHunters)
+* [**@kvaps**](https://github.com/kvaps)
+* [**@lexfrei**](https://github.com/lexfrei)
+* [**@matthieu-robin**](https://github.com/matthieu-robin)
+* [**@sircthulhu**](https://github.com/sircthulhu)
+
+---
+
+**Full Changelog**: [v1.0.0-alpha.1...v1.0.0-alpha.2](https://github.com/cozystack/cozystack/compare/v1.0.0-alpha.1...v1.0.0-alpha.2)

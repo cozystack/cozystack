@@ -1,0 +1,32 @@
+apiVersion: cozystack.io/v1alpha1
+kind: ApplicationDefinition
+metadata:
+  name: http-cache
+spec:
+  application:
+    kind: HTTPCache
+    plural: httpcaches
+    singular: httpcache
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{"endpoints":{"description":"Endpoints configuration, as a list of <ip:port>.","type":"array","default":[],"items":{"type":"string"}},"external":{"description":"Enable external access from outside the cluster.","type":"boolean","default":false},"haproxy":{"description":"HAProxy configuration.","type":"object","default":{},"required":["replicas","resourcesPreset"],"properties":{"replicas":{"description":"Number of HAProxy replicas.","type":"integer","default":2},"resources":{"description":"Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.","type":"object","default":{},"properties":{"cpu":{"description":"CPU available to each replica.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"memory":{"description":"Memory (RAM) available to each replica.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}},"resourcesPreset":{"description":"Default sizing preset used when `resources` is omitted.","type":"string","default":"nano","enum":["nano","micro","small","medium","large","xlarge","2xlarge"]}}},"nginx":{"description":"Nginx configuration.","type":"object","default":{},"required":["replicas","resourcesPreset"],"properties":{"replicas":{"description":"Number of Nginx replicas.","type":"integer","default":2},"resources":{"description":"Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.","type":"object","default":{},"properties":{"cpu":{"description":"CPU available to each replica.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"memory":{"description":"Memory (RAM) available to each replica.","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}},"resourcesPreset":{"description":"Default sizing preset used when `resources` is omitted.","type":"string","default":"nano","enum":["nano","micro","small","medium","large","xlarge","2xlarge"]}}},"size":{"description":"Persistent Volume Claim size available for application data.","default":"10Gi","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"storageClass":{"description":"StorageClass used to store the data.","type":"string","default":""}}}
+  release:
+    prefix: http-cache-
+    labels:
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-http-cache-application-default-http-cache
+      namespace: cozy-system
+  dashboard:
+    category: NaaS
+    singular: HTTP Cache
+    plural: HTTP Cache
+    description: Layer7 load balancer and caching service
+    tags:
+      - cache
+      - network
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl82ODFfMjgyNSkiLz4KPHBhdGggZD0iTTI2LjAwMjYgMzcuODU4OEMyNi4wMDI2IDYwLjkxOSAyNi4wMDI2IDgzLjk4MTQgMjYuMDAyNiAxMDcuMDQ2QzI1Ljk3MyAxMDguMzIzIDI2LjE5OTYgMTA5LjU5MyAyNi42NjkyIDExMC43ODNDMjcuMTM4NyAxMTEuOTcyIDI3Ljg0MTggMTEzLjA1NiAyOC43Mzc0IDExMy45NzJDMzAuNDUzOSAxMTUuNjU5IDMyLjcgMTE2LjcwOSAzNS4xMDA5IDExNi45NDhDMzcuNTAxOSAxMTcuMTg3IDM5LjkxMjYgMTE2LjYgNDEuOTMxIDExNS4yODRDNDMuMjgyIDExNC4zNzEgNDQuMzg4MSAxMTMuMTQzIDQ1LjE1MjcgMTExLjcwN0M0NS45MTc0IDExMC4yNzEgNDYuMzE3NSAxMDguNjcxIDQ2LjMxODEgMTA3LjA0NkM0Ni4zMTgxIDkwLjM1MjggNDYuMjg2MSA3My42NTk3IDQ2LjMxODEgNTYuOTY2NkM2MS42MTY4IDc1LjE4ODkgNzYuOTQ3NCA5My4zODU2IDkyLjMxIDExMS41NTdDOTQuNDQ0NCAxMTMuNzA4IDk3LjA4NzUgMTE1LjI5MSA5OS45OTcgMTE2LjE2MkMxMDIuOTA2IDExNy4wMzIgMTA1Ljk4OSAxMTcuMTYyIDEwOC45NjIgMTE2LjUzOUMxMTEuMDYxIDExNi4xMjggMTEyLjk3MyAxMTUuMDU3IDExNC40MTUgMTEzLjQ4NUMxMTUuODU3IDExMS45MTMgMTE2Ljc1NCAxMDkuOTIxIDExNi45NzQgMTA3LjgwNEMxMTcuMDA5IDg0LjI2ODEgMTE3LjAwOSA2MC43MzQzIDExNi45NzQgMzcuMjAyNUMxMTYuNzU0IDM0LjY5MDcgMTE1LjU5NSAzMi4zNTIyIDExMy43MjYgMzAuNjQ4NkMxMTEuODU4IDI4Ljk0NSAxMDkuNDE1IDI4IDEwNi44ODEgMjhDMTA0LjM0NiAyOCAxMDEuOTAzIDI4Ljk0NSAxMDAuMDM1IDMwLjY0ODZDOTguMTY2MyAzMi4zNTIyIDk3LjAwNzQgMzQuNjkwNyA5Ni43ODY5IDM3LjIwMjVDOTYuNzg2OSA1NC4xNjMyIDk2LjY4NDQgNzEuMTA0OCA5Ni43ODY5IDg4LjA1OTFDODEuNzYxNiA3MC40MzU4IDY2LjkyMTkgNTIuNjU5NiA1MS45NTQzIDM0Ljk3MjVDNDkuOTgxIDMyLjQ1NTQgNDcuMzY4NSAzMC41MDczIDQ0LjM4NjMgMjkuMzI5MUM0MS40MDQxIDI4LjE1MDkgMzguMTU5OSAyNy43ODUyIDM0Ljk4ODMgMjguMjY5OEMzMi41ODU3IDI4LjUzNTkgMzAuMzU4MyAyOS42NDkzIDI4LjcwOTkgMzEuNDA4NEMyNy4wNjE1IDMzLjE2NzUgMjYuMTAxIDM1LjQ1NTkgMjYuMDAyNiAzNy44NTg4WiIgZmlsbD0id2hpdGUiLz4KPGRlZnM+CjxsaW5lYXJHcmFkaWVudCBpZD0icGFpbnQwX2xpbmVhcl82ODFfMjgyNSIgeDE9IjEwIiB5MT0iMTUuNSIgeDI9IjE0NCIgeTI9IjEzMS41IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CjxzdG9wIHN0b3AtY29sb3I9IiMwMEM1NEEiLz4KPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDE5NjM5Ii8+CjwvbGluZWFyR3JhZGllbnQ+CjwvZGVmcz4KPC9zdmc+Cg==
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "endpoints"], ["spec", "haproxy"], ["spec", "haproxy", "replicas"], ["spec", "haproxy", "resources"], ["spec", "haproxy", "resourcesPreset"], ["spec", "nginx"], ["spec", "nginx", "replicas"], ["spec", "nginx", "resources"], ["spec", "nginx", "resourcesPreset"]]
+  secrets:
+    exclude: []
+    include: []

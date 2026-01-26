@@ -22,7 +22,13 @@ spec:
       - GPU
       - VMExport
     evictionStrategy: LiveMigrate
+    vmRolloutStrategy: LiveUpdate
+  workloadUpdateStrategy:
+    workloadUpdateMethods:
+    - LiveMigrate
+    - Evict
+    batchEvictionInterval: 1m
+    batchEvictionSize: 10
   customizeComponents: {}
   imagePullPolicy: IfNotPresent
   monitorNamespace: tenant-root
-  workloadUpdateStrategy: {}

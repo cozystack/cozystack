@@ -1,6 +1,13 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $passwords := dict }}
+
+{{- with (dig "data" (dict) $existingSecret) }}
+  {{- range $k, $v := . }}
+    {{- $_ := set $passwords $k (b64dec $v) }}
+  {{- end }}
+{{- end }}
+
 {{- range $user, $u := .Values.users }}
   {{- if $u.password }}
     {{- $_ := set $passwords $user $u.password }}
@@ -26,16 +33,13 @@ apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
 spec:
-  chart:
-    spec:
-      chart: cozy-nats
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-nats-application-default-nats-system
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:
@@ -45,20 +49,19 @@ spec:
     force: true
     remediation:
       retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
   values:
     nats:
-      podTemplate:
+      container:
         merge:
-          spec:
-            containers:
-              - name: nats
-                image: nats:2.10.17-alpine
-                resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 22 }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 12 }}
       fullnameOverride: {{ .Release.Name }}
       config:
-        {{- if or (gt (len $passwords) 0) (gt (len .Values.config.merge) 0) }}
+        {{- if or $passwords .Values.config.merge }}
         merge:
-          {{- if gt (len $passwords) 0 }}
+          {{- if $passwords }}
           accounts:
             A:
               users:
@@ -67,13 +70,13 @@ spec:
                   password: "{{ $password }}"
                 {{- end }}
           {{- end }}
-          {{- if and .Values.config (hasKey .Values.config "merge") }}
-          {{ toYaml .Values.config.merge | nindent 12 }}
+          {{- with .Values.config.merge }}
+          {{- toYaml . | nindent 10 }}
           {{- end }}
         {{- end }}
-        {{- if and .Values.config (hasKey .Values.config "resolver") }}
+        {{- with .Values.config.resolver }}
         resolver:
-          {{ toYaml .Values.config.resolver | nindent 12 }}
+          {{- toYaml . | nindent 10 }}
         {{- end }}
         cluster:
           enabled: true

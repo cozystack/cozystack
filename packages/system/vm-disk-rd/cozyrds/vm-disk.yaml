@@ -1,0 +1,32 @@
+apiVersion: cozystack.io/v1alpha1
+kind: ApplicationDefinition
+metadata:
+  name: vm-disk
+spec:
+  application:
+    kind: VMDisk
+    singular: vmdisk
+    plural: vmdisks
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{"optical":{"description":"Defines if disk should be considered optical.","type":"boolean","default":false},"source":{"description":"The source image location used to create a disk.","type":"object","default":{},"properties":{"http":{"description":"Download image from an HTTP source.","type":"object","required":["url"],"properties":{"url":{"description":"URL to download the image.","type":"string"}}},"image":{"description":"Use image by name.","type":"object","required":["name"],"properties":{"name":{"description":"Name of the image to use (uploaded as \"golden image\" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, `talos`).","type":"string"}}},"upload":{"description":"Upload local image."}}},"storage":{"description":"The size of the disk allocated for the virtual machine.","default":"5Gi","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"storageClass":{"description":"StorageClass used to store the data.","type":"string","default":"replicated"}}}
+  release:
+    prefix: vm-disk-
+    labels:
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-vm-disk-application-kubevirt-vm-disk
+      namespace: cozy-system
+  dashboard:
+    category: IaaS
+    singular: VM Disk
+    plural: VM Disks
+    description: Virtual Machine disk
+    weight: 51
+    tags:
+      - storage
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8zMzBfNDg5NjMpIi8+CjxnIGZpbHRlcj0idXJsKCNmaWx0ZXIwX2lfMzMwXzQ4OTYzKSI+CjxwYXRoIGQ9Ik03Mi4wMDAxIDI2LjYzNjdDNDYuODc3MiAyNi42MzY3IDI2LjUxMTIgNDcuMDAyNyAyNi41MTEyIDcyLjEyNTZDMjYuNTExMiA5Ny4yNDg0IDQ2Ljg3NzIgMTE3LjYxNCA3Mi4wMDAxIDExNy42MTRDOTcuMTIyOSAxMTcuNjE0IDExNy40ODkgOTcuMjQ4MiAxMTcuNDg5IDcyLjEyNTRDMTE3LjQ4OSA0Ny4wMDI1IDk3LjEyMjkgMjYuNjM2NyA3Mi4wMDAxIDI2LjYzNjdaTTcyLjAwMDEgODEuNjIxMkM2Ni43NTU3IDgxLjYyMTIgNjIuNTA0NCA3Ny4zNjk5IDYyLjUwNDQgNzIuMTI1NkM2Mi41MDQ0IDY2Ljg4MTIgNjYuNzU1NyA2Mi42Mjk5IDcyLjAwMDEgNjIuNjI5OUM3Ny4yNDQ0IDYyLjYyOTkgODEuNDk1NyA2Ni44ODEyIDgxLjQ5NTcgNzIuMTI1NkM4MS40OTU3IDc3LjM2OTkgNzcuMjQ0NCA4MS42MjEyIDcyLjAwMDEgODEuNjIxMloiIGZpbGw9IiNCQUQ5RkYiLz4KPC9nPgo8cGF0aCBkPSJNNTIuMDA3NSA2NS43MjA5TDMyLjI5NzYgNTkuMDQ5OEMzNi4yODQyIDQ3LjI3MTEgNDUuMzI4NSAzNy42MzE1IDU2LjQ5MSAzMy4yNjRMNjQuMDcyOCA1Mi42NDE5QzU4LjY0MiA1NC43NjY3IDU0LjAxOSA1OS43NzgzIDUyLjAwNzUgNjUuNzIwOVpNOTEuOTkyNiA3OC41M0wxMTEuNzAzIDg1LjIwMTFDMTA3LjcxNiA5Ni45Nzk5IDk4LjY3MTggMTA2LjYxOSA4Ny41MDkzIDExMC45ODdMNzkuOTI3NSA5MS42MDlDODUuMzU4MSA4OS40ODQyIDg5Ljk4MTMgODQuNDcyNiA5MS45OTI2IDc4LjUzWiIgZmlsbD0iI0VERjZGRiIvPgo8cGF0aCBkPSJNNTUuOTMyNCA1OC43MDI4QzU3LjY1MTQgNTYuNjE0IDU5LjcxOTQgNTQuODYzMiA2MS45ODk0IDUzLjYxODNDNjMuMTQ5IDUyLjk4MjQgNjQuMjYzMyA1My4xMjk2IDYzLjc4MTQgNTEuODk3OUw1Ny4yMDk1IDM1LjEwMDlDNTYuMjkwOSAzMi43NTI5IDU1LjI4MTQgMzMuNzI4NSA1My45MDYgMzQuMzg2OEM0OC45NzM0IDM2Ljc0NzYgNDQuNTM0OSA0MC4xNTkgNDAuODYwMSA0NC4zMTU0TDU1LjkzMjQgNTguNzAyOFpNODguMDY3NiA4NS41NDgxQzg1LjgzNTIgODguMjYwNSA4My4wMTQ4IDkwLjQwMjkgNzkuOTI2OSA5MS42MDhMODcuNTA4OSAxMTAuOTg2QzkzLjQ3ODUgMTA4LjY1NCA5OC44MzM2IDEwNC44MDYgMTAzLjE0IDk5LjkzNTVMODguMDY3NiA4NS41NDgxWiIgZmlsbD0iI0NERTNGRiIvPgo8cGF0aCBkPSJNNzIgODkuNDM4OEM2Mi40NTM0IDg5LjQzODggNTQuNjg2NSA4MS42NzIxIDU0LjY4NjUgNzIuMTI1NEM1NC42ODY1IDYyLjU3ODYgNjIuNDUzNCA1NC44MTE5IDcyIDU0LjgxMTlDODEuNTQ2OCA1NC44MTE5IDg5LjMxMzQgNjIuNTc4OCA4OS4zMTM0IDcyLjEyNTRDODkuMzEzNCA4MS42NzIgODEuNTQ2OCA4OS40Mzg4IDcyIDg5LjQzODhaTTcyIDU5LjExMDVDNjQuODIzNCA1OS4xMTA1IDU4Ljk4NDkgNjQuOTQ5IDU4Ljk4NDkgNzIuMTI1NkM1OC45ODQ5IDc5LjMwMjIgNjQuODIzNCA4NS4xNDA2IDcyIDg1LjE0MDZDNzkuMTc2NiA4NS4xNDA2IDg1LjAxNSA3OS4zMDIyIDg1LjAxNSA3Mi4xMjU2Qzg1LjAxNSA2NC45NDkgNzkuMTc2NiA1OS4xMTA1IDcyIDU5LjExMDVaIiBmaWxsPSIjMDBCNEZGIi8+CjxkZWZzPgo8ZmlsdGVyIGlkPSJmaWx0ZXIwX2lfMzMwXzQ4OTYzIiB4PSIyNi41MTEyIiB5PSIyNi42MzY3IiB3aWR0aD0iOTIuOTc3OCIgaGVpZ2h0PSI5Mi45Nzc1IiBmaWx0ZXJVbml0cz0idXNlclNwYWNlT25Vc2UiIGNvbG9yLWludGVycG9sYXRpb24tZmlsdGVycz0ic1JHQiI+CjxmZUZsb29kIGZsb29kLW9wYWNpdHk9IjAiIHJlc3VsdD0iQmFja2dyb3VuZEltYWdlRml4Ii8+CjxmZUJsZW5kIG1vZGU9Im5vcm1hbCIgaW49IlNvdXJjZUdyYXBoaWMiIGluMj0iQmFja2dyb3VuZEltYWdlRml4IiByZXN1bHQ9InNoYXBlIi8+CjxmZUNvbG9yTWF0cml4IGluPSJTb3VyY2VBbHBoYSIgdHlwZT0ibWF0cml4IiB2YWx1ZXM9IjAgMCAwIDAgMCAwIDAgMCAwIDAgMCAwIDAgMCAwIDAgMCAwIDEyNyAwIiByZXN1bHQ9ImhhcmRBbHBoYSIvPgo8ZmVPZmZzZXQgZHg9IjIiIGR5PSIyIi8+CjxmZUdhdXNzaWFuQmx1ciBzdGREZXZpYXRpb249IjIuNSIvPgo8ZmVDb21wb3NpdGUgaW4yPSJoYXJkQWxwaGEiIG9wZXJhdG9yPSJhcml0aG1ldGljIiBrMj0iLTEiIGszPSIxIi8+CjxmZUNvbG9yTWF0cml4IHR5cGU9Im1hdHJpeCIgdmFsdWVzPSIwIDAgMCAwIDEgMCAwIDAgMCAxIDAgMCAwIDAgMSAwIDAgMCAwLjIxIDAiLz4KPGZlQmxlbmQgbW9kZT0ibm9ybWFsIiBpbjI9InNoYXBlIiByZXN1bHQ9ImVmZmVjdDFfaW5uZXJTaGFkb3dfMzMwXzQ4OTYzIi8+CjwvZmlsdGVyPgo8bGluZWFyR3JhZGllbnQgaWQ9InBhaW50MF9saW5lYXJfMzMwXzQ4OTYzIiB4MT0iLTE1LjUiIHkxPSItMTIiIHgyPSIyMTYuNSIgeTI9IjE4NS41IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CjxzdG9wIHN0b3AtY29sb3I9IiM2NUNDRkYiLz4KPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDQ0Mzc0Ii8+CjwvbGluZWFyR3JhZGllbnQ+CjwvZGVmcz4KPC9zdmc+Cg==
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "source"], ["spec", "optical"], ["spec", "storage"], ["spec", "storageClass"]]
+  secrets:
+    exclude: []
+    include: []

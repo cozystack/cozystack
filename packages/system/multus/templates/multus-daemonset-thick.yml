@@ -154,7 +154,7 @@ spec:
       serviceAccountName: multus
       containers:
         - name: kube-multus
-          image: ghcr.io/k8snetworkplumbingwg/multus-cni:v4.2.2-thick
+          image: ghcr.io/k8snetworkplumbingwg/multus-cni:v4.2.3-thick
           command: [ "/usr/src/multus-cni/bin/multus-daemon" ]
           resources:
             requests:
@@ -162,7 +162,6 @@ spec:
               memory: "100Mi"
             limits:
               cpu: "100m"
-              memory: "100Mi"
           securityContext:
             privileged: true
           terminationMessagePolicy: FallbackToLogsOnError
@@ -201,11 +200,13 @@ spec:
                   fieldPath: spec.nodeName
       initContainers:
         - name: install-multus-binary
-          image: ghcr.io/k8snetworkplumbingwg/multus-cni:v4.2.2-thick
+          image: ghcr.io/k8snetworkplumbingwg/multus-cni:v4.2.3-thick
           command:
-            - "sh"
-            - "-c"
-            - "cp /usr/src/multus-cni/bin/multus-shim /host/opt/cni/bin/multus-shim && cp /usr/src/multus-cni/bin/passthru /host/opt/cni/bin/passthru"
+            - "/usr/src/multus-cni/bin/install_multus"
+            - "-d"
+            - "/host/opt/cni/bin"
+            - "-t"
+            - "thick"
           resources:
             requests:
               cpu: "10m"

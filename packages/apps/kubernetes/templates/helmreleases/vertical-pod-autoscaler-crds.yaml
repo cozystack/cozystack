@@ -6,18 +6,14 @@ metadata:
   labels:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
 spec:
   interval: 5m
   releaseName: vertical-pod-autoscaler-crds
-  chart:
-    spec:
-      chart: cozy-vertical-pod-autoscaler-crds
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-vertical-pod-autoscaler-crds
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
@@ -37,6 +33,4 @@ spec:
   - name: {{ .Release.Name }}
     namespace: {{ .Release.Namespace }}
   {{- end }}
-  - name: {{ .Release.Name }}-cilium
-    namespace: {{ .Release.Namespace }}
 {{- end }}

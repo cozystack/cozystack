@@ -8,7 +8,6 @@ need yq; need jq; need base64
 CHART_YAML="${CHART_YAML:-Chart.yaml}"
 VALUES_YAML="${VALUES_YAML:-values.yaml}"
 SCHEMA_JSON="${SCHEMA_JSON:-values.schema.json}"
-CRD_DIR="../../system/cozystack-resource-definitions/cozyrds"
 
 [[ -f "$CHART_YAML" ]] || { echo "No $CHART_YAML found"; exit 1; }
 [[ -f "$SCHEMA_JSON" ]] || { echo "No $SCHEMA_JSON found"; exit 1; }
@@ -21,6 +20,8 @@ ICON_PATH_RAW="$(yq -r '.icon // ""' "$CHART_YAML")"
 if [[ -z "$NAME" ]]; then
   echo "Chart.yaml: .name is empty"; exit 1
 fi
+
+CRD_DIR="../../system/${NAME}-rd/cozyrds"
 
 # Resolve icon path
 # Accepts:
@@ -64,12 +65,21 @@ case "$PWD" in
   *"/extra/"*) SOURCE_NAME="cozystack-extra" ;;
 esac
 
+# Determine variant from PackageSource file
+# Look for packages/core/platform/sources/${NAME}-application.yaml
+PACKAGE_SOURCE_FILE="../../core/platform/sources/${NAME}-application.yaml"
+if [[ -f "$PACKAGE_SOURCE_FILE" ]]; then
+  VARIANT="$(yq -r '.spec.variants[0].name // "default"' "$PACKAGE_SOURCE_FILE")"
+else
+  VARIANT="default"
+fi
+
 # If file doesn't exist, create a minimal skeleton
 OUT="${OUT:-$CRD_DIR/$NAME.yaml}"
 if [[ ! -f "$OUT" ]]; then
   cat >"$OUT" <<EOF
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: ${NAME}
 spec: {}
@@ -85,6 +95,7 @@ fi
 export DESCRIPTION="$DESC"
 export ICON_B64="$ICON_B64"
 export SOURCE_NAME="$SOURCE_NAME"
+export VARIANT="$VARIANT"
 export SCHEMA_JSON_MIN="$(jq -c . "$SCHEMA_JSON")"
 
 # Generate keysOrder from values.yaml
@@ -116,21 +127,20 @@ export KEYS_ORDER="$(
 
 # Update only necessary fields in-place
 # - openAPISchema is loaded from file as a multi-line string (block scalar)
-# - labels ensure cozystack.io/ui: "true"
-# - prefix = "<name>-"
-# - sourceRef derived from directory (apps|extra)
+# - prefix = "<name>-" or "" for extra
+# - chartRef points to ExternalArtifact created by Package controller
 yq -i '
   .apiVersion = (.apiVersion // "cozystack.io/v1alpha1") |
-  .kind       = (.kind       // "CozystackResourceDefinition") |
+  .kind       = (.kind       // "ApplicationDefinition") |
   .metadata.name = strenv(RES_NAME) |
   .spec.application.openAPISchema = strenv(SCHEMA_JSON_MIN) |
   (.spec.application.openAPISchema style="literal") |
   .spec.release.prefix = (strenv(PREFIX)) |
-  .spec.release.labels."cozystack.io/ui" = "true" |
-  .spec.release.chart.name = strenv(RES_NAME) |
-  .spec.release.chart.sourceRef.kind = "HelmRepository" |
-  .spec.release.chart.sourceRef.name = strenv(SOURCE_NAME) |
-  .spec.release.chart.sourceRef.namespace = "cozy-public" |
+  del(.spec.release.labels."cozystack.io/application") |
+  del(.spec.release.labels."cozystack.io/ui") |
+  .spec.release.chartRef.kind = "ExternalArtifact" |
+  .spec.release.chartRef.name = ("cozystack-" + strenv(RES_NAME) + "-application-" + strenv(VARIANT) + "-" + strenv(RES_NAME)) |
+  .spec.release.chartRef.namespace = "cozy-system" |
   .spec.dashboard.description = strenv(DESCRIPTION) |
   .spec.dashboard.icon = strenv(ICON_B64) |
   .spec.dashboard.keysOrder = env(KEYS_ORDER)

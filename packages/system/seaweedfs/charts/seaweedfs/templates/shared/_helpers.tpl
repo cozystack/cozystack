@@ -83,6 +83,26 @@ Inject extra environment vars in the format key:value, if populated
 {{- end -}}
 {{- end -}}
 
+{{/* Return the proper admin image */}}
+{{- define "admin.image" -}}
+{{- if .Values.admin.imageOverride -}}
+{{- $imageOverride := .Values.admin.imageOverride -}}
+{{- printf "%s" $imageOverride -}}
+{{- else -}}
+{{- include "common.image" . }}
+{{- end -}}
+{{- end -}}
+
+{{/* Return the proper worker image */}}
+{{- define "worker.image" -}}
+{{- if .Values.worker.imageOverride -}}
+{{- $imageOverride := .Values.worker.imageOverride -}}
+{{- printf "%s" $imageOverride -}}
+{{- else -}}
+{{- include "common.image" . }}
+{{- end -}}
+{{- end -}}
+
 {{/* Return the proper volume image */}}
 {{- define "volume.image" -}}
 {{- if .Values.volume.imageOverride -}}
@@ -96,13 +116,16 @@ Inject extra environment vars in the format key:value, if populated
 {{/* Computes the container image name for all components (if they are not overridden) */}}
 {{- define "common.image" -}}
 {{- $registryName := default .Values.image.registry .Values.global.registry | toString -}}
-{{- $repositoryName := .Values.image.repository | toString -}}
+{{- $repositoryName := default .Values.image.repository .Values.global.repository | toString -}}
 {{- $name := .Values.global.imageName | toString -}}
 {{- $tag := default .Chart.AppVersion .Values.image.tag  | toString -}}
+{{- if $repositoryName -}}
+{{-   $name = printf "%s/%s" (trimSuffix "/" $repositoryName) (base $name) -}}
+{{- end -}}
 {{- if $registryName -}}
-{{- printf "%s/%s%s:%s" $registryName $repositoryName $name $tag -}}
+{{-   printf "%s/%s:%s" $registryName $name $tag -}}
 {{- else -}}
-{{- printf "%s%s:%s" $repositoryName $name $tag -}}
+{{-   printf "%s:%s" $name $tag -}}
 {{- end -}}
 {{- end -}}
 
@@ -127,6 +150,15 @@ Inject extra environment vars in the format key:value, if populated
 {{/* check if any Master PVC exists */}}
 {{- define "master.pvc_exists" -}}
 {{- if or (eq .Values.master.data.type "persistentVolumeClaim") (eq .Values.master.logs.type "persistentVolumeClaim") -}}
+{{- printf "true" -}}
+{{- else -}}
+{{- printf "" -}}
+{{- end -}}
+{{- end -}}
+
+{{/* check if any Admin PVC exists */}}
+{{- define "admin.pvc_exists" -}}
+{{- if or (eq .Values.admin.data.type "persistentVolumeClaim") (eq .Values.admin.logs.type "persistentVolumeClaim") -}}
 {{- printf "true" -}}
 {{- else -}}
 {{- printf "" -}}
@@ -217,5 +249,54 @@ or generate a new random password if it doesn't exist.
   {{- index $existingSecret.data $key | b64dec -}}
 {{- else -}}
   {{- randAlphaNum $length -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Compute the master service address to be used in cluster env vars.
+If allInOne is enabled, point to the all-in-one service; otherwise, point to the master service.
+*/}}
+{{- define "seaweedfs.cluster.masterAddress" -}}
+{{- $serviceNameSuffix := "-master" -}}
+{{- if .Values.allInOne.enabled -}}
+{{-   $serviceNameSuffix = "-all-in-one" -}}
+{{- end -}}
+{{- printf "%s%s.%s:%d" (include "seaweedfs.name" .) $serviceNameSuffix .Release.Namespace (int .Values.master.port) -}}
+{{- end -}}
+
+{{/*
+Compute the filer service address to be used in cluster env vars.
+If allInOne is enabled, point to the all-in-one service; otherwise, point to the filer-client service.
+*/}}
+{{- define "seaweedfs.cluster.filerAddress" -}}
+{{- $serviceNameSuffix := "-filer-client" -}}
+{{- if .Values.allInOne.enabled -}}
+{{-   $serviceNameSuffix = "-all-in-one" -}}
+{{- end -}}
+{{- printf "%s%s.%s:%d" (include "seaweedfs.name" .) $serviceNameSuffix .Release.Namespace (int .Values.filer.port) -}}
+{{- end -}}
+
+{{/*
+Generate comma-separated list of master server addresses.
+Usage: {{ include "seaweedfs.masterServers" . }}
+Output example: ${SEAWEEDFS_FULLNAME}-master-0.${SEAWEEDFS_FULLNAME}-master.namespace:9333,${SEAWEEDFS_FULLNAME}-master-1...
+*/}}
+{{- define "seaweedfs.masterServers" -}}
+{{- $fullname := include "seaweedfs.name" . -}}
+{{- range $index := until (.Values.master.replicas | int) -}}
+{{- if $index }},{{ end -}}
+${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Generate master server argument value, using global.masterServer if set, otherwise the generated list.
+Usage: {{ include "seaweedfs.masterServerArg" . }}
+*/}}
+{{- define "seaweedfs.masterServerArg" -}}
+{{- if .Values.global.masterServer -}}
+{{- .Values.global.masterServer -}}
+{{- else -}}
+{{- include "seaweedfs.masterServers" . -}}
 {{- end -}}
 {{- end -}}

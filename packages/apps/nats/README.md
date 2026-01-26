@@ -7,29 +7,29 @@ It provides a data layer for cloud native applications, IoT messaging, and micro
 
 ### Common parameters
 
-| Name               | Description                                                                                                                               | Type        | Value   |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------- |
-| `replicas`         | Number of replicas                                                                                                                        | `int`       | `2`     |
-| `resources`        | Explicit CPU and memory configuration for each NATS replica. When left empty, the preset defined in `resourcesPreset` is applied.         | `*object`   | `null`  |
-| `resources.cpu`    | CPU available to each replica                                                                                                             | `*quantity` | `null`  |
-| `resources.memory` | Memory (RAM) available to each replica                                                                                                    | `*quantity` | `null`  |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`. | `string`    | `nano`  |
-| `storageClass`     | StorageClass used to store the data                                                                                                       | `string`    | `""`    |
-| `external`         | Enable external access from outside the cluster                                                                                           | `bool`      | `false` |
+| Name               | Description                                                                                                                    | Type       | Value   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------- | ------- |
+| `replicas`         | Number of replicas.                                                                                                            | `int`      | `2`     |
+| `resources`        | Explicit CPU and memory configuration for each NATS replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
+| `resources.cpu`    | CPU available to each replica.                                                                                                 | `quantity` | `""`    |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                        | `quantity` | `""`    |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                        | `string`   | `nano`  |
+| `storageClass`     | StorageClass used to store the data.                                                                                           | `string`   | `""`    |
+| `external`         | Enable external access from outside the cluster.                                                                               | `bool`     | `false` |
 
 
 ### Application-specific parameters
 
-| Name                   | Description                                                                                                    | Type                | Value   |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------- | ------- |
-| `users`                | Users configuration                                                                                            | `map[string]object` | `{...}` |
-| `users[name].password` | Password for the user                                                                                          | `*string`           | `null`  |
-| `jetstream`            | Jetstream configuration                                                                                        | `object`            | `{}`    |
-| `jetstream.enabled`    | Enable or disable Jetstream. Set to `true` (default) to enable Jetstream for persistent messaging in NATS.     | `bool`              | `true`  |
-| `jetstream.size`       | Jetstream persistent storage size. Specifies the size of the persistent storage for Jetstream (message store). | `quantity`          | `10Gi`  |
-| `config`               | NATS configuration                                                                                             | `object`            | `{}`    |
-| `config.merge`         | Additional configuration to merge into NATS config (see example)                                               | `*object`           | `{}`    |
-| `config.resolver`      | Additional resolver configuration to merge into NATS config (see example)                                      | `*object`           | `{}`    |
+| Name                   | Description                                                   | Type                | Value  |
+| ---------------------- | ------------------------------------------------------------- | ------------------- | ------ |
+| `users`                | Users configuration map.                                      | `map[string]object` | `{}`   |
+| `users[name].password` | Password for the user.                                        | `string`            | `""`   |
+| `jetstream`            | Jetstream configuration.                                      | `object`            | `{}`   |
+| `jetstream.enabled`    | Enable or disable Jetstream for persistent messaging in NATS. | `bool`              | `true` |
+| `jetstream.size`       | Jetstream persistent storage size.                            | `quantity`          | `10Gi` |
+| `config`               | NATS configuration.                                           | `object`            | `{}`   |
+| `config.merge`         | Additional configuration to merge into NATS config.           | `*object`           | `{}`   |
+| `config.resolver`      | Additional resolver configuration to merge into NATS config.  | `*object`           | `{}`   |
 
 
 ## Parameter examples and reference

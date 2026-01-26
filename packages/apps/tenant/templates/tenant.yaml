@@ -28,13 +28,13 @@ rules:
   - cozystack.io
   resources:
   - workloadmonitors
+  - workloads
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - core.cozystack.io
   resources:
   - tenantmodules
   - tenantsecrets
-  - tenantsecretstables
   verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -113,6 +113,7 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
@@ -121,7 +122,7 @@ metadata:
   name: {{ include "tenant.name" . }}-view
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "view" (include "tenant.name" .)) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-view
@@ -184,13 +185,13 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
   - apiGroups:
     - core.cozystack.io
     resources:
     - tenantmodules
     - tenantsecrets
-    - tenantsecretstables
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
@@ -199,7 +200,7 @@ metadata:
   name: {{ include "tenant.name" . }}-use
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "use" (include "tenant.name" .)) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "use" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-use
@@ -270,6 +271,7 @@ rules:
     - vmdisks
     - vminstances
     - infos
+    - virtualprivateclouds
     verbs:
     - get
     - list
@@ -282,13 +284,13 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
   - apiGroups:
     - core.cozystack.io
     resources:
     - tenantmodules
     - tenantsecrets
-    - tenantsecretstables
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
@@ -297,7 +299,7 @@ metadata:
   name: {{ include "tenant.name" . }}-admin
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "admin" (include "tenant.name" .)) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "admin" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-admin
@@ -356,13 +358,13 @@ rules:
     - cozystack.io
     resources:
     - workloadmonitors
+    - workloads
     verbs: ["get", "list", "watch"]
   - apiGroups:
     - core.cozystack.io
     resources:
     - tenantmodules
     - tenantsecrets
-    - tenantsecretstables
     verbs: ["get", "list", "watch"]
 ---
 kind: RoleBinding
@@ -371,7 +373,7 @@ metadata:
   name: {{ include "tenant.name" . }}-super-admin
   namespace: {{ include "tenant.name" . }}
 subjects:
-{{ include "cozy-lib.rbac.subjectsForTenant" (list "super-admin" (include "tenant.name" .) ) | nindent 2 }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "super-admin" (include "tenant.name" .) ) | nindent 2 }}
 roleRef:
   kind: Role
   name: {{ include "tenant.name" . }}-super-admin

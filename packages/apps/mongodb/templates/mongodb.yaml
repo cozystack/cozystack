@@ -1,0 +1,173 @@
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+---
+apiVersion: psmdb.percona.com/v1
+kind: PerconaServerMongoDB
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  crVersion: 1.21.1
+  clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
+  pause: false
+  unmanaged: false
+  image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
+  imagePullPolicy: IfNotPresent
+
+  {{- if lt (int .Values.replicas) 3 }}
+  unsafeFlags:
+    replsetSize: true
+  {{- end }}
+
+  updateStrategy: SmartUpdate
+  upgradeOptions:
+    apply: disabled
+
+  pmm:
+    enabled: false
+    image: percona/pmm-client:2.44.1
+    serverHost: ""
+
+  sharding:
+    enabled: {{ .Values.sharding | default false }}
+    balancer:
+      enabled: true
+    {{- if .Values.sharding }}
+    configsvrReplSet:
+      size: {{ .Values.shardingConfig.configServers }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      volumeSpec:
+        persistentVolumeClaim:
+          {{- with .Values.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .Values.shardingConfig.configServerSize }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+    mongos:
+      size: {{ .Values.shardingConfig.mongos }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+      expose:
+        exposeType: ClusterIP
+    {{- end }}
+
+  replsets:
+    {{- if .Values.sharding }}
+    {{- range .Values.shardingConfig.shards }}
+    - name: {{ .name }}
+      size: {{ .replicas }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $.Values.resourcesPreset $.Values.resources $) | nindent 8 }}
+      volumeSpec:
+        persistentVolumeClaim:
+          {{- with $.Values.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .size }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+    {{- end }}
+    {{- else }}
+    - name: rs0
+      size: {{ .Values.replicas }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      volumeSpec:
+        persistentVolumeClaim:
+          {{- with .Values.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .Values.size }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+      expose:
+        enabled: false
+    {{- end }}
+
+  {{- if .Values.users }}
+  users:
+    {{- range $username, $user := .Values.users }}
+    {{- if not $user.roles }}
+    {{- fail (printf "users.%s.roles is required and cannot be empty" $username) }}
+    {{- end }}
+    - name: {{ $username }}
+      db: {{ $user.db }}
+      passwordSecretRef:
+        name: {{ $.Release.Name }}-user-{{ $username }}
+        key: password
+      roles:
+        {{- range $user.roles }}
+        - name: {{ .name }}
+          db: {{ .db }}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+
+  backup:
+    enabled: {{ .Values.backup.enabled | default false }}
+    image: percona/percona-backup-mongodb:2.11.0
+    {{- if .Values.backup.enabled }}
+    storages:
+      s3-storage:
+        type: s3
+        s3:
+          bucket: {{ .Values.backup.destinationPath | trimPrefix "s3://" | regexFind "^[^/]+" }}
+          prefix: {{ .Values.backup.destinationPath | trimPrefix "s3://" | splitList "/" | rest | join "/" }}
+          endpointUrl: {{ .Values.backup.endpointURL }}
+          credentialsSecret: {{ .Release.Name }}-s3-creds
+          insecureSkipTLSVerify: false
+          forcePathStyle: true
+    tasks:
+      - name: daily-backup
+        enabled: true
+        schedule: {{ .Values.backup.schedule | quote }}
+        keep: {{ .Values.backup.retentionPolicy | trimSuffix "d" | int }}
+        storageName: s3-storage
+        type: logical
+        compressionType: gzip
+    pitr:
+      enabled: true
+    {{- end }}
+---
+# WorkloadMonitor tracks data-bearing mongod pods only (not config servers or mongos routers)
+# The selector filters by component=mongod, so we only count shard replicas
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  {{- if .Values.sharding }}
+  {{- $totalReplicas := 0 }}
+  {{- range .Values.shardingConfig.shards }}
+  {{- $totalReplicas = add $totalReplicas .replicas }}
+  {{- end }}
+  replicas: {{ $totalReplicas }}
+  {{- else }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  minReplicas: 1
+  kind: mongodb
+  type: mongodb
+  selector:
+    app.kubernetes.io/name: percona-server-mongodb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: mongod
+  version: {{ .Chart.Version }}

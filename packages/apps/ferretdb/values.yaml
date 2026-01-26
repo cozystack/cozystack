@@ -1,35 +1,56 @@
+##
 ## @section Common parameters
 ##
-## @param replicas {int} Number of replicas
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each FerretDB replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of replicas.
 replicas: 2
-## @param resources {*resources} Explicit CPU and memory configuration for each FerretDB replica. When left empty, the preset defined in `resourcesPreset` is applied.
-## @field resources.cpu {*quantity} CPU available to each replica
-## @field resources.memory {*quantity} Memory (RAM) available to each replica
-#  resources:
-#    cpu: 4000m
-#    memory: 4Gi
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each FerretDB replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-## @param resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
+## @param {ResourcesPreset} resourcesPreset="micro" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "micro"
-## @param size {quantity} Persistent Volume Claim size, available for application data
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
-## @param storageClass {string} StorageClass used to store the data
+
+## @param {string} storageClass - StorageClass used to store the data.
 storageClass: ""
-## @param external {bool} Enable external access from outside the cluster
+
+## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+##
 ## @section Application-specific parameters
 ##
-## @param quorum {quorum} Configuration for the quorum-based synchronous replication
-## @field quorum.minSyncReplicas {int} Minimum number of synchronous replicas that must acknowledge a transaction before it is considered committed
-## @field quorum.maxSyncReplicas {int} Maximum number of synchronous replicas that can acknowledge a transaction (must be lower than the total number of replicas)
+
+## @typedef {struct} Quorum - Configuration for quorum-based synchronous replication.
+## @field {int} minSyncReplicas - Minimum number of synchronous replicas required for commit.
+## @field {int} maxSyncReplicas - Maximum number of synchronous replicas allowed (must be less than total replicas).
+
+## @param {Quorum} quorum - Configuration for quorum-based synchronous replication.
 quorum:
   minSyncReplicas: 0
   maxSyncReplicas: 0
 
-## @param users {map[string]user} Users configuration
-## @field user.password {*string} Password for the user
+## @typedef {struct} User - User configuration.
+## @field {string} [password] - Password for the user.
+
+## @param {map[string]User} users - Users configuration map.
+users: {}
 ## Example:
 ## users:
 ##   user1:
@@ -37,21 +58,21 @@ quorum:
 ##   user2:
 ##     password: hackme
 ##
-users: {}
 
-
-
+##
 ## @section Backup parameters
 ##
 
-## @param backup {backup} Backup configuration
-## @field backup.enabled {bool} Enable regular backups, default is `false`.
-## @field backup.schedule {string} Cron schedule for automated backups
-## @field backup.retentionPolicy {string} Retention policy
-## @field backup.endpointURL {string} S3 Endpoint used to upload data to the cloud
-## @field backup.destinationPath {string} Path to store the backup (i.e. s3://bucket/path/to/folder)
-## @field backup.s3AccessKey {string} Access key for S3, used for authentication
-## @field backup.s3SecretKey {string} Secret key for S3, used for authentication
+## @typedef {struct} Backup - Backup configuration.
+## @field {bool} enabled - Enable regular backups (default: false).
+## @field {string} schedule - Cron schedule for automated backups.
+## @field {string} retentionPolicy - Retention policy.
+## @field {string} endpointURL - S3 endpoint URL for uploads.
+## @field {string} destinationPath - Path to store the backup (e.g. s3://bucket/path/to/folder/).
+## @field {string} s3AccessKey - Access key for S3 authentication.
+## @field {string} s3SecretKey - Secret key for S3 authentication.
+
+## @param {Backup} backup - Backup configuration.
 backup:
   enabled: false
   schedule: "0 2 * * * *"
@@ -61,18 +82,17 @@ backup:
   s3AccessKey: "<your-access-key>"
   s3SecretKey: "<your-secret-key>"
 
-
+##
 ## @section Bootstrap (recovery) parameters
 ##
-## @param bootstrap {bootstrap} Bootstrap (recovery) configuration
-## @field bootstrap.enabled {*bool} Restore database cluster from a backup
-## @field bootstrap.recoveryTime {*string} Timestamp (PITR) up to which recovery will proceed, expressed in RFC 3339 format. If left empty, will restore latest.
-## @field bootstrap.oldName {*string} Name of database cluster before deleting
-##
+
+## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
+## @field {bool} [enabled] - Restore database cluster from a backup.
+## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
+## @field {string} [oldName] - Name of database cluster before deletion.
+
+## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
   enabled: false
-  # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
   oldName: ""
-
-

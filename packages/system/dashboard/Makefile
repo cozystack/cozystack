@@ -1,8 +1,8 @@
 export NAME=dashboard
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 update: update-crd update-dockerfiles
 image: image-openapi-ui image-openapi-ui-k8s-bff image-token-proxy update-tenant-text

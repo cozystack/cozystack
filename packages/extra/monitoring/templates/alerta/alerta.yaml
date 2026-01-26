@@ -1,9 +1,6 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $issuerType := (index $cozyConfig.data "clusterissuer") | default "http01" }}
-
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $ingress := index $myNS.metadata.annotations "namespace.cozystack.io/ingress" }}
-{{- $host := index $myNS.metadata.annotations "namespace.cozystack.io/host" }}
+{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}
+{{- $ingress := .Values._namespace.ingress }}
+{{- $host := .Values._namespace.host }}
 
 {{- $apiKey := randAlphaNum 32 }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace "alerta" }}
@@ -129,13 +126,19 @@ spec:
               value: "{{ .Values.alerta.alerts.telegram.token }}"
             - name: TELEGRAM_WEBHOOK_URL
               value: "https://{{ printf "alerta.%s" (.Values.host | default $host) }}/api/webhooks/telegram?api-key={{ $apiKey }}"
+            {{- if .Values.alerta.alerts.telegram.disabledSeverity }}
             - name: TELEGRAM_DISABLE_NOTIFICATION_SEVERITY
-              value: "{{ .Values.alerta.alerts.telegram.disabledSeverity }}"
+              value: {{ .Values.alerta.alerts.telegram.disabledSeverity | toJson | quote }}
+            {{- end }}
             {{- end }}
 
             {{- if .Values.alerta.alerts.slack.url }}
             - name: "SLACK_WEBHOOK_URL"
               value: "{{ .Values.alerta.alerts.slack.url }}"
+            {{- if .Values.alerta.alerts.slack.disabledSeverity }}
+            - name: SLACK_SEVERITY_FILTER
+              value: {{ .Values.alerta.alerts.slack.disabledSeverity | toJson | quote }}
+            {{- end }}
             {{- end }}
 
           ports:

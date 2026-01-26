@@ -1,10 +1,10 @@
 NAME=fluxcd
 NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 apply-locally:
-	cozypkg apply --plain -n $(NAMESPACE) $(NAME)
+	cozyhr apply --plain -n $(NAMESPACE) $(NAME)
 
 update:
 	rm -rf charts

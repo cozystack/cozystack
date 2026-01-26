@@ -1,0 +1,50 @@
+diff --git a/src/components/molecules/EnrichedTable/organisms/EnrichedTable/utils.tsx b/src/components/molecules/EnrichedTable/organisms/EnrichedTable/utils.tsx
+index 8bcef4d..2551e92 100644
+--- a/src/components/molecules/EnrichedTable/organisms/EnrichedTable/utils.tsx
++++ b/src/components/molecules/EnrichedTable/organisms/EnrichedTable/utils.tsx
+@@ -22,6 +22,15 @@ import { TableFactory } from '../../molecules'
+ import { ShortenedTextWithTooltip, FilterDropdown, TrimmedTags, TextAlignContainer, TinyButton } from './atoms'
+ import { TInternalDataForControls } from './types'
+ 
++const getPluralForm = (singular: string): string => {
++  // If already ends with 's', add 'es'
++  if (singular.endsWith('s')) {
++    return `${singular}es`
++  }
++  // Otherwise just add 's'
++  return `${singular}s`
++}
++
+ export const getCellRender = ({
+   value,
+   record,
+@@ -255,7 +264,7 @@ export const getEnrichedColumnsWithControls = ({
+       key: 'controls',
+       className: 'controls',
+       width: 60,
+-      render: (value: TInternalDataForControls) => {
++      render: (value: TInternalDataForControls, record: unknown) => {
+         return (
+           // <TextAlignContainer $align="right" className="hideable">
+           <TextAlignContainer $align="center">
+@@ -279,10 +288,19 @@ export const getEnrichedColumnsWithControls = ({
+                   domEvent.stopPropagation()
+                   domEvent.preventDefault()
+                   if (key === 'edit') {
++                    // Special case: redirect tenantmodules from core.cozystack.io to apps.cozystack.io with plural form
++                    let apiGroupAndVersion = value.apiGroupAndVersion
++                    let typeName = value.typeName
++                    if (apiGroupAndVersion?.startsWith('core.cozystack.io/') && typeName === 'tenantmodules') {
++                      const appsApiVersion = apiGroupAndVersion.replace('core.cozystack.io/', 'apps.cozystack.io/')
++                      const pluralTypeName = getPluralForm(value.entryName)
++                      apiGroupAndVersion = appsApiVersion
++                      typeName = pluralTypeName
++                    }
+                     navigate(
+                       `${baseprefix}/${value.cluster}${value.namespace ? `/${value.namespace}` : ''}${
+                         value.syntheticProject ? `/${value.syntheticProject}` : ''
+-                      }/${value.pathPrefix}/${value.apiGroupAndVersion}/${value.typeName}/${value.entryName}?backlink=${
++                      }/${value.pathPrefix}/${apiGroupAndVersion}/${typeName}/${value.entryName}?backlink=${
+                         value.backlink
+                       }`,
+                     )

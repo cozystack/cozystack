@@ -51,9 +51,9 @@ spec:
           {{- else if eq .Values.systemDisk.image "ubuntu" }}
           url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
           {{- else if eq .Values.systemDisk.image "fedora" }}
-          url: https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2
+          url: https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2
           {{- else if eq .Values.systemDisk.image "alpine" }}
-          url: https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.2-x86_64-bios-tiny-r0.qcow2
+          url: https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.8-x86_64-bios-cloudinit-r0.qcow2
           {{- else if eq .Values.systemDisk.image "talos" }}
           url: https://github.com/siderolabs/talos/releases/download/v1.7.6/nocloud-amd64.raw.xz
           {{- end }}
@@ -62,7 +62,6 @@ spec:
   template:
     metadata:
       annotations:
-        policy.cozystack.io/allow-external-communication: "false"
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
@@ -93,7 +92,7 @@ spec:
           - disk:
               bus: scsi
             name: systemdisk
-          {{- if or .Values.cloudInit .Values.sshKeys }}
+          {{- if or .Values.cloudInit .Values.sshKeys (and .Values.subnets (or (eq .Values.systemDisk.image "ubuntu") (eq .Values.systemDisk.image "alpine"))) }}
           - disk:
               bus: virtio
             name: cloudinitdisk
@@ -102,6 +101,12 @@ spec:
           interfaces:
           - name: default
             bridge: {}
+          {{- if .Values.subnets }}
+          {{- range $i, $subnet := .Values.subnets }}
+          - name: {{ $subnet.name }}
+            bridge: {}
+          {{- end }}
+          {{- end }}
 
         machine:
           type: ""
@@ -119,17 +124,32 @@ spec:
 
       terminationGracePeriodSeconds: 30
 
+      {{- include "virtual-machine.nodeAffinity" . | nindent 6 }}
+
       volumes:
         - name: systemdisk
           dataVolume:
             name: {{ include "virtual-machine.fullname" . }}
-        {{- if or .Values.cloudInit .Values.sshKeys }}
+        {{- if or .Values.cloudInit .Values.sshKeys (and .Values.subnets (or (eq .Values.systemDisk.image "ubuntu") (eq .Values.systemDisk.image "alpine"))) }}
         - name: cloudinitdisk
           cloudInitNoCloud:
+            {{- if or .Values.cloudInit .Values.sshKeys }}
             secretRef:
               name: {{ include "virtual-machine.fullname" . }}-cloud-init
+            {{- end }}
+            {{- if and .Values.subnets (or (eq .Values.systemDisk.image "ubuntu") (eq .Values.systemDisk.image "alpine")) }}
+            networkDataSecretRef:
+              name: {{ include "virtual-machine.fullname" . }}-network-config
+            {{- end }}
         {{- end }}
 
       networks:
       - name: default
         pod: {}
+      {{- if .Values.subnets }}
+      {{- range $i, $subnet := .Values.subnets }}
+      - name: {{ $subnet.name }}
+        multus:
+          networkName: {{ $.Release.Namespace }}/{{ $subnet.name }}
+      {{- end }}
+      {{- end }}

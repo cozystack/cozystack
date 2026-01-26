@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "linstor-scheduler.fullname" . | trunc 49 }}-test-schedule"
+  labels:
+    {{- include "linstor-scheduler.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  # Smoke test: just test the scheduler without volumes
+  schedulerName: {{ include "linstor-scheduler.fullname" . }}
+  containers:
+    - name: wget
+      image: busybox
+      command: []
+  restartPolicy: Never

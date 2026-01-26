@@ -1,5 +1,4 @@
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
+{{- $targetTenant := .Values._namespace.monitoring }}
 {{- if .Values.addons.monitoringAgents.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -8,17 +7,13 @@ metadata:
   labels:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
 spec:
   releaseName: cozy-monitoring-agents
-  chart:
-    spec:
-      chart: cozy-monitoring-agents
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-monitoring-agents
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
@@ -43,6 +38,10 @@ spec:
   - name: {{ .Release.Name }}-cozy-victoria-metrics-operator
     namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-vertical-pod-autoscaler-crds
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-prometheus-operator-crds
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-metrics-server
     namespace: {{ .Release.Namespace }}
   values:
     vmagent:

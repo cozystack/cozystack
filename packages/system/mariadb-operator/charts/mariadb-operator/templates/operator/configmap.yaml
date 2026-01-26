@@ -4,6 +4,7 @@ data:
   MARIADB_GALERA_LIB_PATH: "{{ .Values.config.galeraLibPath }}"
   MARIADB_DEFAULT_VERSION: "{{ .Values.config.mariadbDefaultVersion }}"
   RELATED_IMAGE_MARIADB: "{{ .Values.config.mariadbImage }}"
+  RELATED_IMAGE_MARIADB_NAME: "{{ .Values.config.mariadbImageName }}"
   RELATED_IMAGE_MAXSCALE: "{{ .Values.config.maxscaleImage }}"
   RELATED_IMAGE_EXPORTER: "{{ .Values.config.exporterImage }}"
   RELATED_IMAGE_EXPORTER_MAXSCALE: "{{ .Values.config.exporterMaxscaleImage }}"

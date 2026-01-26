@@ -1,0 +1,12 @@
+Scheduler {{ include "linstor-scheduler.fullname" . }} deployed!
+
+Used LINSTOR URL: {{ include "linstor-scheduler.linstorEndpoint" .}}
+
+Please run `helm test {{ .Release.Name }}` to ensure it's properly working.
+
+Specify the scheduler on your pods to start smart scheduling based on your Persistent Volumes:
+
+---
+spec:
+  schedulerName: {{ include "linstor-scheduler.fullname" . }}
+---

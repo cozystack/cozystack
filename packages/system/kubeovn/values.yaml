@@ -2,6 +2,7 @@ kube-ovn:
   namespace: cozy-kubeovn
   func:
     ENABLE_NP: false
+    ENABLE_LB: false
   ipv4:
     POD_CIDR: "10.244.0.0/16"
     POD_GATEWAY: "10.244.0.1"
@@ -43,7 +44,7 @@ kube-ovn:
       memory: "50Mi"
     limits:
       cpu: "1000m"
-      memory: "1Gi"
+      memory: "2Gi"
   kube-ovn-pinger:
     requests:
       cpu: "10m"
@@ -64,4 +65,4 @@ global:
   images:
     kubeovn:
       repository: kubeovn
-      tag: v1.14.5@sha256:af10da442a0c6dc7df47a0ef752e2eb5c247bb0b43069fdfcb2aa51511185ea2
+      tag: v1.14.25@sha256:d0b29daaf36e81cac0f9fb15d0ea6b1b49f1abba81a14c73b88a2e60ffcc5978

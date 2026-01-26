@@ -26,7 +26,6 @@ spec:
   template:
     metadata:
       annotations:
-        policy.cozystack.io/allow-external-communication: "false"
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
@@ -77,6 +76,12 @@ spec:
           interfaces:
           - name: default
             bridge: {}
+          {{- if .Values.subnets }}
+          {{- range $i, $subnet := .Values.subnets }}
+          - name: {{ $subnet.name }}
+            bridge: {}
+          {{- end }}
+          {{- end }}
         machine:
           type: ""
       {{- with .Values.sshKeys }}
@@ -90,6 +95,9 @@ spec:
             noCloud: {}
       {{- end }}
       terminationGracePeriodSeconds: 30
+
+      {{- include "virtual-machine.nodeAffinity" . | nindent 6 }}
+
       volumes:
       {{- range .Values.disks }}
       - name: disk-{{ .name }}
@@ -105,3 +113,10 @@ spec:
       networks:
       - name: default
         pod: {}
+      {{- if .Values.subnets }}
+      {{- range $i, $subnet := .Values.subnets }}
+      - name: {{ $subnet.name }}
+        multus:
+          networkName: {{ $.Release.Namespace }}/{{ $subnet.name }}
+      {{- end }}
+      {{- end }}

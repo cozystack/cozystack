@@ -54,9 +54,45 @@ ingress-nginx:
       requests:
         cpu: 100m
         memory: 90Mi
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 10
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                - '{{ include "ingress-nginx.name" . }}'
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                - '{{ .Release.Name }}'
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                - controller
+            topologyKey: kubernetes.io/hostname
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                - '{{ include "ingress-nginx.name" . }}'
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                - '{{ .Release.Name }}'
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                - controller
+            topologyKey: topology.kubernetes.io/zone
 
   defaultBackend:
-    ##
     enabled: true
     resources:
       limits:

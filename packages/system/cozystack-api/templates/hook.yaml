@@ -1,0 +1,87 @@
+{{- $shouldRunUpdateHook := false }}
+{{- $previousKind := "Deployment" }}
+{{- $previousKindPlural := "deployments" }}
+{{- if not .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
+  {{- $previousKind = "DaemonSet" }}
+  {{- $previousKindPlural = "daemonsets" }}
+{{- end }}
+{{- $previous := lookup "apps/v1" $previousKind .Release.Namespace "cozystack-api" }}
+{{- if $previous }}
+  {{- $shouldRunUpdateHook = true }}
+{{- end }}
+
+{{- if $shouldRunUpdateHook }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "cozystack-api-hook"
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: "cozystack-api-hook"
+      containers:
+        - name: kubectl
+          image: docker.io/alpine/k8s:1.33.4
+          command:
+          - sh
+          args:
+            - -exc
+            - |-
+              kubectl --namespace={{ .Release.Namespace }} delete --ignore-not-found \
+                {{ $previousKindPlural }}.apps cozystack-api
+      restartPolicy: Never
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+  name: "cozystack-api-hook"
+rules:
+- apiGroups:
+  - "apps"
+  resources:
+  - "{{ $previousKindPlural }}"
+  verbs:
+  - get
+  - delete
+  resourceNames:
+  - "cozystack-api"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "cozystack-api-hook"
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: "cozystack-api-hook"
+subjects:
+  - kind: ServiceAccount
+    name: "cozystack-api-hook"
+    namespace: "{{ .Release.Namespace }}"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "cozystack-api-hook"
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+{{- end }}
+

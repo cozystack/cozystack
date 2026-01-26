@@ -1,17 +1,22 @@
+##
 ## @section Common parameters
 ##
-## @param external {bool} Enable external access from outside the cluster
+
+## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
-
+##
 ## @section Application-specific parameters
 ##
-## @param topics {[]topic} Topics configuration
-## @field topic {topic} Topic
-## @field topic.name {string} Topic name
-## @field topic.partitions {int} Number of partitions
-## @field topic.replicas {int} Number of replicas
-## @field topic.config {object} Topic configuration
+
+## @typedef {struct} Topic - Topic configuration.
+## @field {string} name - Topic name.
+## @field {int} partitions - Number of partitions.
+## @field {int} replicas - Number of replicas.
+## @field {object} config - Topic configuration.
+
+## @param {[]Topic} topics - Topics configuration.
+topics: []
 ## Example:
 ## topics:
 ##   - name: Results
@@ -27,46 +32,54 @@ external: false
 ##       min.insync.replicas: 2
 ##     partitions: 1
 ##     replicas: 3
-##
-topics: []
 
+##
 ## @section Kafka configuration
 ##
-## @param kafka {kafka} Kafka configuration
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @typedef {struct} Kafka - Kafka configuration.
+## @field {int} replicas - Number of Kafka replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
+## @field {quantity} size - Persistent Volume size for Kafka.
+## @field {string} storageClass - StorageClass used to store the Kafka data.
+
+## @param {Kafka} kafka - Kafka configuration.
 kafka:
-  ## @field kafka.replicas {int} Number of Kafka replicas
   replicas: 3
-  ## @field kafka.resources {*resources} Explicit CPU and memory configuration for each replica. When left empty, the preset defined in `resourcesPreset` is applied.
-  ## @field resources.cpu {*quantity} CPU available to each replica
-  ## @field resources.memory {*quantity} Memory (RAM) available to each replica
-  # resources:
-  #   cpu: 4000m
-  #   memory: 4Gi
   resources: {}
-  ## @field kafka.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
   resourcesPreset: "small"
-  ## @field kafka.size {quantity} Persistent Volume size for Kafka
   size: 10Gi
-  ## @field kafka.storageClass {string} StorageClass used to store the Kafka data
   storageClass: ""
 
-
-## @section Zookeeper configuration
 ##
-## @param zookeeper {zookeeper} Zookeeper configuration
+## @section ZooKeeper configuration
+##
+
+## @typedef {struct} ZooKeeper - ZooKeeper configuration.
+## @field {int} replicas - Number of ZooKeeper replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
+## @field {quantity} size - Persistent Volume size for ZooKeeper.
+## @field {string} storageClass - StorageClass used to store the ZooKeeper data.
+
+## @param {ZooKeeper} zookeeper - ZooKeeper configuration.
 zookeeper:
-  ## @field zookeeper.replicas {int} Number of ZooKeeper replicas
   replicas: 3
-  ## @field zookeeper.resources {*resources} Explicit CPU and memory configuration for each replica. When left empty, the preset defined in `resourcesPreset` is applied.
-  # resources:
-  #   cpu: 4000m
-  #   memory: 4Gi
   resources: {}
-
-  ## @field zookeeper.resourcesPreset {string enum:"nano,micro,small,medium,large,xlarge,2xlarge"} Default sizing preset used when `resources` is omitted. Allowed values: `nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`.
   resourcesPreset: "small"
-  ## @field zookeeper.size {quantity} Persistent Volume size for ZooKeeper
   size: 5Gi
-  ## @field zookeeper.storageClass {string} StorageClass used to store the ZooKeeper data
   storageClass: ""
-

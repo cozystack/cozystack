@@ -1,0 +1,27 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.mongodb-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: mongodb
+          path: apps/mongodb
+          libraries: ["cozy-lib"]
+        - name: mongodb-rd
+          path: system/mongodb-rd
+          install:
+            namespace: cozy-system
+            releaseName: mongodb-rd

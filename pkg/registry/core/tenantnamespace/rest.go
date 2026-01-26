@@ -8,23 +8,27 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-	rbacv1client "k8s.io/client-go/kubernetes/typed/rbac/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
 )
 
 const (
@@ -46,18 +50,18 @@ var (
 )
 
 type REST struct {
-	core corev1client.CoreV1Interface
-	rbac rbacv1client.RbacV1Interface
-	gvr  schema.GroupVersionResource
+	c   client.Client
+	w   client.WithWatch
+	gvr schema.GroupVersionResource
 }
 
 func NewREST(
-	coreCli corev1client.CoreV1Interface,
-	rbacCli rbacv1client.RbacV1Interface,
+	c client.Client,
+	w client.WithWatch,
 ) *REST {
 	return &REST{
-		core: coreCli,
-		rbac: rbacCli,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -89,7 +93,8 @@ func (r *REST) List(
 	ctx context.Context,
 	_ *metainternal.ListOptions,
 ) (runtime.Object, error) {
-	nsList, err := r.core.Namespaces().List(ctx, metav1.ListOptions{})
+	nsList := &corev1.NamespaceList{}
+	err := r.c.List(ctx, nsList)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +123,8 @@ func (r *REST) Get(
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
-	ns, err := r.core.Namespaces().Get(ctx, name, *opts)
+	ns := &corev1.Namespace{}
+	err := r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
@@ -128,14 +134,7 @@ func (r *REST) Get(
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       "TenantNamespace",
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              ns.Name,
-			UID:               ns.UID,
-			ResourceVersion:   ns.ResourceVersion,
-			CreationTimestamp: ns.CreationTimestamp,
-			Labels:            ns.Labels,
-			Annotations:       ns.Annotations,
-		},
+		ObjectMeta: ns.ObjectMeta,
 	}, nil
 }
 
@@ -144,12 +143,21 @@ func (r *REST) Get(
 // -----------------------------------------------------------------------------
 
 func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
-	nsWatch, err := r.core.Namespaces().Watch(ctx, metav1.ListOptions{
+	nsList := &corev1.NamespaceList{}
+	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: &metav1.ListOptions{
 		Watch:           true,
 		ResourceVersion: opts.ResourceVersion,
-	})
+	}})
 	if err != nil {
 		return nil, err
+	}
+
+	// Get starting resourceVersion from options
+	var startingRV uint64
+	if opts.ResourceVersion != "" {
+		if rv, err := strconv.ParseUint(opts.ResourceVersion, 10, 64); err == nil {
+			startingRV = rv
+		}
 	}
 
 	events := make(chan watch.Event)
@@ -157,11 +165,30 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 	go func() {
 		defer pw.Stop()
+
 		for ev := range nsWatch.ResultChan() {
+			// Handle bookmark events
+			if ev.Type == watch.Bookmark {
+				if ns, ok := ev.Object.(*corev1.Namespace); ok {
+					out := &corev1alpha1.TenantNamespace{
+						TypeMeta: metav1.TypeMeta{
+							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+							Kind:       "TenantNamespace",
+						},
+						ObjectMeta: metav1.ObjectMeta{
+							ResourceVersion: ns.ResourceVersion,
+						},
+					}
+					events <- watch.Event{Type: watch.Bookmark, Object: out}
+				}
+				continue
+			}
+
 			ns, ok := ev.Object.(*corev1.Namespace)
 			if !ok || !strings.HasPrefix(ns.Name, prefix) {
 				continue
 			}
+
 			out := &corev1alpha1.TenantNamespace{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: corev1alpha1.SchemeGroupVersion.String(),
@@ -176,6 +203,18 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 					Annotations:       ns.Annotations,
 				},
 			}
+
+			// Skip ADDED events based on resourceVersion comparison
+			// Only skip when client provided resourceVersion (they already have objects from List)
+			if ev.Type == watch.Added && startingRV > 0 {
+				objRV, parseErr := strconv.ParseUint(out.ResourceVersion, 10, 64)
+				// Skip objects client already has (objRV <= startingRV)
+				if parseErr == nil && objRV <= startingRV {
+					continue
+				}
+			}
+			// When startingRV == 0, always send ADDED events (client wants full state)
+
 			events <- watch.Event{Type: ev.Type, Object: out}
 		}
 	}()
@@ -209,10 +248,10 @@ func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.O
 		for i := range v.Items {
 			tbl.Rows = append(tbl.Rows, row(&v.Items[i]))
 		}
-		tbl.ListMeta.ResourceVersion = v.ListMeta.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	case *corev1alpha1.TenantNamespace:
 		tbl.Rows = append(tbl.Rows, row(v))
-		tbl.ListMeta.ResourceVersion = v.ResourceVersion
+		tbl.ResourceVersion = v.ResourceVersion
 	default:
 		return nil, notAcceptable{r.gvr.GroupResource(), fmt.Sprintf("unexpected %T", obj)}
 	}
@@ -229,12 +268,19 @@ func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alph
 		set[n] = struct{}{}
 	}
 
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := src.ResourceVersion
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(src)
+	}
+
 	out := &corev1alpha1.TenantNamespaceList{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       "TenantNamespaceList",
 		},
-		ListMeta: metav1.ListMeta{ResourceVersion: src.ResourceVersion},
+		ListMeta: metav1.ListMeta{ResourceVersion: listRV},
 	}
 
 	for i := range src.Items {
@@ -257,6 +303,9 @@ func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alph
 			},
 		})
 	}
+
+	sorting.ByName[corev1alpha1.TenantNamespace, *corev1alpha1.TenantNamespace](out.Items)
+
 	return out
 }
 
@@ -282,9 +331,10 @@ func (r *REST) filterAccessible(
 	for _, name := range names {
 		nameSet[name] = struct{}{}
 	}
-	rbs, err := r.rbac.RoleBindings("").List(ctx, metav1.ListOptions{})
+	rbs := &rbacv1.RoleBindingList{}
+	err := r.c.List(ctx, rbs)
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to list rolebindings")
+		return []string{}, fmt.Errorf("failed to list rolebindings: %w", err)
 	}
 	allowedNameSet := make(map[string]struct{})
 	for i := range rbs.Items {

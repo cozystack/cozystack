@@ -68,7 +68,7 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
-	var cozystackVersion string
+	var reconcileDeployment bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -86,8 +86,8 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
-	flag.StringVar(&cozystackVersion, "cozystack-version", "unknown",
-		"Version of Cozystack")
+	flag.BoolVar(&reconcileDeployment, "reconcile-deployment", false,
+		"If set, the Cozystack API server is assumed to run as a Deployment, else as a DaemonSet.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -103,10 +103,9 @@ func main() {
 
 	// Configure telemetry
 	telemetryConfig := telemetry.Config{
-		Disabled:         disableTelemetry,
-		Endpoint:         telemetryEndpoint,
-		Interval:         interval,
-		CozystackVersion: cozystackVersion,
+		Disabled: disableTelemetry,
+		Endpoint: telemetryEndpoint,
+		Interval: interval,
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
@@ -197,27 +196,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.TenantHelmReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+	cozyAPIKind := "DaemonSet"
+	if reconcileDeployment {
+		cozyAPIKind = "Deployment"
+	}
+	if err = (&controller.ApplicationDefinitionReconciler{
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		CozystackAPIKind: cozyAPIKind,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TenantHelmReconciler")
+		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionReconciler")
 		os.Exit(1)
 	}
 
-	if err = (&controller.CozystackConfigReconciler{
+	if err = (&controller.ApplicationDefinitionHelmReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackConfigReconciler")
+		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionHelmReconciler")
 		os.Exit(1)
 	}
 
-	if err = (&controller.CozystackResourceDefinitionReconciler{
+	dashboardManager := &dashboard.Manager{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CozystackResourceDefinitionReconciler")
+	}
+	if err = dashboardManager.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "DashboardReconciler")
 		os.Exit(1)
 	}
 
@@ -246,7 +251,9 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	ctx := ctrl.SetupSignalHandler()
+	dashboardManager.InitializeStaticResources(ctx)
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

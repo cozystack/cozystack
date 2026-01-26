@@ -1,64 +1,35 @@
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $bundleName := index $cozyConfig.data "bundle-name" }}
+{{- $kubeRootCa := lookup "v1" "ConfigMap" "kube-system" "kube-root-ca.crt" }}
+{{- $bundleName := .Values.bundles.system.variant }}
 {{- $bundle := tpl (.Files.Get (printf "bundles/%s.yaml" $bundleName)) . | fromYaml }}
-{{- $host := "example.org" }}
-{{- $host := "example.org" }}
-{{- if $cozyConfig.data }}
-  {{- if hasKey $cozyConfig.data "root-host" }}
-    {{- $host = index $cozyConfig.data "root-host" }}
-  {{- end }}
-{{- end }}
-{{- $tenantRoot := dict }}
-{{- if .Capabilities.APIVersions.Has "helm.toolkit.fluxcd.io/v2" }}
-{{- $tenantRoot = lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" "tenant-root" "tenant-root" }}
-{{- end }}
-{{- if and $tenantRoot $tenantRoot.spec $tenantRoot.spec.values $tenantRoot.spec.values.host }}
-{{- $host = $tenantRoot.spec.values.host }}
-{{- else }}
-{{- end }}
 ---
 apiVersion: v1
-kind: Namespace
+kind: Secret
 metadata:
-  annotations:
-    helm.sh/resource-policy: keep
-    namespace.cozystack.io/etcd: tenant-root
-    namespace.cozystack.io/monitoring: tenant-root
-    namespace.cozystack.io/ingress: tenant-root
-    namespace.cozystack.io/seaweedfs: tenant-root
-    namespace.cozystack.io/host: "{{ $host }}"
-  name: tenant-root
----
-apiVersion: helm.toolkit.fluxcd.io/v2
-kind: HelmRelease
-metadata:
-  name: tenant-root
-  namespace: tenant-root
+  name: cozystack-values
+  namespace: cozy-system
   labels:
-    cozystack.io/ui: "true"
-spec:
-  interval: 0s
-  releaseName: tenant-root
-  install:
-    remediation:
-      retries: -1
-  upgrade:
-    remediation:
-      retries: -1
-  chart:
-    spec:
-      chart: tenant
-      version: '>= 0.0.0-0'
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
-  values:
-    host: "{{ $host }}"
-  dependsOn:
-  {{- range $x := $bundle.releases }}
-  {{- if has $x.name (list "cilium" "kubeovn") }}
-  - name: {{ $x.name }}
-    namespace: {{ $x.namespace }}
-  {{- end }}
-  {{- end }}
+    reconcile.fluxcd.io/watch: Enabled
+type: Opaque
+stringData:
+  values.yaml: |
+    _cluster:
+      root-host: {{ .Values.publishing.host | quote }}
+      bundle-name: {{ .Values.bundles.system.variant | quote }}
+      clusterissuer: {{ .Values.publishing.certificates.issuerType | quote }}
+      oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
+      expose-services: {{ .Values.publishing.exposedServices | join "," | quote }}
+      expose-ingress: {{ .Values.publishing.ingressName | quote }}
+      expose-external-ips: {{ .Values.publishing.externalIPs | join "," | quote }}
+      cluster-domain: {{ .Values.networking.clusterDomain | quote }}
+      api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
+      {{- with .Values.branding }}
+      branding:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduling }}
+      scheduling:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      {{- with $kubeRootCa.data }}
+      kube-root-ca: {{ index . "ca.crt" | b64enc | quote }}
+      {{- end }}

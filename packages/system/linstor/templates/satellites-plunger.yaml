@@ -11,7 +11,7 @@ spec:
     spec:
       containers:
       - name: plunger
-        image: {{ include "cozy.linstor.version.satellite" . }}
+        image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
         command:
         - "/scripts/plunger-satellite.sh"
         securityContext:
@@ -48,7 +48,7 @@ spec:
           name: script-volume
           readOnly: true
       - name: drbd-logger
-        image: {{ include "cozy.linstor.version.satellite" . }}
+        image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
         command:
         - "/scripts/plunger-drbd-logger.sh"
         securityContext:

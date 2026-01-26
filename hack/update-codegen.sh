@@ -23,6 +23,14 @@ CODEGEN_PKG=${CODEGEN_PKG:-$(cd "${SCRIPT_ROOT}"; ls -d -1 ./vendor/k8s.io/code-
 API_KNOWN_VIOLATIONS_DIR="${API_KNOWN_VIOLATIONS_DIR:-"${SCRIPT_ROOT}/api/api-rules"}"
 UPDATE_API_KNOWN_VIOLATIONS="${UPDATE_API_KNOWN_VIOLATIONS:-true}"
 CONTROLLER_GEN="go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4"
+TMPDIR=$(mktemp -d)
+OPERATOR_CRDDIR=packages/core/installer/definitions
+COZY_CONTROLLER_CRDDIR=packages/system/cozystack-controller/definitions
+COZY_RD_CRDDIR=packages/system/application-definition-crd/definition
+BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
+BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
+
+trap 'rm -rf ${TMPDIR}' EXIT
 
 source "${CODEGEN_PKG}/kube_codegen.sh"
 
@@ -53,6 +61,15 @@ kube::codegen::gen_openapi \
     "${SCRIPT_ROOT}/pkg/apis"
 
 $CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/..." output:crd:artifacts:config=packages/system/cozystack-controller/crds
-mv packages/system/cozystack-controller/crds/cozystack.io_cozystackresourcedefinitions.yaml \
-        packages/system/cozystack-resource-definition-crd/definition/cozystack.io_cozystackresourcedefinitions.yaml
+$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/..." output:crd:artifacts:config=${TMPDIR} 
+
+mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
+mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml
+
+mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
+        ${COZY_RD_CRDDIR}/cozystack.io_applicationdefinitions.yaml
+
+mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
+mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
+
+mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/

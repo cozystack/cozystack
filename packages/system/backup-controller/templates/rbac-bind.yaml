@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: backups.cozystack.io:core-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: backups.cozystack.io:core-controller
+subjects:
+- kind: ServiceAccount
+  name: backup-controller
+  namespace: {{ .Release.Namespace }}

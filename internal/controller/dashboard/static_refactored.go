@@ -132,15 +132,15 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 	return []*dashboardv1alpha1.CustomColumnsOverride{
 		// Factory details v1 services
 		createCustomColumnsOverride("factory-details-v1.services", []any{
-			createCustomColumnWithSpecificColor("Name", "Service", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithSpecificColor("Name", "Service", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("ClusterIP", ".spec.clusterIP"),
-			createStringColumn("LoadbalancerIP", ".spec.loadBalancerIP"),
+			createStringColumn("LoadbalancerIP", ".status.loadBalancer.ingress[0].ip"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Stock namespace v1 services
 		createCustomColumnsOverride("stock-namespace-/v1/services", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Service", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("ClusterIP", ".spec.clusterIP"),
 			createStringColumn("LoadbalancerIP", ".status.loadBalancer.ingress[0].ip"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
@@ -148,7 +148,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock namespace core cozystack io v1alpha1 tenantmodules
 		createCustomColumnsOverride("stock-namespace-/core.cozystack.io/v1alpha1/tenantmodules", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "M", "module", getColorForType("module"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/{reqsJsonPath[0]['.metadata.name']['-']}-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Module", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/{reqsJsonPath[0]['.metadata.name']['-']}-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createReadyColumn(),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 			createStringColumn("Version", ".status.version"),
@@ -164,7 +164,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Factory details v1alpha1 cozystack io workloadmonitors
 		createCustomColumnsOverride("factory-details-v1alpha1.cozystack.io.workloadmonitors", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "W", "workloadmonitor", getColorForType("workloadmonitor"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/workloadmonitor-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "WorkloadMonitor", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/workloadmonitor-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("TYPE", ".spec.type"),
 			createStringColumn("VERSION", ".spec.version"),
 			createStringColumn("REPLICAS", ".spec.replicas"),
@@ -173,18 +173,26 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createStringColumn("OBSERVED", ".status.observedReplicas"),
 		}),
 
-		// Factory details v1alpha1 core cozystack io tenantsecretstables
-		createCustomColumnsOverride("factory-details-v1alpha1.core.cozystack.io.tenantsecretstables", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", getColorForType("secret"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createStringColumn("Key", ".data.key"),
-			createSecretBase64Column("Value", ".data.value"),
+		// Factory details v1alpha1 core cozystack io tenantsecrets
+		createCustomColumnsOverride("factory-details-v1alpha1.core.cozystack.io.tenantsecrets", []any{
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Secret", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createFlatMapColumn("Data", ".data"),
+			createStringColumn("Key", "_flatMapData_Key"),
+			createSecretBase64Column("Value", "._flatMapData_Value"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+		}),
+
+		// Virtual private cloud subnets
+		createCustomColumnsOverride("virtualprivatecloud-subnets", []any{
+			createFlatMapColumn("Data", ".data"),
+			createStringColumn("Subnet Parameters", "_flatMapData_Key"),
+			createStringColumn("Values", "_flatMapData_Value"),
 		}),
 
 		// Factory ingress details rules
 		createCustomColumnsOverride("factory-kube-ingress-details-rules", []any{
 			createStringColumn("Host", ".host"),
-			createCustomColumnWithJsonPath("Service", ".http.paths[0].backend.service.name", "S", "service", getColorForType("service"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.http.paths[0].backend.service.name']['-']}"),
+			createCustomColumnWithJsonPath("Service", ".http.paths[0].backend.service.name", "Service", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.http.paths[0].backend.service.name']['-']}"),
 			createStringColumn("Port", ".http.paths[0].backend.service.port.number"),
 			createStringColumn("Path", ".http.paths[0].path"),
 		}),
@@ -250,7 +258,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Factory details networking k8s io v1 ingresses
 		createCustomColumnsOverride("factory-details-networking.k8s.io.v1.ingresses", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "I", "ingress", getColorForType("ingress"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Ingress", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("Hosts", ".spec.rules[*].host"),
 			createStringColumn("Address", ".status.loadBalancer.ingress[0].ip"),
 			createStringColumn("Port", ".spec.defaultBackend.service.port.number"),
@@ -259,7 +267,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock namespace networking k8s io v1 ingresses
 		createCustomColumnsOverride("stock-namespace-/networking.k8s.io/v1/ingresses", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "I", "ingress", getColorForType("ingress"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Ingress", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-ingress-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("Hosts", ".spec.rules[*].host"),
 			createStringColumn("Address", ".status.loadBalancer.ingress[0].ip"),
 			createStringColumn("Port", ".spec.defaultBackend.service.port.number"),
@@ -268,34 +276,34 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock cluster v1 configmaps
 		createCustomColumnsOverride("stock-cluster-/v1/configmaps", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "CM", "configmap", getColorForType("configmap"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/configmap-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", getColorForType("namespace"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "ConfigMap", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/configmap-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "Namespace", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Stock namespace v1 configmaps
 		createCustomColumnsOverride("stock-namespace-/v1/configmaps", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "CM", "configmap", getColorForType("configmap"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/configmap-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "ConfigMap", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/configmap-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Cluster v1 configmaps
 		createCustomColumnsOverride("cluster-/v1/configmaps", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "CM", "configmap", getColorForType("configmap"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/configmap-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", getColorForType("namespace"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "ConfigMap", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/configmap-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "Namespace", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Stock cluster v1 nodes
 		createCustomColumnsOverride("stock-cluster-/v1/nodes", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "N", "node", getColorForType("node"), "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Node", "", "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createSimpleStatusColumn("Status", "node-status"),
 		}),
 
 		// Factory node details v1 pods
 		createCustomColumnsOverride("factory-node-details-v1.pods", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "P", "pod", getColorForType("pod"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", getColorForType("namespace"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Pod", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "Namespace", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace"),
 			createStringColumn("Restart Policy", ".spec.restartPolicy"),
 			createStringColumn("Pod IP", ".status.podIP"),
 			createStringColumn("QOS", ".status.qosClass"),
@@ -304,8 +312,8 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Factory v1 pods
 		createCustomColumnsOverride("factory-v1.pods", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "P", "pod", getColorForType("pod"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithoutJsonPath("Node", "N", "node", getColorForType("node"), "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.spec.nodeName']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Pod", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithoutJsonPath("Node", "Node", "", "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.spec.nodeName']['-']}"),
 			createStringColumn("Restart Policy", ".spec.restartPolicy"),
 			createStringColumn("Pod IP", ".status.podIP"),
 			createStringColumn("QOS", ".status.qosClass"),
@@ -314,9 +322,9 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock cluster v1 pods
 		createCustomColumnsOverride("stock-cluster-/v1/pods", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "P", "pod", "#009596", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", "#a25792ff", "/openapi-ui/{2}/factory/tenantnamespace/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
-			createCustomColumnWithJsonPath("Node", ".spec.nodeName", "N", "node", "#8476d1", "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.spec.nodeName']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Pod", "#009596", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "Namespace", "#a25792ff", "/openapi-ui/{2}/factory/tenantnamespace/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
+			createCustomColumnWithJsonPath("Node", ".spec.nodeName", "Node", "#8476d1", "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.spec.nodeName']['-']}"),
 			createStringColumn("Restart Policy", ".spec.restartPolicy"),
 			createStringColumn("Pod IP", ".status.podIP"),
 			createStringColumn("QOS", ".status.qosClass"),
@@ -325,8 +333,8 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock namespace v1 pods
 		createCustomColumnsOverride("stock-namespace-/v1/pods", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "P", "pod", "#009596", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithoutJsonPath("Node", "N", "node", "#8476d1", "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.spec.nodeName']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Pod", "#009596", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/pod-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithoutJsonPath("Node", "Node", "#8476d1", "/openapi-ui/{2}/factory/node-details/{reqsJsonPath[0]['.spec.nodeName']['-']}"),
 			createStringColumn("Restart Policy", ".spec.restartPolicy"),
 			createStringColumn("Pod IP", ".status.podIP"),
 			createStringColumn("QOS", ".status.qosClass"),
@@ -335,15 +343,15 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock cluster v1 secrets
 		createCustomColumnsOverride("stock-cluster-/v1/secrets", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
-			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "NS", "namespace", "#a25792ff", "/openapi-ui/{2}/factory/tenantnamespace/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Namespace", ".metadata.namespace", "Namespace", "#a25792ff", "/openapi-ui/{2}/factory/tenantnamespace/{reqsJsonPath[0]['.metadata.namespace']['-']}"),
 			createStringColumn("Type", ".type"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
 		// Stock namespace v1 secrets
 		createCustomColumnsOverride("stock-namespace-/v1/secrets", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "S", "secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Secret", "#c46100", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-secret-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("Type", ".type"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
@@ -360,7 +368,31 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 
 		// Stock cluster core cozystack io v1alpha1 tenantnamespaces
 		createCustomColumnsOverride("stock-cluster-/core.cozystack.io/v1alpha1/tenantnamespaces", []any{
-			createCustomColumnWithJsonPath("Name", ".metadata.name", "TN", "tenantnamespace", getColorForType("tenantnamespace"), "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.name']['-']}/factory/marketplace"),
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "TenantNamespace", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.name']['-']}/factory/marketplace"),
+			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+		}),
+
+		// Stock namespace backups cozystack io v1alpha1 plans
+		createCustomColumnsOverride("stock-namespace-/backups.cozystack.io/v1alpha1/plans", []any{
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Plan", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/plan-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createApplicationRefColumn("Application"),
+			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+		}),
+
+		// Stock namespace backups cozystack io v1alpha1 backupjobs
+		createCustomColumnsOverride("stock-namespace-/backups.cozystack.io/v1alpha1/backupjobs", []any{
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "BackupJob", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/backupjob-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createStringColumn("Phase", ".status.phase"),
+			createApplicationRefColumn("Application"),
+			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+		}),
+
+		// Stock namespace backups cozystack io v1alpha1 backups
+		createCustomColumnsOverride("stock-namespace-/backups.cozystack.io/v1alpha1/backups", []any{
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "Backup", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/backup-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createStringColumn("Phase", ".status.phase"),
+			createApplicationRefColumn("Application"),
+			createTimestampColumn("Taken At", ".spec.takenAt"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 	}
@@ -496,7 +528,6 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 		Kind:         "Namespace",
 		Plural:       "namespaces",
 		Title:        "namespace",
-		Size:         BadgeSizeLarge,
 	}
 	namespaceSpec := createUnifiedFactory(namespaceConfig, nil, []any{"/api/clusters/{2}/k8s/api/v1/namespaces/{5}"})
 
@@ -796,6 +827,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"substractHeight":           float64(400),
 						"type":                      "builtin",
 						"typeName":                  "secrets",
+						"readOnly":                  true,
 					},
 				},
 			},
@@ -1055,7 +1087,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 													"clusterNamePartOfUrl": "{2}",
 													"customizationId":      "factory-kube-service-details-endpointslice",
 													"fetchUrl":             "/api/clusters/{2}/k8s/apis/discovery.k8s.io/v1/namespaces/{3}/endpointslices",
-													"labelsSelector": map[string]any{
+													"labelSelector": map[string]any{
 														"kubernetes.io/service-name": "{reqsJsonPath[0]['.metadata.name']['-']}",
 													},
 													"pathToItems":     ".items[*].endpoints",
@@ -1201,7 +1233,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 											"gap":   6,
 										},
 										"children": []any{
-											createUnifiedBadgeFromKind("ns-badge", "Namespace", "namespace", BadgeSizeMedium),
+											createUnifiedBadgeFromKind("ns-badge", "Namespace"),
 											antdLink("namespace-link",
 												"{reqsJsonPath[0]['.metadata.namespace']['-']}",
 												"/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
@@ -1396,7 +1428,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"clusterNamePartOfUrl": "{2}",
 						"customizationId":      "factory-details-v1alpha1.cozystack.io.workloads",
 						"fetchUrl":             "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloads",
-						"labelsSelector": map[string]any{
+						"labelSelector": map[string]any{
 							"workloads.cozystack.io/monitor": "{reqs[0]['metadata','name']}",
 						},
 						"pathToItems": []any{"items"},
@@ -1425,6 +1457,434 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 	}
 	workloadmonitorSpec := createFactorySpec("workloadmonitor-details", []any{"workloadmonitor-sidebar"}, []any{"/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors/{6}"}, workloadmonitorHeader, workloadmonitorTabs)
 
+	// Plan details factory using unified approach
+	planConfig := UnifiedResourceConfig{
+		Name:         "plan-details",
+		ResourceType: "factory",
+		Kind:         "Plan",
+		Plural:       "plans",
+		Title:        "plan",
+	}
+	planTabs := []any{
+		map[string]any{
+			"key":   "details",
+			"label": "Details",
+			"children": []any{
+				contentCard("details-card", map[string]any{
+					"marginBottom": "24px",
+				}, []any{
+					antdText("details-title", true, "Plan details", map[string]any{
+						"fontSize":     20,
+						"marginBottom": "12px",
+					}),
+					spacer("details-spacer", 16),
+					antdRow("details-grid", []any{48, 12}, []any{
+						antdCol("col-left", 12, []any{
+							antdFlexVertical("col-left-stack", 24, []any{
+								antdFlexVertical("meta-name-block", 4, []any{
+									antdText("meta-name-label", true, "Name", nil),
+									parsedText("meta-name-value", "{reqsJsonPath[0]['.metadata.name']['-']}", nil),
+								}),
+								antdFlexVertical("meta-namespace-block", 8, []any{
+									antdText("meta-namespace-label", true, "Namespace", nil),
+									antdFlex("header-row", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":    "header-badge",
+												"text":  "NS",
+												"title": "namespace",
+												"style": map[string]any{
+													"backgroundColor": "#a25792ff",
+													"borderRadius":    "20px",
+													"color":           "#fff",
+													"display":         "inline-block",
+													"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
+													"fontSize":        "15px",
+													"fontWeight":      400,
+													"lineHeight":      "24px",
+													"minWidth":        24,
+													"padding":         "0 9px",
+													"textAlign":       "center",
+													"whiteSpace":      "nowrap",
+												},
+											},
+										},
+										map[string]any{
+											"type": "antdLink",
+											"data": map[string]any{
+												"id":   "namespace-link",
+												"text": "{reqsJsonPath[0]['.metadata.namespace']['-']}",
+												"href": "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("meta-created-block", 4, []any{
+									antdText("time-label", true, "Created", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.metadata.creationTimestamp']['-']}",
+											},
+										},
+									}),
+								}),
+							}),
+						}),
+						antdCol("col-right", 12, []any{
+							antdFlexVertical("col-right-stack", 24, []any{
+								antdFlexVertical("spec-application-ref-block", 4, []any{
+									antdText("application-ref-label", true, "Application", nil),
+									parsedText("application-ref-value", "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-storage-ref-block", 4, []any{
+									antdText("storage-ref-label", true, "Storage", nil),
+									parsedText("storage-ref-value", "{reqsJsonPath[0]['.spec.storageRef.kind']['-']}.{reqsJsonPath[0]['.spec.storageRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.storageRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-strategy-ref-block", 4, []any{
+									antdText("strategy-ref-label", true, "Strategy", nil),
+									parsedText("strategy-ref-value", "{reqsJsonPath[0]['.spec.strategyRef.kind']['-']}.{reqsJsonPath[0]['.spec.strategyRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.strategyRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-schedule-type-block", 4, []any{
+									antdText("schedule-type-label", true, "Schedule Type", nil),
+									parsedText("schedule-type-value", "{reqsJsonPath[0]['.spec.schedule.type']['-']}", nil),
+								}),
+								antdFlexVertical("spec-schedule-cron-block", 4, []any{
+									antdText("schedule-cron-label", true, "Schedule Cron", nil),
+									parsedText("schedule-cron-value", "{reqsJsonPath[0]['.spec.schedule.cron']['-']}", nil),
+								}),
+							}),
+						}),
+					}),
+				}),
+			},
+		},
+	}
+	planSpec := createUnifiedFactory(planConfig, planTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/plans/{6}"})
+
+	// BackupJob details factory using unified approach
+	backupJobConfig := UnifiedResourceConfig{
+		Name:         "backupjob-details",
+		ResourceType: "factory",
+		Kind:         "BackupJob",
+		Plural:       "backupjobs",
+		Title:        "backupjob",
+	}
+	backupJobTabs := []any{
+		map[string]any{
+			"key":   "details",
+			"label": "Details",
+			"children": []any{
+				contentCard("details-card", map[string]any{
+					"marginBottom": "24px",
+				}, []any{
+					antdText("details-title", true, "BackupJob details", map[string]any{
+						"fontSize":     20,
+						"marginBottom": "12px",
+					}),
+					spacer("details-spacer", 16),
+					antdRow("details-grid", []any{48, 12}, []any{
+						antdCol("col-left", 12, []any{
+							antdFlexVertical("col-left-stack", 24, []any{
+								antdFlexVertical("meta-name-block", 4, []any{
+									antdText("meta-name-label", true, "Name", nil),
+									parsedText("meta-name-value", "{reqsJsonPath[0]['.metadata.name']['-']}", nil),
+								}),
+								antdFlexVertical("meta-namespace-block", 8, []any{
+									antdText("meta-namespace-label", true, "Namespace", nil),
+									antdFlex("header-row", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":    "header-badge",
+												"text":  "NS",
+												"title": "namespace",
+												"style": map[string]any{
+													"backgroundColor": "#a25792ff",
+													"borderRadius":    "20px",
+													"color":           "#fff",
+													"display":         "inline-block",
+													"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
+													"fontSize":        "15px",
+													"fontWeight":      400,
+													"lineHeight":      "24px",
+													"minWidth":        24,
+													"padding":         "0 9px",
+													"textAlign":       "center",
+													"whiteSpace":      "nowrap",
+												},
+											},
+										},
+										map[string]any{
+											"type": "antdLink",
+											"data": map[string]any{
+												"id":   "namespace-link",
+												"text": "{reqsJsonPath[0]['.metadata.namespace']['-']}",
+												"href": "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("meta-created-block", 4, []any{
+									antdText("time-label", true, "Created", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.metadata.creationTimestamp']['-']}",
+											},
+										},
+									}),
+								}),
+							}),
+						}),
+						antdCol("col-right", 12, []any{
+							antdFlexVertical("col-right-stack", 24, []any{
+								antdFlexVertical("status-phase-block", 4, []any{
+									antdText("phase-label", true, "Phase", nil),
+									parsedText("phase-value", "{reqsJsonPath[0]['.status.phase']['-']}", nil),
+								}),
+								antdFlexVertical("spec-plan-ref-block", 4, []any{
+									antdText("plan-ref-label", true, "Plan Ref", nil),
+									parsedText("plan-ref-value", "{reqsJsonPath[0]['.spec.planRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-application-ref-block", 4, []any{
+									antdText("application-ref-label", true, "Application", nil),
+									parsedText("application-ref-value", "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-storage-ref-block", 4, []any{
+									antdText("storage-ref-label", true, "Storage", nil),
+									parsedText("storage-ref-value", "{reqsJsonPath[0]['.spec.storageRef.kind']['-']}.{reqsJsonPath[0]['.spec.storageRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.storageRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-strategy-ref-block", 4, []any{
+									antdText("strategy-ref-label", true, "Strategy", nil),
+									parsedText("strategy-ref-value", "{reqsJsonPath[0]['.spec.strategyRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("status-backup-ref-block", 4, []any{
+									antdText("backup-ref-label", true, "Backup Ref", nil),
+									parsedText("backup-ref-value", "{reqsJsonPath[0]['.status.backupRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("status-started-at-block", 4, []any{
+									antdText("started-at-label", true, "Started At", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.status.startedAt']['-']}",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("status-completed-at-block", 4, []any{
+									antdText("completed-at-label", true, "Completed At", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.status.completedAt']['-']}",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("status-message-block", 4, []any{
+									antdText("message-label", true, "Message", nil),
+									parsedText("message-value", "{reqsJsonPath[0]['.status.message']['-']}", nil),
+								}),
+							}),
+						}),
+					}),
+				}),
+			},
+		},
+	}
+	backupJobSpec := createUnifiedFactory(backupJobConfig, backupJobTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/backupjobs/{6}"})
+
+	// Backup details factory using unified approach
+	backupConfig := UnifiedResourceConfig{
+		Name:         "backup-details",
+		ResourceType: "factory",
+		Kind:         "Backup",
+		Plural:       "backups",
+		Title:        "backup",
+	}
+	backupTabs := []any{
+		map[string]any{
+			"key":   "details",
+			"label": "Details",
+			"children": []any{
+				contentCard("details-card", map[string]any{
+					"marginBottom": "24px",
+				}, []any{
+					antdText("details-title", true, "Backup details", map[string]any{
+						"fontSize":     20,
+						"marginBottom": "12px",
+					}),
+					spacer("details-spacer", 16),
+					antdRow("details-grid", []any{48, 12}, []any{
+						antdCol("col-left", 12, []any{
+							antdFlexVertical("col-left-stack", 24, []any{
+								antdFlexVertical("meta-name-block", 4, []any{
+									antdText("meta-name-label", true, "Name", nil),
+									parsedText("meta-name-value", "{reqsJsonPath[0]['.metadata.name']['-']}", nil),
+								}),
+								antdFlexVertical("meta-namespace-block", 8, []any{
+									antdText("meta-namespace-label", true, "Namespace", nil),
+									antdFlex("header-row", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":    "header-badge",
+												"text":  "NS",
+												"title": "namespace",
+												"style": map[string]any{
+													"backgroundColor": "#a25792ff",
+													"borderRadius":    "20px",
+													"color":           "#fff",
+													"display":         "inline-block",
+													"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
+													"fontSize":        "15px",
+													"fontWeight":      400,
+													"lineHeight":      "24px",
+													"minWidth":        24,
+													"padding":         "0 9px",
+													"textAlign":       "center",
+													"whiteSpace":      "nowrap",
+												},
+											},
+										},
+										map[string]any{
+											"type": "antdLink",
+											"data": map[string]any{
+												"id":   "namespace-link",
+												"text": "{reqsJsonPath[0]['.metadata.namespace']['-']}",
+												"href": "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("meta-created-block", 4, []any{
+									antdText("time-label", true, "Created", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.metadata.creationTimestamp']['-']}",
+											},
+										},
+									}),
+								}),
+							}),
+						}),
+						antdCol("col-right", 12, []any{
+							antdFlexVertical("col-right-stack", 24, []any{
+								antdFlexVertical("status-phase-block", 4, []any{
+									antdText("phase-label", true, "Phase", nil),
+									parsedText("phase-value", "{reqsJsonPath[0]['.status.phase']['-']}", nil),
+								}),
+								antdFlexVertical("spec-taken-at-block", 4, []any{
+									antdText("taken-at-label", true, "Taken At", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.spec.takenAt']['-']}",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("spec-plan-ref-block", 4, []any{
+									antdText("plan-ref-label", true, "Plan Ref", nil),
+									parsedText("plan-ref-value", "{reqsJsonPath[0]['.spec.planRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-application-ref-block", 4, []any{
+									antdText("application-ref-label", true, "Application", nil),
+									parsedText("application-ref-value", "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-storage-ref-block", 4, []any{
+									antdText("storage-ref-label", true, "Storage", nil),
+									parsedText("storage-ref-value", "{reqsJsonPath[0]['.spec.storageRef.kind']['-']}.{reqsJsonPath[0]['.spec.storageRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.storageRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-strategy-ref-block", 4, []any{
+									antdText("strategy-ref-label", true, "Strategy", nil),
+									parsedText("strategy-ref-value", "{reqsJsonPath[0]['.spec.strategyRef.kind']['-']}.{reqsJsonPath[0]['.spec.strategyRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.strategyRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("status-artifact-uri-block", 4, []any{
+									antdText("artifact-uri-label", true, "Artifact URI", nil),
+									parsedText("artifact-uri-value", "{reqsJsonPath[0]['.status.artifact.uri']['-']}", nil),
+								}),
+								antdFlexVertical("status-artifact-size-block", 4, []any{
+									antdText("artifact-size-label", true, "Artifact Size", nil),
+									parsedText("artifact-size-value", "{reqsJsonPath[0]['.status.artifact.sizeBytes']['-']}", nil),
+								}),
+								antdFlexVertical("status-artifact-checksum-block", 4, []any{
+									antdText("artifact-checksum-label", true, "Artifact Checksum", nil),
+									parsedText("artifact-checksum-value", "{reqsJsonPath[0]['.status.artifact.checksum']['-']}", nil),
+								}),
+							}),
+						}),
+					}),
+				}),
+			},
+		},
+	}
+	backupSpec := createUnifiedFactory(backupConfig, backupTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/backups/{6}"})
+
 	return []*dashboardv1alpha1.Factory{
 		createFactory("marketplace", marketplaceSpec),
 		createFactory("namespace-details", namespaceSpec),
@@ -1434,6 +1894,9 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 		createFactory("kube-service-details", serviceSpec),
 		createFactory("kube-ingress-details", ingressSpec),
 		createFactory("workloadmonitor-details", workloadmonitorSpec),
+		createFactory("plan-details", planSpec),
+		createFactory("backupjob-details", backupJobSpec),
+		createFactory("backup-details", backupSpec),
 	}
 }
 

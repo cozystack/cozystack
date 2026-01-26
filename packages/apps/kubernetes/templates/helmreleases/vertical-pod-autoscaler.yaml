@@ -1,8 +1,6 @@
 {{- define "cozystack.defaultVPAValues" -}}
-{{- $cozyConfig := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
-{{- $clusterDomain := (index $cozyConfig.data "cluster-domain") | default "cozy.local" }}
-{{- $myNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- $targetTenant := index $myNS.metadata.annotations "namespace.cozystack.io/monitoring" }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $targetTenant := .Values._namespace.monitoring }}
 vpaForVPA: false
 vertical-pod-autoscaler:
   recommender:
@@ -34,17 +32,13 @@ metadata:
   labels:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
 spec:
   releaseName: vertical-pod-autoscaler
-  chart:
-    spec:
-      chart: cozy-vertical-pod-autoscaler
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-vertical-pod-autoscaler
+    namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig

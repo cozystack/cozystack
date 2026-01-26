@@ -1,38 +1,28 @@
+##
 ## @section Common parameters
+##
 
-## @param source {source} The source image location used to create a disk
-## @field source.image {*uploadImage} Use image by name: uploaded as "golden image" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, and `talos`.
-## @field uploadImage.name {string} Name of the image to use
-## Example using golden image:
-## source:
-##   image:
-##     name: ubuntu
-##
-## @field source.upload {*emptyobject} Upload local image
-## Example upload local image:
-## source:
-##   upload: {}
-##
-## @field source.http {*uploadHTTP} Download image from an HTTP source
-## @field uploadHTTP.url {string} URL to download the image
-## Example download image from http source:
-## source:
-##   http:
-##     url: "https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img"
-##
-## Well known public images:
-## ubuntu: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
-## fedora: https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2
-## cirros: https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img
-## alpine: https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.2-x86_64-bios-tiny-r0.qcow2
-## talos: https://github.com/siderolabs/talos/releases/download/v1.7.6/nocloud-amd64.raw.xz
+## @typedef {struct} SourceImage - Use image by name.
+## @field {string} name - Name of the image to use (uploaded as "golden image" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, `talos`).
 
+## @typedef {struct} SourceUpload - Upload local image.
+
+## @typedef {struct} SourceHTTP - Download image from an HTTP source.
+## @field {string} url - URL to download the image.
+
+## @typedef {struct} Source - The source image location used to create a disk.
+## @field {*SourceImage} [image] - Use image by name.
+## @field {*SourceUpload} [upload] - Upload local image.
+## @field {*SourceHTTP} [http] - Download image from an HTTP source.
+
+## @param {Source} source - The source image location used to create a disk.
 source: {}
 
-## @param optical {bool} Defines if disk should be considered optical
+## @param {bool} optical - Defines if disk should be considered optical.
 optical: false
 
-## @param storage {quantity} The size of the disk allocated for the virtual machine
-## @param storageClass {string} StorageClass used to store the data
+## @param {quantity} storage - The size of the disk allocated for the virtual machine.
 storage: 5Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
 storageClass: replicated

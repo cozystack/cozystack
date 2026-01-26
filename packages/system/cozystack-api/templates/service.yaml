@@ -4,9 +4,12 @@ metadata:
   name: cozystack-api
   namespace: cozy-system
 spec:
+  {{- if .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
+  internalTrafficPolicy: Local
+  {{- end }}
   ports:
   - port: 443
     protocol: TCP
-    targetPort: 443
+    targetPort: https
   selector:
     app: cozystack-api

@@ -15,6 +15,5 @@ cilium:
   enableIPv4Masquerade: false
   enableIPv6Masquerade: false
   enableIdentityMark: false
-  enableRuntimeDeviceDetection: true
   forceDeviceDetection: true
   devices: "ovn0 genev_sys_6081"

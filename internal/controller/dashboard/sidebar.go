@@ -26,26 +26,18 @@ import (
 //   - Tenant Info  (/openapi-ui/{clusterName}/{namespace}/factory/info-details/info)
 //   - All other sections are built from CRDs where spec.dashboard != nil.
 //   - Categories are ordered strictly as:
-//     Marketplace, IaaS, PaaS, NaaS, <others A→Z>, Resources, Administration
+//     Marketplace, IaaS, PaaS, NaaS, <others A→Z>, Resources, Backups, Administration
 //   - Items within each category: sort by Weight (desc), then Label (A→Z).
-func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
 	// Build the full menu once.
 
 	// 1) Fetch all CRDs
-	var all []cozyv1alpha1.CozystackResourceDefinition
-	if m.crdListFn != nil {
-		s, err := m.crdListFn(ctx)
-		if err != nil {
-			return err
-		}
-		all = s
-	} else {
-		var crdList cozyv1alpha1.CozystackResourceDefinitionList
-		if err := m.client.List(ctx, &crdList, &client.ListOptions{}); err != nil {
-			return err
-		}
-		all = crdList.Items
+	var all []cozyv1alpha1.ApplicationDefinition
+	var crdList cozyv1alpha1.ApplicationDefinitionList
+	if err := m.List(ctx, &crdList, &client.ListOptions{}); err != nil {
+		return err
 	}
+	all = crdList.Items
 
 	// 2) Build category -> []item map (only for CRDs with spec.dashboard != nil)
 	type item struct {
@@ -120,6 +112,15 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	keysAndTags["secrets"] = []any{"secret-sidebar"}
 	keysAndTags["ingresses"] = []any{"ingress-sidebar"}
 
+	// Add sidebar for backups.cozystack.io Plan resource
+	keysAndTags["plans"] = []any{"plan-sidebar"}
+
+	// Add sidebar for backups.cozystack.io BackupJob resource
+	keysAndTags["backupjobs"] = []any{"backupjob-sidebar"}
+
+	// Add sidebar for backups.cozystack.io Backup resource
+	keysAndTags["backups"] = []any{"backup-sidebar"}
+
 	// 3) Sort items within each category by Weight (desc), then Label (A→Z)
 	for cat := range categories {
 		sort.Slice(categories[cat], func(i, j int) bool {
@@ -131,10 +132,10 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	}
 
 	// 4) Order categories strictly:
-	//    Marketplace (hardcoded), IaaS, PaaS, NaaS, <others A→Z>, Resources, Administration
+	//    Marketplace (hardcoded), IaaS, PaaS, NaaS, <others A→Z>, Resources, Backups (hardcoded), Administration (hardcoded)
 	orderedCats := orderCategoryLabels(categories)
 
-	// 5) Build menuItems (hardcode "Marketplace"; then dynamic categories; then hardcode "Administration")
+	// 5) Build menuItems (hardcode "Marketplace"; then dynamic categories; then hardcode "Backups" and "Administration")
 	menuItems := []any{
 		map[string]any{
 			"key":   "marketplace",
@@ -150,8 +151,8 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	}
 
 	for _, cat := range orderedCats {
-		// Skip "Marketplace" and "Administration" here since they're hardcoded
-		if strings.EqualFold(cat, "Marketplace") || strings.EqualFold(cat, "Administration") {
+		// Skip "Marketplace", "Backups", and "Administration" here since they're hardcoded
+		if strings.EqualFold(cat, "Marketplace") || strings.EqualFold(cat, "Backups") || strings.EqualFold(cat, "Administration") {
 			continue
 		}
 		children := []any{}
@@ -170,6 +171,29 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 			})
 		}
 	}
+
+	// Add hardcoded Backups section
+	menuItems = append(menuItems, map[string]any{
+		"key":   "backups",
+		"label": "Backups",
+		"children": []any{
+			map[string]any{
+				"key":   "plans",
+				"label": "Plans",
+				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/backups.cozystack.io/v1alpha1/plans",
+			},
+			map[string]any{
+				"key":   "backupjobs",
+				"label": "BackupJobs",
+				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/backups.cozystack.io/v1alpha1/backupjobs",
+			},
+			map[string]any{
+				"key":   "backups",
+				"label": "Backups",
+				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/backups.cozystack.io/v1alpha1/backups",
+			},
+		},
+	})
 
 	// Add hardcoded Administration section
 	menuItems = append(menuItems, map[string]any{
@@ -209,6 +233,9 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		"stock-project-factory-kube-service-details",
 		"stock-project-factory-kube-secret-details",
 		"stock-project-factory-kube-ingress-details",
+		"stock-project-factory-plan-details",
+		"stock-project-factory-backupjob-details",
+		"stock-project-factory-backup-details",
 		"stock-project-api-form",
 		"stock-project-api-table",
 		"stock-project-builtin-form",
@@ -236,7 +263,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 // upsertMultipleSidebars creates/updates several Sidebar resources with the same menu spec.
 func (m *Manager) upsertMultipleSidebars(
 	ctx context.Context,
-	crd *cozyv1alpha1.CozystackResourceDefinition,
+	crd *cozyv1alpha1.ApplicationDefinition,
 	ids []string,
 	keysAndTags map[string]any,
 	menuItems []any,
@@ -251,7 +278,7 @@ func (m *Manager) upsertMultipleSidebars(
 		obj := &dashv1alpha1.Sidebar{}
 		obj.SetName(id)
 
-		if _, err := controllerutil.CreateOrUpdate(ctx, m.client, obj, func() error {
+		if _, err := controllerutil.CreateOrUpdate(ctx, m.Client, obj, func() error {
 			// Only set owner reference for dynamic sidebars (stock-project-factory-{kind}-details)
 			// Static sidebars (stock-instance-*, stock-project-*) should not have owner references
 			if strings.HasPrefix(id, "stock-project-factory-") && strings.HasSuffix(id, "-details") {
@@ -260,7 +287,7 @@ func (m *Manager) upsertMultipleSidebars(
 				lowerKind := strings.ToLower(kind)
 				expectedID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
 				if id == expectedID {
-					if err := controllerutil.SetOwnerReference(crd, obj, m.scheme); err != nil {
+					if err := controllerutil.SetOwnerReference(crd, obj, m.Scheme); err != nil {
 						return err
 					}
 					// Add dashboard labels to dynamic resources
@@ -343,7 +370,7 @@ func orderCategoryLabels[T any](cats map[string][]T) []string {
 }
 
 // safeCategory returns spec.dashboard.category or "Resources" if not set.
-func safeCategory(def *cozyv1alpha1.CozystackResourceDefinition) string {
+func safeCategory(def *cozyv1alpha1.ApplicationDefinition) string {
 	if def == nil || def.Spec.Dashboard == nil {
 		return "Resources"
 	}

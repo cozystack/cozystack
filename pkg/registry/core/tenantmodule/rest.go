@@ -20,26 +20,31 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	fields "k8s.io/apimachinery/pkg/fields"
 	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry"
+	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -60,26 +65,21 @@ const (
 	singularName           = "tenantmodule"
 )
 
-// Define the GroupVersionResource for HelmRelease
-var helmReleaseGVR = schema.GroupVersionResource{
-	Group:    "helm.toolkit.fluxcd.io",
-	Version:  "v2",
-	Resource: "helmreleases",
-}
-
 // REST implements the RESTStorage interface for TenantModule resources
 type REST struct {
-	dynamicClient dynamic.Interface
-	gvr           schema.GroupVersionResource
-	gvk           schema.GroupVersionKind
-	kindName      string
-	singularName  string
+	c            client.Client
+	w            client.WithWatch
+	gvr          schema.GroupVersionResource
+	gvk          schema.GroupVersionKind
+	kindName     string
+	singularName string
 }
 
 // NewREST creates a new REST storage for TenantModule
-func NewREST(dynamicClient dynamic.Interface) *REST {
+func NewREST(c client.Client, w client.WithWatch) *REST {
 	return &REST{
-		dynamicClient: dynamicClient,
+		c: c,
+		w: w,
 		gvr: schema.GroupVersionResource{
 			Group:    corev1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -115,7 +115,8 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 	klog.V(6).Infof("Attempting to retrieve TenantModule %s in namespace %s", name, namespace)
 
 	// Get the corresponding HelmRelease
-	hr, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Get(ctx, name, *options)
+	hr := &helmv2.HelmRelease{}
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, hr, &client.GetOptions{Raw: options})
 	if err != nil {
 		klog.Errorf("Error retrieving HelmRelease for TenantModule %s: %v", name, err)
 
@@ -143,25 +144,8 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 		return nil, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Explicitly set apiVersion and kind for TenantModule
-	convertedModule.TypeMeta = metav1.TypeMeta{
-		APIVersion: "core.cozystack.io/v1alpha1",
-		Kind:       r.kindName,
-	}
-
-	// Convert TenantModule to unstructured format
-	unstructuredModule, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&convertedModule)
-	if err != nil {
-		klog.Errorf("Failed to convert TenantModule to unstructured for resource %s: %v", name, err)
-		return nil, fmt.Errorf("failed to convert TenantModule to unstructured: %v", err)
-	}
-
-	// Explicitly set apiVersion and kind in unstructured object
-	unstructuredModule["apiVersion"] = "core.cozystack.io/v1alpha1"
-	unstructuredModule["kind"] = r.kindName
-
-	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s to unstructured", name, r.gvr.Resource)
-	return &unstructured.Unstructured{Object: unstructuredModule}, nil
+	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s", name, r.gvr.Resource)
+	return &convertedModule, nil
 }
 
 // List retrieves a list of TenantModules by converting HelmReleases
@@ -181,24 +165,26 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 	}
 
 	// Initialize variables for selector mapping
-	var helmFieldSelector string
-	var helmLabelSelector string
+	var helmLabelSelector labels.Selector
 
-	// Process field.selector
-	if options.FieldSelector != nil {
-		fs, err := fields.ParseSelector(options.FieldSelector.String())
-		if err != nil {
-			klog.Errorf("Invalid field selector: %v", err)
-			return nil, fmt.Errorf("invalid field selector: %v", err)
-		}
-		// Check if selector is for metadata.name
-		if name, exists := fs.RequiresExactMatch("metadata.name"); exists {
-			// Create new field.selector for HelmRelease
-			helmFieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
-		} else {
-			// If field.selector contains other fields, map them directly
-			helmFieldSelector = fs.String()
-		}
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(options.FieldSelector)
+	if err != nil {
+		klog.Errorf("Error parsing field selector: %v", err)
+		return nil, err
+	}
+
+	// If field selector specifies namespace different from context, return empty list
+	if fieldFilter.Namespace != "" && namespace != "" && namespace != fieldFilter.Namespace {
+		klog.V(6).Infof("Field selector namespace %s doesn't match context namespace %s, returning empty list", fieldFilter.Namespace, namespace)
+		return &corev1alpha1.TenantModuleList{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       "TenantModuleList",
+			},
+		}, nil
 	}
 
 	// Process label.selector - add the tenant module label requirement
@@ -222,34 +208,44 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		}
 	}
 
-	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
-	// Set ListOptions for HelmRelease with selector mapping
-	metaOptions := metav1.ListOptions{
-		FieldSelector: helmFieldSelector,
+	// List HelmReleases with label selector only
+	// Field selectors are not supported by controller-runtime cache
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	hrList := &helmv2.HelmReleaseList{}
+	err = r.c.List(ctx, hrList, &client.ListOptions{
+		Namespace:     namespace,
 		LabelSelector: helmLabelSelector,
-	}
-
-	// List HelmReleases with mapped selectors
-	hrList, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).List(ctx, metaOptions)
+	})
 	if err != nil {
 		klog.Errorf("Error listing HelmReleases: %v", err)
 		return nil, err
 	}
 
-	// Initialize unstructured items array
-	items := make([]unstructured.Unstructured, 0)
+	// Initialize TenantModule items array
+	items := make([]corev1alpha1.TenantModule, 0, len(hrList.Items))
 
 	// Iterate over HelmReleases and convert to TenantModules
-	for _, hr := range hrList.Items {
-		// Double-check the label requirement
-		if !r.hasTenantModuleLabel(&hr) {
+	for i := range hrList.Items {
+		// Apply manual field selector filtering (metadata.name and metadata.namespace)
+		// controller-runtime cache doesn't support field selectors
+		// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+		if !fieldFilter.MatchesName(hrList.Items[i].Name) {
+			continue
+		}
+		if !fieldFilter.MatchesNamespace(hrList.Items[i].Namespace) {
 			continue
 		}
 
-		module, err := r.ConvertHelmReleaseToTenantModule(&hr)
+		// Double-check the label requirement
+		if !r.hasTenantModuleLabel(&hrList.Items[i]) {
+			continue
+		}
+
+		module, err := r.ConvertHelmReleaseToTenantModule(&hrList.Items[i])
 		if err != nil {
-			klog.Errorf("Error converting HelmRelease %s to TenantModule: %v", hr.GetName(), err)
+			klog.Errorf("Error converting HelmRelease %s to TenantModule: %v", hrList.Items[i].GetName(), err)
 			continue
 		}
 
@@ -286,21 +282,26 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			}
 		}
 
-		// Convert TenantModule to unstructured
-		unstructuredModule, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&module)
-		if err != nil {
-			klog.Errorf("Error converting TenantModule %s to unstructured: %v", module.Name, err)
-			continue
-		}
-		items = append(items, unstructured.Unstructured{Object: unstructuredModule})
+		items = append(items, module)
 	}
 
-	// Explicitly set apiVersion and kind in unstructured object
-	moduleList := &unstructured.UnstructuredList{}
-	moduleList.SetAPIVersion("core.cozystack.io/v1alpha1")
-	moduleList.SetKind(r.kindName + "List")
-	moduleList.SetResourceVersion(hrList.GetResourceVersion())
+	// Create TenantModuleList with proper kind
+	moduleList := &corev1alpha1.TenantModuleList{}
+	moduleList.TypeMeta = metav1.TypeMeta{
+		APIVersion: "core.cozystack.io/v1alpha1",
+		Kind:       r.kindName + "List",
+	}
+
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := hrList.GetResourceVersion()
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(hrList)
+	}
+	moduleList.SetResourceVersion(listRV)
 	moduleList.Items = items
+
+	sorting.ByNamespacedName[corev1alpha1.TenantModule, *corev1alpha1.TenantModule](moduleList.Items)
 
 	klog.V(6).Infof("Successfully listed %d TenantModule resources in namespace %s", len(items), namespace)
 	return moduleList, nil
@@ -323,25 +324,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 
 	// Initialize variables for selector mapping
-	var helmFieldSelector string
-	var helmLabelSelector string
+	var helmLabelSelector labels.Selector
 
-	// Process field.selector
-	if options.FieldSelector != nil {
-		fs, err := fields.ParseSelector(options.FieldSelector.String())
-		if err != nil {
-			klog.Errorf("Invalid field selector: %v", err)
-			return nil, fmt.Errorf("invalid field selector: %v", err)
-		}
-
-		// Check if selector is for metadata.name
-		if name, exists := fs.RequiresExactMatch("metadata.name"); exists {
-			// Create new field.selector for HelmRelease
-			helmFieldSelector = fields.OneTermEqualSelector("metadata.name", name).String()
-		} else {
-			// If field.selector contains other fields, map them directly
-			helmFieldSelector = fs.String()
-		}
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(options.FieldSelector)
+	if err != nil {
+		klog.Errorf("Error parsing field selector: %v", err)
+		return nil, err
 	}
 
 	// Process label.selector - add the tenant module label requirement
@@ -365,18 +356,24 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		}
 	}
 
-	helmLabelSelector = labels.NewSelector().Add(labelRequirements...).String()
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
-	// Set ListOptions for HelmRelease with selector mapping
-	metaOptions := metav1.ListOptions{
-		Watch:           true,
-		ResourceVersion: options.ResourceVersion,
-		FieldSelector:   helmFieldSelector,
-		LabelSelector:   helmLabelSelector,
+	// Get starting resourceVersion from options
+	var startingRV uint64
+	if options.ResourceVersion != "" {
+		if rv, err := strconv.ParseUint(options.ResourceVersion, 10, 64); err == nil {
+			startingRV = rv
+		}
 	}
 
-	// Start watch on HelmRelease with mapped selectors
-	helmWatcher, err := r.dynamicClient.Resource(helmReleaseGVR).Namespace(namespace).Watch(ctx, metaOptions)
+	// Start watch on HelmRelease with label selector only
+	// Field selectors are not supported by controller-runtime cache
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	hrList := &helmv2.HelmReleaseList{}
+	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
+		Namespace:     namespace,
+		LabelSelector: helmLabelSelector,
+	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
 		return nil, err
@@ -386,43 +383,87 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	customW := &customWatcher{
 		resultChan: make(chan watch.Event),
 		stopChan:   make(chan struct{}),
+		underlying: helmWatcher,
 	}
 
 	go func() {
 		defer close(customW.resultChan)
+		defer customW.underlying.Stop()
+
 		for {
 			select {
-			case event, ok := <-helmWatcher.ResultChan():
+			case event, ok := <-customW.underlying.ResultChan():
 				if !ok {
-					// The watcher has been closed, attempt to re-establish the watch
-					klog.Warning("HelmRelease watcher closed, attempting to re-establish")
-					// Implement retry logic or exit based on your requirements
+					klog.Warning("HelmRelease watcher closed")
 					return
+				}
+
+				// Handle bookmark events
+				if event.Type == watch.Bookmark {
+					if hr, ok := event.Object.(*helmv2.HelmRelease); ok {
+						bookmarkModule := &corev1alpha1.TenantModule{}
+						bookmarkModule.SetResourceVersion(hr.GetResourceVersion())
+						bookmarkModule.TypeMeta = metav1.TypeMeta{
+							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+							Kind:       r.kindName,
+						}
+						bookmarkEvent := watch.Event{
+							Type:   watch.Bookmark,
+							Object: bookmarkModule,
+						}
+						select {
+						case customW.resultChan <- bookmarkEvent:
+						case <-customW.stopChan:
+							return
+						case <-ctx.Done():
+							return
+						}
+					}
+					continue
 				}
 
 				// Check if the object is a *v1.Status
 				if status, ok := event.Object.(*metav1.Status); ok {
 					klog.V(4).Infof("Received Status object in HelmRelease watch: %v", status.Message)
-					continue // Skip processing this event
-				}
-
-				// Proceed with processing Unstructured objects
-				matches, err := r.isRelevantHelmRelease(&event)
-				if err != nil {
-					klog.V(4).Infof("Non-critical error filtering HelmRelease event: %v", err)
 					continue
 				}
 
-				if !matches {
+				// Proceed with processing HelmRelease objects
+				hr, ok := event.Object.(*helmv2.HelmRelease)
+				if !ok {
+					klog.V(4).Infof("Expected HelmRelease object, got %T", event.Object)
+					continue
+				}
+
+				// Apply manual field selector filtering
+				if !fieldFilter.MatchesName(hr.Name) {
+					continue
+				}
+				if !fieldFilter.MatchesNamespace(hr.Namespace) {
+					continue
+				}
+
+				if !r.hasTenantModuleLabel(hr) {
 					continue
 				}
 
 				// Convert HelmRelease to TenantModule
-				module, err := r.ConvertHelmReleaseToTenantModule(event.Object.(*unstructured.Unstructured))
+				module, err := r.ConvertHelmReleaseToTenantModule(hr)
 				if err != nil {
 					klog.Errorf("Error converting HelmRelease to TenantModule: %v", err)
 					continue
 				}
+
+				// Skip ADDED events based on resourceVersion comparison
+				// Only skip when client provided resourceVersion (they already have objects from List)
+				if event.Type == watch.Added && startingRV > 0 {
+					objRV, parseErr := strconv.ParseUint(module.ResourceVersion, 10, 64)
+					// Skip objects client already has (objRV <= startingRV)
+					if parseErr == nil && objRV <= startingRV {
+						continue
+					}
+				}
+				// When startingRV == 0, always send ADDED events (client wants full state)
 
 				// Apply field.selector by name if specified
 				if resourceName != "" && module.Name != resourceName {
@@ -441,17 +482,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					}
 				}
 
-				// Convert TenantModule to unstructured
-				unstructuredModule, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&module)
-				if err != nil {
-					klog.Errorf("Failed to convert TenantModule to unstructured: %v", err)
-					continue
-				}
-
 				// Create watch event with TenantModule object
 				moduleEvent := watch.Event{
 					Type:   event.Type,
-					Object: &unstructured.Unstructured{Object: unstructuredModule},
+					Object: &module,
 				}
 
 				// Send event to custom watcher
@@ -480,12 +514,16 @@ type customWatcher struct {
 	resultChan chan watch.Event
 	stopChan   chan struct{}
 	stopOnce   sync.Once
+	underlying watch.Interface
 }
 
 // Stop terminates the watch
 func (cw *customWatcher) Stop() {
 	cw.stopOnce.Do(func() {
 		close(cw.stopChan)
+		if cw.underlying != nil {
+			cw.underlying.Stop()
+		}
 	})
 }
 
@@ -494,30 +532,8 @@ func (cw *customWatcher) ResultChan() <-chan watch.Event {
 	return cw.resultChan
 }
 
-// isRelevantHelmRelease checks if the HelmRelease has the tenant module label
-func (r *REST) isRelevantHelmRelease(event *watch.Event) (bool, error) {
-	if event.Object == nil {
-		return false, nil
-	}
-
-	// Check if the object is a *v1.Status
-	if status, ok := event.Object.(*metav1.Status); ok {
-		// Log at a less severe level or handle specific status errors if needed
-		klog.V(4).Infof("Received Status object in HelmRelease watch: %v", status.Message)
-		return false, nil // Not relevant for processing as a HelmRelease
-	}
-
-	// Proceed if it's an Unstructured object
-	hr, ok := event.Object.(*unstructured.Unstructured)
-	if !ok {
-		return false, fmt.Errorf("expected Unstructured object, got %T", event.Object)
-	}
-
-	return r.hasTenantModuleLabel(hr), nil
-}
-
 // hasTenantModuleLabel checks if a HelmRelease has the required tenant module label
-func (r *REST) hasTenantModuleLabel(hr *unstructured.Unstructured) bool {
+func (r *REST) hasTenantModuleLabel(hr *helmv2.HelmRelease) bool {
 	labels := hr.GetLabels()
 	if labels == nil {
 		return false
@@ -547,26 +563,18 @@ func (r *REST) getNamespace(ctx context.Context) (string, error) {
 	namespace, ok := request.NamespaceFrom(ctx)
 	if !ok {
 		err := fmt.Errorf("namespace not found in context")
-		klog.Errorf(err.Error())
+		klog.Error(err)
 		return "", err
 	}
 	return namespace, nil
 }
 
 // ConvertHelmReleaseToTenantModule converts a HelmRelease to a TenantModule
-func (r *REST) ConvertHelmReleaseToTenantModule(hr *unstructured.Unstructured) (corev1alpha1.TenantModule, error) {
+func (r *REST) ConvertHelmReleaseToTenantModule(hr *helmv2.HelmRelease) (corev1alpha1.TenantModule, error) {
 	klog.V(6).Infof("Converting HelmRelease to TenantModule for resource %s", hr.GetName())
 
-	var helmRelease helmv2.HelmRelease
-	// Convert unstructured to HelmRelease struct
-	err := runtime.DefaultUnstructuredConverter.FromUnstructured(hr.Object, &helmRelease)
-	if err != nil {
-		klog.Errorf("Error converting from unstructured to HelmRelease: %v", err)
-		return corev1alpha1.TenantModule{}, err
-	}
-
 	// Convert HelmRelease struct to TenantModule struct
-	module, err := r.convertHelmReleaseToTenantModule(&helmRelease)
+	module, err := r.convertHelmReleaseToTenantModule(hr)
 	if err != nil {
 		klog.Errorf("Error converting from HelmRelease to TenantModule: %v", err)
 		return corev1alpha1.TenantModule{}, err
@@ -632,28 +640,12 @@ func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableO
 	var table metav1.Table
 
 	switch obj := object.(type) {
-	case *unstructured.UnstructuredList:
-		modules := make([]corev1alpha1.TenantModule, 0, len(obj.Items))
-		for _, u := range obj.Items {
-			var m corev1alpha1.TenantModule
-			err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &m)
-			if err != nil {
-				klog.Errorf("Failed to convert Unstructured to TenantModule: %v", err)
-				continue
-			}
-			modules = append(modules, m)
-		}
-		table = r.buildTableFromTenantModules(modules)
-		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
-	case *unstructured.Unstructured:
-		var module corev1alpha1.TenantModule
-		err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), &module)
-		if err != nil {
-			klog.Errorf("Failed to convert Unstructured to TenantModule: %v", err)
-			return nil, fmt.Errorf("failed to convert Unstructured to TenantModule: %v", err)
-		}
-		table = r.buildTableFromTenantModule(module)
-		table.ListMeta.ResourceVersion = obj.GetResourceVersion()
+	case *corev1alpha1.TenantModuleList:
+		table = r.buildTableFromTenantModules(obj.Items)
+		table.ResourceVersion = obj.ResourceVersion
+	case *corev1alpha1.TenantModule:
+		table = r.buildTableFromTenantModule(*obj)
+		table.ResourceVersion = obj.GetResourceVersion()
 	default:
 		resource := schema.GroupResource{}
 		if info, ok := request.RequestInfoFrom(ctx); ok {
@@ -692,10 +684,11 @@ func (r *REST) buildTableFromTenantModules(modules []corev1alpha1.TenantModule) 
 	}
 	now := time.Now()
 
-	for _, module := range modules {
+	for i := range modules {
+		module := &modules[i]
 		row := metav1.TableRow{
 			Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
-			Object: runtime.RawExtension{Object: &module},
+			Object: runtime.RawExtension{Object: module},
 		}
 		table.Rows = append(table.Rows, row)
 	}
@@ -716,20 +709,29 @@ func (r *REST) buildTableFromTenantModule(module corev1alpha1.TenantModule) meta
 	}
 	now := time.Now()
 
+	m := module
 	row := metav1.TableRow{
 		Cells:  []interface{}{module.GetName(), getReadyStatus(module.Status.Conditions), computeAge(module.GetCreationTimestamp().Time, now), getVersion(module.Status.Version)},
-		Object: runtime.RawExtension{Object: &module},
+		Object: runtime.RawExtension{Object: &m},
 	}
 	table.Rows = append(table.Rows, row)
 
 	return table
 }
 
-// getVersion returns the module version or a placeholder if unknown
+// getVersion extracts and returns only the revision from the version string
+// If version is in format "0.1.4+abcdef", returns "abcdef"
+// Otherwise returns the original string or "<unknown>" if empty
 func getVersion(version string) string {
 	if version == "" {
 		return "<unknown>"
 	}
+	// Check if version contains "+" separator
+	if idx := strings.LastIndex(version, "+"); idx >= 0 && idx < len(version)-1 {
+		// Return only the part after "+"
+		return version[idx+1:]
+	}
+	// If no "+" found, return original version
 	return version
 }
 
@@ -763,12 +765,22 @@ func (r *REST) Destroy() {
 
 // New creates a new instance of TenantModule
 func (r *REST) New() runtime.Object {
-	return &corev1alpha1.TenantModule{}
+	obj := &corev1alpha1.TenantModule{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName,
+	}
+	return obj
 }
 
 // NewList returns an empty list of TenantModule objects
 func (r *REST) NewList() runtime.Object {
-	return &corev1alpha1.TenantModuleList{}
+	obj := &corev1alpha1.TenantModuleList{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName + "List",
+	}
+	return obj
 }
 
 // Kind returns the resource kind used for API discovery

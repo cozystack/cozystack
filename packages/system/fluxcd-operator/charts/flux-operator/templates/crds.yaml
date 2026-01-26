@@ -174,6 +174,7 @@ spec:
                   - notification-controller
                   - image-reflector-controller
                   - image-automation-controller
+                  - source-watcher
                   type: string
                 type: array
               distribution:
@@ -201,6 +202,15 @@ spec:
                     description: |-
                       Registry address to pull the distribution images from
                       e.g. 'ghcr.io/fluxcd'.
+                    type: string
+                  variant:
+                    description: |-
+                      Variant specifies the Flux distribution flavor stored
+                      in the registry.
+                    enum:
+                    - upstream-alpine
+                    - enterprise-alpine
+                    - enterprise-distroless
                     type: string
                   version:
                     description: Version semver expression e.g. '2.x', '2.3.x'.
@@ -581,6 +591,12 @@ spec:
                 description: |-
                   LastAttemptedRevision is the version and digest of the
                   distribution config that was last attempted to reconcile.
+                type: string
+              lastHandledForceAt:
+                description: |-
+                  LastHandledForceAt holds the value of the most recent
+                  force request value, so a change of the annotation value
+                  can be detected.
                 type: string
               lastHandledReconcileAt:
                 description: |-

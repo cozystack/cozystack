@@ -1,0 +1,92 @@
+## Release.Namespace == tenant name
+## Release.Name == vpc name
+
+{{ $vpcId := print "vpc-" (print .Release.Namespace "/" .Release.Name | sha256sum | trunc 6) }}
+
+---
+apiVersion: kubeovn.io/v1
+kind: Vpc
+metadata:
+  name: {{ $vpcId }}
+  labels:
+    cozystack.io/vpcName: {{ .Release.Name }}
+    cozystack.io/tenantName: {{ .Release.Namespace }}
+spec:
+  enableExternal: false
+  namespaces:
+    - {{ .Release.Namespace }}
+
+{{- range $subnetName, $subnetConfig := .Values.subnets  }}
+{{- $subnetId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ $subnetId }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    cozystack.io/subnetName: {{ $subnetName }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+spec:
+  config: '{
+      "cniVersion": "0.3.0",
+      "type": "kube-ovn",
+      "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
+      "provider": "{{ $subnetId }}.{{ $.Release.Namespace }}.ovn"
+    }'
+---
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: {{ $subnetId }}
+  labels:
+    cozystack.io/subnetName: {{ $subnetName }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/vpcName: {{ $.Release.Name }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+spec:
+  vpc: {{ $vpcId  }}
+  cidrBlock: {{ $subnetConfig.cidr }}
+  provider: "{{ $subnetId }}.{{ $.Release.Namespace }}.ovn"
+  protocol: IPv4
+  enableLb: false
+  private: true
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $.Release.Name }}-subnets
+  labels:
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.kind: VirtualPrivateCloud
+    apps.cozystack.io/application.name: {{ trimPrefix "virtualprivatecloud-" .Release.Name }}
+    cozystack.io/vpcId: {{ $vpcId }}
+    cozystack.io/tenantName: {{ $.Release.Namespace }}
+data:
+  {{- range $subnetName, $subnetConfig := .Values.subnets }}
+  {{ $subnetName }}.ID: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
+  {{ $subnetName }}.CIDR: {{ $subnetConfig.cidr }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: "{{ .Release.Name }}-subnets"
+subjects: {{- include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" .Release.Namespace ) | nindent 2 }}
+roleRef:
+  kind: Role
+  name: "{{ .Release.Name }}-subnets"
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: "{{ .Release.Name }}-subnets"
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get","list","watch"]
+  resourceNames: ["{{ .Release.Name }}-subnets"]
