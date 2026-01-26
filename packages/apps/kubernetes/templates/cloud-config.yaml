@@ -10,3 +10,8 @@ data:
       enableEPSController: true
       selectorless: true
     namespace: {{ .Release.Namespace }}
+    infraLabels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Kubernetes
+      apps.cozystack.io/application.name: {{ .Release.Name | trimPrefix "kubernetes-" }}
+      internal.cozystack.io/tenantresource: "true"
