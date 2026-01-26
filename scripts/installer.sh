@@ -50,10 +50,10 @@ wait_for_crds() {
 }
 
 install_basic_charts() {
-  if [ "$BUNDLE" = "paas-full" ] || [ "$BUNDLE" = "distro-full" || "$BUNDLE" = "paas-proxmox" ]; then
-    make -C packages/system/cilium apply resume
+  if [ "$BUNDLE" = "paas-full" ] || [ "$BUNDLE" = "distro-full" ]; then
+  make -C packages/system/cilium apply resume
   fi
-  if [ "$BUNDLE" = "paas-full" || "$BUNDLE" = "paas-proxmox" ]; then
+  if [ "$BUNDLE" = "paas-full" ]; then
     make -C packages/system/kubeovn apply resume
   fi
 }
