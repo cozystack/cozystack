@@ -1144,7 +1144,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 								"clusterNamePartOfUrl": "{2}",
 								"customizationId":      "factory-node-details-/v1/pods",
 								"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/pods",
-								"labelsSelectorFull": map[string]any{
+								"labelSelectorFull": map[string]any{
 									"pathToLabels": ".spec.selector",
 									"reqIndex":     0,
 								},
