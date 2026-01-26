@@ -1885,6 +1885,46 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 	}
 	backupSpec := createUnifiedFactory(backupConfig, backupTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/backups/{6}"})
 
+	// External IPs factory (filtered services)
+	externalIPsTabs := []any{
+		map[string]any{
+			"key":   "services",
+			"label": "Services",
+			"children": []any{
+				map[string]any{
+					"type": "EnrichedTable",
+					"data": map[string]any{
+						"id":                   "external-ips-table",
+						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
+						"clusterNamePartOfUrl": "{2}",
+						"baseprefix":           "/openapi-ui",
+						"customizationId":      "factory-details-v1.services",
+						"pathToItems":          []any{"items"},
+						"fieldSelector": map[string]any{
+							"spec.type": "LoadBalancer",
+						},
+					},
+				},
+			},
+		},
+	}
+	externalIPsSpec := map[string]any{
+		"key":                           "external-ips",
+		"sidebarTags":                   []any{"external-ips-sidebar"},
+		"withScrollableMainContentCard": true,
+		"urlsToFetch":                   []any{},
+		"data": []any{
+			map[string]any{
+				"type": "antdTabs",
+				"data": map[string]any{
+					"id":               "tabs-root",
+					"defaultActiveKey": "services",
+					"items":            externalIPsTabs,
+				},
+			},
+		},
+	}
+
 	return []*dashboardv1alpha1.Factory{
 		createFactory("marketplace", marketplaceSpec),
 		createFactory("namespace-details", namespaceSpec),
@@ -1897,6 +1937,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 		createFactory("plan-details", planSpec),
 		createFactory("backupjob-details", backupJobSpec),
 		createFactory("backup-details", backupSpec),
+		createFactory("external-ips", externalIPsSpec),
 	}
 }
 
