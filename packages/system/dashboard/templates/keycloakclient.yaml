@@ -66,6 +66,12 @@ spec:
   defaultClientScopes:
     - groups
     - kubernetes-client
+  optionalClientScopes:
+    - offline_access
+  attributes:
+    post.logout.redirect.uris: "+"
+    client.session.idle.timeout: "86400"
+    client.session.max.lifespan: "604800"
   redirectUris:
     - "https://dashboard.{{ $host }}/oauth2/callback/*"
     {{- range $i, $v := $extraRedirectUris }}
