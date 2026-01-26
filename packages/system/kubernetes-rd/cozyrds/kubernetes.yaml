@@ -39,8 +39,12 @@ spec:
     include:
       - resourceNames:
           - kubernetes-{{ .name }}
+          - kubernetes-{{ .name }}-ingress-nginx
+      - matchLabels:
+          cluster.x-k8s.io/cluster-name: kubernetes-{{ .name }}
   ingresses:
     exclude: []
     include:
       - resourceNames:
           - kubernetes-{{ .name }}
+          - kubernetes-{{ .name }}-ingress-nginx
