@@ -1,0 +1,177 @@
+# Default values for proxmox-cloud-controller-manager.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  # -- Proxmox CCM image.
+  repository: ghcr.io/sergelogvinov/proxmox-cloud-controller-manager
+  # -- Always or IfNotPresent
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Any extra arguments for talos-cloud-controller-manager
+extraArgs: []
+  # - --cluster-name=kubernetes
+
+# -- List of controllers should be enabled.
+# Use '*' to enable all controllers.
+# Support only `cloud-node,cloud-node-lifecycle` controllers.
+enabledControllers:
+  - cloud-node
+  - cloud-node-lifecycle
+  # - route
+  # - service
+
+# -- Log verbosity level. See https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md
+# for description of individual verbosity levels.
+logVerbosityLevel: 2
+
+# -- Proxmox cluster config stored in secrets.
+existingConfigSecret: ~
+# -- Proxmox cluster config stored in secrets key.
+existingConfigSecretKey: config.yaml
+
+# -- Proxmox cluster config.
+config:
+  clusters: []
+  #   - url: https://cluster-api-1.exmple.com:8006/api2/json
+  #     insecure: false
+  #     token_id: "login!name"
+  #     token_secret: "secret"
+  #     region: cluster-1
+
+# -- Pods Service Account.
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# -- CCM pods' priorityClassName.
+priorityClassName: system-cluster-critical
+
+# -- Add additional init containers to the CCM pods.
+# ref: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+initContainers: []
+  # - name: loadbalancer
+  #   restartPolicy: Always
+  #   image: ghcr.io/sergelogvinov/haproxy:2.8.3-alpine3.18
+  #   imagePullPolicy: IfNotPresent
+  #   env:
+  #     - name: SVC
+  #       value: "proxmox.domain.com"
+  #     - name: PORT
+  #       value: "8006"
+  #   securityContext:
+  #     runAsUser: 99
+  #     runAsGroup: 99
+  #   resources:
+  #     limits:
+  #       cpu: 50m
+  #       memory: 64Mi
+  #     requests:
+  #       cpu: 50m
+  #       memory: 32Mi
+
+# -- hostAliases Deployment pod host aliases
+# ref: https://kubernetes.io/docs/tasks/network/customize-hosts-file-for-pods/
+hostAliases: []
+  # - ip: 127.0.0.1
+  #   hostnames:
+  #     - proxmox.domain.com
+
+# -- Annotations for data pods.
+# ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+
+# -- Pods Security Context.
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10258
+  runAsGroup: 10258
+  fsGroup: 10258
+  fsGroupChangePolicy: "OnRootMismatch"
+
+# -- Container Security Context.
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Resource requests and limits.
+# ref: https://kubernetes.io/docs/user-guide/compute-resources/
+resources:
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 32Mi
+
+# -- Deploy CCM  in Daemonset mode.
+# CCM will use hostNetwork.
+# It allows to use CCM without CNI plugins.
+useDaemonSet: false
+
+# -- Deployment update strategy type.
+# ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#updating-a-deployment
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# -- Node labels for data pods assignment.
+# ref: https://kubernetes.io/docs/user-guide/node-selection/
+nodeSelector: {}
+  # node-role.kubernetes.io/control-plane: ""
+
+# -- Tolerations for data pods assignment.
+# ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+    operator: Exists
+  - effect: NoSchedule
+    key: node.cloudprovider.kubernetes.io/uninitialized
+    operator: Exists
+
+# -- Affinity for data pods assignment.
+# ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity
+affinity: {}
+#  nodeAffinity:
+#    requiredDuringSchedulingIgnoredDuringExecution:
+#      nodeSelectorTerms:
+#      - matchExpressions:
+#        - key: node-role.kubernetes.io/control-plane
+#          operator: Exists
+
+# -- Additional volumes for Pods
+extraVolumes: []
+# - name: ca
+#   secret:
+#     secretName: my-ca
+# -- Additional volume mounts for Pods
+extraVolumeMounts: []
+# - mountPath: /etc/ssl/certs/ca-certificates.crt
+#   name: ca
+#   subPath: ca.crt
