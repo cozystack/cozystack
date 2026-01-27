@@ -111,6 +111,8 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 	keysAndTags["services"] = []any{"service-sidebar"}
 	keysAndTags["secrets"] = []any{"secret-sidebar"}
 	keysAndTags["ingresses"] = []any{"ingress-sidebar"}
+	// Add sidebar for v1/services type loadbalancer
+	keysAndTags["loadbalancer-services"] = []any{"external-ips-sidebar"}
 
 	// Add sidebar for backups.cozystack.io Plan resource
 	keysAndTags["plans"] = []any{"plan-sidebar"}
@@ -211,6 +213,11 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/core.cozystack.io/v1alpha1/tenantmodules",
 			},
 			map[string]any{
+				"key":   "loadbalancer-services",
+				"label": "External IPs",
+				"link":  "/openapi-ui/{clusterName}/{namespace}/factory/external-ips",
+			},
+			map[string]any{
 				"key":   "tenants",
 				"label": "Tenants",
 				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/apps.cozystack.io/v1alpha1/tenants",
@@ -236,6 +243,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 		"stock-project-factory-plan-details",
 		"stock-project-factory-backupjob-details",
 		"stock-project-factory-backup-details",
+		"stock-project-factory-external-ips",
 		"stock-project-api-form",
 		"stock-project-api-table",
 		"stock-project-builtin-form",

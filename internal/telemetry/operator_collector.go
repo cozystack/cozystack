@@ -22,7 +22,7 @@ import (
 
 // OperatorCollector handles telemetry data collection for cozystack-operator
 type OperatorCollector struct {
-	client          client.Client
+	reader          client.Reader
 	discoveryClient discovery.DiscoveryInterface
 	config          *Config
 	ticker          *time.Ticker
@@ -30,13 +30,13 @@ type OperatorCollector struct {
 }
 
 // NewOperatorCollector creates a new telemetry collector for cozystack-operator
-func NewOperatorCollector(c client.Client, config *Config, kubeConfig *rest.Config) (*OperatorCollector, error) {
+func NewOperatorCollector(r client.Reader, config *Config, kubeConfig *rest.Config) (*OperatorCollector, error) {
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(kubeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discovery client: %w", err)
 	}
 	return &OperatorCollector{
-		client:          c,
+		reader:          r,
 		discoveryClient: discoveryClient,
 		config:          config,
 	}, nil
@@ -108,7 +108,7 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 
 	// Get cluster ID from kube-system namespace
 	var kubeSystemNS corev1.Namespace
-	if err := c.client.Get(ctx, types.NamespacedName{Name: "kube-system"}, &kubeSystemNS); err != nil {
+	if err := c.reader.Get(ctx, types.NamespacedName{Name: "kube-system"}, &kubeSystemNS); err != nil {
 		logger.Info(fmt.Sprintf("Failed to get kube-system namespace: %v", err))
 		return
 	}
@@ -124,7 +124,7 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 
 	// Get nodes
 	var nodeList corev1.NodeList
-	if err := c.client.List(ctx, &nodeList); err != nil {
+	if err := c.reader.List(ctx, &nodeList); err != nil {
 		logger.Info(fmt.Sprintf("Failed to list nodes: %v", err))
 		return
 	}
@@ -183,7 +183,7 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 
 	// Collect LoadBalancer services metrics
 	var serviceList corev1.ServiceList
-	if err := c.client.List(ctx, &serviceList); err != nil {
+	if err := c.reader.List(ctx, &serviceList); err != nil {
 		logger.Info(fmt.Sprintf("Failed to list Services: %v", err))
 	} else {
 		lbCount := 0
@@ -197,7 +197,7 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 
 	// Collect PV metrics grouped by driver and size
 	var pvList corev1.PersistentVolumeList
-	if err := c.client.List(ctx, &pvList); err != nil {
+	if err := c.reader.List(ctx, &pvList); err != nil {
 		logger.Info(fmt.Sprintf("Failed to list PVs: %v", err))
 	} else {
 		pvMetrics := make(map[string]map[string]int) // size -> driver -> count
@@ -236,7 +236,7 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 
 	// Collect installed packages
 	var packageList cozyv1alpha1.PackageList
-	if err := c.client.List(ctx, &packageList); err != nil {
+	if err := c.reader.List(ctx, &packageList); err != nil {
 		logger.Info(fmt.Sprintf("Failed to list Packages: %v", err))
 	} else {
 		for _, pkg := range packageList.Items {
