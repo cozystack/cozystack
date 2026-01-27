@@ -103,18 +103,34 @@ spec:
     {{- end }}
 
   {{- if .Values.users }}
+  {{- /* Build a map of username -> list of roles from databases config */}}
+  {{- $userRoles := dict }}
+  {{- range $dbname, $db := .Values.databases }}
+    {{- range $user := $db.roles.admin }}
+      {{- $roles := index $userRoles $user | default list }}
+      {{- $roles = append $roles (dict "name" "readWrite" "db" $dbname) }}
+      {{- $roles = append $roles (dict "name" "dbAdmin" "db" $dbname) }}
+      {{- $_ := set $userRoles $user $roles }}
+    {{- end }}
+    {{- range $user := $db.roles.readonly }}
+      {{- $roles := index $userRoles $user | default list }}
+      {{- $roles = append $roles (dict "name" "read" "db" $dbname) }}
+      {{- $_ := set $userRoles $user $roles }}
+    {{- end }}
+  {{- end }}
   users:
     {{- range $username, $user := .Values.users }}
-    {{- if not $user.roles }}
-    {{- fail (printf "users.%s.roles is required and cannot be empty" $username) }}
+    {{- $roles := index $userRoles $username }}
+    {{- if not $roles }}
+    {{- fail (printf "user '%s' is not assigned to any database role in databases.*.roles" $username) }}
     {{- end }}
     - name: {{ $username }}
-      db: {{ $user.db }}
+      db: admin
       passwordSecretRef:
         name: {{ $.Release.Name }}-user-{{ $username }}
         key: password
       roles:
-        {{- range $user.roles }}
+        {{- range $roles }}
         - name: {{ .name }}
           db: {{ .db }}
         {{- end }}

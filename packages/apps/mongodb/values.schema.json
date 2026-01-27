@@ -232,44 +232,46 @@
       "type": "string",
       "default": ""
     },
-    "users": {
-      "description": "Custom MongoDB users configuration map.",
+    "databases": {
+      "description": "Databases configuration map.",
       "type": "object",
       "default": {},
       "additionalProperties": {
         "type": "object",
-        "required": [
-          "db"
-        ],
         "properties": {
-          "db": {
-            "description": "Database to authenticate against.",
-            "type": "string"
-          },
-          "password": {
-            "description": "Password for the user (auto-generated if omitted).",
-            "type": "string"
-          },
           "roles": {
-            "description": "List of MongoDB roles with database scope.",
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "db",
-                "name"
-              ],
-              "properties": {
-                "db": {
-                  "description": "Database the role applies to.",
+            "description": "Roles assigned to users.",
+            "type": "object",
+            "properties": {
+              "admin": {
+                "description": "List of users with admin privileges (readWrite + dbAdmin).",
+                "type": "array",
+                "items": {
                   "type": "string"
-                },
-                "name": {
-                  "description": "Role name (e.g., readWrite, dbAdmin, clusterAdmin).",
+                }
+              },
+              "readonly": {
+                "description": "List of users with read-only privileges.",
+                "type": "array",
+                "items": {
                   "type": "string"
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "users": {
+      "description": "Users configuration map.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "description": "Password for the user (auto-generated if omitted).",
+            "type": "string"
           }
         }
       }
