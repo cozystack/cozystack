@@ -14,6 +14,14 @@ spec:
   replicas: 1
   storageClass: ""
   resourcesPreset: "nano"
+  users:
+    testuser:
+      password: xai7Wepo
+  databases:
+    testdb:
+      roles:
+        admin:
+        - testuser
   backup:
     enabled: false
 EOF
