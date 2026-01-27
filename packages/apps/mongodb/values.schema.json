@@ -73,6 +73,36 @@
         }
       }
     },
+    "databases": {
+      "description": "Databases configuration map.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "roles": {
+            "description": "Roles assigned to users.",
+            "type": "object",
+            "properties": {
+              "admin": {
+                "description": "List of users with admin privileges (readWrite + dbAdmin).",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "readonly": {
+                "description": "List of users with read-only privileges.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "external": {
       "description": "Enable external access from outside the cluster.",
       "type": "boolean",
@@ -231,36 +261,6 @@
       "description": "StorageClass used to store the data.",
       "type": "string",
       "default": ""
-    },
-    "databases": {
-      "description": "Databases configuration map.",
-      "type": "object",
-      "default": {},
-      "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "roles": {
-            "description": "Roles assigned to users.",
-            "type": "object",
-            "properties": {
-              "admin": {
-                "description": "List of users with admin privileges (readWrite + dbAdmin).",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "readonly": {
-                "description": "List of users with read-only privileges.",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      }
     },
     "users": {
       "description": "Users configuration map.",
