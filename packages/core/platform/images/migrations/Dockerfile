@@ -1,6 +1,6 @@
 FROM alpine:3.22
 
-RUN wget -O- https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.5.0
+RUN wget -O- https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.6.1
 
 RUN apk add --no-cache kubectl helm coreutils git jq ca-certificates bash curl
 
