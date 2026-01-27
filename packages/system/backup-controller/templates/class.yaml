@@ -1,0 +1,14 @@
+kind: BackupClass
+metadata:
+  name: velero
+spec:
+  strategies:
+  - strategyRef:
+      apiGroup: strategy.backups.cozystack.io
+      kind: Velero
+      name: velero-backup-strategy-for-virtualmachines
+    application:
+      apiVersion: apps.cozystack.io
+      kind: VirtualMachine
+    parameters:
+      backupStorageLocationName: default
