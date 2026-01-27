@@ -1,0 +1,73 @@
+#!/bin/sh
+# Migration 24 --> 25
+# Migrate MongoDB users configuration to new databases format
+
+set -euo pipefail
+
+echo "Migrating MongoDB HelmReleases: converting users to databases format"
+
+# Process all MongoDB HelmReleases
+kubectl get helmreleases --all-namespaces -o json | \
+  jq -r '.items[] | select(.metadata.name | startswith("mongodb-")) | "\(.metadata.namespace)|\(.metadata.name)"' | \
+  while IFS='|' read -r namespace name; do
+    echo "Processing MongoDB HelmRelease $namespace/$name"
+
+    # Get current spec.values
+    values=$(kubectl get helmrelease -n "$namespace" "$name" -o jsonpath='{.spec.values}')
+
+    # Check if users exist and have old format (with db and roles fields)
+    has_old_format=$(echo "$values" | jq -r '.users // {} | to_entries[] | select(.value.db != null or .value.roles != null) | .key' | head -1)
+
+    if [ -z "$has_old_format" ]; then
+      echo "Skipping $namespace/$name: no users with old format found"
+      continue
+    fi
+
+    echo "Converting users configuration for $namespace/$name"
+
+    # Build new configuration using jq
+    new_values=$(echo "$values" | jq '
+      # Extract users and build new format
+      .users as $old_users |
+
+      # Build databases from user roles
+      ($old_users // {} | to_entries | reduce .[] as $user (
+        {};
+        ($user.value.roles // []) as $roles |
+        reduce $roles[] as $role (
+          .;
+          # Determine role type: readWrite/dbAdmin -> admin, read -> readonly
+          if ($role.name == "readWrite" or $role.name == "dbAdmin") then
+            .[$role.db].roles.admin = ((.[$role.db].roles.admin // []) + [$user.key] | unique)
+          elif ($role.name == "read") then
+            .[$role.db].roles.readonly = ((.[$role.db].roles.readonly // []) + [$user.key] | unique)
+          else
+            .
+          end
+        )
+      )) as $databases |
+
+      # Build new users (only keep password if present)
+      ($old_users // {} | to_entries | reduce .[] as $user (
+        {};
+        if $user.value.password then
+          .[$user.key] = {password: $user.value.password}
+        else
+          .[$user.key] = {}
+        end
+      )) as $new_users |
+
+      # Update values
+      . + {users: $new_users} + (if ($databases | length) > 0 then {databases: $databases} else {} end)
+    ')
+
+    # Patch the HelmRelease
+    kubectl patch helmrelease -n "$namespace" "$name" --type=merge -p "{\"spec\":{\"values\":$new_values}}"
+    echo "Successfully migrated $namespace/$name"
+  done
+
+echo "MongoDB migration completed"
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=25 --dry-run=client -o yaml | kubectl apply -f-
