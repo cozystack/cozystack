@@ -262,7 +262,9 @@ func main() {
 	}
 
 	// Initialize telemetry collector
-	collector, err := telemetry.NewOperatorCollector(mgr.GetClient(), &telemetryConfig, config)
+	// Use APIReader (non-cached) because the manager's cache is filtered
+	// and doesn't include resources needed for telemetry (e.g., kube-system namespace, nodes, etc.)
+	collector, err := telemetry.NewOperatorCollector(mgr.GetAPIReader(), &telemetryConfig, config)
 	if err != nil {
 		setupLog.V(1).Info("unable to create telemetry collector, telemetry will be disabled", "error", err)
 	}
