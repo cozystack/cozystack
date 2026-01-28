@@ -18,5 +18,5 @@ spec:
     - name: metrics-server
       path: system/metrics-server
       install:
-        namespace: cozy-metrics-server
+        namespace: cozy-monitoring
         releaseName: metrics-server
