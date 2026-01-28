@@ -237,9 +237,16 @@ func createUnifiedFactory(config UnifiedResourceConfig, tabs []any, urlsToFetch 
 		"lineHeight": "24px",
 	})
 
-	header := antdFlex(generateContainerID("header", "row"), float64(6), []any{
-		badge,
-		nameText,
+	header := antdFlexSpaceBetween(generateContainerID("header", "row"), []any{
+		antdFlex(generateContainerID("header", "title-text"), float64(6), []any{
+			badge,
+			nameText,
+		}),
+		antdLink(generateLinkID("header", "edit"),
+			"Edit",
+			fmt.Sprintf("/openapi-ui/{2}/{3}/forms/apis/{reqsJsonPath[0]['.apiVersion']['-']}/%s/{reqsJsonPath[0]['.metadata.name']['-']}",
+				config.Plural),
+		),
 	})
 
 	// Add marginBottom style to header
