@@ -1,0 +1,12 @@
+migrations:
+  enabled: true
+bundles:
+  system:
+    enabled: true
+    variant: "paas-proxmox-custom"
+  iaas:
+    enabled: false
+  paas:
+    enabled: false
+  naas:
+    enabled: false

@@ -11,7 +11,7 @@ migrations:
 bundles:
   system:
     enabled: false
-    variant: "isp-full" # Options: "isp-full", "isp-hosted", "distro-full"
+    variant: "isp-full" # Options: "isp-full", "isp-hosted", "distro-full", "paas-proxmox-custom"
   iaas:
     enabled: false
   paas:
