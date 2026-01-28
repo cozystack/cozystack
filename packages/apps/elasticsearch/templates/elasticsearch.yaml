@@ -1,4 +1,3 @@
-{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 {{- $topologyMode := .Values.topologySpreadPolicy | default "soft" }}
 {{- $whenUnsatisfiable := "ScheduleAnyway" }}
 {{- if eq $topologyMode "hard" }}

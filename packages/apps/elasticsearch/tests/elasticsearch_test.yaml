@@ -69,7 +69,7 @@ tests:
           value: "8.17.0"
         documentIndex: 0
 
-  - it: sets version 7.17.27 when v7 selected
+  - it: sets version 7.17.28 when v7 selected
     release:
       name: test-es
       namespace: tenant-test
@@ -80,7 +80,7 @@ tests:
     asserts:
       - equal:
           path: spec.version
-          value: "7.17.27"
+          value: "7.17.28"
         documentIndex: 0
 
   #####################

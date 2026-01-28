@@ -11,9 +11,6 @@
       "description": "Container images used by the operator.",
       "type": "object",
       "default": {},
-      "required": [
-        "elasticsearch"
-      ],
       "properties": {
         "elasticsearch": {
           "description": "Elasticsearch image.",

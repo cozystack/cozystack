@@ -8,7 +8,7 @@ The Managed Elasticsearch Service provides a self-healing cluster managed by the
 This managed service is controlled by the ECK Operator, ensuring efficient management and seamless operation.
 
 - Docs: <https://www.elastic.co/guide/en/cloud-on-k8s/current/index.html>
-- Github: <https://github.com/elastic/cloud-on-k8s>
+- GitHub: <https://github.com/elastic/cloud-on-k8s>
 
 ## Prerequisites
 

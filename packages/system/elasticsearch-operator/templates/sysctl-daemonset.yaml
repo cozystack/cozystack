@@ -17,8 +17,6 @@ spec:
       labels:
         app.kubernetes.io/name: elasticsearch-sysctl-setter
     spec:
-      hostPID: true
-      hostNetwork: true
       initContainers:
         - name: sysctl
           image: busybox:1.36
@@ -39,7 +37,7 @@ spec:
               readOnly: false
       containers:
         - name: pause
-          image: gcr.io/google_containers/pause:3.9
+          image: registry.k8s.io/pause:3.9
           resources:
             requests:
               cpu: 1m

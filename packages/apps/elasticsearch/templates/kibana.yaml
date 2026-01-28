@@ -1,5 +1,4 @@
 {{- if .Values.kibana.enabled }}
-{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 ---
 apiVersion: kibana.k8s.elastic.co/v1
 kind: Kibana
@@ -16,7 +15,7 @@ spec:
     spec:
       containers:
         - name: kibana
-          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.kibana.resourcesPreset | default "small") .Values.kibana.resources $) | nindent 12 }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.kibana.resourcesPreset | default "medium") .Values.kibana.resources $) | nindent 12 }}
   http:
     tls:
       selfSignedCertificate:
