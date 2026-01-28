@@ -146,41 +146,57 @@ When `external: true` is enabled, LoadBalancer services are created for:
 
 ### Common parameters
 
-| Name | Description | Type | Default |
-|------|-------------|------|---------|
-| `replicas` | Number of Elasticsearch nodes in the cluster. | `int` | `3` |
-| `resources` | Explicit CPU and memory configuration for each node. | `object` | `{}` |
-| `resources.cpu` | CPU available to each node. | `quantity` | `""` |
-| `resources.memory` | Memory (RAM) available to each node. | `quantity` | `""` |
-| `resourcesPreset` | Default sizing preset (large, xlarge, 2xlarge). | `string` | `large` |
-| `size` | Persistent Volume Claim size for data. | `quantity` | `10Gi` |
-| `storageClass` | StorageClass used to store the data. | `string` | `""` |
-| `topologySpreadPolicy` | Pod distribution policy (soft, hard). | `string` | `soft` |
-| `external` | Enable external access from outside the cluster. | `bool` | `false` |
-| `version` | Elasticsearch major version (v9, v8, v7). | `string` | `v9` |
+| Name                   | Description                                                                                                                          | Type       | Value   |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ------- |
+| `replicas`             | Number of Elasticsearch nodes in the cluster.                                                                                        | `int`      | `3`     |
+| `resources`            | Explicit CPU and memory configuration for each Elasticsearch node. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
+| `resources.cpu`        | CPU available to each node.                                                                                                          | `quantity` | `""`    |
+| `resources.memory`     | Memory (RAM) available to each node.                                                                                                 | `quantity` | `""`    |
+| `resourcesPreset`      | Default sizing preset used when `resources` is omitted. Elasticsearch requires minimum 2Gi memory.                                   | `string`   | `large` |
+| `size`                 | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`  |
+| `storageClass`         | StorageClass used to store the data.                                                                                                 | `string`   | `""`    |
+| `external`             | Enable external access from outside the cluster.                                                                                     | `bool`     | `false` |
+| `topologySpreadPolicy` | How strictly to enforce pod distribution across nodes and zones.                                                                     | `string`   | `soft`  |
+| `version`              | Elasticsearch major version to deploy.                                                                                               | `string`   | `v9`    |
+
+
+### Image configuration
+
+| Name                   | Description                            | Type     | Value                                                  |
+| ---------------------- | -------------------------------------- | -------- | ------------------------------------------------------ |
+| `images`               | Container images used by the operator. | `object` | `{}`                                                   |
+| `images.elasticsearch` | Elasticsearch image.                   | `string` | `docker.elastic.co/elasticsearch/elasticsearch:8.17.0` |
+
 
 ### Node roles configuration
 
-| Name | Description | Type | Default |
-|------|-------------|------|---------|
-| `nodeRoles.master` | Enable master role. | `bool` | `true` |
-| `nodeRoles.data` | Enable data role. | `bool` | `true` |
-| `nodeRoles.ingest` | Enable ingest role. | `bool` | `true` |
-| `nodeRoles.ml` | Enable machine learning role. | `bool` | `false` |
+| Name               | Description                   | Type     | Value   |
+| ------------------ | ----------------------------- | -------- | ------- |
+| `nodeRoles`        | Node roles configuration.     | `object` | `{}`    |
+| `nodeRoles.master` | Enable master role.           | `bool`   | `true`  |
+| `nodeRoles.data`   | Enable data role.             | `bool`   | `true`  |
+| `nodeRoles.ingest` | Enable ingest role.           | `bool`   | `true`  |
+| `nodeRoles.ml`     | Enable machine learning role. | `bool`   | `false` |
 
-### Kibana configuration
-
-| Name | Description | Type | Default |
-|------|-------------|------|---------|
-| `kibana.enabled` | Enable Kibana deployment. | `bool` | `false` |
-| `kibana.replicas` | Number of Kibana replicas. | `int` | `1` |
-| `kibana.resources` | Explicit CPU and memory for Kibana. | `object` | `{}` |
-| `kibana.resourcesPreset` | Sizing preset for Kibana. | `string` | `medium` |
 
 ### Users configuration
 
-| Name | Description | Type | Default |
-|------|-------------|------|---------|
-| `users` | Custom Elasticsearch users. | `map[string]object` | `{}` |
-| `users[name].password` | Password (auto-generated if omitted). | `string` | `""` |
-| `users[name].roles` | List of Elasticsearch roles. | `[]string` | `[]` |
+| Name                   | Description                                        | Type                | Value |
+| ---------------------- | -------------------------------------------------- | ------------------- | ----- |
+| `users`                | Custom Elasticsearch users configuration map.      | `map[string]object` | `{}`  |
+| `users[name].password` | Password for the user (auto-generated if omitted). | `string`            | `""`  |
+| `users[name].roles`    | List of Elasticsearch roles.                       | `[]string`          | `[]`  |
+
+
+### Kibana configuration
+
+| Name                      | Description                                       | Type       | Value    |
+| ------------------------- | ------------------------------------------------- | ---------- | -------- |
+| `kibana`                  | Kibana configuration.                             | `object`   | `{}`     |
+| `kibana.enabled`          | Enable Kibana deployment.                         | `bool`     | `false`  |
+| `kibana.replicas`         | Number of Kibana replicas.                        | `int`      | `1`      |
+| `kibana.resources`        | Explicit CPU and memory configuration for Kibana. | `object`   | `{}`     |
+| `kibana.resources.cpu`    | CPU available to each node.                       | `quantity` | `""`     |
+| `kibana.resources.memory` | Memory (RAM) available to each node.              | `quantity` | `""`     |
+| `kibana.resourcesPreset`  | Default sizing preset for Kibana.                 | `string`   | `medium` |
+

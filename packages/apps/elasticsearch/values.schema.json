@@ -11,6 +11,9 @@
       "description": "Container images used by the operator.",
       "type": "object",
       "default": {},
+      "required": [
+        "elasticsearch"
+      ],
       "properties": {
         "elasticsearch": {
           "description": "Elasticsearch image.",
@@ -19,16 +22,86 @@
         }
       }
     },
+    "kibana": {
+      "description": "Kibana configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled",
+        "replicas",
+        "resourcesPreset"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Enable Kibana deployment.",
+          "type": "boolean",
+          "default": false
+        },
+        "replicas": {
+          "description": "Number of Kibana replicas.",
+          "type": "integer",
+          "default": 1
+        },
+        "resources": {
+          "description": "Explicit CPU and memory configuration for Kibana.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "CPU available to each node.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Memory (RAM) available to each node.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset for Kibana.",
+          "type": "string",
+          "default": "medium",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        }
+      }
+    },
     "nodeRoles": {
       "description": "Node roles configuration.",
       "type": "object",
       "default": {},
+      "required": [
+        "data",
+        "ingest",
+        "master",
+        "ml"
+      ],
       "properties": {
-        "master": {
-          "description": "Enable master role.",
-          "type": "boolean",
-          "default": true
-        },
         "data": {
           "description": "Enable data role.",
           "type": "boolean",
@@ -36,6 +109,11 @@
         },
         "ingest": {
           "description": "Enable ingest role.",
+          "type": "boolean",
+          "default": true
+        },
+        "master": {
+          "description": "Enable master role.",
           "type": "boolean",
           "default": true
         },
@@ -89,6 +167,10 @@
       "type": "string",
       "default": "large",
       "enum": [
+        "nano",
+        "micro",
+        "small",
+        "medium",
         "large",
         "xlarge",
         "2xlarge"
@@ -114,10 +196,13 @@
       "default": ""
     },
     "topologySpreadPolicy": {
-      "description": "Pod distribution policy across nodes and zones. 'soft' allows scheduling even if spread cannot be achieved, 'hard' prevents scheduling if pods cannot be evenly distributed.",
+      "description": "How strictly to enforce pod distribution across nodes and zones.",
       "type": "string",
       "default": "soft",
-      "enum": ["soft", "hard"]
+      "enum": [
+        "soft",
+        "hard"
+      ]
     },
     "users": {
       "description": "Custom Elasticsearch users configuration map.",
@@ -149,48 +234,6 @@
         "v8",
         "v7"
       ]
-    },
-    "kibana": {
-      "description": "Kibana deployment configuration.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "enabled": {
-          "description": "Enable Kibana deployment.",
-          "type": "boolean",
-          "default": false
-        },
-        "replicas": {
-          "description": "Number of Kibana replicas.",
-          "type": "integer",
-          "default": 1
-        },
-        "resources": {
-          "description": "Explicit CPU and memory configuration for Kibana.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "cpu": {
-              "description": "CPU available to Kibana.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [{"type": "integer"}, {"type": "string"}],
-              "x-kubernetes-int-or-string": true
-            },
-            "memory": {
-              "description": "Memory (RAM) available to Kibana.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [{"type": "integer"}, {"type": "string"}],
-              "x-kubernetes-int-or-string": true
-            }
-          }
-        },
-        "resourcesPreset": {
-          "description": "Default sizing preset for Kibana. Minimum 1Gi memory recommended.",
-          "type": "string",
-          "default": "medium",
-          "enum": ["small", "medium", "large", "xlarge", "2xlarge"]
-        }
-      }
     }
   }
 }
