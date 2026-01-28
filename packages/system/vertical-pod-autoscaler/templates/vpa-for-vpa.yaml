@@ -18,7 +18,7 @@ metadata:
 spec:
   chartRef:
     kind: ExternalArtifact
-    name: cozystack-system-default-vertical-pod-autoscaler
+    name: cozystack-vertical-pod-autoscaler-default-vpa-for-vpa
     namespace: cozy-system
   dependsOn:
   - name: monitoring-agents
