@@ -174,6 +174,48 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 			}),
 		)
 	}
+	if kind == "Info" {
+		rightColStack = append(rightColStack,
+			antdFlexVertical("resource-quotas-block", 4, []any{
+				antdText("resource-quotas-label", true, "Resource Quotas", map[string]any{
+					"fontSize":     float64(20),
+					"marginBottom": float64(12),
+				}),
+				map[string]any{
+					"type": "EnrichedTable",
+					"data": map[string]any{
+						"id":                   "resource-quotas-table",
+						"baseprefix":           "/openapi-ui",
+						"clusterNamePartOfUrl": "{2}",
+						"customizationId":      "factory-resource-quotas",
+						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/resourcequotas",
+						"pathToItems":          []any{`items`},
+					},
+				},
+			}),
+		)
+	}
+	if kind == "Tenant" {
+		rightColStack = append(rightColStack,
+			antdFlexVertical("resource-quotas-block", 4, []any{
+				antdText("resource-quotas-label", true, "Resource Quotas", map[string]any{
+					"fontSize":     float64(20),
+					"marginBottom": float64(12),
+				}),
+				map[string]any{
+					"type": "EnrichedTable",
+					"data": map[string]any{
+						"id":                   "resource-quotas-table",
+						"baseprefix":           "/openapi-ui",
+						"clusterNamePartOfUrl": "{2}",
+						"customizationId":      "factory-resource-quotas",
+						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/resourcequotas",
+						"pathToItems":          []any{`items`},
+					},
+				},
+			}),
+		)
+	}
 
 	return map[string]any{
 		"key":   "details",
