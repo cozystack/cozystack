@@ -1,2 +1,2 @@
 assets:
-  image: ghcr.io/cozystack/cozystack/cozystack-assets:v0.41.3@sha256:1efa1a3477d9fe8068d5e1ba867e67401943ca13234e93242c12a3e24c7e18f9
+  image: ghcr.io/cozystack/cozystack/cozystack-assets:v0.41.4@sha256:0cf7e4e96c7b41c420cf4fe0964a0b8180f8adb972fd7fcc33278a3b347c6ce6
