@@ -44,15 +44,12 @@ publishing:
 authentication:
   oidc:
     enabled: false
-    dashboard:
-      extraRedirectUris: []
+    keycloakExtraRedirectUri: ""
 # Pod scheduling configuration
 scheduling:
-  topologySpreadConstraints: []
+  globalAppTopologySpreadConstraints: ""
 # UI branding configuration
-branding:
-  dashboard: {}
-  keycloak: {}
+branding: {}
 # Container registry mirrors configuration
 #
 # Example:
