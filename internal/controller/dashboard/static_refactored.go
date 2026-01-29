@@ -189,6 +189,14 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createStringColumn("Values", "_flatMapData_Value"),
 		}),
 
+		// Factory resource quotas
+		createCustomColumnsOverride("factory-resource-quotas", []any{
+			createFlatMapColumn("Data", ".spec.hard"),
+			createStringColumn("Resource", "_flatMapData_Key"),
+			createStringColumn("Hard", "_flatMapData_Value"),
+			createStringColumn("Used", ".status.used['{_flatMapData_Key}']"),
+		}),
+
 		// Factory ingress details rules
 		createCustomColumnsOverride("factory-kube-ingress-details-rules", []any{
 			createStringColumn("Host", ".host"),
