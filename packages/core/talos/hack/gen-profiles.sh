@@ -73,6 +73,11 @@ arch: amd64
 platform: ${platform}
 secureboot: false
 version: ${TALOS_VERSION}
+customization:
+  extraKernelArgs:
+    - cpufreq.default_governor=performance
+    - amd_pstate=active
+    - intel_idle.max_cstate=0
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
