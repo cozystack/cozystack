@@ -27,6 +27,16 @@ networking:
   podGateway: "10.244.0.1"
   serviceCIDR: "10.96.0.0/16"
   joinCIDR: "100.64.0.0/16"
+  # Kubernetes API server configuration for Cilium
+  # Defaults are for Talos KubePrism; override for non-Talos clusters
+  apiServer:
+    host: "localhost"
+    port: "7445"
+  # Cilium cgroup configuration
+  # Set autoMount to true for non-Talos clusters
+  cilium:
+    cgroup:
+      autoMount: false
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"

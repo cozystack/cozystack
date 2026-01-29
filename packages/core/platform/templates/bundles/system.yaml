@@ -11,6 +11,11 @@
     "SVC_CIDR" .Values.networking.serviceCIDR
     "JOIN_CIDR" .Values.networking.joinCIDR)) -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- $ciliumValues := dict "cilium" (dict
+  "k8sServiceHost" .Values.networking.apiServer.host
+  "k8sServicePort" .Values.networking.apiServer.port
+  "cgroup" (dict "autoMount" (dict "enabled" .Values.networking.cilium.cgroup.autoMount))) -}}
+{{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $) }}

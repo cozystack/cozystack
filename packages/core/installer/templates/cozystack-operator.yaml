@@ -65,9 +65,9 @@ spec:
         {{- end }}
         env:
         - name: KUBERNETES_SERVICE_HOST
-          value: localhost
+          value: {{ .Values.cozystackOperator.kubernetesServiceHost | quote }}
         - name: KUBERNETES_SERVICE_PORT
-          value: "7445"
+          value: {{ .Values.cozystackOperator.kubernetesServicePort | quote }}
       hostNetwork: true
       tolerations:
       - key: "node.kubernetes.io/not-ready"
