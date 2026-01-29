@@ -84,6 +84,21 @@ tests:
           path: spec.version
           value: "8.17.0"
 
+  - it: uses same version as Elasticsearch (v7)
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v7
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.17.28"
+
   #####################
   # Replicas          #
   #####################

@@ -123,6 +123,8 @@ Kibana requires minimum `medium` preset (1Gi RAM).
 
 | Preset | CPU | Memory |
 |--------|-----|--------|
+| small | 1 | 512Mi |
+| medium | 1 | 1Gi |
 | large | 2 | 2Gi |
 | xlarge | 4 | 4Gi |
 | 2xlarge | 8 | 8Gi |
