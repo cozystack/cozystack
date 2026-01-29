@@ -102,6 +102,22 @@ func antdFlex(id string, gap float64, children []any) map[string]any {
 	}
 }
 
+func antdFlexSpaceBetween(id string, children []any) map[string]any {
+	if id == "" {
+		id = generateContainerID("auto", "flex")
+	}
+
+	return map[string]any{
+		"type": "antdFlex",
+		"data": map[string]any{
+			"id":      id,
+			"align":   "center",
+			"justify": "space-between",
+		},
+		"children": children,
+	}
+}
+
 func antdFlexVertical(id string, gap float64, children []any) map[string]any {
 	// Auto-generate ID if not provided
 	if id == "" {
