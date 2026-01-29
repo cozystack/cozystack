@@ -1,0 +1,26 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    sharding.fluxcd.io/key: tenants
+    apps.cozystack.io/application.kind: Monitoring
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: monitoring
+  name: monitoring
+  namespace: {{ .Release.Namespace }}
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-monitoring-application-default-monitoring
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
