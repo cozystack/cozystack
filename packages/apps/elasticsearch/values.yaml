@@ -1,0 +1,111 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each Elasticsearch node.
+## @field {quantity} [cpu] - CPU available to each node.
+## @field {quantity} [memory] - Memory (RAM) available to each node.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of Elasticsearch nodes in the cluster.
+replicas: 3
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each Elasticsearch node. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="large" - Default sizing preset used when `resources` is omitted. Elasticsearch requires minimum 2Gi memory.
+resourcesPreset: "large"
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+storageClass: ""
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
+## @value soft - Best-effort distribution (ScheduleAnyway) - pods may be scheduled on same node if needed
+## @value hard - Strict distribution (DoNotSchedule) - pods will not schedule if spread cannot be achieved
+
+## @param {TopologySpreadPolicy} topologySpreadPolicy="soft" - How strictly to enforce pod distribution across nodes and zones.
+topologySpreadPolicy: "soft"
+
+##
+## @enum {string} Version
+## @value v9
+## @value v8
+## @value v7
+
+## @param {Version} version - Elasticsearch major version to deploy.
+version: v9
+
+##
+## @section Image configuration
+##
+
+## @typedef {struct} Images - Container image configuration.
+## @field {string} elasticsearch - Elasticsearch image.
+
+## @param {Images} images - Container images used by the operator.
+images:
+  elasticsearch: "docker.elastic.co/elasticsearch/elasticsearch:8.17.0"
+
+##
+## @section Node roles configuration
+##
+
+## @typedef {struct} NodeRoles - Elasticsearch node roles.
+## @field {bool} master - Enable master role.
+## @field {bool} data - Enable data role.
+## @field {bool} ingest - Enable ingest role.
+## @field {bool} ml - Enable machine learning role.
+
+## @param {NodeRoles} nodeRoles - Node roles configuration.
+nodeRoles:
+  master: true
+  data: true
+  ingest: true
+  ml: false
+
+##
+## @section Users configuration
+##
+
+## @typedef {struct} User - User configuration.
+## @field {string} [password] - Password for the user (auto-generated if omitted).
+## @field {[]string} roles - List of Elasticsearch roles.
+
+## @param {map[string]User} users - Custom Elasticsearch users configuration map.
+users: {}
+## Example:
+## users:
+##   myuser:
+##     roles:
+##       - superuser
+
+##
+## @section Kibana configuration
+##
+
+## @typedef {struct} Kibana - Kibana deployment configuration.
+## @field {bool} enabled - Enable Kibana deployment.
+## @field {int} replicas - Number of Kibana replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration for Kibana.
+## @field {ResourcesPreset} resourcesPreset - Default sizing preset for Kibana.
+
+## @param {Kibana} kibana - Kibana configuration.
+kibana:
+  enabled: false
+  replicas: 1
+  resources: {}
+  resourcesPreset: "medium"

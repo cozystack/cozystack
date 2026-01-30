@@ -1,0 +1,88 @@
+{{- $topologyMode := .Values.topologySpreadPolicy | default "soft" }}
+{{- $whenUnsatisfiable := "ScheduleAnyway" }}
+{{- if eq $topologyMode "hard" }}
+{{- $whenUnsatisfiable = "DoNotSchedule" }}
+{{- end }}
+---
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  version: {{ include "elasticsearch.versionMap" $ }}
+  {{- if .Values.users }}
+  auth:
+    fileRealm:
+      {{- range $username, $user := .Values.users }}
+      - secretName: {{ $.Release.Name }}-user-{{ $username }}
+      {{- end }}
+  {{- end }}
+  nodeSets:
+    - name: default
+      count: {{ .Values.replicas }}
+      config:
+        node.roles:
+          {{- if .Values.nodeRoles.master }}
+          - master
+          {{- end }}
+          {{- if .Values.nodeRoles.data }}
+          - data
+          {{- end }}
+          {{- if .Values.nodeRoles.ingest }}
+          - ingest
+          {{- end }}
+          {{- if .Values.nodeRoles.ml }}
+          - ml
+          {{- end }}
+      podTemplate:
+        spec:
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: {{ $whenUnsatisfiable }}
+              labelSelector:
+                matchLabels:
+                  elasticsearch.k8s.elastic.co/cluster-name: {{ .Release.Name }}
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: {{ $whenUnsatisfiable }}
+              labelSelector:
+                matchLabels:
+                  elasticsearch.k8s.elastic.co/cluster-name: {{ .Release.Name }}
+          containers:
+            - name: elasticsearch
+              resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 16 }}
+      volumeClaimTemplates:
+        - metadata:
+            name: elasticsearch-data
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            {{- if .Values.storageClass }}
+            storageClassName: {{ .Values.storageClass }}
+            {{- else if eq (int .Values.replicas) 1 }}
+            # Single replica requires replicated storage for data resilience
+            storageClassName: replicated
+            {{- end }}
+            resources:
+              requests:
+                storage: {{ .Values.size }}
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: false
+---
+# WorkloadMonitor tracks Elasticsearch pods
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  minReplicas: 1
+  kind: elasticsearch
+  type: elasticsearch
+  selector:
+    common.k8s.elastic.co/type: elasticsearch
+    elasticsearch.k8s.elastic.co/cluster-name: {{ .Release.Name }}
+  version: {{ .Chart.Version }}

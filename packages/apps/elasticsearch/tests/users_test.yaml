@@ -1,0 +1,176 @@
+suite: users secrets tests
+
+templates:
+  - templates/users.yaml
+
+tests:
+  ###################
+  # Basic rendering #
+  ###################
+
+  - it: does not render secrets when no users defined
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders one secret per user
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        user1:
+          roles:
+            - viewer
+        user2:
+          roles:
+            - editor
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  #####################
+  # Secret metadata   #
+  #####################
+
+  - it: sets correct secret name
+    release:
+      name: my-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser:
+          roles:
+            - viewer
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-es-user-myuser
+
+  - it: sets ECK credentials label
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser:
+          roles:
+            - viewer
+    asserts:
+      - equal:
+          path: metadata.labels["eck.k8s.elastic.co/credentials"]
+          value: "true"
+
+  - it: uses basic-auth secret type
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser:
+          roles:
+            - viewer
+    asserts:
+      - equal:
+          path: type
+          value: kubernetes.io/basic-auth
+
+  #####################
+  # Secret data       #
+  #####################
+
+  - it: sets username in secret
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        testuser:
+          roles:
+            - viewer
+    asserts:
+      - equal:
+          path: stringData.username
+          value: testuser
+
+  - it: uses provided password
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser:
+          password: mysecretpassword
+          roles:
+            - viewer
+    asserts:
+      - equal:
+          path: stringData.password
+          value: mysecretpassword
+
+  - it: generates password when not provided
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser:
+          roles:
+            - viewer
+    asserts:
+      - matchRegex:
+          path: stringData.password
+          pattern: "^[a-zA-Z0-9]{16}$"
+
+  - it: sets roles as comma-separated string
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser:
+          roles:
+            - viewer
+            - reporting_user
+            - monitoring_user
+    asserts:
+      - equal:
+          path: stringData.roles
+          value: "viewer,reporting_user,monitoring_user"
+
+  - it: defaults to viewer role when no roles specified
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser: {}
+    asserts:
+      - equal:
+          path: stringData.roles
+          value: "viewer"
