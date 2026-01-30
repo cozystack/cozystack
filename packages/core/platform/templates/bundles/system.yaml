@@ -84,6 +84,8 @@
 {{- if $masterNodes -}}
 {{- $_ := set $kubeovnDict "MASTER_NODES" $masterNodes -}}
 {{- end -}}
+{{- /* For generic k8s (k3s, kubeadm), control-plane label has value "true" */ -}}
+{{- $_ := set $kubeovnDict "MASTER_NODES_LABEL" "node-role.kubernetes.io/control-plane=true" -}}
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* Cilium configuration - for generic k8s, always enable cgroup autoMount */ -}}
