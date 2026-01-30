@@ -1,0 +1,48 @@
+name: Lint
+
+on:
+  push:
+    branches: [ main ]  # Lint only on pushes to the main branch
+  pull_request:
+    branches: [ main ]  # Lint on PRs targeting the main branch
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Super-Linter
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Run Super-Linter
+        uses: github/super-linter@v4
+        env:
+          # To report GitHub Actions status checks
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_ALL_CODEBASE: false  # Lint only changed files
+          VALIDATE_TERRAFORM: false     # Disable Terraform linting (remove if you need it)
+          DEFAULT_BRANCH: main          # Set your default branch
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Enable only the linters you need for your project
+          VALIDATE_JAVASCRIPT_ES: true
+          VALIDATE_PYTHON_BLACK: true
+          VALIDATE_HTML: false
+          VALIDATE_GO: false
+          VALIDATE_XML: false
+          VALIDATE_JAVA: false
+          VALIDATE_DOCKERFILE: false
+          # turn off JSCPD copy/paste detection, which results in lots of results for examples and devops repos
+          VALIDATE_JSCPD: false
+          # turn off shfmt shell formatter as we already have shellcheck
+          VALIDATE_SHELL_SHFMT: false
+          VALIDATE_EDITORCONFIG: false
+          # prevent Kubernetes CRD API's from causing kubeval to fail
+          # also change schema location to an up-to-date list
+          # https://github.com/yannh/kubernetes-json-schema/#kubeval
+          KUBERNETES_KUBEVAL_OPTIONS: --ignore-missing-schemas --schema-location https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/
