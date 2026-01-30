@@ -338,12 +338,12 @@ metrics:
 
 kubectl:
   image:
-    repository: rancher/kubectl
+    repository: alpine/k8s
     # Digest value example: sha256:d238835e151cec91c6a811fe3a89a66d3231d9f64d09e5f3c49552672d271f38.
     # If used, it will take precedence over the kubectl.image.tag.
     # digest:
     # kubectl image tag. If used, it will take precedence over the cluster Kubernetes version.
-    tag: v1.35.0
+    tag: "1.35.0"
   # Container Level Security Context for the 'kubectl' container of the crd jobs. Optional.
   # See: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
   containerSecurityContext: {}
