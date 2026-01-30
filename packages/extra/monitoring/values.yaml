@@ -1,0 +1,180 @@
+## @section Common parameters
+##
+
+## @param {string} host - The hostname used to access Grafana externally (defaults to 'grafana' subdomain for the tenant host).
+host: ""
+
+##
+## @section Metrics storage configuration
+##
+
+## @typedef {struct} Request - Minimum guaranteed resources.
+## @field {quantity} [cpu] - CPU request.
+## @field {quantity} [memory] - Memory request.
+
+## @typedef {struct} Limit - Maximum allowed resources.
+## @field {quantity} [cpu] - CPU limit.
+## @field {quantity} [memory] - Memory limit.
+
+## @typedef {struct} VMComponent - VictoriaMetrics component configuration.
+## @field {Request} [minAllowed] - Minimum guaranteed resources.
+## @field {Limit} [maxAllowed] - Maximum allowed resources.
+
+## @typedef {struct} Resources - Combined resource configuration.
+## @field {Request} [requests] - Resource requests.
+## @field {Limit} [limits] - Resource limits.
+
+## @typedef {struct} MetricsStorage - Configuration of metrics storage instance.
+## @field {string} name - Name of the storage instance.
+## @field {string} retentionPeriod - Retention period for metrics.
+## @field {string} deduplicationInterval - Deduplication interval for metrics.
+## @field {string} storage="10Gi" - Persistent volume size.
+## @field {string} [storageClassName] - StorageClass used for the data.
+## @field {VMComponent} [vminsert] - Configuration for vminsert.
+## @field {VMComponent} [vmselect] - Configuration for vmselect.
+## @field {VMComponent} [vmstorage] - Configuration for vmstorage.
+
+## @param {[]MetricsStorage} metricsStorages - Configuration of metrics storage instances.
+metricsStorages:
+## Example:
+## metricsStorages:
+## - name: shortterm
+##   retentionPeriod: "3d"
+##   deduplicationInterval: "15s"
+##   storage: 10Gi
+##   storageClassName: ""
+##   vminsert:
+##     minAllowed:
+##       cpu: 200m
+##       memory: 512Mi
+##     maxAllowed:
+##       cpu: 1500m
+##       memory: 3Gi
+##   vmselect:
+##     minAllowed:
+##       cpu: 300m
+##       memory: 1Gi
+##     maxAllowed:
+##       cpu: 3500m
+##       memory: 6Gi
+##   vmstorage:
+##     minAllowed:
+##       cpu: 500m
+##       memory: 2Gi
+##     maxAllowed:
+##       cpu: 4000m
+##       memory: 8Gi
+- name: shortterm
+  retentionPeriod: "3d"
+  deduplicationInterval: "15s"
+  storage: 10Gi
+  storageClassName: ""
+- name: longterm
+  retentionPeriod: "14d"
+  deduplicationInterval: "5m"
+  storage: 10Gi
+  storageClassName: ""
+
+##
+## @section Logs storage configuration
+##
+
+## @typedef {struct} LogsStorage - Configuration of logs storage instance.
+## @field {string} name - Name of the storage instance.
+## @field {string} retentionPeriod="1" - Retention period for logs.
+## @field {string} storage="10Gi" - Persistent volume size.
+## @field {string} storageClassName="replicated" - StorageClass used to store the data.
+
+## @param {[]LogsStorage} logsStorages - Configuration of logs storage instances.
+logsStorages:
+- name: generic
+  retentionPeriod: "1"
+  storage: 10Gi
+  storageClassName: replicated
+
+##
+## @section Alerta configuration
+##
+
+## @typedef {struct} TelegramAlerts - Telegram alert configuration.
+## @field {string} token - Telegram bot token.
+## @field {string} chatID - Telegram chat ID(s), separated by commas.
+## @field {[]string} [disabledSeverity] - List of severities without alerts (e.g. ["informational","warning"]).
+
+## @typedef {struct} SlackAlerts - Slack alert configuration.
+## @field {string} url - Configuration uri for Slack alerts.
+## @field {[]string} [disabledSeverity] - List of severities without alerts (e.g. ["informational","warning"]).
+
+## @typedef {struct} Alerts - Alert routing configuration.
+## @field {TelegramAlerts} [telegram] - Configuration for Telegram alerts.
+## @field {SlackAlerts} [slack] - Configuration for Slack alerts.
+
+## @typedef {struct} Alerta - Configuration for the Alerta service.
+## @field {string} [storage] - Persistent volume size for the database.
+## @field {string} [storageClassName] - StorageClass used for the database.
+## @field {Resources} [resources] - Resource configuration.
+## @field {Alerts} [alerts] - Alert routing configuration.
+
+## @param {Alerta} alerta - Configuration for the Alerta service.
+alerta:
+  storage: 10Gi
+  storageClassName: ""
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  alerts:
+    telegram:
+      token: ""
+      chatID: ""
+      disabledSeverity: []
+    slack:
+      url: ""
+      disabledSeverity: []
+##
+## @section Grafana configuration
+##
+
+## @typedef {struct} GrafanaDB - Grafana database configuration.
+## @field {string} [size] - Persistent volume size for the database.
+
+## @typedef {struct} Grafana - Grafana service configuration.
+## @field {GrafanaDB} [db] - Database configuration.
+## @field {Resources} [resources] - Resource configuration.
+
+## @param {Grafana} grafana - Configuration for Grafana.
+grafana:
+  db:
+    size: 10Gi
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+##
+## @section Vmagent configuration
+##
+
+## @typedef {struct} VmagentRemoteWrite - Remote write configuration.
+## @typedef {stringSlice} VmagentRemoteWriteURLs - List of remoteWrite endpoint URLs.
+
+## @typedef {struct} VmagentExternalLabels - External labels for metrics.
+## @field {string} [<key>] - Label value for the given key.
+
+## @typedef {struct} Vmagent - VictoriaMetrics Agent configuration.
+## @field {VmagentExternalLabels} [externalLabels] - External labels applied to all metrics.
+## @field {VmagentRemoteWrite} [remoteWrite] - Remote write configuration.
+
+## @param {Vmagent} vmagent - Configuration for VictoriaMetrics Agent.
+vmagent:
+  externalLabels:
+    cluster: cozystack
+  remoteWrite:
+    urls:
+      - http://vminsert-shortterm:8480/insert/0/prometheus
+      - http://vminsert-longterm:8480/insert/0/prometheus
