@@ -40,21 +40,41 @@
 {{- if eq .Values.bundles.system.variant "isp-full-generic" }}
 {{- $networkingComponents := dict -}}
 {{- if .Values.networking -}}
+{{- /* Parse apiServerEndpoint URL for generic k8s (used by both Cilium and KubeOVN) */ -}}
+{{- $apiHost := .Values.networking.apiServer.host -}}
+{{- $apiPort := .Values.networking.apiServer.port -}}
+{{- if .Values.publishing.apiServerEndpoint -}}
+{{- $parsed := urlParse .Values.publishing.apiServerEndpoint -}}
+{{- $hostPort := splitList ":" $parsed.host -}}
+{{- $apiHost = index $hostPort 0 -}}
+{{- if gt (len $hostPort) 1 -}}
+{{- $apiPort = index $hostPort 1 -}}
+{{- else -}}
+{{- $apiPort = "6443" -}}
+{{- end -}}
+{{- end -}}
+{{- /* KubeOVN IPv4 configuration */ -}}
 {{- $kubeovnIpv4 := dict
   "POD_CIDR" .Values.networking.podCIDR
   "POD_GATEWAY" .Values.networking.podGateway
   "SVC_CIDR" .Values.networking.serviceCIDR
   "JOIN_CIDR" .Values.networking.joinCIDR -}}
 {{- $kubeovnDict := dict "ipv4" $kubeovnIpv4 -}}
-{{- if .Values.networking.kubeovn.MASTER_NODES -}}
-{{- $_ := set $kubeovnDict "MASTER_NODES" .Values.networking.kubeovn.MASTER_NODES -}}
+{{- /* Set MASTER_NODES: explicit value > parsed from apiServerEndpoint > empty (use helm lookup) */ -}}
+{{- $masterNodes := .Values.networking.kubeovn.MASTER_NODES -}}
+{{- if and (not $masterNodes) .Values.publishing.apiServerEndpoint -}}
+{{- $masterNodes = $apiHost -}}
+{{- end -}}
+{{- if $masterNodes -}}
+{{- $_ := set $kubeovnDict "MASTER_NODES" $masterNodes -}}
 {{- end -}}
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- /* Cilium configuration - for generic k8s, always enable cgroup autoMount */ -}}
 {{- $ciliumValues := dict "cilium" (dict
-  "k8sServiceHost" .Values.networking.apiServer.host
-  "k8sServicePort" .Values.networking.apiServer.port
-  "cgroup" (dict "autoMount" (dict "enabled" .Values.networking.cilium.cgroup.autoMount))) -}}
+  "k8sServiceHost" $apiHost
+  "k8sServicePort" $apiPort
+  "cgroup" (dict "autoMount" (dict "enabled" true))) -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{- /* Use kubeovn-cilium-generic variant (no values-talos.yaml) */ -}}
