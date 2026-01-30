@@ -1,0 +1,12 @@
+migrations:
+  enabled: true
+bundles:
+  system:
+    enabled: true
+    variant: "isp-full-generic"
+  iaas:
+    enabled: true
+  paas:
+    enabled: true
+  naas:
+    enabled: true
