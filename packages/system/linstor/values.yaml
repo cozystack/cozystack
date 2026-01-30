@@ -2,6 +2,11 @@ piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
     tag: 1.32.3@sha256:0e78fa31a3fe4ec2af43d1e59a9fc0f6d765780e32d473e18e1c495714051802
+
+# Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
+talos:
+  enabled: true
+
 linstor:
   autoDiskful:
     enabled: true
