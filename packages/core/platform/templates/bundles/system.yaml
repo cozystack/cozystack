@@ -4,12 +4,16 @@
 {{- if eq .Values.bundles.system.variant "isp-full" }}
 {{- $networkingComponents := dict -}}
 {{- if .Values.networking -}}
-{{- $kubeovnValues := dict "kube-ovn" (dict
-  "ipv4" (dict
-    "POD_CIDR" .Values.networking.podCIDR
-    "POD_GATEWAY" .Values.networking.podGateway
-    "SVC_CIDR" .Values.networking.serviceCIDR
-    "JOIN_CIDR" .Values.networking.joinCIDR)) -}}
+{{- $kubeovnIpv4 := dict
+  "POD_CIDR" .Values.networking.podCIDR
+  "POD_GATEWAY" .Values.networking.podGateway
+  "SVC_CIDR" .Values.networking.serviceCIDR
+  "JOIN_CIDR" .Values.networking.joinCIDR -}}
+{{- $kubeovnDict := dict "ipv4" $kubeovnIpv4 -}}
+{{- if .Values.networking.kubeovn.MASTER_NODES -}}
+{{- $_ := set $kubeovnDict "MASTER_NODES" .Values.networking.kubeovn.MASTER_NODES -}}
+{{- end -}}
+{{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- $ciliumValues := dict "cilium" (dict
   "k8sServiceHost" .Values.networking.apiServer.host

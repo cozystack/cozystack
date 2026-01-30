@@ -37,6 +37,10 @@ networking:
   cilium:
     cgroup:
       autoMount: false
+  # KubeOVN configuration for non-Talos clusters
+  # MASTER_NODES: comma-separated list of master node IPs (empty = use helm lookup)
+  kubeovn:
+    MASTER_NODES: ""
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
