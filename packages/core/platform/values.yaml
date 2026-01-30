@@ -27,18 +27,11 @@ networking:
   podGateway: "10.244.0.1"
   serviceCIDR: "10.96.0.0/16"
   joinCIDR: "100.64.0.0/16"
-  # Kubernetes API server configuration for Cilium
-  # Defaults are for Talos KubePrism; override for non-Talos clusters
-  apiServer:
-    host: "localhost"
-    port: "7445"
-  # Cilium cgroup configuration
-  # Set autoMount to true for non-Talos clusters
-  cilium:
-    cgroup:
-      autoMount: false
-  # KubeOVN configuration for non-Talos clusters
-  # MASTER_NODES: comma-separated list of master node IPs (empty = use helm lookup)
+  # KubeOVN master nodes override (optional)
+  # By default, KubeOVN helm chart uses `lookup` to find control-plane nodes
+  # by label `node-role.kubernetes.io/control-plane`. On fresh clusters or
+  # during initial deployment, lookup may return empty results.
+  # Set this to comma-separated list of master node IPs to override.
   kubeovn:
     MASTER_NODES: ""
 # Service publishing and ingress configuration

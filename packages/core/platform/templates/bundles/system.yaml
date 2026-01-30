@@ -15,10 +15,11 @@
 {{- end -}}
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- /* For Talos (isp-full): use KubePrism endpoint and disable cgroup autoMount */ -}}
 {{- $ciliumValues := dict "cilium" (dict
-  "k8sServiceHost" .Values.networking.apiServer.host
-  "k8sServicePort" .Values.networking.apiServer.port
-  "cgroup" (dict "autoMount" (dict "enabled" .Values.networking.cilium.cgroup.autoMount))) -}}
+  "k8sServiceHost" "localhost"
+  "k8sServicePort" "7445"
+  "cgroup" (dict "autoMount" (dict "enabled" false))) -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
