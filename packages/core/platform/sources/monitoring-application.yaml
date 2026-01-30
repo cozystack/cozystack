@@ -1,4 +1,4 @@
-
+---
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
@@ -12,8 +12,6 @@ spec:
   variants:
     - name: default
       dependsOn:
-        - cozystack.cozystack-controller
-        - cozystack.vertical-pod-autoscaler
         - cozystack.networking
         - cozystack.postgres-operator
       libraries:
