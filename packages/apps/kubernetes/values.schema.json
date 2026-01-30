@@ -13,6 +13,7 @@
         "fluxcd",
         "gatewayAPI",
         "gpuOperator",
+        "hami",
         "ingressNginx",
         "monitoringAgents",
         "velero",
@@ -121,6 +122,28 @@
           "properties": {
             "enabled": {
               "description": "Enable GPU Operator.",
+              "type": "boolean",
+              "default": false
+            },
+            "valuesOverride": {
+              "description": "Custom Helm values overrides.",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "hami": {
+          "description": "HAMi scheduler extender.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Enable HAMi scheduler extender.",
               "type": "boolean",
               "default": false
             },
