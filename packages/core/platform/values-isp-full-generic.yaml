@@ -10,3 +10,5 @@ bundles:
     enabled: true
   naas:
     enabled: true
+  enabledPackages:
+    - velero
