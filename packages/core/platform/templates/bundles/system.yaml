@@ -112,10 +112,14 @@
 
 # Cozystack Engine
 {{- $cozystackEngineComponents := dict -}}
-{{- /* For generic k8s, lineage-controller-webhook needs nodeSelector with value "true" */ -}}
+{{- /* For generic k8s, DaemonSets with control-plane nodeSelector need value "true" */ -}}
 {{- if eq .Values.bundles.system.variant "isp-full-generic" -}}
-{{- $lineageNodeSelector := dict "node-role.kubernetes.io/control-plane" "true" -}}
-{{- $lineageValues := dict "lineageControllerWebhook" (dict "nodeSelector" $lineageNodeSelector) -}}
+{{- $genericNodeSelector := dict "node-role.kubernetes.io/control-plane" "true" -}}
+{{- /* cozystack-api DaemonSet */ -}}
+{{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
+{{- /* lineage-controller-webhook DaemonSet */ -}}
+{{- $lineageValues := dict "lineageControllerWebhook" (dict "nodeSelector" $genericNodeSelector) -}}
 {{- $_ := set $cozystackEngineComponents "lineage-controller-webhook" (dict "values" $lineageValues) -}}
 {{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
