@@ -6,10 +6,13 @@
 {{- $existingAuthConfig := lookup "v1" "Secret" "cozy-dashboard" "kubeapps-auth-config" }}
 {{- $brandingConfig := .Values._cluster.branding | default dict }}
 
+# to keep strings with single quotes
 {{ $branding := "" }}
 {{- if $brandingConfig }}
-  {{- $branding = $brandingConfig.branding }}
-{{- end }}
+  {{- if hasKey $brandingConfig "branding" -}}
+    {{- $branding = $brandingConfig.branding | quote -}}
+  {{- end -}}
+{{- end -}}
 
 ---
 
