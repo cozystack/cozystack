@@ -1,4 +1,4 @@
-{{- if ne .Release.Namespace "tenant-root" }}
+{{- if and (ne .Release.Namespace "tenant-root") (ne .Release.Namespace "cozy-monitoring") }}
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMAgent
 metadata:

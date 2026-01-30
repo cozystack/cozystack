@@ -1,10 +1,13 @@
 GRAFANA_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
 
 NAME=monitoring
-NAMESPACE=cozy-$(NAME)
 
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
+
+generate:
+	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
+	../../../hack/update-crd.sh
 
 image:
 	docker buildx build images/grafana \

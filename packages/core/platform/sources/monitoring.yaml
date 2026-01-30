@@ -1,8 +1,10 @@
----
+
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.monitoring-application
+  name: cozystack.monitoring-independent-application
+  annotations:
+    operator.cozystack.io/skip-cozystack-values: "true"
 spec:
   sourceRef:
     kind: OCIRepository
@@ -12,6 +14,8 @@ spec:
   variants:
     - name: default
       dependsOn:
+        - cozystack.cozystack-controller
+        - cozystack.vertical-pod-autoscaler
         - cozystack.networking
         - cozystack.postgres-operator
       libraries:
@@ -19,10 +23,9 @@ spec:
           path: library/cozy-lib
       components:
         - name: monitoring
-          path: extra/monitoring
+          path: system/monitoring
           libraries: ["cozy-lib"]
-        - name: monitoring-rd
-          path: system/monitoring-rd
           install:
-            namespace: cozy-system
-            releaseName: monitoring-rd
+            privileged: true
+            namespace: cozy-monitoring
+            releaseName: monitoring
