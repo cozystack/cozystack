@@ -63,12 +63,8 @@ spec:
         {{- if .Values.cozystackOperator.platformSourceRef }}
         - --platform-source-ref={{ .Values.cozystackOperator.platformSourceRef }}
         {{- end }}
-        env:
-        # Talos KubePrism endpoint
-        - name: KUBERNETES_SERVICE_HOST
-          value: "localhost"
-        - name: KUBERNETES_SERVICE_PORT
-          value: "7445"
+        # Hosted: use in-cluster service account, no env override needed
+        env: []
       hostNetwork: true
       tolerations:
       - key: "node.kubernetes.io/not-ready"
