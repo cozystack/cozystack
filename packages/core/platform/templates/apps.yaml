@@ -17,6 +17,7 @@ stringData:
       bundle-name: {{ .Values.bundles.system.variant | quote }}
       clusterissuer: {{ .Values.publishing.certificates.issuerType | quote }}
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
+      extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}
       expose-services: {{ .Values.publishing.exposedServices | join "," | quote }}
       expose-ingress: {{ .Values.publishing.ingressName | quote }}
       expose-external-ips: {{ .Values.publishing.externalIPs | join "," | quote }}
