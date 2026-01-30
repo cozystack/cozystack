@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+{{- if .Values.useDaemonSet }}
+kind: DaemonSet
+{{- else }}
+kind: Deployment
+{{- end }}
+metadata:
+  name: {{ include "proxmox-cloud-controller-manager.fullname" . }}
+  labels:
+    {{- include "proxmox-cloud-controller-manager.labels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- if not .Values.useDaemonSet }}
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.updateStrategy.type }}
+  {{- else }}
+  updateStrategy:
+    type: {{ .Values.updateStrategy.type }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "proxmox-cloud-controller-manager.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+      {{- if .Values.config }}
+        checksum/config: {{ toJson .Values.config | sha256sum }}
+      {{- end }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "proxmox-cloud-controller-manager.selectorLabels" . | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "proxmox-cloud-controller-manager.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.useDaemonSet }}
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers: {{- toYaml .Values.initContainers | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --v={{ .Values.logVerbosityLevel }}
+            - --cloud-provider=proxmox
+            - --cloud-config=/etc/proxmox/config.yaml
+            - --controllers={{- trimAll "," (include "proxmox-cloud-controller-manager.enabledControllers" . ) }}
+            - --leader-elect-resource-name=cloud-controller-manager-proxmox
+            - --use-service-account-credentials
+            - --secure-port=10258
+            - --authorization-always-allow-paths=/healthz,/livez,/readyz,/metrics
+          {{- with .Values.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 10258
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+              scheme: HTTPS
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: cloud-config
+              mountPath: /etc/proxmox
+              readOnly: true
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+      {{- with .Values.affinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "proxmox-cloud-controller-manager.selectorLabels" . | nindent 20 }}
+                topologyKey: topology.kubernetes.io/zone
+              weight: 1
+      {{- end }}
+      tolerations:
+      {{- with .Values.tolerations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.useDaemonSet }}
+        - effect: NoSchedule
+          key: node.kubernetes.io/not-ready
+          operator: Exists
+      {{- end }}
+      {{- if not .Values.useDaemonSet }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "proxmox-cloud-controller-manager.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      volumes:
+        {{- if .Values.existingConfigSecret }}
+        - name: cloud-config
+          secret:
+            secretName: {{ .Values.existingConfigSecret }}
+            items:
+              - key: {{ .Values.existingConfigSecretKey }}
+                path: config.yaml
+            defaultMode: 416
+        {{- else }}
+        - name: cloud-config
+          secret:
+            secretName: {{ include "proxmox-cloud-controller-manager.fullname" . }}
+            defaultMode: 416
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
