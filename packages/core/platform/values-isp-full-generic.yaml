@@ -5,8 +5,8 @@ bundles:
     enabled: true
     variant: "isp-full-generic"
   iaas:
-    enabled: false
+    enabled: true
   paas:
-    enabled: false
+    enabled: true
   naas:
-    enabled: false
+    enabled: true
