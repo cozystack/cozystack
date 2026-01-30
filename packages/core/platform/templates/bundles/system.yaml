@@ -23,15 +23,8 @@
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozy-proxy" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.multus" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.metallb" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.reloader" $) }}
+{{include "cozystack.platform.system.common-packages" $ }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $) }}
 {{- end }}
 
 {{- if eq .Values.bundles.system.variant "isp-hosted" }}
@@ -98,17 +91,10 @@
 {{- end -}}
 {{- /* Use kubeovn-cilium-generic variant (no values-talos.yaml) */ -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium-generic" $ $networkingComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozy-proxy" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.multus" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.metallb" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.reloader" $) }}
+{{include "cozystack.platform.system.common-packages" $ }}
 {{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
 {{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $) }}
 {{- end }}
 
 # Cozystack Engine
