@@ -1,0 +1,90 @@
+diff --git a/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts b/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts
+index 87a0f12..fb2e1cc 100644
+--- a/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts
++++ b/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts
+@@ -134,22 +134,6 @@ export const prepare = ({
+       // impossible in k8s
+       return {}
+     })
+-    if (customFields.length > 0) {
+-      dataSource = dataSource.map((el: TJSON) => {
+-        const newFieldsForComplexJsonPath: Record<string, TJSON> = {}
+-        customFields.forEach(({ dataIndex, jsonPath }) => {
+-          const jpQueryResult = jp.query(el, `$${jsonPath}`)
+-          newFieldsForComplexJsonPath[dataIndex] =
+-            Array.isArray(jpQueryResult) && jpQueryResult.length === 1 ? jpQueryResult[0] : jpQueryResult
+-        })
+-        if (typeof el === 'object') {
+-          return { ...el, ...newFieldsForComplexJsonPath }
+-        }
+-        // impossible in k8s
+-        return { ...newFieldsForComplexJsonPath }
+-      })
+-    }
+-
+     // Handle flatMap: expand rows for map objects
+     // Process all flatMap columns sequentially
+     if (flatMapColumns.length > 0 && dataSource) {
+@@ -204,6 +188,62 @@ export const prepare = ({
+         currentDataSource = expandedDataSource
+       })
+       dataSource = currentDataSource
++    }
++
++    if (customFields.length > 0) {
++      dataSource = dataSource.map((el: TJSON) => {
++        const newFieldsForComplexJsonPath: Record<string, TJSON> = {}
++        customFields.forEach(({ dataIndex, jsonPath }) => {
++          let fieldValue: TJSON = null
++          let handled = false
++
++          const flatMapMatch = jsonPath.match(/^(.*)\[(_flatMap[^\]]+_Key)\](.*)$/)
++          if (flatMapMatch && el && typeof el === 'object' && !Array.isArray(el)) {
++            const basePath = flatMapMatch[1]
++            const keyField = flatMapMatch[2]
++            const tailPath = flatMapMatch[3]
++            const keyValue = (el as Record<string, unknown>)[keyField]
++            if (keyValue !== null && keyValue !== undefined) {
++              const baseResult = jp.query(el, `$${basePath}`)[0]
++              if (baseResult && typeof baseResult === 'object' && !Array.isArray(baseResult)) {
++                const baseValue = (baseResult as Record<string, unknown>)[String(keyValue)]
++                if (tailPath) {
++                  const normalizedTailPath =
++                    tailPath.startsWith('.') || tailPath.startsWith('[') ? tailPath : `.${tailPath}`
++                  const tailResult = jp.query(baseValue, `$${normalizedTailPath}`)
++                  fieldValue = Array.isArray(tailResult) && tailResult.length === 1 ? tailResult[0] : tailResult
++                } else {
++                  fieldValue = baseValue as TJSON
++                }
++                handled = true
++              }
++            }
++          }
++
++          if (!handled) {
++            let resolvedJsonPath = jsonPath
++            if (el && typeof el === 'object' && !Array.isArray(el)) {
++              resolvedJsonPath = jsonPath.replace(/\[(_flatMap[^\]]+_Key)\]/g, (match, keyField) => {
++                const keyValue = (el as Record<string, unknown>)[keyField]
++                if (keyValue === null || keyValue === undefined) {
++                  return match
++                }
++                const escaped = String(keyValue).replace(/'/g, "\\'")
++                return `['${escaped}']`
++              })
++            }
++            const jpQueryResult = jp.query(el, `$${resolvedJsonPath}`)
++            fieldValue = Array.isArray(jpQueryResult) && jpQueryResult.length === 1 ? jpQueryResult[0] : jpQueryResult
++          }
++
++          newFieldsForComplexJsonPath[dataIndex] = fieldValue
++        })
++        if (typeof el === 'object') {
++          return { ...el, ...newFieldsForComplexJsonPath }
++        }
++        // impossible in k8s
++        return { ...newFieldsForComplexJsonPath }
++      })
+     }
+   } else {
+     dataSource = dataItems.map((el: TJSON) => {

@@ -194,7 +194,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createFlatMapColumn("Data", ".spec.hard"),
 			createStringColumn("Resource", "_flatMapData_Key"),
 			createStringColumn("Hard", "_flatMapData_Value"),
-			createStringColumn("Used", ".status.used['{_flatMapData_Key}']"),
+			createStringColumn("Used", ".status.used[_flatMapData_Key]"),
 		}),
 
 		// Factory ingress details rules
