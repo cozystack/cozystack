@@ -149,6 +149,17 @@ func (c completedConfig) New() (*CozyServer, error) {
 		return nil, fmt.Errorf("failed to build manager: %w", err)
 	}
 
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&corev1.Service{},
+		"spec.type",
+		func(rawObj client.Object) []string {
+			svc := rawObj.(*corev1.Service)
+			return []string{string(svc.Spec.Type)}
+		}); err != nil {
+		return nil, fmt.Errorf("failed to index service spec.type field: %w", err)
+	}
+
 	ctx := ctrl.SetupSignalHandler()
 
 	if err = mustGetInformers(ctx, mgr,

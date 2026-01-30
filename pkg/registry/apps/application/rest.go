@@ -1278,16 +1278,18 @@ func (r *REST) countTenantExternalIPs(ctx context.Context, namespace string) (in
 	}
 
 	var services corev1.ServiceList
-	if err := r.c.List(ctx, &services, client.InNamespace(namespace)); err != nil {
+	if err := r.c.List(
+		ctx,
+		&services,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.type": string(corev1.ServiceTypeLoadBalancer)},
+	); err != nil {
 		return 0, err
 	}
 
 	var count int32
 	for i := range services.Items {
 		svc := &services.Items[i]
-		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
-			continue
-		}
 		for _, ingress := range svc.Status.LoadBalancer.Ingress {
 			if ingress.IP != "" {
 				count++
