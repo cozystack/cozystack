@@ -2,4 +2,9 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Velero
 metadata:
   name: velero-strategy-default
-spec: {}
+spec:
+  template:
+    spec:
+      ttl: 720h
+      includedNamespaces:
+        - "*"
