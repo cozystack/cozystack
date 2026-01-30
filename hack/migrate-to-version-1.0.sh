@@ -7,8 +7,9 @@ set -e
 
 NAMESPACE="cozy-system"
 
-echo "Cozystack Migration to v1.0"
-echo "==========================="
+echo "============================="
+echo " Cozystack Migration to v1.0 "
+echo "============================="
 echo ""
 echo "This script will convert existing ConfigMaps to a Package resource."
 echo ""
@@ -16,6 +17,12 @@ echo ""
 # Check if kubectl is available
 if ! command -v kubectl &> /dev/null; then
     echo "Error: kubectl is not installed or not in PATH"
+    exit 1
+fi
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is not installed or not in PATH"
     exit 1
 fi
 
@@ -42,6 +49,7 @@ CLUSTER_DOMAIN=$(echo "$COZYSTACK_CM" | jq -r '.data["cluster-domain"] // "cozy.
 ROOT_HOST=$(echo "$COZYSTACK_CM" | jq -r '.data["root-host"] // "example.org"')
 API_SERVER_ENDPOINT=$(echo "$COZYSTACK_CM" | jq -r '.data["api-server-endpoint"] // ""')
 OIDC_ENABLED=$(echo "$COZYSTACK_CM" | jq -r '.data["oidc-enabled"] // "false"')
+KEYCLOAK_REDIRECTS=$(echo "$COZYSTACK_CM" | jq -r '.data["extra-keycloak-redirect-uri-for-dashboard"] // ""' )
 TELEMETRY_ENABLED=$(echo "$COZYSTACK_CM" | jq -r '.data["telemetry-enabled"] // "true"')
 BUNDLE_NAME=$(echo "$COZYSTACK_CM" | jq -r '.data["bundle-name"] // "paas-full"')
 
@@ -50,6 +58,13 @@ POD_CIDR=$(echo "$COZYSTACK_CM" | jq -r '.data["ipv4-pod-cidr"] // "10.244.0.0/1
 POD_GATEWAY=$(echo "$COZYSTACK_CM" | jq -r '.data["ipv4-pod-gateway"] // "10.244.0.1"')
 SVC_CIDR=$(echo "$COZYSTACK_CM" | jq -r '.data["ipv4-svc-cidr"] // "10.96.0.0/16"')
 JOIN_CIDR=$(echo "$COZYSTACK_CM" | jq -r '.data["ipv4-join-cidr"] // "100.64.0.0/16"')
+
+EXTERNAL_IPS=$(echo "$COZYSTACK_CM" | jq -r '.data["expose-external-ips"] // ""')
+if [ -z "$EXTERNAL_IPS" ]; then
+    EXTERNAL_IPS="[]"
+else
+    EXTERNAL_IPS=$(echo "$EXTERNAL_IPS" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - "$0}')
+fi
 
 # Determine bundle type
 case "$BUNDLE_NAME" in
@@ -67,12 +82,24 @@ case "$BUNDLE_NAME" in
         ;;
 esac
 
+# Update bundle naming
+BUNDLE_NAME=$(echo "$BUNDLE_NAME" | sed 's/paas/isp/')
+
 # Extract branding if available
-DASHBOARD_BRANDING=$(echo "$BRANDING_CM" | jq -r '.data["dashboard"] // "{}"')
-KEYCLOAK_BRANDING=$(echo "$BRANDING_CM" | jq -r '.data["keycloak"] // "{}"')
+BRANDING=$(echo "$BRANDING_CM" | jq -r '.data // {} | to_entries[] | "\(.key): \"\(.value)\""')
+if [ -z "$BRANDING" ]; then 
+    BRANDING="{}"
+else
+    BRANDING=$(echo "$BRANDING" | awk 'BEGIN{print}{print "          " $0}')
+fi
 
 # Extract scheduling if available
-SCHEDULING_CONSTRAINTS=$(echo "$SCHEDULING_CM" | jq -r '.data["topologySpreadConstraints"] // "[]"')
+SCHEDULING_CONSTRAINTS=$(echo "$SCHEDULING_CM" | jq -r '.data.["globalAppTopologySpreadConstraints"] // ""')
+if [ -z "$SCHEDULING_CONSTRAINTS" ]; then
+    SCHEDULING_CONSTRAINTS='""'
+else
+    SCHEDULING_CONSTRAINTS=$(echo "$SCHEDULING_CONSTRAINTS" | awk 'BEGIN{print}{print "            " $0}')
+fi
 
 echo ""
 echo "Extracted configuration:"
@@ -116,21 +143,21 @@ spec:
         publishing:
           host: "$ROOT_HOST"
           apiServerEndpoint: "$API_SERVER_ENDPOINT"
+          externalIPs: $EXTERNAL_IPS
         authentication:
           oidc:
             enabled: $OIDC_ENABLED
+            keycloakExtraRedirectUri: "$KEYCLOAK_REDIRECTS"
         scheduling:
-          topologySpreadConstraints: $SCHEDULING_CONSTRAINTS
-        branding:
-          dashboard: $DASHBOARD_BRANDING
-          keycloak: $KEYCLOAK_BRANDING
+          globalAppTopologySpreadConstraints: $SCHEDULING_CONSTRAINTS
+        branding: $BRANDING
 EOF
 )
 
 echo "Generated Package resource:"
 echo "---"
 echo "$PACKAGE_YAML"
-echo "---"
+echo "..."
 echo ""
 
 read -p "Do you want to apply this Package? (y/N) " -n 1 -r
@@ -149,4 +176,4 @@ else
 fi
 
 echo ""
-echo "Migration complete!"
+echo "All done!"
