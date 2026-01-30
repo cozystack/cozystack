@@ -69,14 +69,20 @@ Run `helm upgrade` after MongoDB is ready to populate the credentials secret wit
 
 ### Users configuration
 
-| Name                        | Description                                         | Type                | Value |
-| --------------------------- | --------------------------------------------------- | ------------------- | ----- |
-| `users`                     | Custom MongoDB users configuration map.             | `map[string]object` | `{}`  |
-| `users[name].password`      | Password for the user (auto-generated if omitted).  | `string`            | `""`  |
-| `users[name].db`            | Database to authenticate against.                   | `string`            | `""`  |
-| `users[name].roles`         | List of MongoDB roles with database scope.          | `[]object`          | `[]`  |
-| `users[name].roles[i].name` | Role name (e.g., readWrite, dbAdmin, clusterAdmin). | `string`            | `""`  |
-| `users[name].roles[i].db`   | Database the role applies to.                       | `string`            | `""`  |
+| Name                   | Description                                        | Type                | Value |
+| ---------------------- | -------------------------------------------------- | ------------------- | ----- |
+| `users`                | Users configuration map.                           | `map[string]object` | `{}`  |
+| `users[name].password` | Password for the user (auto-generated if omitted). | `string`            | `""`  |
+
+
+### Databases configuration
+
+| Name                             | Description                                                | Type                | Value |
+| -------------------------------- | ---------------------------------------------------------- | ------------------- | ----- |
+| `databases`                      | Databases configuration map.                               | `map[string]object` | `{}`  |
+| `databases[name].roles`          | Roles assigned to users.                                   | `object`            | `{}`  |
+| `databases[name].roles.admin`    | List of users with admin privileges (readWrite + dbAdmin). | `[]string`          | `[]`  |
+| `databases[name].roles.readonly` | List of users with read-only privileges.                   | `[]string`          | `[]`  |
 
 
 ### Backup parameters

@@ -352,12 +352,13 @@ tests:
       _cluster:
         cluster-domain: cozy.local
       users: {}
+      databases: {}
     asserts:
       - notExists:
           path: spec.users
         documentIndex: 0
 
-  - it: configures users when defined
+  - it: configures users with admin role
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -365,11 +366,12 @@ tests:
       _cluster:
         cluster-domain: cozy.local
       users:
-        appuser:
-          db: appdb
+        appuser: {}
+      databases:
+        appdb:
           roles:
-            - name: readWrite
-              db: appdb
+            admin:
+              - appuser
     asserts:
       - exists:
           path: spec.users
@@ -380,7 +382,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.users[0].db
-          value: appdb
+          value: admin
         documentIndex: 0
       - equal:
           path: spec.users[0].passwordSecretRef.name
@@ -391,7 +393,7 @@ tests:
           value: password
         documentIndex: 0
 
-  - it: configures user roles
+  - it: assigns readWrite and dbAdmin roles for admin users
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -399,28 +401,31 @@ tests:
       _cluster:
         cluster-domain: cozy.local
       users:
-        admin:
-          db: admin
+        appuser: {}
+      databases:
+        mydb:
           roles:
-            - name: clusterAdmin
-              db: admin
-            - name: userAdminAnyDatabase
-              db: admin
+            admin:
+              - appuser
     asserts:
       - equal:
           path: spec.users[0].roles[0].name
-          value: clusterAdmin
+          value: readWrite
         documentIndex: 0
       - equal:
           path: spec.users[0].roles[0].db
-          value: admin
+          value: mydb
         documentIndex: 0
       - equal:
           path: spec.users[0].roles[1].name
-          value: userAdminAnyDatabase
+          value: dbAdmin
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].roles[1].db
+          value: mydb
         documentIndex: 0
 
-  - it: fails when user has empty roles
+  - it: assigns read role for readonly users
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -428,12 +433,35 @@ tests:
       _cluster:
         cluster-domain: cozy.local
       users:
-        myuser:
-          db: mydb
-          roles: []
+        reader: {}
+      databases:
+        mydb:
+          roles:
+            readonly:
+              - reader
+    asserts:
+      - equal:
+          path: spec.users[0].roles[0].name
+          value: read
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].roles[0].db
+          value: mydb
+        documentIndex: 0
+
+  - it: fails when user is not assigned to any database role
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser: {}
+      databases: {}
     asserts:
       - failedTemplate:
-          errorMessage: "users.myuser.roles is required and cannot be empty"
+          errorMessage: "user 'myuser' is not assigned to any database role in databases.*.roles"
 
   ###########################
   # Backup configuration    #

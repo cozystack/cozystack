@@ -74,26 +74,38 @@ shardingConfig:
 ## @section Users configuration
 ##
 
-## @typedef {struct} Role - MongoDB role configuration.
-## @field {string} name - Role name (e.g., readWrite, dbAdmin, clusterAdmin).
-## @field {string} db - Database the role applies to.
-
 ## @typedef {struct} User - User configuration.
 ## @field {string} [password] - Password for the user (auto-generated if omitted).
-## @field {string} db - Database to authenticate against.
-## @field {[]Role} roles - List of MongoDB roles with database scope.
 
-## @param {map[string]User} users - Custom MongoDB users configuration map.
+## @param {map[string]User} users - Users configuration map.
 users: {}
 ## Example:
 ## users:
-##   myuser:
-##     db: mydb
+##   user1:
+##     password: strongpassword
+##   user2: {}
+
+##
+## @section Databases configuration
+##
+
+## @typedef {struct} DatabaseRoles - Role assignments for a database.
+## @field {[]string} [admin] - List of users with admin privileges (readWrite + dbAdmin).
+## @field {[]string} [readonly] - List of users with read-only privileges.
+
+## @typedef {struct} Database - Database configuration.
+## @field {DatabaseRoles} [roles] - Roles assigned to users.
+
+## @param {map[string]Database} databases - Databases configuration map.
+databases: {}
+## Example:
+## databases:
+##   myapp:
 ##     roles:
-##       - name: readWrite
-##         db: mydb
-##       - name: dbAdmin
-##         db: mydb
+##       admin:
+##       - user1
+##       readonly:
+##       - user2
 
 ##
 ## @section Backup parameters
