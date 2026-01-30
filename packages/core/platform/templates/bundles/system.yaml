@@ -41,10 +41,16 @@
 {{- $networkingComponents := dict -}}
 {{- if .Values.networking -}}
 {{- /* Parse apiServerEndpoint URL for generic k8s (used by both Cilium and KubeOVN) */ -}}
+{{- /* First try cozystack ConfigMap, then fall back to chart values */ -}}
+{{- $cozystackCm := lookup "v1" "ConfigMap" "cozy-system" "cozystack" -}}
+{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint -}}
+{{- if and $cozystackCm $cozystackCm.data -}}
+{{- $apiServerEndpoint = default $apiServerEndpoint (index $cozystackCm.data "api-server-endpoint") -}}
+{{- end -}}
 {{- $apiHost := .Values.networking.apiServer.host -}}
 {{- $apiPort := .Values.networking.apiServer.port -}}
-{{- if .Values.publishing.apiServerEndpoint -}}
-{{- $parsed := urlParse .Values.publishing.apiServerEndpoint -}}
+{{- if $apiServerEndpoint -}}
+{{- $parsed := urlParse $apiServerEndpoint -}}
 {{- $hostPort := splitList ":" $parsed.host -}}
 {{- $apiHost = index $hostPort 0 -}}
 {{- if gt (len $hostPort) 1 -}}
@@ -53,16 +59,26 @@
 {{- $apiPort = "6443" -}}
 {{- end -}}
 {{- end -}}
-{{- /* KubeOVN IPv4 configuration */ -}}
+{{- /* KubeOVN IPv4 configuration - read from ConfigMap or fall back to chart values */ -}}
+{{- $podCIDR := .Values.networking.podCIDR -}}
+{{- $podGateway := .Values.networking.podGateway -}}
+{{- $svcCIDR := .Values.networking.serviceCIDR -}}
+{{- $joinCIDR := .Values.networking.joinCIDR -}}
+{{- if and $cozystackCm $cozystackCm.data -}}
+{{- $podCIDR = default $podCIDR (index $cozystackCm.data "ipv4-pod-cidr") -}}
+{{- $podGateway = default $podGateway (index $cozystackCm.data "ipv4-pod-gateway") -}}
+{{- $svcCIDR = default $svcCIDR (index $cozystackCm.data "ipv4-svc-cidr") -}}
+{{- $joinCIDR = default $joinCIDR (index $cozystackCm.data "ipv4-join-cidr") -}}
+{{- end -}}
 {{- $kubeovnIpv4 := dict
-  "POD_CIDR" .Values.networking.podCIDR
-  "POD_GATEWAY" .Values.networking.podGateway
-  "SVC_CIDR" .Values.networking.serviceCIDR
-  "JOIN_CIDR" .Values.networking.joinCIDR -}}
+  "POD_CIDR" $podCIDR
+  "POD_GATEWAY" $podGateway
+  "SVC_CIDR" $svcCIDR
+  "JOIN_CIDR" $joinCIDR -}}
 {{- $kubeovnDict := dict "ipv4" $kubeovnIpv4 -}}
 {{- /* Set MASTER_NODES: explicit value > parsed from apiServerEndpoint > empty (use helm lookup) */ -}}
 {{- $masterNodes := .Values.networking.kubeovn.MASTER_NODES -}}
-{{- if and (not $masterNodes) .Values.publishing.apiServerEndpoint -}}
+{{- if and (not $masterNodes) $apiServerEndpoint -}}
 {{- $masterNodes = $apiHost -}}
 {{- end -}}
 {{- if $masterNodes -}}
