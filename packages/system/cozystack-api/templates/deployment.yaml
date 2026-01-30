@@ -25,8 +25,10 @@ spec:
       - operator: Exists
       serviceAccountName: cozystack-api
       {{- if .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
+      {{- with .Values.cozystackAPI.nodeSelector }}
       nodeSelector:
-        node-role.kubernetes.io/control-plane: ""
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- end }}
       containers:
       - name: cozystack-api

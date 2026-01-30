@@ -41,10 +41,21 @@ manifests:
 	helm template installer packages/core/installer -n cozy-system \
 		-s templates/crds.yaml \
 		> _out/assets/cozystack-crds.yaml
+	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
 		-s templates/cozystack-operator.yaml \
 		-s templates/packagesource.yaml \
 		> _out/assets/cozystack-operator.yaml
+	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
+	helm template installer packages/core/installer -n cozy-system \
+		-s templates/cozystack-operator-generic.yaml \
+		-s templates/packagesource.yaml \
+		> _out/assets/cozystack-operator-generic.yaml
+	# Hosted variant (managed Kubernetes)
+	helm template installer packages/core/installer -n cozy-system \
+		-s templates/cozystack-operator-hosted.yaml \
+		-s templates/packagesource.yaml \
+		> _out/assets/cozystack-operator-hosted.yaml
 
 cozypkg:
 	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg ./cmd/cozypkg

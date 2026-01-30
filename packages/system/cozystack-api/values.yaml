@@ -3,3 +3,8 @@ cozystackAPI:
   localK8sAPIEndpoint:
     enabled: true
   replicas: 2
+  # nodeSelector for DaemonSet mode (localK8sAPIEndpoint.enabled: true)
+  # Talos uses empty value: "node-role.kubernetes.io/control-plane": ""
+  # Generic k8s (k3s, kubeadm) uses: "node-role.kubernetes.io/control-plane": "true"
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""

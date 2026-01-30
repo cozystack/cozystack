@@ -1,6 +1,12 @@
 {{- $kubeRootCa := lookup "v1" "ConfigMap" "kube-system" "kube-root-ca.crt" }}
+{{- $cozystackCm := lookup "v1" "ConfigMap" "cozy-system" "cozystack" }}
 {{- $bundleName := .Values.bundles.system.variant }}
 {{- $bundle := tpl (.Files.Get (printf "bundles/%s.yaml" $bundleName)) . | fromYaml }}
+{{- /* Read root-host from ConfigMap if available, else use chart values */ -}}
+{{- $rootHost := .Values.publishing.host -}}
+{{- if and $cozystackCm $cozystackCm.data -}}
+{{- $rootHost = default $rootHost (index $cozystackCm.data "root-host") -}}
+{{- end -}}
 ---
 apiVersion: v1
 kind: Secret
@@ -13,7 +19,7 @@ type: Opaque
 stringData:
   values.yaml: |
     _cluster:
-      root-host: {{ .Values.publishing.host | quote }}
+      root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
       clusterissuer: {{ .Values.publishing.certificates.issuerType | quote }}
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}

@@ -62,10 +62,12 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Get the kubernetes version we should assume for creating scheduler configs
+Get the kubernetes version we should assume for creating scheduler configs.
+Strips distribution suffixes like +k3s1, +rke2r1 from version string.
 */}}
 {{- define "linstor-scheduler.kubeVersion" }}
-{{- .Values.scheduler.image.compatibleKubernetesRelease | default .Capabilities.KubeVersion.Version }}
+{{- $version := .Values.scheduler.image.compatibleKubernetesRelease | default .Capabilities.KubeVersion.Version }}
+{{- regexReplaceAll "\\+.*$" $version "" }}
 {{- end }}
 
 {{/*

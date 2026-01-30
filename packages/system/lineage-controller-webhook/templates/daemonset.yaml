@@ -13,8 +13,10 @@ spec:
       labels:
         app: lineage-controller-webhook
     spec:
+      {{- with .Values.lineageControllerWebhook.nodeSelector }}
       nodeSelector:
-        node-role.kubernetes.io/control-plane: ""
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
       - operator: Exists
       serviceAccountName: lineage-controller-webhook

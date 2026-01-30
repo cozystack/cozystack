@@ -30,7 +30,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: kube-scheduler
-          image: "{{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag | default .Capabilities.KubeVersion.Version }}"
+          image: "{{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag | default (include "linstor-scheduler.kubeVersion" .) }}"
           securityContext:
             {{- toYaml .Values.scheduler.securityContext | nindent 12 }}
           command:

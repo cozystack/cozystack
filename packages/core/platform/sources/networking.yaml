@@ -33,6 +33,27 @@ spec:
         releaseName: cilium-networkpolicy
         dependsOn:
         - cilium
+  # Generic Cilium variant for non-Talos clusters (kubeadm, k3s, RKE2, etc.)
+  - name: cilium-generic
+    dependsOn: []
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
   - name: kubeovn-cilium
     dependsOn: []
     components:
@@ -41,6 +62,36 @@ spec:
       valuesFiles:
       - values.yaml
       - values-talos.yaml
+      - values-kubeovn.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+    - name: kubeovn
+      path: system/kubeovn
+      install:
+        privileged: true
+        namespace: cozy-kubeovn
+        releaseName: kubeovn
+        dependsOn:
+        - cilium
+  # Generic KubeOVN+Cilium variant for non-Talos clusters (kubeadm, k3s, RKE2, etc.)
+  - name: kubeovn-cilium-generic
+    dependsOn: []
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
       - values-kubeovn.yaml
       install:
         privileged: true
