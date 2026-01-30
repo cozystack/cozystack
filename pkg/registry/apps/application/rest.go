@@ -27,6 +27,7 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	corev1 "k8s.io/api/core/v1"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -186,7 +187,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	}
 
 	// Convert the created HelmRelease back to Application
-	convertedApp, err := r.ConvertHelmReleaseToApplication(helmRelease)
+	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
 	if err != nil {
 		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", helmRelease.GetName(), err)
 		return nil, fmt.Errorf("conversion error: %v", err)
@@ -233,7 +234,7 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 	}
 
 	// Convert HelmRelease to Application
-	convertedApp, err := r.ConvertHelmReleaseToApplication(helmRelease)
+	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
 	if err != nil {
 		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", name, err)
 		return nil, fmt.Errorf("conversion error: %v", err)
@@ -360,7 +361,7 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 			continue
 		}
 
-		app, err := r.ConvertHelmReleaseToApplication(hr)
+		app, err := r.ConvertHelmReleaseToApplication(ctx, hr)
 		if err != nil {
 			klog.Errorf("Error converting HelmRelease %s to Application: %v", hr.GetName(), err)
 			continue
@@ -514,7 +515,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 
 	// Convert the updated HelmRelease back to Application
-	convertedApp, err := r.ConvertHelmReleaseToApplication(helmRelease)
+	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
 	if err != nil {
 		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", helmRelease.GetName(), err)
 		return nil, false, fmt.Errorf("conversion error: %v", err)
@@ -796,7 +797,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 
 				// Note: All HelmReleases already match the required labels due to server-side label selector filtering
 				// Convert HelmRelease to Application
-				app, err := r.ConvertHelmReleaseToApplication(hr)
+				app, err := r.ConvertHelmReleaseToApplication(ctx, hr)
 				if err != nil {
 					klog.Errorf("Error converting HelmRelease to Application: %v", err)
 					continue
@@ -967,11 +968,11 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application
-func (r *REST) ConvertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+func (r *REST) ConvertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
 	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
 
 	// Convert HelmRelease struct to Application struct
-	app, err := r.convertHelmReleaseToApplication(hr)
+	app, err := r.convertHelmReleaseToApplication(ctx, hr)
 	if err != nil {
 		klog.Errorf("Error converting from HelmRelease to Application: %v", err)
 		return appsv1alpha1.Application{}, err
@@ -1029,7 +1030,7 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 }
 
 // convertHelmReleaseToApplication implements the actual conversion logic
-func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
 	// Filter out internal keys (starting with "_") from spec
 	filteredSpec := filterInternalKeys(hr.Spec.Values)
 
@@ -1071,6 +1072,12 @@ func (r *REST) convertHelmReleaseToApplication(hr *helmv2.HelmRelease) (appsv1al
 	// Add namespace field for Tenant applications
 	if r.kindName == "Tenant" {
 		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
+		externalIPsCount, err := r.countTenantExternalIPs(ctx, app.Status.Namespace)
+		if err != nil {
+			klog.Warningf("Failed to count external IPs for tenant %s/%s: %v", hr.Namespace, app.Name, err)
+		} else {
+			app.Status.ExternalIPsCount = externalIPsCount
+		}
 	}
 
 	return app, nil
@@ -1263,6 +1270,33 @@ func (r *REST) computeTenantNamespace(currentNamespace, tenantName string) strin
 		// 3) tenant in a dedicated namespace
 		return fmt.Sprintf("%s-%s", currentNamespace, tenantName)
 	}
+}
+
+func (r *REST) countTenantExternalIPs(ctx context.Context, namespace string) (int32, error) {
+	if namespace == "" {
+		return 0, nil
+	}
+
+	var services corev1.ServiceList
+	if err := r.c.List(ctx, &services, client.InNamespace(namespace)); err != nil {
+		return 0, err
+	}
+
+	var count int32
+	for i := range services.Items {
+		svc := &services.Items[i]
+		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+			continue
+		}
+		for _, ingress := range svc.Status.LoadBalancer.Ingress {
+			if ingress.IP != "" {
+				count++
+				break
+			}
+		}
+	}
+
+	return count, nil
 }
 
 // Destroy releases resources associated with REST

@@ -47,6 +47,9 @@ type ApplicationStatus struct {
 	// Namespace holds the computed namespace for Tenant applications.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
+	// ExternalIPsCount holds the number of LoadBalancer services with assigned external IPs for Tenant applications.
+	// +optional
+	ExternalIPsCount int32 `json:"externalIPsCount,omitempty"`
 }
 
 // GetConditions returns the status conditions of the object.
