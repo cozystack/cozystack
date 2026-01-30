@@ -19,14 +19,14 @@ spec:
   components:
 {{ toYaml $components | indent 4 }}
 {{- end }}
-{{- end -}}
-{{- end -}}
+{{- end }}
+{{ end }}
 
 {{- define "cozystack.platform.package.default" -}}
 {{- $name := index . 0 -}}
 {{- $root := index . 1 -}}
 {{- include "cozystack.platform.package" (list $name "default" $root) }}
-{{- end -}}
+{{ end }}
 
 {{- define "cozystack.platform.package.optional" -}}
 {{- $name := index . 0 -}}
@@ -42,11 +42,11 @@ metadata:
   name: {{ $name }}
 spec:
   variant: {{ $variant }}
-{{- end -}}
-{{- end -}}
+{{- end }}
+{{ end }}
 
 {{- define "cozystack.platform.package.optional.default" -}}
 {{- $name := index . 0 -}}
 {{- $root := index . 1 -}}
 {{- include "cozystack.platform.package.optional" (list $name "default" $root) }}
-{{- end -}}
+{{ end }}
