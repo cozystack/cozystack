@@ -41,8 +41,8 @@
 {{- if and $cozystackCm $cozystackCm.data -}}
 {{- $apiServerEndpoint = default $apiServerEndpoint (index $cozystackCm.data "api-server-endpoint") -}}
 {{- end -}}
-{{- $apiHost := .Values.networking.apiServer.host -}}
-{{- $apiPort := .Values.networking.apiServer.port -}}
+{{- $apiHost := "" -}}
+{{- $apiPort := "6443" -}}
 {{- if $apiServerEndpoint -}}
 {{- $parsed := urlParse $apiServerEndpoint -}}
 {{- $hostPort := splitList ":" $parsed.host -}}
