@@ -338,7 +338,7 @@ metrics:
 
 kubectl:
   image:
-    repository: docker.io/bitnamilegacy/kubectl
+    repository: rancher/kubectl
     # Digest value example: sha256:d238835e151cec91c6a811fe3a89a66d3231d9f64d09e5f3c49552672d271f38.
     # If used, it will take precedence over the kubectl.image.tag.
     # digest:
