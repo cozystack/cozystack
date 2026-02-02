@@ -175,6 +175,10 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 		)
 	}
 	if kind == "Tenant" {
+		leftColStack = append(leftColStack, antdFlexVertical("tenant-external-ip-count", 4, []any{
+			antdText("tenant-external-ip-count-label", true, "External IPs count", nil),
+			parsedText("tenant-external-ip-count-value", `{reqsJsonPath[0]['.status.externalIPsCount']['0']}`, nil),
+		}))
 		rightColStack = append(rightColStack,
 			antdFlexVertical("resource-quotas-block", 4, []any{
 				antdText("resource-quotas-label", true, "Resource Quotas", map[string]any{
