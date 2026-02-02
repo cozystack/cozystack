@@ -1,0 +1,4 @@
+cluster-autoscaler:
+  cloudProvider: azure
+  extraArgs:
+    leader-elect-resource-name: azure-cluster-autoscaler
