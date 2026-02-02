@@ -5,12 +5,6 @@
 {{- $existingKubeappsSecret := lookup "v1" "Secret" .Release.Namespace "kubeapps-client" }}
 {{- $existingAuthConfig := lookup "v1" "Secret" "cozy-dashboard" "kubeapps-auth-config" }}
 {{- $brandingConfig := .Values._cluster.branding | default dict }}
-
-{{ $branding := "" }}
-{{- if $brandingConfig }}
-  {{- $branding = $brandingConfig.branding }}
-{{- end }}
-
 ---
 
 apiVersion: v1.edp.epam.com/v1alpha1
@@ -32,9 +26,15 @@ metadata:
 spec:
   realmName: cozy
   clusterKeycloakRef: keycloak-cozy
-  {{- if $branding }}
-  displayHtmlName: {{ $branding }}
-  displayName: {{ $branding }}
+  {{- if $brandingConfig }}
+  {{- if hasKey $brandingConfig "brandName" }}
+  displayName: {{ $brandingConfig.brandName }}
+  {{- end }}
+  {{- if hasKey $brandingConfig "brandHtmlName" }}
+  displayHtmlName: {{ $brandingConfig.brandHtmlName }}
+  {{- else if hasKey $brandingConfig "branding" }}
+  displayHtmlName: {{ $brandingConfig.branding }}
+  {{- end }}
   {{- end }}
 
 ---
