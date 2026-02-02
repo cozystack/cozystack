@@ -3,3 +3,8 @@ lineageControllerWebhook:
   debug: false
   localK8sAPIEndpoint:
     enabled: true
+  # nodeSelector for the DaemonSet
+  # Talos uses empty value: "node-role.kubernetes.io/control-plane": ""
+  # Generic k8s (k3s, kubeadm) uses: "node-role.kubernetes.io/control-plane": "true"
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""

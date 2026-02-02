@@ -41,3 +41,13 @@ spec:
       valuesFiles:
       - values.yaml
       - values-isp-hosted.yaml
+  - name: isp-full-generic
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: platform
+      path: core/platform
+      valuesFiles:
+      - values.yaml
+      - values-isp-full-generic.yaml

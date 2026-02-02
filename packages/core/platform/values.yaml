@@ -11,7 +11,7 @@ migrations:
 bundles:
   system:
     enabled: false
-    variant: "isp-full" # Options: "isp-full", "isp-hosted", "distro-full"
+    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "distro-full"
   iaas:
     enabled: false
   paas:
@@ -27,6 +27,13 @@ networking:
   podGateway: "10.244.0.1"
   serviceCIDR: "10.96.0.0/16"
   joinCIDR: "100.64.0.0/16"
+  # KubeOVN master nodes override (optional)
+  # By default, KubeOVN helm chart uses `lookup` to find control-plane nodes
+  # by label `node-role.kubernetes.io/control-plane`. On fresh clusters or
+  # during initial deployment, lookup may return empty results.
+  # Set this to comma-separated list of master node IPs to override.
+  kubeovn:
+    MASTER_NODES: ""
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"

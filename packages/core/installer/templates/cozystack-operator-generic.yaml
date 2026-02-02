@@ -64,11 +64,20 @@ spec:
         - --platform-source-ref={{ .Values.cozystackOperator.platformSourceRef }}
         {{- end }}
         env:
-        # Talos KubePrism endpoint
+        # Generic Kubernetes: read from ConfigMap
+        # Create cozystack-operator-config ConfigMap before applying this manifest
         - name: KUBERNETES_SERVICE_HOST
-          value: "localhost"
+          valueFrom:
+            configMapKeyRef:
+              name: cozystack-operator-config
+              key: KUBERNETES_SERVICE_HOST
+              optional: false
         - name: KUBERNETES_SERVICE_PORT
-          value: "7445"
+          valueFrom:
+            configMapKeyRef:
+              name: cozystack-operator-config
+              key: KUBERNETES_SERVICE_PORT
+              optional: false
       hostNetwork: true
       tolerations:
       - key: "node.kubernetes.io/not-ready"
