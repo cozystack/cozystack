@@ -3,14 +3,17 @@
 
 {{- $existingVM := lookup "kubevirt.io/v1" "VirtualMachine" $namespace $vmName -}}
 {{- $existingPVC := lookup "v1" "PersistentVolumeClaim" $namespace $vmName -}}
+{{- $existingService := lookup "v1" "Service" $namespace $vmName -}}
 
 {{- $instanceType := .Values.instanceType | default "" -}}
 {{- $instanceProfile := .Values.instanceProfile | default "" -}}
 {{- $desiredStorage := .Values.systemDisk.storage | default "" -}}
+{{- $desiredServiceType := ternary "LoadBalancer" "ClusterIP" .Values.external -}}
 
 {{- $needUpdateType := false -}}
 {{- $needUpdateProfile := false -}}
 {{- $needResizePVC := false -}}
+{{- $needRecreateService := false -}}
 
 {{- if and $existingVM $instanceType -}}
   {{- if not (eq $existingVM.spec.instancetype.name $instanceType) -}}
@@ -35,7 +38,14 @@
   {{- end -}}
 {{- end -}}
 
-{{- if or $needUpdateType $needUpdateProfile $needResizePVC }}
+{{- if $existingService -}}
+  {{- $currentServiceType := $existingService.spec.type -}}
+  {{- if ne $currentServiceType $desiredServiceType -}}
+    {{- $needRecreateService = true -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if or $needUpdateType $needUpdateProfile $needResizePVC $needRecreateService }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -86,6 +96,11 @@ spec:
                 --type merge \
                 -p '{"spec":{"resources":{"requests":{"storage":"{{ $desiredStorage }}"}}}}'
               {{- end }}
+
+              {{- if $needRecreateService }}
+              echo "Removing Service..."
+              kubectl delete service --cascade=orphan -n {{ $namespace }} {{ $vmName }}
+              {{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -111,6 +126,10 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["patch", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["{{ $vmName }}"]
+    verbs: ["delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
