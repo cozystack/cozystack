@@ -1,0 +1,99 @@
+{{- $topologyMode := .Values.topologySpreadPolicy | default "soft" }}
+{{- $whenUnsatisfiable := "ScheduleAnyway" }}
+{{- if eq $topologyMode "hard" }}
+{{- $whenUnsatisfiable = "DoNotSchedule" }}
+{{- end }}
+---
+apiVersion: opensearch.opster.io/v1
+kind: OpenSearchCluster
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  general:
+    serviceName: {{ .Release.Name }}
+    version: {{ include "opensearch.versionMap" $ }}
+    httpPort: 9200
+    drainDataNodes: true
+    {{- if gt (len .Values.images.opensearch) 0 }}
+    image: {{ .Values.images.opensearch }}
+    {{- end }}
+  bootstrap:
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
+  security:
+    tls:
+      transport:
+        generate: true
+        perNode: true
+      http:
+        generate: true
+    config:
+      securityConfigSecret:
+        name: {{ .Release.Name }}-security-config
+      adminCredentialsSecret:
+        name: {{ .Release.Name }}-admin-credentials
+  {{- if .Values.dashboards.enabled }}
+  dashboards:
+    enable: true
+    version: {{ include "opensearch.versionMap" $ }}
+    replicas: {{ .Values.dashboards.replicas | default 1 }}
+    tls:
+      enable: true
+      generate: true
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.dashboards.resourcesPreset | default "medium") .Values.dashboards.resources $) | nindent 6 }}
+  {{- end }}
+  nodePools:
+    - component: nodes
+      replicas: {{ .Values.replicas }}
+      diskSize: {{ .Values.size }}
+      persistence:
+        pvc:
+          accessModes:
+            - ReadWriteOnce
+          {{- if .Values.storageClass }}
+          storageClass: {{ .Values.storageClass }}
+          {{- else if eq (int .Values.replicas) 1 }}
+          storageClass: replicated
+          {{- else }}
+          storageClass: local
+          {{- end }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      roles:
+        {{- if .Values.nodeRoles.master }}
+        - cluster_manager
+        {{- end }}
+        {{- if .Values.nodeRoles.data }}
+        - data
+        {{- end }}
+        {{- if .Values.nodeRoles.ingest }}
+        - ingest
+        {{- end }}
+        {{- if .Values.nodeRoles.ml }}
+        - ml
+        {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: {{ $whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              opster.io/opensearch-cluster: {{ .Release.Name }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: {{ $whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              opster.io/opensearch-cluster: {{ .Release.Name }}
+---
+# WorkloadMonitor tracks OpenSearch pods
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  minReplicas: 1
+  kind: opensearch
+  type: opensearch
+  selector:
+    opster.io/opensearch-cluster: {{ .Release.Name }}
+  version: {{ .Chart.Version }}
