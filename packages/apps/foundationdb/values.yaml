@@ -47,17 +47,36 @@ storage:
 ## @field {quantity} [memory] - Memory (RAM) available to each instance.
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
-## @value small
-## @value medium
-## @value large
-## @value xlarge
-## @value 2xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
 
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each FoundationDB instance. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-## @param {ResourcesPreset} resourcesPreset="medium" - Default sizing preset used when `resources` is omitted.
-resourcesPreset: "medium"
+## @param {ResourcesPreset} resourcesPreset="u1.small" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "u1.small"
 
 ## @typedef {struct} BackupS3Credentials - S3 credentials.
 ## @field {string} accessKeyId - S3 access key ID.
