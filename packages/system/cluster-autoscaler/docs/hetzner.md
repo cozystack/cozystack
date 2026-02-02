@@ -71,71 +71,97 @@ hcloud image list --type snapshot
 hcloud server delete talos-image-builder
 ```
 
-## Step 2: Create Kubernetes Secrets
+## Step 2: Create Hetzner vSwitch (Optional but Recommended)
 
-### 2.1 Create namespace (if not exists)
+Create a private network for communication between nodes:
 
 ```bash
-kubectl create namespace cozy-cluster-autoscaler-hetzner
+# Create network
+hcloud network create --name cozystack-vswitch --ip-range 10.100.0.0/16
+
+# Add subnet for your region (eu-central covers FSN1, NBG1)
+hcloud network add-subnet cozystack-vswitch \
+  --type cloud \
+  --network-zone eu-central \
+  --ip-range 10.100.0.0/24
 ```
 
-### 2.2 Create secret with Hetzner API token
+## Step 3: Create Talos Machine Config
+
+Create a worker machine config for autoscaled nodes. Important fields:
+
+```yaml
+version: v1alpha1
+machine:
+  type: worker
+  token: <worker-token>
+  ca:
+    crt: <base64-encoded-ca-cert>
+  # Node labels (applied automatically on join)
+  nodeLabels:
+    kilo.squat.ai/location: hetzner-cloud
+  kubelet:
+    image: ghcr.io/siderolabs/kubelet:v1.33.1
+    # Use vSwitch IP as internal IP
+    nodeIP:
+      validSubnets:
+        - 10.100.0.0/24
+    # Required for external cloud provider
+    extraArgs:
+      cloud-provider: external
+    extraConfig:
+      maxPods: 512
+    defaultRuntimeSeccompProfileEnabled: true
+    disableManifestsDirectory: true
+  # Registry mirrors (recommended to avoid rate limiting)
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+          - https://mirror.gcr.io
+cluster:
+  controlPlane:
+    endpoint: https://<control-plane-ip>:6443
+  clusterName: <cluster-name>
+  network:
+    cni:
+      name: none
+    podSubnets:
+      - 10.244.0.0/16
+    serviceSubnets:
+      - 10.96.0.0/16
+  token: <cluster-token>
+  ca:
+    crt: <base64-encoded-cluster-ca>
+```
+
+> **Important**: Ensure kubelet version matches your cluster version. Talos 1.11.6 doesn't support Kubernetes 1.35+.
+
+## Step 4: Create Kubernetes Secrets
+
+### 4.1 Create secret with Hetzner API token
 
 ```bash
 kubectl -n cozy-cluster-autoscaler-hetzner create secret generic hetzner-credentials \
   --from-literal=token=<your-hetzner-api-token>
 ```
 
-### 2.3 Create secret with Talos machine config
+### 4.2 Create secret with Talos machine config
 
-The machine config must be base64-encoded for the `HCLOUD_CLOUD_INIT` environment variable.
+The machine config must be base64-encoded:
 
 ```bash
-# Encode your worker.yaml
-cat worker.yaml | base64 -w0 > worker.b64
+# Encode your worker.yaml (single line base64)
+base64 -i worker.yaml -o worker.b64
 
 # Create secret
 kubectl -n cozy-cluster-autoscaler-hetzner create secret generic talos-config \
   --from-file=cloud-init=worker.b64
 ```
 
-## Step 3: Configure Cluster Autoscaler
+## Step 5: Deploy Cluster Autoscaler
 
-Create or update your values file for the cluster-autoscaler-hetzner package:
-
-```yaml
-cluster-autoscaler:
-  cloudProvider: hetzner
-
-  autoscalingGroups:
-    - name: workers-fsn1
-      minSize: 0
-      maxSize: 10
-      instanceType: CPX21    # 3 vCPU, 4GB RAM
-      region: FSN1
-
-  extraEnv:
-    HCLOUD_IMAGE: "<snapshot-id>"
-    HCLOUD_NETWORK: "<network-name-or-id>"      # Optional: private network
-    HCLOUD_FIREWALL: "<firewall-name-or-id>"    # Optional: firewall
-    HCLOUD_SSH_KEY: "<ssh-key-name-or-id>"      # Optional: SSH key
-    HCLOUD_PUBLIC_IPV4: "true"
-    HCLOUD_PUBLIC_IPV6: "false"
-
-  extraEnvSecrets:
-    HCLOUD_TOKEN:
-      name: hetzner-credentials
-      key: token
-    HCLOUD_CLOUD_INIT:
-      name: talos-config
-      key: cloud-init
-```
-
-## Step 4: Deploy
-
-### Via Cozystack Package
-
-Update the Package resource with your configuration:
+Create the Package resource:
 
 ```yaml
 apiVersion: cozystack.io/v1alpha1
@@ -157,6 +183,7 @@ spec:
           extraEnv:
             HCLOUD_IMAGE: "<snapshot-id>"
             HCLOUD_SSH_KEY: "<ssh-key-name>"
+            HCLOUD_NETWORK: "cozystack-vswitch"
             HCLOUD_PUBLIC_IPV4: "true"
             HCLOUD_PUBLIC_IPV6: "false"
           extraEnvSecrets:
@@ -166,37 +193,93 @@ spec:
             HCLOUD_CLOUD_INIT:
               name: talos-config
               key: cloud-init
+          rbac:
+            additionalRules:
+              - apiGroups:
+                  - coordination.k8s.io
+                resources:
+                  - leases
+                verbs:
+                  - create
+                  - get
+                  - update
 ```
 
-Apply with:
+Apply:
 ```bash
 kubectl apply -f package.yaml
 ```
 
-### Via Helm (direct)
+## Step 6: Test Autoscaling
 
-```bash
-helm upgrade --install cluster-autoscaler-hetzner \
-  ./packages/system/cluster-autoscaler \
-  -n cozy-cluster-autoscaler-hetzner \
-  -f values-hetzner.yaml \
-  -f my-values.yaml
+Create a deployment with pod anti-affinity to force scale-up:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-autoscaler
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: test-autoscaler
+  template:
+    metadata:
+      labels:
+        app: test-autoscaler
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: test-autoscaler
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: nginx
+        image: nginx
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
 ```
 
-## Step 5: Verify
+If you have fewer nodes than replicas, the autoscaler will create new Hetzner servers.
+
+## Step 7: Verify
 
 ```bash
 # Check autoscaler logs
-kubectl -n cozy-cluster-autoscaler-hetzner logs -l app.kubernetes.io/name=cluster-autoscaler -f
+kubectl -n cozy-cluster-autoscaler-hetzner logs deployment/cluster-autoscaler-hetzner-hetzner-cluster-autoscaler -f
 
-# Check autoscaler status
-kubectl -n cozy-cluster-autoscaler-hetzner get configmap cluster-autoscaler-status -o yaml
+# Check nodes
+kubectl get nodes -o wide
 
-# Test scale-up by creating pending pods
-kubectl run test-pending --image=nginx --requests='cpu=2,memory=4Gi'
+# Verify node labels and internal IP
+kubectl get node <node-name> --show-labels
 ```
 
-## Hetzner Server Types
+Expected result for autoscaled nodes:
+- Internal IP from vSwitch range (e.g., 10.100.0.2)
+- Label `kilo.squat.ai/location=hetzner-cloud`
+
+## Configuration Reference
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `HCLOUD_TOKEN` | Hetzner API token | Yes |
+| `HCLOUD_IMAGE` | Talos snapshot ID | Yes |
+| `HCLOUD_CLOUD_INIT` | Base64-encoded machine config | Yes |
+| `HCLOUD_NETWORK` | vSwitch network name/ID | No |
+| `HCLOUD_SSH_KEY` | SSH key name/ID | No |
+| `HCLOUD_FIREWALL` | Firewall name/ID | No |
+| `HCLOUD_PUBLIC_IPV4` | Assign public IPv4 | No (default: true) |
+| `HCLOUD_PUBLIC_IPV6` | Assign public IPv6 | No (default: false) |
+
+### Hetzner Server Types
 
 | Type | vCPU | RAM | Good for |
 |------|------|-----|----------|
@@ -212,26 +295,79 @@ kubectl run test-pending --image=nginx --requests='cpu=2,memory=4Gi'
 
 > **Note**: Some older server types (cpx11, cpx21, etc.) may be unavailable in certain regions.
 
-## Hetzner Regions
+### Hetzner Regions
 
-- `FSN1` - Falkenstein, Germany
-- `NBG1` - Nuremberg, Germany
-- `HEL1` - Helsinki, Finland
-- `ASH` - Ashburn, USA
-- `HIL` - Hillsboro, USA
+| Code | Location |
+|------|----------|
+| FSN1 | Falkenstein, Germany |
+| NBG1 | Nuremberg, Germany |
+| HEL1 | Helsinki, Finland |
+| ASH | Ashburn, USA |
+| HIL | Hillsboro, USA |
 
 ## Troubleshooting
 
 ### Nodes not joining cluster
 
-1. Check that machine config is correct and base64-encoded
-2. Verify network connectivity (private network, firewall rules)
-3. Check Talos image has `qemu-guest-agent` extension
+1. Check VNC console via Hetzner Cloud Console or:
+   ```bash
+   hcloud server request-console <server-name>
+   ```
+2. Common errors:
+   - **"unknown keys found during decoding"**: Check Talos config format. `nodeLabels` goes under `machine`, `nodeIP` goes under `machine.kubelet`
+   - **"kubelet image is not valid"**: Kubernetes version mismatch. Use kubelet version compatible with your Talos version
+   - **"failed to load config"**: Machine config syntax error
+
+### Nodes have wrong Internal IP
+
+Ensure `machine.kubelet.nodeIP.validSubnets` is set to your vSwitch subnet:
+```yaml
+machine:
+  kubelet:
+    nodeIP:
+      validSubnets:
+        - 10.100.0.0/24
+```
+
+### Scale-up not triggered
+
+1. Check autoscaler logs for errors
+2. Verify RBAC permissions (leases access required)
+3. Check if pods are actually pending:
+   ```bash
+   kubectl get pods --field-selector=status.phase=Pending
+   ```
+
+### Registry rate limiting (403 errors)
+
+Add registry mirrors to Talos config:
+```yaml
+machine:
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+          - https://mirror.gcr.io
+      registry.k8s.io:
+        endpoints:
+          - https://registry.k8s.io
+```
 
 ### Scale-down not working
 
-Talos caches absent nodes for up to 30 minutes. Wait or restart autoscaler.
+Talos caches absent nodes for up to 30 minutes. Wait or restart autoscaler:
+```bash
+kubectl -n cozy-cluster-autoscaler-hetzner rollout restart deployment cluster-autoscaler-hetzner-hetzner-cluster-autoscaler
+```
 
-### Image not found
+## Integration with Kilo
 
-Verify snapshot ID exists: `hcloud image list --type snapshot`
+For multi-location clusters using Kilo mesh networking, add location label to machine config:
+
+```yaml
+machine:
+  nodeLabels:
+    kilo.squat.ai/location: hetzner-cloud
+```
+
+This allows Kilo to create proper WireGuard tunnels between your bare-metal nodes and Hetzner Cloud nodes.
