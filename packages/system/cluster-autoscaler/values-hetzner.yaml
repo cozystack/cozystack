@@ -1,4 +1,12 @@
 cluster-autoscaler:
   cloudProvider: hetzner
-  extraArgs:
-    leader-elect-resource-name: hetzner-cluster-autoscaler
+  rbac:
+    additionalRules:
+      - apiGroups:
+          - coordination.k8s.io
+        resources:
+          - leases
+        verbs:
+          - create
+          - get
+          - update

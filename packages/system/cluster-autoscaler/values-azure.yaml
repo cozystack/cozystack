@@ -1,4 +1,12 @@
 cluster-autoscaler:
   cloudProvider: azure
-  extraArgs:
-    leader-elect-resource-name: azure-cluster-autoscaler
+  rbac:
+    additionalRules:
+      - apiGroups:
+          - coordination.k8s.io
+        resources:
+          - leases
+        verbs:
+          - create
+          - get
+          - update
