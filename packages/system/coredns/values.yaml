@@ -6,3 +6,6 @@ coredns:
   k8sAppLabelOverride: kube-dns
   service:
     name: kube-dns
+  serviceAccount:
+    create: true
+    name: kube-dns
