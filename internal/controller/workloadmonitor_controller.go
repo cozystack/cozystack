@@ -466,7 +466,7 @@ func (r *WorkloadMonitorReconciler) getWorkloadMetadata(obj client.Object) map[s
 	annotations := obj.GetAnnotations()
 	if instanceType, ok := annotations["kubevirt.io/cluster-instancetype-name"]; ok {
 		labels["workloads.cozystack.io/kubevirt-vmi-instance-type"] = instanceType
-	if instanceProfile, ok := annotations["kubevirt.io/cluster-instanceprofile-name"]; ok {                                                                                                              
+	if instanceProfile, ok := annotations["kubevirt.io/cluster-preference-name"]; ok {                                                                                                              
         labels["workloads.cozystack.io/kubevirt-vmi-instance-profile"] = instanceProfile
 	}
 	return labels
