@@ -4,9 +4,12 @@ ingress-nginx:
   controller:
     kind: DaemonSet
     {{- if eq .Values.addons.ingressNginx.exposeMethod "Proxied" }}
-    hostNetwork: true
     service:
-      enabled: false
+      enabled: true
+      type: NodePort
+      nodePorts:
+        http: 30000
+        https: 30001
     {{- end }}
     {{- if not .Values.addons.certManager.enabled }}
     admissionWebhooks:

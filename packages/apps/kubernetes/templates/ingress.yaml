@@ -56,11 +56,11 @@ spec:
   - appProtocol: http
     name: http
     port: 80
-    targetPort: 80
+    targetPort: 30000
   - appProtocol: https
     name: https
     port: 443
-    targetPort: 443
+    targetPort: 30001
   selector:
     cluster.x-k8s.io/cluster-name: {{ .Release.Name }}
     node-role.kubernetes.io/ingress-nginx: ""
