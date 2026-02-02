@@ -1,0 +1,4 @@
+opensearch-operator:
+  manager:
+    # Enable cluster-wide mode to watch all namespaces
+    watchNamespace: ""
