@@ -292,6 +292,12 @@ metadata:
     {{- end }}
 spec:
   clusterName: {{ $.Release.Name }}
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxSurge: {{ $group.maxReplicas }}
+      maxUnavailable: 1
+    type: RollingUpdate
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}
@@ -326,6 +332,7 @@ metadata:
   namespace: {{ $.Release.Namespace }}
 spec:
   clusterName: {{ $.Release.Name }}
+  maxUnhealthy: 0
   nodeStartupTimeout: 10m
   selector:
     matchLabels:
