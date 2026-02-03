@@ -1,0 +1,84 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/master/master-statefulset.yaml
+@@ -48,6 +48,10 @@ spec:
+       {{- with .Values.master.podAnnotations }}
+       {{- toYaml . | nindent 8 }}
+       {{- end }}
++      {{- if .Values.global.enableSecurity }}
++        {{- $name := include "seaweedfs.name" . }}
++        secret.reloader.stakater.com/reload: "{{ $name }}-ca-cert,{{ $name }}-master-cert,{{ $name }}-volume-cert,{{ $name }}-filer-cert,{{ $name }}-client-cert"
++      {{- end }}
+     spec:
+       restartPolicy: {{ default .Values.global.restartPolicy .Values.master.restartPolicy }}
+       {{- if .Values.master.affinity }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/filer/filer-statefulset.yaml
+@@ -48,6 +48,10 @@ spec:
+       {{- with .Values.filer.podAnnotations }}
+       {{- toYaml . | nindent 8 }}
+       {{- end }}
++      {{- if .Values.global.enableSecurity }}
++        {{- $name := include "seaweedfs.name" . }}
++        secret.reloader.stakater.com/reload: "{{ $name }}-ca-cert,{{ $name }}-master-cert,{{ $name }}-volume-cert,{{ $name }}-filer-cert,{{ $name }}-client-cert"
++      {{- end }}
+       {{- if .Values.filer.s3.existingConfigSecret }}
+         {{- $configSecret := (lookup "v1" "Secret" .Release.Namespace .Values.filer.s3.existingConfigSecret) | default dict }}
+         checksum/s3config: {{ $configSecret | toYaml | sha256sum }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
+@@ -48,6 +48,10 @@ spec:
+       {{- with $volume.podAnnotations }}
+       {{- toYaml . | nindent 8 }}
+       {{- end }}
++      {{- if $.Values.global.enableSecurity }}
++        {{- $name := include "seaweedfs.name" $ }}
++        secret.reloader.stakater.com/reload: "{{ $name }}-ca-cert,{{ $name }}-master-cert,{{ $name }}-volume-cert,{{ $name }}-filer-cert,{{ $name }}-client-cert"
++      {{- end }}
+     spec:
+       {{- if $volume.affinity }}
+       affinity:
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml
+@@ -40,6 +40,10 @@ spec:
+       {{- with .Values.s3.podAnnotations }}
+       {{- toYaml . | nindent 8 }}
+       {{- end }}
++      {{- if .Values.global.enableSecurity }}
++        {{- $name := include "seaweedfs.name" . }}
++        secret.reloader.stakater.com/reload: "{{ $name }}-ca-cert,{{ $name }}-master-cert,{{ $name }}-volume-cert,{{ $name }}-filer-cert,{{ $name }}-client-cert"
++      {{- end }}
+     spec:
+       restartPolicy: {{ default .Values.global.restartPolicy .Values.s3.restartPolicy }}
+       {{- if .Values.s3.affinity }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/admin/admin-statefulset.yaml
+@@ -45,6 +45,10 @@ spec:
+       {{- with .Values.admin.podAnnotations }}
+       {{- toYaml . | nindent 8 }}
+       {{- end }}
++      {{- if .Values.global.enableSecurity }}
++        {{- $name := include "seaweedfs.name" . }}
++        secret.reloader.stakater.com/reload: "{{ $name }}-ca-cert,{{ $name }}-master-cert,{{ $name }}-volume-cert,{{ $name }}-filer-cert,{{ $name }}-client-cert"
++      {{- end }}
+     spec:
+       restartPolicy: {{ default .Values.global.restartPolicy .Values.admin.restartPolicy }}
+       {{- if .Values.admin.affinity }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/worker/worker-deployment.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/worker/worker-deployment.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/worker/worker-deployment.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/worker/worker-deployment.yaml
+@@ -43,6 +43,10 @@ spec:
+       {{- with .Values.worker.podAnnotations }}
+       {{- toYaml . | nindent 8 }}
+       {{- end }}
++      {{- if .Values.global.enableSecurity }}
++        {{- $name := include "seaweedfs.name" . }}
++        secret.reloader.stakater.com/reload: "{{ $name }}-ca-cert,{{ $name }}-master-cert,{{ $name }}-volume-cert,{{ $name }}-filer-cert,{{ $name }}-client-cert"
++      {{- end }}
+     spec:
+       restartPolicy: {{ default .Values.global.restartPolicy .Values.worker.restartPolicy }}
+       {{- if .Values.worker.affinity }}

@@ -11,5 +11,6 @@ update:
 	tar xzvf - --strip 3 -C charts seaweedfs-$${version}/k8s/charts/seaweedfs
 	patch --no-backup-if-mismatch -p4 < patches/resize-api-server-annotation.diff
 	patch --no-backup-if-mismatch -p4 < patches/s3-traffic-distribution.patch
+	patch --no-backup-if-mismatch -p4 < patches/certificate-reload-annotation.patch
 	#patch --no-backup-if-mismatch -p4 < patches/retention-policy-delete.yaml
 

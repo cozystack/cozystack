@@ -49,6 +49,10 @@ spec:
       {{- with .Values.master.podAnnotations }}
       {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.global.enableSecurity }}
+        {{- $name := include "seaweedfs.name" . }}
+        secret.reloader.stakater.com/reload: "{{ $name }}-ca-cert,{{ $name }}-master-cert,{{ $name }}-volume-cert,{{ $name }}-filer-cert,{{ $name }}-client-cert"
+      {{- end }}
     spec:
       restartPolicy: {{ default .Values.global.restartPolicy .Values.master.restartPolicy }}
       {{- if .Values.master.affinity }}
