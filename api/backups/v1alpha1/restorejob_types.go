@@ -71,6 +71,8 @@ type RestoreJobStatus struct {
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",priority=0
 
 // RestoreJob represents a single execution of a restore from a Backup.
 type RestoreJob struct {
