@@ -1,0 +1,140 @@
+#!/bin/sh
+# Migration 26 --> 27
+# Migrate monitoring resources from extra/monitoring to system/monitoring
+# This migration re-labels resources so they become owned by monitoring-system HelmRelease
+
+set -euo pipefail
+
+echo "Starting monitoring migration to monitoring-system"
+
+# Function to relabel resources of a given type in a namespace
+relabel_resources() {
+  local ns="$1"
+  local resource_type="$2"
+
+  # Get resources with monitoring release annotation
+  local resources
+  resources=$(kubectl get "$resource_type" -n "$ns" -o json 2>/dev/null | \
+    jq -r '.items[] | select(.metadata.annotations["meta.helm.sh/release-name"] == "monitoring") | .metadata.name' 2>/dev/null || true)
+
+  for resource_name in $resources; do
+    # Skip dashboard-resourcemap resources (they stay with parent monitoring release)
+    if echo "$resource_name" | grep -q "dashboard-resources"; then
+      echo "  Skipping $resource_type/$resource_name (stays with parent release)"
+      continue
+    fi
+
+    echo "  Relabeling $resource_type/$resource_name"
+
+    # Update annotations and labels
+    kubectl annotate "$resource_type" -n "$ns" "$resource_name" \
+      meta.helm.sh/release-name=monitoring-system --overwrite 2>/dev/null || true
+
+    kubectl label "$resource_type" -n "$ns" "$resource_name" \
+      helm.toolkit.fluxcd.io/name=monitoring-system --overwrite 2>/dev/null || true
+  done
+}
+
+# Find all tenant namespaces with monitoring HelmRelease
+echo "Finding tenant namespaces with monitoring HelmRelease..."
+NAMESPACES=$(kubectl get hr --all-namespaces -l apps.cozystack.io/application.kind=Monitoring \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u || true)
+
+if [ -z "$NAMESPACES" ]; then
+  echo "No monitoring HelmReleases found in tenant namespaces, skipping migration"
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=27 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+
+echo "Found namespaces with monitoring:"
+echo "$NAMESPACES"
+
+# Process each namespace
+for ns in $NAMESPACES; do
+  echo ""
+  echo "========================================="
+  echo "Processing namespace: $ns"
+  echo "========================================="
+
+  # Check if monitoring HelmRelease exists
+  if ! kubectl get hr -n "$ns" monitoring >/dev/null 2>&1; then
+    echo "No monitoring HelmRelease in $ns, skipping"
+    continue
+  fi
+
+  # Step 1: Suspend the HelmRelease
+  echo ""
+  echo "Step 1: Suspending HelmRelease monitoring..."
+  kubectl patch hr -n "$ns" monitoring --type=merge -p '{"spec":{"suspend":true}}' 2>/dev/null || true
+
+  # Wait a moment for reconciliation to stop
+  sleep 2
+
+  # Step 2: Delete helm secrets for the monitoring release
+  echo ""
+  echo "Step 2: Deleting helm secrets for monitoring release..."
+  kubectl delete secrets -n "$ns" -l name=monitoring,owner=helm --ignore-not-found
+
+  # Step 3: Relabel resources to be owned by monitoring-system
+  echo ""
+  echo "Step 3: Relabeling resources to monitoring-system..."
+
+  # Core resources
+  echo "Processing core resources..."
+  relabel_resources "$ns" "secrets"
+  relabel_resources "$ns" "configmaps"
+  relabel_resources "$ns" "services"
+
+  # Apps resources
+  echo "Processing apps resources..."
+  relabel_resources "$ns" "deployments.apps"
+
+  # Networking resources
+  echo "Processing networking resources..."
+  relabel_resources "$ns" "ingresses.networking.k8s.io"
+
+  # PostgreSQL operator resources
+  echo "Processing PostgreSQL resources..."
+  relabel_resources "$ns" "clusters.postgresql.cnpg.io"
+
+  # Grafana operator resources
+  echo "Processing Grafana resources..."
+  relabel_resources "$ns" "grafanas.grafana.integreatly.org"
+  relabel_resources "$ns" "grafanadashboards.grafana.integreatly.org"
+  relabel_resources "$ns" "grafanadatasources.grafana.integreatly.org"
+
+  # VictoriaMetrics operator resources
+  echo "Processing VictoriaMetrics resources..."
+  relabel_resources "$ns" "vmagents.operator.victoriametrics.com"
+  relabel_resources "$ns" "vmalerts.operator.victoriametrics.com"
+  relabel_resources "$ns" "vmalertmanagers.operator.victoriametrics.com"
+  relabel_resources "$ns" "vmclusters.operator.victoriametrics.com"
+  relabel_resources "$ns" "vmservicescrapes.operator.victoriametrics.com"
+  relabel_resources "$ns" "vlogs.operator.victoriametrics.com"
+
+  # VPA resources
+  echo "Processing VPA resources..."
+  relabel_resources "$ns" "verticalpodautoscalers.autoscaling.k8s.io"
+
+  # Cozystack resources
+  echo "Processing Cozystack resources..."
+  relabel_resources "$ns" "workloadmonitors.cozystack.io"
+
+  # Step 4: Delete the suspended HelmRelease (Flux won't delete resources when HR is suspended)
+  echo ""
+  echo "Step 4: Deleting suspended HelmRelease monitoring..."
+  kubectl delete hr -n "$ns" monitoring --ignore-not-found
+
+  echo ""
+  echo "Completed migration for namespace: $ns"
+done
+
+echo ""
+echo "========================================="
+echo "Monitoring migration completed successfully"
+echo "========================================="
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=27 --dry-run=client -o yaml | kubectl apply -f-

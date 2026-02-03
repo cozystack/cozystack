@@ -5,8 +5,8 @@ sourceRef:
   path: /
 migrations:
   enabled: false
-  image: ghcr.io/cozystack/cozystack/platform-migrations:latest@sha256:24507a6004ac46e6690327e9063a7b73b87e60d5c740ec680bffa1d0895ab4c8
-  targetVersion: 26
+  image: ghcr.io/cozystack/cozystack/platform-migrations:latest
+  targetVersion: 27
 # Bundle deployment configuration
 bundles:
   system:
