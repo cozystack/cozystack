@@ -38,8 +38,8 @@ replicas: 3
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-## @param {ResourcesPreset} resourcesPreset="s1.nano" - Default sizing preset used when `resources` is omitted.
-resourcesPreset: "s1.nano"
+## @param {ResourcesPreset} resourcesPreset="u1.nano" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "u1.nano"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
