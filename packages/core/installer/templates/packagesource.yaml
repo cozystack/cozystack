@@ -1,0 +1,53 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cozystack-platform
+  annotations:
+    operator.cozystack.io/skip-cozystack-values: "true"
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-platform
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: platform
+      path: core/platform
+      valuesFiles:
+      - values.yaml
+  - name: isp-full
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: platform
+      path: core/platform
+      valuesFiles:
+      - values.yaml
+      - values-isp-full.yaml
+  - name: isp-hosted
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: platform
+      path: core/platform
+      valuesFiles:
+      - values.yaml
+      - values-isp-hosted.yaml
+  - name: isp-full-generic
+    components:
+    - install:
+        namespace: cozy-system
+        releaseName: cozystack-platform
+      name: platform
+      path: core/platform
+      valuesFiles:
+      - values.yaml
+      - values-isp-full-generic.yaml

@@ -1,7 +1,7 @@
 export NAME=piraeus-operator
 export NAMESPACE=cozy-linstor
 
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

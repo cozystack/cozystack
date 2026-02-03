@@ -56,26 +56,31 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 		return fmt.Errorf("failed to extract embedded manifests: %w", err)
 	}
 
-	// Find the manifest file (should be fluxcd.yaml from cozypkg)
-	manifestPath := filepath.Join(manifestsDir, "fluxcd.yaml")
-	if _, err := os.Stat(manifestPath); err != nil {
-		// Try to find any YAML file if fluxcd.yaml doesn't exist
-		entries, err := os.ReadDir(manifestsDir)
-		if err != nil {
-			return fmt.Errorf("failed to read manifests directory: %w", err)
-		}
-		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".yaml") {
-				manifestPath = filepath.Join(manifestsDir, entry.Name())
-				break
-			}
+	// Find all YAML manifest files
+	entries, err := os.ReadDir(manifestsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read manifests directory: %w", err)
+	}
+
+	var manifestFiles []string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".yaml") {
+			manifestFiles = append(manifestFiles, filepath.Join(manifestsDir, entry.Name()))
 		}
 	}
 
-	// Parse and apply manifests
-	objects, err := parseManifests(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to parse manifests: %w", err)
+	if len(manifestFiles) == 0 {
+		return fmt.Errorf("no YAML manifest files found in directory")
+	}
+
+	// Parse all manifest files
+	var objects []*unstructured.Unstructured
+	for _, manifestPath := range manifestFiles {
+		objs, err := parseManifests(manifestPath)
+		if err != nil {
+			return fmt.Errorf("failed to parse manifests from %s: %w", manifestPath, err)
+		}
+		objects = append(objects, objs...)
 	}
 
 	if len(objects) == 0 {
@@ -96,7 +101,7 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 	logger.Info("Installing Flux components", "namespace", namespace)
 
 	// Apply manifests using server-side apply
-	logger.Info("Applying Flux manifests", "count", len(objects), "manifest", manifestPath, "namespace", namespace)
+	logger.Info("Applying Flux manifests", "count", len(objects), "files", len(manifestFiles), "namespace", namespace)
 	if err := applyManifests(ctx, k8sClient, objects); err != nil {
 		return fmt.Errorf("failed to apply manifests: %w", err)
 	}
@@ -251,9 +256,15 @@ func injectKubernetesServiceEnv(objects []*unstructured.Unstructured) error {
 			continue
 		}
 
-		// Navigate to spec.template.spec.containers
+		// Navigate to spec.template.spec
 		spec, found, err := unstructured.NestedMap(obj.Object, "spec", "template", "spec")
 		if !found {
+			continue
+		}
+
+		// Skip pods that don't use hostNetwork - they should use normal Kubernetes DNS
+		hostNetwork, _, _ := unstructured.NestedBool(spec, "hostNetwork")
+		if !hostNetwork {
 			continue
 		}
 		if err != nil {

@@ -1,10 +1,10 @@
-KUBEOVN_TAG=v0.39.0
+KUBEOVN_TAG=v0.40.0
 
 export NAME=kubeovn
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/common-envs.mk
-include ../../../scripts/package.mk
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts values.yaml Chart.yaml

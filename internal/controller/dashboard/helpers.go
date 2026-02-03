@@ -23,7 +23,7 @@ type fieldInfo struct {
 
 // pickGVK tries to read group/version/kind from the CRD. We prefer the "application" section,
 // falling back to other likely fields if your schema differs.
-func pickGVK(crd *cozyv1alpha1.CozystackResourceDefinition) (group, version, kind string) {
+func pickGVK(crd *cozyv1alpha1.ApplicationDefinition) (group, version, kind string) {
 	// Best guess based on your examples:
 	if crd.Spec.Application.Kind != "" {
 		kind = crd.Spec.Application.Kind
@@ -41,7 +41,7 @@ func pickGVK(crd *cozyv1alpha1.CozystackResourceDefinition) (group, version, kin
 }
 
 // pickPlural prefers a field on the CRD if you have it; otherwise do a simple lowercase + "s".
-func pickPlural(kind string, crd *cozyv1alpha1.CozystackResourceDefinition) string {
+func pickPlural(kind string, crd *cozyv1alpha1.ApplicationDefinition) string {
 	// If you have crd.Spec.Application.Plural, prefer it. Example:
 	if crd.Spec.Application.Plural != "" {
 		return crd.Spec.Application.Plural

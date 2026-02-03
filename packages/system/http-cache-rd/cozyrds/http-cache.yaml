@@ -1,5 +1,5 @@
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: http-cache
 spec:
@@ -12,13 +12,11 @@ spec:
   release:
     prefix: http-cache-
     labels:
-      cozystack.io/ui: "true"
-    chart:
-      name: http-cache
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-http-cache-application-default-http-cache
+      namespace: cozy-system
   dashboard:
     category: NaaS
     singular: HTTP Cache

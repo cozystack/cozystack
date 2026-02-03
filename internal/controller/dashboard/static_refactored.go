@@ -134,7 +134,7 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 		createCustomColumnsOverride("factory-details-v1.services", []any{
 			createCustomColumnWithSpecificColor("Name", "Service", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/kube-service-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
 			createStringColumn("ClusterIP", ".spec.clusterIP"),
-			createStringColumn("LoadbalancerIP", ".spec.loadBalancerIP"),
+			createStringColumn("LoadbalancerIP", ".status.loadBalancer.ingress[0].ip"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
 
@@ -187,6 +187,14 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createFlatMapColumn("Data", ".data"),
 			createStringColumn("Subnet Parameters", "_flatMapData_Key"),
 			createStringColumn("Values", "_flatMapData_Value"),
+		}),
+
+		// Factory resource quotas
+		createCustomColumnsOverride("factory-resource-quotas", []any{
+			createFlatMapColumn("Data", ".spec.hard"),
+			createStringColumn("Resource", "_flatMapData_Key"),
+			createStringColumn("Hard", "_flatMapData_Value"),
+			createStringColumn("Used", ".status.used[_flatMapData_Key]"),
 		}),
 
 		// Factory ingress details rules
@@ -1144,7 +1152,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 								"clusterNamePartOfUrl": "{2}",
 								"customizationId":      "factory-node-details-/v1/pods",
 								"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/pods",
-								"labelsSelectorFull": map[string]any{
+								"labelSelectorFull": map[string]any{
 									"pathToLabels": ".spec.selector",
 									"reqIndex":     0,
 								},
@@ -1885,6 +1893,46 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 	}
 	backupSpec := createUnifiedFactory(backupConfig, backupTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/backups/{6}"})
 
+	// External IPs factory (filtered services)
+	externalIPsTabs := []any{
+		map[string]any{
+			"key":   "services",
+			"label": "Services",
+			"children": []any{
+				map[string]any{
+					"type": "EnrichedTable",
+					"data": map[string]any{
+						"id":                   "external-ips-table",
+						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
+						"clusterNamePartOfUrl": "{2}",
+						"baseprefix":           "/openapi-ui",
+						"customizationId":      "factory-details-v1.services",
+						"pathToItems":          []any{"items"},
+						"fieldSelector": map[string]any{
+							"spec.type": "LoadBalancer",
+						},
+					},
+				},
+			},
+		},
+	}
+	externalIPsSpec := map[string]any{
+		"key":                           "external-ips",
+		"sidebarTags":                   []any{"external-ips-sidebar"},
+		"withScrollableMainContentCard": true,
+		"urlsToFetch":                   []any{},
+		"data": []any{
+			map[string]any{
+				"type": "antdTabs",
+				"data": map[string]any{
+					"id":               "tabs-root",
+					"defaultActiveKey": "services",
+					"items":            externalIPsTabs,
+				},
+			},
+		},
+	}
+
 	return []*dashboardv1alpha1.Factory{
 		createFactory("marketplace", marketplaceSpec),
 		createFactory("namespace-details", namespaceSpec),
@@ -1897,6 +1945,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 		createFactory("plan-details", planSpec),
 		createFactory("backupjob-details", backupJobSpec),
 		createFactory("backup-details", backupSpec),
+		createFactory("external-ips", externalIPsSpec),
 	}
 }
 

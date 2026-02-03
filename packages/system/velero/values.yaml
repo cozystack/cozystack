@@ -1,4 +1,7 @@
 velero:
+  # Disable CRD upgrade job - CRDs are installed as part of helm chart
+  # The upgrade job has issues with kubectl image compatibility
+  upgradeCRDs: false
   initContainers:
     - name: velero-plugin-for-aws
       image: velero/velero-plugin-for-aws:v1.12.1

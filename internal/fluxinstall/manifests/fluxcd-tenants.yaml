@@ -1,0 +1,102 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: flux-tenants
+    app.kubernetes.io/part-of: flux
+    app.kubernetes.io/version: v2.7.3
+    sharding.fluxcd.io/role: shard
+  name: flux-tenants
+  namespace: cozy-fluxcd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flux-tenants
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+        prometheus.io/scrape: "true"
+      labels:
+        app.kubernetes.io/name: flux-tenants
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
+      containers:
+        - args:
+            - --watch-all-namespaces
+            - --log-level=info
+            - --log-encoding=json
+            - --enable-leader-election=false
+            - --metrics-addr=:9795
+            - --health-addr=:9796
+            - --watch-label-selector=sharding.fluxcd.io/key=tenants
+            - --concurrent=5
+            - --requeue-dependency=30s
+            - --feature-gates=ExternalArtifact=true
+          env:
+            - name: RUNTIME_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: GOMEMLIMIT
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.memory
+            - name: TUF_ROOT
+              value: /tmp/.sigstore
+          image: "ghcr.io/fluxcd/helm-controller:v1.4.3"
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+          name: helm-controller
+          ports:
+            - containerPort: 9795
+              name: http-prom
+              protocol: TCP
+            - containerPort: 9796
+              name: healthz
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: healthz
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp
+      priorityClassName: system-cluster-critical
+      securityContext:
+        fsGroup: 1337
+      serviceAccountName: flux
+      terminationGracePeriodSeconds: 60
+      volumes:
+        - emptyDir: {}
+          name: tmp

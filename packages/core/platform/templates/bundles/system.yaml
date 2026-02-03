@@ -1,0 +1,155 @@
+{{- if .Values.bundles.system.enabled }}
+
+# Networking
+{{- if eq .Values.bundles.system.variant "isp-full" }}
+{{- $networkingComponents := dict -}}
+{{- if .Values.networking -}}
+{{- $kubeovnIpv4 := dict
+  "POD_CIDR" .Values.networking.podCIDR
+  "POD_GATEWAY" .Values.networking.podGateway
+  "SVC_CIDR" .Values.networking.serviceCIDR
+  "JOIN_CIDR" .Values.networking.joinCIDR -}}
+{{- $kubeovnDict := dict "ipv4" $kubeovnIpv4 -}}
+{{- if .Values.networking.kubeovn.MASTER_NODES -}}
+{{- $_ := set $kubeovnDict "MASTER_NODES" .Values.networking.kubeovn.MASTER_NODES -}}
+{{- end -}}
+{{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
+{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- /* For Talos (isp-full): use KubePrism endpoint and disable cgroup autoMount */ -}}
+{{- $ciliumValues := dict "cilium" (dict
+  "k8sServiceHost" "localhost"
+  "k8sServicePort" "7445"
+  "cgroup" (dict "autoMount" (dict "enabled" false))) -}}
+{{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
+{{- end -}}
+{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
+{{include "cozystack.platform.system.common-packages" $ }}
+{{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
+{{- end }}
+
+{{- if eq .Values.bundles.system.variant "isp-hosted" }}
+{{include "cozystack.platform.package" (list "cozystack.networking" "noop" $) }}
+{{- end }}
+
+{{- if eq .Values.bundles.system.variant "isp-full-generic" }}
+{{- $networkingComponents := dict -}}
+{{- if .Values.networking -}}
+{{- /* Parse apiServerEndpoint URL for generic k8s (used by both Cilium and KubeOVN) */ -}}
+{{- /* First try cozystack ConfigMap, then fall back to chart values */ -}}
+{{- $cozystackCm := lookup "v1" "ConfigMap" "cozy-system" "cozystack" -}}
+{{- $apiServerEndpoint := .Values.publishing.apiServerEndpoint -}}
+{{- if and $cozystackCm $cozystackCm.data -}}
+{{- $apiServerEndpoint = default $apiServerEndpoint (index $cozystackCm.data "api-server-endpoint") -}}
+{{- end -}}
+{{- $apiHost := "" -}}
+{{- $apiPort := "6443" -}}
+{{- if $apiServerEndpoint -}}
+{{- $parsed := urlParse $apiServerEndpoint -}}
+{{- $hostPort := splitList ":" $parsed.host -}}
+{{- $apiHost = index $hostPort 0 -}}
+{{- if gt (len $hostPort) 1 -}}
+{{- $apiPort = index $hostPort 1 -}}
+{{- else -}}
+{{- $apiPort = "6443" -}}
+{{- end -}}
+{{- end -}}
+{{- /* KubeOVN IPv4 configuration - read from ConfigMap or fall back to chart values */ -}}
+{{- $podCIDR := .Values.networking.podCIDR -}}
+{{- $podGateway := .Values.networking.podGateway -}}
+{{- $svcCIDR := .Values.networking.serviceCIDR -}}
+{{- $joinCIDR := .Values.networking.joinCIDR -}}
+{{- if and $cozystackCm $cozystackCm.data -}}
+{{- $podCIDR = default $podCIDR (index $cozystackCm.data "ipv4-pod-cidr") -}}
+{{- $podGateway = default $podGateway (index $cozystackCm.data "ipv4-pod-gateway") -}}
+{{- $svcCIDR = default $svcCIDR (index $cozystackCm.data "ipv4-svc-cidr") -}}
+{{- $joinCIDR = default $joinCIDR (index $cozystackCm.data "ipv4-join-cidr") -}}
+{{- end -}}
+{{- $kubeovnIpv4 := dict
+  "POD_CIDR" $podCIDR
+  "POD_GATEWAY" $podGateway
+  "SVC_CIDR" $svcCIDR
+  "JOIN_CIDR" $joinCIDR -}}
+{{- $kubeovnDict := dict "ipv4" $kubeovnIpv4 -}}
+{{- /* Set MASTER_NODES: explicit value > parsed from apiServerEndpoint > empty (use helm lookup) */ -}}
+{{- $masterNodes := .Values.networking.kubeovn.MASTER_NODES -}}
+{{- if and (not $masterNodes) $apiServerEndpoint -}}
+{{- $masterNodes = $apiHost -}}
+{{- end -}}
+{{- if $masterNodes -}}
+{{- $_ := set $kubeovnDict "MASTER_NODES" $masterNodes -}}
+{{- end -}}
+{{- /* For generic k8s (k3s, kubeadm), control-plane label has value "true" */ -}}
+{{- $_ := set $kubeovnDict "MASTER_NODES_LABEL" "node-role.kubernetes.io/control-plane=true" -}}
+{{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
+{{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
+{{- /* Cilium configuration - for generic k8s, always enable cgroup autoMount */ -}}
+{{- $ciliumValues := dict "cilium" (dict
+  "k8sServiceHost" $apiHost
+  "k8sServicePort" $apiPort
+  "cgroup" (dict "autoMount" (dict "enabled" true))) -}}
+{{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
+{{- end -}}
+{{- /* Use kubeovn-cilium-generic variant (no values-talos.yaml) */ -}}
+{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium-generic" $ $networkingComponents) }}
+{{include "cozystack.platform.system.common-packages" $ }}
+{{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
+{{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
+{{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
+{{- end }}
+
+# Cozystack Engine
+{{- $cozystackEngineComponents := dict -}}
+{{- /* For generic k8s, DaemonSets with control-plane nodeSelector need value "true" */ -}}
+{{- if eq .Values.bundles.system.variant "isp-full-generic" -}}
+{{- $genericNodeSelector := dict "node-role.kubernetes.io/control-plane" "true" -}}
+{{- /* cozystack-api DaemonSet */ -}}
+{{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
+{{- /* lineage-controller-webhook DaemonSet */ -}}
+{{- $lineageValues := dict "lineageControllerWebhook" (dict "nodeSelector" $genericNodeSelector) -}}
+{{- $_ := set $cozystackEngineComponents "lineage-controller-webhook" (dict "values" $lineageValues) -}}
+{{- end -}}
+{{- if .Values.authentication.oidc.enabled }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
+{{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.keycloak-operator" $) }}
+{{- else }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "default" $ $cozystackEngineComponents) }}
+{{- end }}
+
+# Common Packages
+{{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.flux-plunger" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}
+{{- $tenantComponents := dict -}}
+{{- $tenantClusterValues := dict "_cluster" (dict "oidc-enabled" (ternary "true" "false" .Values.authentication.oidc.enabled)) -}}
+{{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
+{{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
+{{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.backupstrategy-controller" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.metrics-server" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.monitoring-agents" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.goldpinger" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.prometheus-operator-crds" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.grafana-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.etcd-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.postgres-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.objectstorage-controller" $) }}
+
+# Optional System Packages (controlled via bundles.enabledPackages)
+{{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.bootbox" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
+
+{{- end }}

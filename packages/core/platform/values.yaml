@@ -1,2 +1,95 @@
-assets:
-  image: ghcr.io/cozystack/cozystack/cozystack-assets:latest@sha256:19b166819d0205293c85d8351a3e038dc4c146b876a8e2ae21dce1d54f0b9e33
+sourceRef:
+  kind: OCIRepository
+  name: cozystack-platform
+  namespace: cozy-system
+  path: /
+migrations:
+  enabled: false
+  image: ghcr.io/cozystack/cozystack/platform-migrations:latest
+  targetVersion: 24
+# Bundle deployment configuration
+bundles:
+  system:
+    enabled: false
+    variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "distro-full"
+  iaas:
+    enabled: false
+  paas:
+    enabled: false
+  naas:
+    enabled: false
+  disabledPackages: []
+  enabledPackages: []
+# Network configuration
+networking:
+  clusterDomain: "cozy.local"
+  podCIDR: "10.244.0.0/16"
+  podGateway: "10.244.0.1"
+  serviceCIDR: "10.96.0.0/16"
+  joinCIDR: "100.64.0.0/16"
+  # KubeOVN master nodes override (optional)
+  # By default, KubeOVN helm chart uses `lookup` to find control-plane nodes
+  # by label `node-role.kubernetes.io/control-plane`. On fresh clusters or
+  # during initial deployment, lookup may return empty results.
+  # Set this to comma-separated list of master node IPs to override.
+  kubeovn:
+    MASTER_NODES: ""
+# Service publishing and ingress configuration
+publishing:
+  host: "example.org"
+  ingressName: tenant-root
+  exposedServices:
+    - api
+    - dashboard
+    - vm-exportproxy
+    - cdi-uploadproxy
+  apiServerEndpoint: "" # example: "https://api.example.org"
+  externalIPs: []
+  certificates:
+    issuerType: http01 # "http01" or "cloudflare"
+# Authentication configuration
+authentication:
+  oidc:
+    enabled: false
+    keycloakExtraRedirectUri: ""
+# Pod scheduling configuration
+scheduling:
+  globalAppTopologySpreadConstraints: ""
+# UI branding configuration
+branding: {}
+# Container registry mirrors configuration
+#
+# Example:
+# registries:
+#   mirrors:
+#     docker.io:
+#       endpoints:
+#         - http://10.0.0.1:8082
+#     ghcr.io:
+#       endpoints:
+#         - http://10.0.0.1:8083
+#     gcr.io:
+#       endpoints:
+#         - http://10.0.0.1:8084
+#     registry.k8s.io:
+#       endpoints:
+#         - http://10.0.0.1:8085
+#     quay.io:
+#       endpoints:
+#         - http://10.0.0.1:8086
+#     cr.fluentbit.io:
+#       endpoints:
+#         - http://10.0.0.1:8087
+#     docker-registry3.mariadb.com:
+#       endpoints:
+#         - http://10.0.0.1:8088
+#   config:
+#     "10.0.0.1:8082":
+#       tls:
+#         insecureSkipVerify: true
+registries: {}
+# Resource allocation ratios
+resources:
+  cpuAllocationRatio: 10
+  memoryAllocationRatio: 1
+  ephemeralStorageAllocationRatio: 40

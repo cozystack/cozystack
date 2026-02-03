@@ -1,0 +1,20 @@
+{{- if and .Values.bundles.iaas.enabled (not (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic"))) }}
+{{- fail "bundles.iaas.enabled can only be true when bundles.system.variant is 'isp-full' or 'isp-full-generic'" }}
+{{- end }}
+{{- if and .Values.bundles.iaas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic")) }}
+{{include "cozystack.platform.package.default" (list "cozystack.kubevirt" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.gpu-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.kamaji" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-bootstrap-kubeadm" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-core" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-cp-kamaji" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.capi-provider-infra-kubevirt" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
+{{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
+{{include "cozystack.platform.package" (list "cozystack.virtual-machine-application" "kubevirt" $) }}
+{{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
+{{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
+{{include "cozystack.platform.package" (list "cozystack.vm-instance-application" "kubevirt" $) }}
+{{- end }}

@@ -10,6 +10,9 @@ import (
 )
 
 func BackupJob(p *backupsv1alpha1.Plan, scheduledFor time.Time) *backupsv1alpha1.BackupJob {
+	// Normalize ApplicationRef (default apiGroup if not specified)
+	appRef := backupsv1alpha1.NormalizeApplicationRef(*p.Spec.ApplicationRef.DeepCopy())
+
 	job := &backupsv1alpha1.BackupJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%d", p.Name, scheduledFor.Unix()/60),
@@ -19,9 +22,8 @@ func BackupJob(p *backupsv1alpha1.Plan, scheduledFor time.Time) *backupsv1alpha1
 			PlanRef: &corev1.LocalObjectReference{
 				Name: p.Name,
 			},
-			ApplicationRef: *p.Spec.ApplicationRef.DeepCopy(),
-			StorageRef:     *p.Spec.StorageRef.DeepCopy(),
-			StrategyRef:    *p.Spec.StrategyRef.DeepCopy(),
+			ApplicationRef:  appRef,
+			BackupClassName: p.Spec.BackupClassName,
 		},
 	}
 	return job

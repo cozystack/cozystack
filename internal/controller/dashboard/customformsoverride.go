@@ -15,7 +15,7 @@ import (
 )
 
 // ensureCustomFormsOverride creates or updates a CustomFormsOverride resource for the given CRD
-func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
 	g, v, kind := pickGVK(crd)
 	plural := pickPlural(kind, crd)
 

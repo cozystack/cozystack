@@ -14,6 +14,11 @@ metadata:
       }
     nginx.ingress.kubernetes.io/ssl-passthrough: "true"
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  labels:
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.kind: Kubernetes
+    apps.cozystack.io/application.name: {{ .Release.Name | trimPrefix "kubernetes-" }}
+    internal.cozystack.io/tenantresource: "true"
 spec:
   ingressClassName: "{{ $ingress }}"
   rules:
@@ -41,16 +46,21 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}-ingress-nginx
+  labels:
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.kind: Kubernetes
+    apps.cozystack.io/application.name: {{ .Release.Name | trimPrefix "kubernetes-" }}
+    internal.cozystack.io/tenantresource: "true"
 spec:
   ports:
   - appProtocol: http
     name: http
     port: 80
-    targetPort: 80
+    targetPort: 30000
   - appProtocol: https
     name: https
     port: 443
-    targetPort: 443
+    targetPort: 30001
   selector:
     cluster.x-k8s.io/cluster-name: {{ .Release.Name }}
     node-role.kubernetes.io/ingress-nginx: ""

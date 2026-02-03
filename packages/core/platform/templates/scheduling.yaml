@@ -1,0 +1,11 @@
+{{- if .Values.scheduling.globalAppTopologySpreadConstraints }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-scheduling
+  namespace: cozy-system
+data:
+  globalAppTopologySpreadConstraints: |
+    {{- toYaml .Values.scheduling.globalAppTopologySpreadConstraints | nindent 4 }}
+{{- end }}

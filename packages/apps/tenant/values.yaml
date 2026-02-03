@@ -17,8 +17,5 @@ ingress: false
 ## @param {bool} seaweedfs - Deploy own SeaweedFS.
 seaweedfs: false
 
-## @param {bool} isolated - Enforce tenant namespace with network policies (default: true).
-isolated: true
-
 ## @param {map[string]quantity} resourceQuotas - Define resource quotas for the tenant.
 resourceQuotas: {}

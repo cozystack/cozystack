@@ -60,6 +60,24 @@ spec:
           configMap:
             name: linstor-plunger
             defaultMode: 0755
+  csiController:
+    podTemplate:
+      spec:
+        initContainers:
+        - name: linstor-wait-api-online
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        containers:
+        - name: linstor-csi
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+  csiNode:
+    podTemplate:
+      spec:
+        initContainers:
+        - name: linstor-wait-node-online
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        containers:
+        - name: linstor-csi
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
   patches:
     - target:
         kind: Deployment

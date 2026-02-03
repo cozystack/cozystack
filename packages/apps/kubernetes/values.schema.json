@@ -150,7 +150,11 @@
             "exposeMethod": {
               "description": "Method to expose the controller. Allowed values: `Proxied`, `LoadBalancer`.",
               "type": "string",
-              "default": "Proxied"
+              "default": "Proxied",
+              "enum": [
+                "Proxied",
+                "LoadBalancer"
+              ]
             },
             "hosts": {
               "description": "Domains routed to this tenant cluster when `exposeMethod` is `Proxied`.",
@@ -287,7 +291,7 @@
             "resourcesPreset": {
               "description": "Preset if `resources` omitted.",
               "type": "string",
-              "default": "medium",
+              "default": "large",
               "enum": [
                 "nano",
                 "micro",

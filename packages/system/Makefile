@@ -2,7 +2,7 @@ OUT=../../_out/repos/system
 CHARTS := $(shell grep -F 'version: 0.0.0' */Chart.yaml | cut -f1 -d/)
 VERSIONED_CHARTS := $(shell grep '^version:' */Chart.yaml | grep -Fv '0.0.0' | cut -f1 -d/)
 
-include ../../scripts/common-envs.mk
+include ../../hack/common-envs.mk
 
 repo:
 	rm -rf "$(OUT)"

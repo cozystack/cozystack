@@ -1,7 +1,7 @@
 export NAME=opencost
 export NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/package-system.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

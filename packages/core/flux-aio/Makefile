@@ -1,7 +1,7 @@
 NAME=flux-aio
 NAMESPACE=cozy-$(NAME)
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 
 show:
 	cozyhr show -n $(NAMESPACE) $(NAME) --plain
@@ -12,23 +12,13 @@ apply:
 diff:
 	cozyhr show -n $(NAMESPACE) $(NAME) --plain | kubectl diff -f-
 
-update: update-old update-new
+MANIFESTS_DIR=../../../internal/fluxinstall/manifests
 
-# TODO: remove old manifest after migration to cozystack-operator
-update-old:
-	timoni bundle build -f flux-aio.cue > templates/fluxcd.yaml
-	yq eval '(select(.kind == "Namespace") | .metadata.labels."pod-security.kubernetes.io/enforce") = "privileged"' -i templates/fluxcd.yaml
-	sed -i templates/fluxcd.yaml \
+update:
+	timoni bundle build -f flux-aio.cue > $(MANIFESTS_DIR)/fluxcd.yaml
+	yq eval '(select(.kind == "Namespace") | .metadata.labels."pod-security.kubernetes.io/enforce") = "privileged"' -i $(MANIFESTS_DIR)/fluxcd.yaml
+	sed -i $(MANIFESTS_DIR)/fluxcd.yaml \
 		-e '/timoni/d' \
 		-e 's|\.cluster\.local\.,||g' -e 's|\.cluster\.local\,||g' -e 's|\.cluster\.local\.||g' \
-		-e '/value: .svc/a \            {{- include "cozy.kubernetes_envs" . | nindent 12 }}' \
-		-e '/hostNetwork: true/i \      dnsPolicy: ClusterFirstWithHostNet'
-
-update-new:
-	timoni bundle build -f flux-aio.cue > ../../../internal/fluxinstall/manifests/fluxcd.yaml
-	yq eval '(select(.kind == "Namespace") | .metadata.labels."pod-security.kubernetes.io/enforce") = "privileged"' -i ../../../internal/fluxinstall/manifests/fluxcd.yaml
-	sed -i ../../../internal/fluxinstall/manifests/fluxcd.yaml \
-		-e '/timoni/d' \
-		-e 's|\.cluster\.local\.,||g' -e 's|\.cluster\.local\,||g' -e 's|\.cluster\.local\.||g'
-	# TODO: solve dns issue with hostNetwork for installing helmreleases in tenant k8s clusters
-	#-e '/hostNetwork: true/i \      dnsPolicy: ClusterFirstWithHostNet' 
+		-e 's|--storage-adv-addr=source-watcher.$$(RUNTIME_NAMESPACE).svc|--storage-adv-addr=flux.$$(RUNTIME_NAMESPACE).svc|'
+	yq eval '.spec.template.spec.containers[0].image = "'"$$(yq eval 'select(.kind == "Deployment" and .metadata.name == "flux") | .spec.template.spec.containers[] | select(.name == "helm-controller").image' $(MANIFESTS_DIR)/fluxcd.yaml)"'"' -i $(MANIFESTS_DIR)/fluxcd-tenants.yaml

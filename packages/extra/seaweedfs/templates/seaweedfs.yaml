@@ -40,16 +40,13 @@ apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
 spec:
-  chart:
-    spec:
-      chart: cozy-seaweedfs
-      reconcileStrategy: Revision
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-system
-        namespace: cozy-system
-      version: '>= 0.0.0-0'
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-seaweedfs-application-default-seaweedfs-system
+    namespace: cozy-system
   interval: 5m
   timeout: 10m
   install:

@@ -76,6 +76,36 @@ tenant-u1
 | `monitoring`     | Deploy own Monitoring Stack.                                                                                               | `bool`                | `false` |
 | `ingress`        | Deploy own Ingress Controller.                                                                                             | `bool`                | `false` |
 | `seaweedfs`      | Deploy own SeaweedFS.                                                                                                      | `bool`                | `false` |
-| `isolated`       | Enforce tenant namespace with network policies (default: true).                                                            | `bool`                | `true`  |
 | `resourceQuotas` | Define resource quotas for the tenant.                                                                                     | `map[string]quantity` | `{}`    |
 
+
+## Configuration
+
+### Resource Quotas
+
+The `resourceQuotas` parameter allows you to limit resources available to the tenant. Supported keys include:
+
+**Compute resources** (converted to `requests.X` and `limits.X`):
+- `cpu` - Total CPU cores (e.g., `"4"` or `"500m"`)
+- `memory` - Total memory (e.g., `"4Gi"` or `"512Mi"`)
+- `ephemeral-storage` - Ephemeral storage limit (e.g., `"10Gi"`)
+- `storage` - Total persistent storage (e.g., `"100Gi"`)
+
+**Object count quotas** (passed as-is):
+- `pods` - Maximum number of pods
+- `services` - Maximum number of services
+- `services.loadbalancers` - Maximum number of LoadBalancer services
+- `services.nodeports` - Maximum number of NodePort services
+- `configmaps` - Maximum number of ConfigMaps
+- `secrets` - Maximum number of Secrets
+- `persistentvolumeclaims` - Maximum number of PVCs
+
+**Example:**
+```yaml
+resourceQuotas:
+  cpu: 4
+  memory: 4Gi
+  storage: 10Gi
+  services.loadbalancers: "3"
+  pods: "50"
+```

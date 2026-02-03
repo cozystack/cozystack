@@ -1,5 +1,5 @@
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: ferretdb
 spec:
@@ -12,13 +12,11 @@ spec:
   release:
     prefix: ferretdb-
     labels:
-      cozystack.io/ui: "true"
-    chart:
-      name: ferretdb
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-ferretdb-application-default-ferretdb
+      namespace: cozy-system
   dashboard:
     category: PaaS
     singular: FerretDB

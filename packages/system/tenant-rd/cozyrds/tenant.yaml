@@ -1,5 +1,5 @@
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: tenant
 spec:
@@ -8,24 +8,22 @@ spec:
     singular: tenant
     plural: tenants
     openAPISchema: |-
-      {"title":"Chart Values","type":"object","properties":{"etcd":{"description":"Deploy own Etcd cluster.","type":"boolean","default":false},"host":{"description":"The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).","type":"string","default":""},"ingress":{"description":"Deploy own Ingress Controller.","type":"boolean","default":false},"isolated":{"description":"Enforce tenant namespace with network policies (default: true).","type":"boolean","default":true},"monitoring":{"description":"Deploy own Monitoring Stack.","type":"boolean","default":false},"resourceQuotas":{"description":"Define resource quotas for the tenant.","type":"object","default":{},"additionalProperties":{"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}},"seaweedfs":{"description":"Deploy own SeaweedFS.","type":"boolean","default":false}}}
+      {"title":"Chart Values","type":"object","properties":{"etcd":{"description":"Deploy own Etcd cluster.","type":"boolean","default":false},"host":{"description":"The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).","type":"string","default":""},"ingress":{"description":"Deploy own Ingress Controller.","type":"boolean","default":false},"monitoring":{"description":"Deploy own Monitoring Stack.","type":"boolean","default":false},"resourceQuotas":{"description":"Define resource quotas for the tenant.","type":"object","default":{},"additionalProperties":{"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}},"seaweedfs":{"description":"Deploy own SeaweedFS.","type":"boolean","default":false}}}
   release:
     prefix: tenant-
     labels:
-      cozystack.io/ui: "true"
-    chart:
-      name: tenant
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-tenant-application-default-tenant
+      namespace: cozy-system
   dashboard:
     category: Administration
     singular: Tenant
     plural: Tenants
     description: Separated tenant namespace
     icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl82ODdfMzQwMykiLz4KPGcgY2xpcC1wYXRoPSJ1cmwoI2NsaXAwXzY4N18zNDAzKSI+CjxwYXRoIGQ9Ik03MiAyOUM2Ni4zOTI2IDI5IDYxLjAxNDggMzEuMjM4OCA1Ny4wNDk3IDM1LjIyNEM1My4wODQ3IDM5LjIwOTEgNTAuODU3MSA0NC42MTQxIDUwLjg1NzEgNTAuMjVDNTAuODU3MSA1NS44ODU5IDUzLjA4NDcgNjEuMjkwOSA1Ny4wNDk3IDY1LjI3NkM2MS4wMTQ4IDY5LjI2MTIgNjYuMzkyNiA3MS41IDcyIDcxLjVDNzcuNjA3NCA3MS41IDgyLjk4NTIgNjkuMjYxMiA4Ni45NTAzIDY1LjI3NkM5MC45MTUzIDYxLjI5MDkgOTMuMTQyOSA1NS44ODU5IDkzLjE0MjkgNTAuMjVDOTMuMTQyOSA0NC42MTQxIDkwLjkxNTMgMzkuMjA5MSA4Ni45NTAzIDM1LjIyNEM4Mi45ODUyIDMxLjIzODggNzcuNjA3NCAyOSA3MiAyOVpNNjAuOTgyNiA4My4zMDM3QzYwLjQ1NCA4Mi41ODk4IDU5LjU5NTEgODIuMTkxNCA1OC43MTk2IDgyLjI3NDRDNDUuMzg5NyA4My43MzU0IDM1IDk1LjEwNzQgMzUgMTA4LjkwM0MzNSAxMTEuNzI2IDM3LjI3OTUgMTE0IDQwLjA3MSAxMTRIMTAzLjkyOUMxMDYuNzM3IDExNCAxMDkgMTExLjcwOSAxMDkgMTA4LjkwM0MxMDkgOTUuMTA3NCA5OC42MTAzIDgzLjc1MiA4NS4yNjM4IDgyLjI5MUM4NC4zODg0IDgyLjE5MTQgODMuNTI5NSA4Mi42MDY0IDgzLjAwMDkgODMuMzIwM0w3NC4wOTc4IDk1LjI0MDJDNzMuMDQwNiA5Ni42NTE0IDcwLjkyNjMgOTYuNjUxNCA2OS44NjkyIDk1LjI0MDJMNjAuOTY2MSA4My4zMjAzTDYwLjk4MjYgODMuMzAzN1oiIGZpbGw9ImJsYWNrIi8+CjwvZz4KPGRlZnM+CjxsaW5lYXJHcmFkaWVudCBpZD0icGFpbnQwX2xpbmVhcl82ODdfMzQwMyIgeDE9IjcyIiB5MT0iMTQ0IiB4Mj0iLTEuMjgxN2UtMDUiIHkyPSI0IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CjxzdG9wIHN0b3AtY29sb3I9IiNDMEQ2RkYiLz4KPHN0b3Agb2Zmc2V0PSIwLjMiIHN0b3AtY29sb3I9IiNDNERBRkYiLz4KPHN0b3Agb2Zmc2V0PSIwLjY1IiBzdG9wLWNvbG9yPSIjRDNFOUZGIi8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI0U5RkZGRiIvPgo8L2xpbmVhckdyYWRpZW50Pgo8Y2xpcFBhdGggaWQ9ImNsaXAwXzY4N18zNDAzIj4KPHJlY3Qgd2lkdGg9Ijc0IiBoZWlnaHQ9Ijg1IiBmaWxsPSJ3aGl0ZSIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMzUgMjkpIi8+CjwvY2xpcFBhdGg+CjwvZGVmcz4KPC9zdmc+Cg==
-    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "host"], ["spec", "etcd"], ["spec", "monitoring"], ["spec", "ingress"], ["spec", "seaweedfs"], ["spec", "isolated"], ["spec", "resourceQuotas"]]
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "host"], ["spec", "etcd"], ["spec", "monitoring"], ["spec", "ingress"], ["spec", "seaweedfs"], ["spec", "resourceQuotas"]]
   secrets:
     exclude: []
     include: []

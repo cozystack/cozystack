@@ -1,35 +1,52 @@
 #!/usr/bin/env bats
 
 @test "Required installer assets exist" {
-  if [ ! -f _out/assets/cozystack-installer.yaml ]; then
-    echo "Missing: _out/assets/cozystack-installer.yaml" >&2
+  if [ ! -f _out/assets/cozystack-crds.yaml ]; then
+    echo "Missing: _out/assets/cozystack-crds.yaml" >&2
+    exit 1
+  fi
+  if [ ! -f _out/assets/cozystack-operator.yaml ]; then
+    echo "Missing: _out/assets/cozystack-operator.yaml" >&2
     exit 1
   fi
 }
 
 @test "Install Cozystack" {
-  # Create namespace & configmap required by installer
+  # Create namespace
   kubectl create namespace cozy-system --dry-run=client -o yaml | kubectl apply -f -
-  kubectl create configmap cozystack -n cozy-system \
-          --from-literal=bundle-name=paas-full \
-          --from-literal=ipv4-pod-cidr=10.244.0.0/16 \
-          --from-literal=ipv4-pod-gateway=10.244.0.1 \
-          --from-literal=ipv4-svc-cidr=10.96.0.0/16 \
-          --from-literal=ipv4-join-cidr=100.64.0.0/16 \
-          --from-literal=root-host=example.org \
-          --from-literal=api-server-endpoint=https://192.168.123.10:6443 \
-          --dry-run=client -o yaml | kubectl apply -f -
 
-  # Apply installer manifests from file
-  kubectl apply -f _out/assets/cozystack-installer.yaml
+  # Apply installer manifests (CRDs + operator)
+  kubectl apply -f _out/assets/cozystack-crds.yaml
+  kubectl apply -f _out/assets/cozystack-operator.yaml
 
-  # Wait for the installer deployment to become available
-  kubectl wait deployment/cozystack -n cozy-system --timeout=1m --for=condition=Available
+  # Wait for the operator deployment to become available
+  kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
+
+  # Create platform Package with isp-full variant
+  kubectl apply -f - <<EOF
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cozystack-platform
+spec:
+  variant: isp-full
+  components:
+    platform:
+      values:
+        networking:
+          podCIDR: "10.244.0.0/16"
+          podGateway: "10.244.0.1"
+          serviceCIDR: "10.96.0.0/16"
+          joinCIDR: "100.64.0.0/16"
+        publishing:
+          host: "example.org"
+          apiServerEndpoint: "https://192.168.123.10:6443"
+EOF
 
   # Wait until HelmReleases appear & reconcile them
-  timeout 60 sh -ec 'until kubectl get hr -A -l cozystack.io/system-app=true | grep -q cozys; do sleep 1; done'
+  timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
   sleep 5
-  kubectl get hr -A -l cozystack.io/system-app=true | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
+  kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
 
   # Fail the test if any HelmRelease is not Ready
   if kubectl get hr -A | grep -v " True " | grep -v NAME; then
@@ -142,7 +159,7 @@ EOF
 
 
   # Expose Cozystack services through ingress
-  kubectl patch configmap/cozystack -n cozy-system --type merge -p '{"data":{"expose-services":"api,dashboard,cdi-uploadproxy,vm-exportproxy,keycloak"}}'
+  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"publishing":{"exposedServices":["api","dashboard","cdi-uploadproxy","vm-exportproxy","keycloak"]}}}}}}'
 
   # NGINX ingress controller
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
@@ -169,7 +186,7 @@ EOF
 }
 
 @test "Keycloak OIDC stack is healthy" {
-  kubectl patch configmap/cozystack -n cozy-system --type merge -p '{"data":{"oidc-enabled":"true"}}'
+  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true}}}}}}}'
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready

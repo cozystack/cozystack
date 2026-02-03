@@ -11871,7 +11871,7 @@ spec:
             - --health-addr=:9693
             - --storage-addr=:9691
             - --storage-path=/data
-            - --storage-adv-addr=source-watcher.$(RUNTIME_NAMESPACE).svc
+            - --storage-adv-addr=flux.$(RUNTIME_NAMESPACE).svc
             - --events-addr=http://localhost:9690
           env:
             - name: SOURCE_CONTROLLER_LOCALHOST
@@ -11940,10 +11940,12 @@ spec:
       tolerations:
         - key: node.kubernetes.io/not-ready
           operator: Exists
-        - effect: NoExecute
-          key: node.kubernetes.io/unreachable
+        - key: node.kubernetes.io/unreachable
           operator: Exists
-          tolerationSeconds: 300
+        - key: node.cilium.io/agent-not-ready
+          operator: Exists
+        - key: node.cloudprovider.kubernetes.io/uninitialized
+          operator: Exists
       volumes:
         - emptyDir: {}
           name: data

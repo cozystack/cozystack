@@ -21,7 +21,7 @@ import (
 //
 //	metadata.name: stock-namespace-<group>.<version>.<plural>
 //	spec.id:       stock-namespace-/<group>/<version>/<plural>
-func (m *Manager) ensureCustomColumnsOverride(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) (controllerutil.OperationResult, error) {
+func (m *Manager) ensureCustomColumnsOverride(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) (controllerutil.OperationResult, error) {
 	g, v, kind := pickGVK(crd)
 	plural := pickPlural(kind, crd)
 	// Details page segment uses lowercase kind, mirroring your example
@@ -34,9 +34,6 @@ func (m *Manager) ensureCustomColumnsOverride(ctx context.Context, crd *cozyv1al
 	obj.SetName(name)
 
 	href := fmt.Sprintf("/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/%s/{reqsJsonPath[0]['.metadata.name']['-']}", detailsSegment)
-	if g == "apps.cozystack.io" && kind == "Tenant" && plural == "tenants" {
-		href = "/openapi-ui/{2}/{reqsJsonPath[0]['.status.namespace']['-']}/api-table/core.cozystack.io/v1alpha1/tenantmodules"
-	}
 
 	desired := map[string]any{
 		"spec": map[string]any{

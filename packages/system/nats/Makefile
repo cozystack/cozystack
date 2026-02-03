@@ -1,4 +1,4 @@
-include ../../../scripts/package.mk
+include ../../../hack/package.mk
 
 update:
 	rm -rf charts

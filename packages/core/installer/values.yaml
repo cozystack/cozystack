@@ -1,8 +1,4 @@
-cozystack:
-  image: ghcr.io/cozystack/cozystack/installer:v0.38.2@sha256:9ff92b655de6f9bea3cba4cd42dcffabd9aace6966dcfb1cc02dda2420ea4a15
 cozystackOperator:
-  enabled: false
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:latest@sha256:f7f6e0fd9e896b7bfa642d0bfa4378bc14e646bc5c2e86e2e09a82770ef33181
-  platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/platform-packages'
-  platformSourceRef: 'digest=sha256:0576491291b33936cdf770a5c5b5692add97339c1505fc67a92df9d69dfbfdf6'
-  cozystackVersion: latest
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.0.0-beta.2@sha256:aaea9d8430187f208e6464cb6f102dcbbcdb0584b6a7a8a690ad91fc1f5d45e6
+  platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
+  platformSourceRef: 'digest=sha256:f59e562f2c91446117773ad457251d567706ea2964251a2b0acc65060fd1f3bc'

@@ -24,6 +24,10 @@ func init() {
 const (
 	OwningJobNameLabel      = thisGroup + "/owned-by.BackupJobName"
 	OwningJobNamespaceLabel = thisGroup + "/owned-by.BackupJobNamespace"
+
+	// DefaultApplicationAPIGroup is the default API group for applications
+	// when not specified in ApplicationRef or ApplicationSelector.
+	DefaultApplicationAPIGroup = "apps.cozystack.io"
 )
 
 // BackupJobPhase represents the lifecycle phase of a BackupJob.
@@ -46,15 +50,15 @@ type BackupJobSpec struct {
 
 	// ApplicationRef holds a reference to the managed application whose state
 	// is being backed up.
+	// If apiGroup is not specified, it defaults to "apps.cozystack.io".
 	ApplicationRef corev1.TypedLocalObjectReference `json:"applicationRef"`
 
-	// StorageRef holds a reference to the Storage object that describes where
-	// the backup will be stored.
-	StorageRef corev1.TypedLocalObjectReference `json:"storageRef"`
-
-	// StrategyRef holds a reference to the driver-specific BackupStrategy object
-	// that describes how the backup should be created.
-	StrategyRef corev1.TypedLocalObjectReference `json:"strategyRef"`
+	// BackupClassName references a BackupClass that contains strategy and storage configuration.
+	// The BackupClass will be resolved to determine the appropriate strategy and storage
+	// based on the ApplicationRef.
+	// This field is immutable once the BackupJob is created.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="backupClassName is immutable"
+	BackupClassName string `json:"backupClassName"`
 }
 
 // BackupJobStatus represents the observed state of a BackupJob.
@@ -113,4 +117,14 @@ type BackupJobList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []BackupJob `json:"items"`
+}
+
+// NormalizeApplicationRef sets the default apiGroup to DefaultApplicationAPIGroup if it's not specified.
+// This function is exported so it can be used by other packages (e.g., controllers, factories).
+func NormalizeApplicationRef(ref corev1.TypedLocalObjectReference) corev1.TypedLocalObjectReference {
+	if ref.APIGroup == nil || *ref.APIGroup == "" {
+		apiGroup := DefaultApplicationAPIGroup
+		ref.APIGroup = &apiGroup
+	}
+	return ref
 }

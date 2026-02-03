@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	minRequeueDelay         = 30 * time.Second
-	startingDeadlineSeconds = 300 * time.Second
+	minRequeueDelay     = 30 * time.Second
+	startingDeadline    = 300 * time.Second
 )
 
 // PlanReconciler reconciles a Plan object
@@ -45,7 +45,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
-	tCheck := time.Now().Add(-startingDeadlineSeconds)
+	tCheck := time.Now().Add(-startingDeadline)
 	sch, err := cron.ParseStandard(p.Spec.Schedule.Cron)
 	if err != nil {
 		errWrapped := fmt.Errorf("could not parse cron %s: %w", p.Spec.Schedule.Cron, err)
@@ -78,7 +78,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	tNext := sch.Next(tCheck)
 
 	if time.Now().Before(tNext) {
-		return ctrl.Result{RequeueAfter: tNext.Sub(time.Now())}, nil
+		return ctrl.Result{RequeueAfter: time.Until(tNext)}, nil
 	}
 
 	job := factory.BackupJob(p, tNext)
@@ -88,12 +88,12 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	if err := r.Create(ctx, job); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{RequeueAfter: startingDeadlineSeconds}, nil
+			return ctrl.Result{RequeueAfter: startingDeadline}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: startingDeadlineSeconds}, nil
+	return ctrl.Result{RequeueAfter: startingDeadline}, nil
 }
 
 // SetupWithManager registers our controller with the Manager and sets up watches.

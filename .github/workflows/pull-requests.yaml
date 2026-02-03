@@ -71,11 +71,17 @@ jobs:
           name: pr-patch
           path: _out/assets/pr.patch
      
-      - name: Upload installer
+      - name: Upload CRDs
         uses: actions/upload-artifact@v4
         with:
-          name: cozystack-installer
-          path: _out/assets/cozystack-installer.yaml
+          name: cozystack-crds
+          path: _out/assets/cozystack-crds.yaml
+
+      - name: Upload operator
+        uses: actions/upload-artifact@v4
+        with:
+          name: cozystack-operator
+          path: _out/assets/cozystack-operator.yaml
 
       - name: Upload Talos image
         uses: actions/upload-artifact@v4
@@ -88,8 +94,9 @@ jobs:
     runs-on: ubuntu-latest
     if: contains(github.event.pull_request.labels.*.name, 'release')
     outputs:
-     installer_id: ${{ steps.fetch_assets.outputs.installer_id }}
-     disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
+      crds_id:      ${{ steps.fetch_assets.outputs.crds_id }}
+      operator_id:  ${{ steps.fetch_assets.outputs.operator_id }}
+      disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
     steps:
       - name: Checkout code
@@ -132,19 +139,22 @@ jobs:
               return;
             }
             const find = (n) => draft.assets.find(a => a.name === n)?.id;
-            const installerId = find('cozystack-installer.yaml');
-            const diskId      = find('nocloud-amd64.raw.xz');
-            if (!installerId || !diskId) {
+            const crdsId     = find('cozystack-crds.yaml');
+            const operatorId = find('cozystack-operator.yaml');
+            const diskId     = find('nocloud-amd64.raw.xz');
+            if (!crdsId || !operatorId || !diskId) {
               core.setFailed('Required assets missing in draft release');
               return;
             }
-            core.setOutput('installer_id', installerId);
-            core.setOutput('disk_id',      diskId);
+            core.setOutput('crds_id',     crdsId);
+            core.setOutput('operator_id', operatorId);
+            core.setOutput('disk_id',     diskId);
 
 
-  prepare_env:
-    name: "Prepare environment"
-    runs-on: [self-hosted]
+  e2e:
+    name: "E2E Tests"
+    runs-on: [oracle-vm-24cpu-96gb-x86-64]
+    #runs-on: [oracle-vm-32cpu-128gb-x86-64]
     permissions:
       contents: read
       packages: read
@@ -162,6 +172,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: talos-image
+          path: _out/assets
+
+      - name: "Download CRDs (regular PR)"
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        uses: actions/download-artifact@v4
+        with:
+          name: cozystack-crds
+          path: _out/assets
+
+      - name: "Download operator (regular PR)"
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        uses: actions/download-artifact@v4
+        with:
+          name: cozystack-operator
           path: _out/assets
 
       - name: Download PR patch
@@ -184,13 +208,19 @@ jobs:
           curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
             -o _out/assets/nocloud-amd64.raw.xz \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.disk_id }}"
+          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
+            -o _out/assets/cozystack-crds.yaml \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.crds_id }}"
+          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
+            -o _out/assets/cozystack-operator.yaml \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.operator_id }}"
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
 
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
 
-      # ▸ Start actual job steps
+      # ▸ Prepare environment
       - name: Prepare workspace
         run: |
           rm -rf /tmp/$SANDBOX_NAME
@@ -210,47 +240,7 @@ jobs:
           done
           echo "✅ The task completed successfully after $attempt attempts"
 
-  install_cozystack:
-    name: "Install Cozystack"
-    runs-on: [self-hosted]
-    permissions:
-      contents: read
-      packages: read
-    needs: ["prepare_env", "resolve_assets"]
-    if: ${{ always() && needs.prepare_env.result == 'success' }}
-
-    steps:
-      - name: Prepare _out/assets directory
-        run: mkdir -p _out/assets
-
-      # ▸ Regular PR path – download artefacts produced by the *build* job
-      - name: "Download installer (regular PR)"
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@v4
-        with:
-          name: cozystack-installer
-          path: _out/assets
-
-      # ▸ Release PR path – fetch artefacts from the corresponding draft release
-      - name: Download assets from draft release (release PR)
-        if: contains(github.event.pull_request.labels.*.name, 'release')
-        run: |
-          mkdir -p _out/assets
-          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
-            -o _out/assets/cozystack-installer.yaml \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.installer_id }}"
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
- 
-      # ▸ Start actual job steps
-      - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
-
-      - name: Sync _out/assets directory
-        run: |
-          mkdir -p /tmp/$SANDBOX_NAME/_out/assets
-          mv _out/assets/* /tmp/$SANDBOX_NAME/_out/assets/
-
+      # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
         run: |
           cd /tmp/$SANDBOX_NAME
@@ -263,107 +253,77 @@ jobs:
             fi
             echo "❌ Attempt $attempt failed, retrying..."
           done
-          echo "✅ The task completed successfully after $attempt attempts."
+          echo "✅ The task completed successfully after $attempt attempts"
 
       - name: Run OpenAPI tests
         run: |
           cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
-  detect_test_matrix:
-    name: "Detect e2e test matrix"
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set.outputs.matrix }}
-
-    steps:
-      - uses: actions/checkout@v4
-      - id: set
-        run: |
-          apps=$(ls hack/e2e-apps/*.bats | cut -f3 -d/ | cut -f1 -d. | jq -R | jq -cs)
-          echo "matrix={\"app\":$apps}" >> "$GITHUB_OUTPUT"
-
-  test_apps:
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.detect_test_matrix.outputs.matrix) }}
-    name: Test ${{ matrix.app }}
-    runs-on: [self-hosted]
-    needs: [install_cozystack,detect_test_matrix]
-    if: ${{ always() && (needs.install_cozystack.result == 'success' && needs.detect_test_matrix.result == 'success') }}
-
-    steps:
-      - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
-
-      - name: E2E Apps
+      # ▸ Run E2E tests
+      - name: Run E2E tests
+        id: e2e_tests
         run: |
           cd /tmp/$SANDBOX_NAME
-          attempt=0
-          until make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-${{ matrix.app }}; do
-            attempt=$((attempt + 1))
-            if [ $attempt -ge 3 ]; then
-              echo "❌ Attempt $attempt failed, exiting..."
-              exit 1
+          failed_tests=""
+          for app in $(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1); do
+            echo "::group::Testing $app"
+            attempt=0
+            success=false
+            until [ $attempt -ge 3 ]; do
+              if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
+                success=true
+                break
+              fi
+              attempt=$((attempt + 1))
+              echo "❌ Attempt $attempt failed, retrying..."
+            done
+            if [ "$success" = true ]; then
+              echo "✅ Test $app completed successfully"
+            else
+              echo "❌ Test $app failed after $attempt attempts"
+              failed_tests="$failed_tests $app"
             fi
-            echo "❌ Attempt $attempt failed, retrying..."
+            echo "::endgroup::"
           done
-          echo "✅ The task completed successfully after $attempt attempts"
+          if [ -n "$failed_tests" ]; then
+            echo "❌ Failed tests:$failed_tests"
+            exit 1
+          fi
+          echo "✅ All E2E tests passed"
 
-  collect_debug_information:
-    name: Collect debug information
-    runs-on: [self-hosted]
-    needs: [test_apps]
-    if: ${{ always() }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
-
+      # ▸ Collect debug information (always runs)
       - name: Collect report
+        if: always()
         run: |
           cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
 
       - name: Upload cozyreport.tgz
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cozyreport
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
 
       - name: Collect images list
+        if: always()
         run: |
           cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
 
       - name: Upload image list
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: image-list
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
 
-  cleanup:
-    name: Tear down environment
-    runs-on: [self-hosted]
-    needs: [collect_debug_information]
-    if: ${{ always() && needs.test_apps.result == 'success' }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
-
+      # ▸ Tear down environment (always runs)
       - name: Tear down sandbox
-        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
 
       - name: Remove workspace
+        if: always()
         run: rm -rf /tmp/$SANDBOX_NAME
-
-

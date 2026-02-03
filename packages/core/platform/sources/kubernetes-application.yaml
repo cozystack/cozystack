@@ -14,10 +14,10 @@ spec:
       dependsOn:
         - cozystack.networking
         - cozystack.capi-operator
-        - cozystack.capi-providers-bootstrap
-        - cozystack.capi-providers-core
-        - cozystack.capi-providers-cpprovider
-        - cozystack.capi-providers-infraprovider
+        - cozystack.capi-provider-bootstrap-kubeadm
+        - cozystack.capi-provider-core
+        - cozystack.capi-provider-cp-kamaji
+        - cozystack.capi-provider-infra-kubevirt
       libraries:
         - name: cozy-lib
           path: library/cozy-lib

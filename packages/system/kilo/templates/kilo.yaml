@@ -1,0 +1,89 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kilo
+  namespace: cozy-kilo
+  labels:
+    app.kubernetes.io/name: kilo
+    app.kubernetes.io/part-of: kilo
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kilo
+      app.kubernetes.io/part-of: kilo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kilo
+        app.kubernetes.io/part-of: kilo
+    spec:
+      serviceAccountName: kilo
+      hostNetwork: true
+      containers:
+      - name: kilo
+        image: "{{ .Values.kilo.image.repository }}:{{ .Values.kilo.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.kilo.image.pullPolicy }}
+        args:
+        - --kubeconfig=/etc/kubernetes/kubeconfig
+        - --hostname=$(NODE_NAME)
+        - --cni=false
+        - --clean-up-interface={{ .Values.kilo.cleanUpInterface | default "false" }}
+        - --encapsulate=crosssubnet
+        - --local=false
+        - --mesh-granularity={{ .Values.kilo.meshGranularity | default "location" }}
+        {{- with .Values.kilo.podCIDR }}
+        - --service-cidr={{ . }}
+        {{- end }}
+        {{- with .Values.kilo.serviceCIDR }}
+        - --service-cidr={{ . }}
+        {{- end }}
+        {{- with .Values.kilo.transitCIDR }}
+        - --subnet={{ . }}
+        {{- end }}
+        - --internal-cidr=$(NODE_IP)/32
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        ports:
+        - containerPort: 1107
+          name: metrics
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: kilo-dir
+          mountPath: /var/lib/kilo
+        - name: kubeconfig
+          mountPath: /etc/kubernetes
+          readOnly: true
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+          readOnly: false
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists
+      volumes:
+      - name: kilo-dir
+        hostPath:
+          path: /var/lib/kilo
+      - name: kubeconfig
+        configMap:
+          name: kubeconfig-in-cluster
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+      - name: xtables-lock
+        hostPath:
+          path: /run/xtables.lock
+          type: FileOrCreate

@@ -28,12 +28,12 @@ import (
 //   - Categories are ordered strictly as:
 //     Marketplace, IaaS, PaaS, NaaS, <others A→Z>, Resources, Backups, Administration
 //   - Items within each category: sort by Weight (desc), then Label (A→Z).
-func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.CozystackResourceDefinition) error {
+func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
 	// Build the full menu once.
 
 	// 1) Fetch all CRDs
-	var all []cozyv1alpha1.CozystackResourceDefinition
-	var crdList cozyv1alpha1.CozystackResourceDefinitionList
+	var all []cozyv1alpha1.ApplicationDefinition
+	var crdList cozyv1alpha1.ApplicationDefinitionList
 	if err := m.List(ctx, &crdList, &client.ListOptions{}); err != nil {
 		return err
 	}
@@ -111,6 +111,8 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 	keysAndTags["services"] = []any{"service-sidebar"}
 	keysAndTags["secrets"] = []any{"secret-sidebar"}
 	keysAndTags["ingresses"] = []any{"ingress-sidebar"}
+	// Add sidebar for v1/services type loadbalancer
+	keysAndTags["loadbalancer-services"] = []any{"external-ips-sidebar"}
 
 	// Add sidebar for backups.cozystack.io Plan resource
 	keysAndTags["plans"] = []any{"plan-sidebar"}
@@ -211,6 +213,11 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/core.cozystack.io/v1alpha1/tenantmodules",
 			},
 			map[string]any{
+				"key":   "loadbalancer-services",
+				"label": "External IPs",
+				"link":  "/openapi-ui/{clusterName}/{namespace}/factory/external-ips",
+			},
+			map[string]any{
 				"key":   "tenants",
 				"label": "Tenants",
 				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/apps.cozystack.io/v1alpha1/tenants",
@@ -236,6 +243,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 		"stock-project-factory-plan-details",
 		"stock-project-factory-backupjob-details",
 		"stock-project-factory-backup-details",
+		"stock-project-factory-external-ips",
 		"stock-project-api-form",
 		"stock-project-api-table",
 		"stock-project-builtin-form",
@@ -263,7 +271,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Cozystack
 // upsertMultipleSidebars creates/updates several Sidebar resources with the same menu spec.
 func (m *Manager) upsertMultipleSidebars(
 	ctx context.Context,
-	crd *cozyv1alpha1.CozystackResourceDefinition,
+	crd *cozyv1alpha1.ApplicationDefinition,
 	ids []string,
 	keysAndTags map[string]any,
 	menuItems []any,
@@ -370,7 +378,7 @@ func orderCategoryLabels[T any](cats map[string][]T) []string {
 }
 
 // safeCategory returns spec.dashboard.category or "Resources" if not set.
-func safeCategory(def *cozyv1alpha1.CozystackResourceDefinition) string {
+func safeCategory(def *cozyv1alpha1.ApplicationDefinition) string {
 	if def == nil || def.Spec.Dashboard == nil {
 		return "Resources"
 	}

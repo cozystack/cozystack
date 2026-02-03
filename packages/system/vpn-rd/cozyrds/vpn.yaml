@@ -1,5 +1,5 @@
 apiVersion: cozystack.io/v1alpha1
-kind: CozystackResourceDefinition
+kind: ApplicationDefinition
 metadata:
   name: vpn
 spec:
@@ -12,13 +12,11 @@ spec:
   release:
     prefix: vpn-
     labels:
-      cozystack.io/ui: "true"
-    chart:
-      name: vpn
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack-apps
-        namespace: cozy-public
+      sharding.fluxcd.io/key: tenants
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-vpn-application-default-vpn
+      namespace: cozy-system
   dashboard:
     category: NaaS
     singular: VPN

@@ -76,9 +76,13 @@ host: ""
 ## @typedef {struct} GatewayAPIAddon - Gateway API addon.
 ## @field {bool} enabled - Enable Gateway API.
 
+## @enum {string} IngressNginxExposeMethod - Method to expose the controller
+## @value Proxied
+## @value LoadBalancer
+
 ## @typedef {struct} IngressNginxAddon - Ingress-NGINX controller.
 ## @field {bool} enabled - Enable the controller (requires nodes labeled `ingress-nginx`).
-## @field {string} exposeMethod - Method to expose the controller. Allowed values: `Proxied`, `LoadBalancer`.
+## @field {IngressNginxExposeMethod} exposeMethod - Method to expose the controller. Allowed values: `Proxied`, `LoadBalancer`.
 ## @field {[]string} hosts - Domains routed to this tenant cluster when `exposeMethod` is `Proxied`.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
@@ -153,7 +157,7 @@ addons:
 
 ## @typedef {struct} APIServer - API Server configuration.
 ## @field {Resources} resources - CPU and memory resources for API Server.
-## @field {ResourcesPreset} resourcesPreset="medium" - Preset if `resources` omitted.
+## @field {ResourcesPreset} resourcesPreset="large" - Preset if `resources` omitted.
 
 ## @typedef {struct} ControllerManager - Controller Manager configuration.
 ## @field {Resources} resources - CPU and memory resources for Controller Manager.
@@ -182,7 +186,7 @@ controlPlane:
   replicas: 2
   apiServer:
     resources: {}
-    resourcesPreset: "medium"
+    resourcesPreset: "large"
   controllerManager:
     resources: {}
     resourcesPreset: "micro"
