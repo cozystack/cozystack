@@ -149,7 +149,10 @@
 {{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.bootbox" $) }}
+{{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
+{{include "cozystack.platform.package.default" (list "cozystack.bootbox-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
+{{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
 
 {{- end }}
