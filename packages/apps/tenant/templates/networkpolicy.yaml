@@ -46,13 +46,20 @@ spec:
     {{- $parts := splitList "-" .Release.Namespace }}
     {{- range $i, $v := $parts }}
     {{- if ne $i 0 }}
-    - matchLabels:
-        "k8s:app.kubernetes.io/name": "vminsert"
-        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    - matchExpressions:
+      - key: "k8s:io.kubernetes.pod.namespace"
+        operator: "In"
+        values:
+        - {{ join "-" (slice $parts 0 (add $i 1)) | quote }}
+      - key: "k8s:app.kubernetes.io/name"
+        operator: "In"
+        values:
+        - "vminsert"
+        - "vlogs"
     {{- end }}
     {{- end }}
     {{- end }}
-  {{- end }}    
+  {{- end }}
   {{- if ne (include "tenant.name" .) "tenant-root" }}
   - toEndpoints:
     {{- if hasPrefix "tenant-" .Release.Namespace }}
