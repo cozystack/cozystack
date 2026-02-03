@@ -13,17 +13,17 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 
 ### Common parameters
 
-| Name               | Description                                                                                                                        | Type       | Value   |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
-| `replicas`         | Number of RabbitMQ replicas.                                                                                                       | `int`      | `3`     |
-| `resources`        | Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `resources.cpu`    | CPU available to each replica.                                                                                                     | `quantity` | `""`    |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                            | `quantity` | `""`    |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                            | `string`   | `nano`  |
-| `size`             | Persistent Volume Claim size available for application data.                                                                       | `quantity` | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data.                                                                                               | `string`   | `""`    |
-| `external`         | Enable external access from outside the cluster.                                                                                   | `bool`     | `false` |
-| `version`          | RabbitMQ major.minor version to deploy                                                                                             | `string`   | `v4.2`  |
+| Name               | Description                                                                                                                        | Type       | Value     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `replicas`         | Number of RabbitMQ replicas.                                                                                                       | `int`      | `3`       |
+| `resources`        | Explicit CPU and memory configuration for each RabbitMQ replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `resources.cpu`    | CPU available to each replica.                                                                                                     | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                            | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                            | `string`   | `s1.nano` |
+| `size`             | Persistent Volume Claim size available for application data.                                                                       | `quantity` | `10Gi`    |
+| `storageClass`     | StorageClass used to store the data.                                                                                               | `string`   | `""`      |
+| `external`         | Enable external access from outside the cluster.                                                                                   | `bool`     | `false`   |
+| `version`          | RabbitMQ major.minor version to deploy                                                                                             | `string`   | `v4.2`    |
 
 
 ### Application-specific parameters

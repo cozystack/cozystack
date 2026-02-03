@@ -66,17 +66,17 @@ See:
 
 ### Common parameters
 
-| Name               | Description                                                                                                                          | Type       | Value   |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ------- |
-| `replicas`         | Number of Postgres replicas.                                                                                                         | `int`      | `2`     |
-| `resources`        | Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `resources.cpu`    | CPU available to each replica.                                                                                                       | `quantity` | `""`    |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                              | `quantity` | `""`    |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                              | `string`   | `micro` |
-| `size`             | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`    |
-| `external`         | Enable external access from outside the cluster.                                                                                     | `bool`     | `false` |
-| `version`          | PostgreSQL major version to deploy                                                                                                   | `string`   | `v18`   |
+| Name               | Description                                                                                                                          | Type       | Value     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- | --------- |
+| `replicas`         | Number of Postgres replicas.                                                                                                         | `int`      | `2`       |
+| `resources`        | Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `resources.cpu`    | CPU available to each replica.                                                                                                       | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                              | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                              | `string`   | `u1.nano` |
+| `size`             | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`    |
+| `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`      |
+| `external`         | Enable external access from outside the cluster.                                                                                     | `bool`     | `false`   |
+| `version`          | PostgreSQL major version to deploy                                                                                                   | `string`   | `v18`     |
 
 
 ### Application-specific parameters

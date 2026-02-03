@@ -39,17 +39,17 @@ Run `helm upgrade` after MongoDB is ready to populate the credentials secret wit
 
 ### Common parameters
 
-| Name               | Description                                                                                                                       | Type       | Value   |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
-| `replicas`         | Number of MongoDB replicas in replica set.                                                                                        | `int`      | `3`     |
-| `resources`        | Explicit CPU and memory configuration for each MongoDB replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `resources.cpu`    | CPU available to each replica.                                                                                                    | `quantity` | `""`    |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                           | `quantity` | `""`    |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                           | `string`   | `small` |
-| `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`    |
-| `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false` |
-| `version`          | MongoDB major version to deploy.                                                                                                  | `string`   | `v8`    |
+| Name               | Description                                                                                                                       | Type       | Value      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `replicas`         | Number of MongoDB replicas in replica set.                                                                                        | `int`      | `3`        |
+| `resources`        | Explicit CPU and memory configuration for each MongoDB replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
+| `resources.cpu`    | CPU available to each replica.                                                                                                    | `quantity` | `""`       |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                           | `quantity` | `""`       |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                           | `string`   | `u1.micro` |
+| `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`     |
+| `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`       |
+| `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`    |
+| `version`          | MongoDB major version to deploy.                                                                                                  | `string`   | `v8`       |
 
 
 ### Sharding configuration
