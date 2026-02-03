@@ -208,30 +208,6 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
-	logger := getLogger(ctx)
-	now := metav1.Now()
-	backupJob.Status.CompletedAt = &now
-	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
-	backupJob.Status.Message = message
-
-	// Add condition
-	backupJob.Status.Conditions = append(backupJob.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "BackupFailed",
-		Message:            message,
-		LastTransitionTime: now,
-	})
-
-	if err := r.Status().Update(ctx, backupJob); err != nil {
-		logger.Error(err, "failed to update BackupJob status to Failed")
-		return ctrl.Result{}, err
-	}
-	logger.Debug("BackupJob failed", "message", message)
-	return ctrl.Result{}, nil
-}
-
 func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, strategy *strategyv1alpha1.Velero, resolved *ResolvedBackupConfig) error {
 	logger := getLogger(ctx)
 	logger.Debug("createVeleroBackup called", "strategy", strategy.Name)
@@ -476,39 +452,48 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 		return fmt.Errorf("failed to get target application: %w", err)
 	}
 
-	// Template the restore spec from the strategy
-	veleroRestoreSpec, err := template.Template(&strategy.Spec.Template.RestoreSpec, app.Object)
-	if err != nil {
-		return fmt.Errorf("failed to template Velero Restore spec: %w", err)
+	// Build template context
+	templateContext := map[string]interface{}{
+		"Application": app.Object,
+		// TODO: Parameters are not currently stored on Backup, so they're unavailable during restore.
+		// This is a design limitation that should be addressed by persisting Parameters on the Backup object.
+		"Parameters": map[string]string{},
+	}
+
+	// Template the restore spec from the strategy, or use defaults if not specified
+	var veleroRestoreSpec velerov1.RestoreSpec
+	if strategy.Spec.Template.RestoreSpec != nil {
+		templatedSpec, err := template.Template(strategy.Spec.Template.RestoreSpec, templateContext)
+		if err != nil {
+			return fmt.Errorf("failed to template Velero Restore spec: %w", err)
+		}
+		veleroRestoreSpec = *templatedSpec
 	}
 
 	// Set the backupName in the spec (required by Velero)
 	veleroRestoreSpec.BackupName = veleroBackupName
 
+	generateName := fmt.Sprintf("%s.%s-", restoreJob.Namespace, restoreJob.Name)
 	veleroRestore := &velerov1.Restore{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("%s.%s-", restoreJob.Namespace, restoreJob.Name),
+			GenerateName: generateName,
 			Namespace:    veleroNamespace,
 			Labels: map[string]string{
 				backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
 				backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
 			},
 		},
-		Spec: *veleroRestoreSpec,
+		Spec: veleroRestoreSpec,
 	}
-	name := veleroRestore.GenerateName
 	if err := r.Create(ctx, veleroRestore); err != nil {
-		if veleroRestore.Name != "" {
-			name = veleroRestore.Name
-		}
-		logger.Error(err, "failed to create Velero Restore", "name", veleroRestore.Name)
+		logger.Error(err, "failed to create Velero Restore", "generateName", generateName)
 		r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "VeleroRestoreCreationFailed",
-			fmt.Sprintf("Failed to create Velero Restore %s/%s: %v", veleroNamespace, name, err))
+			fmt.Sprintf("Failed to create Velero Restore %s/%s: %v", veleroNamespace, generateName, err))
 		return err
 	}
 
 	logger.Debug("created Velero Restore", "name", veleroRestore.Name, "namespace", veleroRestore.Namespace)
 	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "VeleroRestoreCreated",
-		fmt.Sprintf("Created Velero Restore %s/%s", veleroNamespace, name))
+		fmt.Sprintf("Created Velero Restore %s/%s", veleroNamespace, veleroRestore.Name))
 	return nil
 }

@@ -258,6 +258,13 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref common.ReferenceCallbac
 							Format:      "",
 						},
 					},
+					"externalIPsCount": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ExternalIPsCount holds the number of LoadBalancer services with assigned external IPs for Tenant applications.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
 				},
 			},
 		},

@@ -2,7 +2,6 @@ package backupcontroller
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,8 +21,8 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
 
-// BackupVeleroStrategyReconciler reconciles BackupJob with a strategy referencing
-// Velero.strategy.backups.cozystack.io objects.
+// BackupJobReconciler reconciles BackupJob with a strategy from the
+// strategy.backups.cozystack.io API group.
 type BackupJobReconciler struct {
 	client.Client
 	dynamic.Interface

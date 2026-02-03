@@ -57,6 +57,7 @@ type BackupJobSpec struct {
 	// The BackupClass will be resolved to determine the appropriate strategy and storage
 	// based on the ApplicationRef.
 	// This field is immutable once the BackupJob is created.
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="backupClassName is immutable"
 	BackupClassName string `json:"backupClassName"`
 }

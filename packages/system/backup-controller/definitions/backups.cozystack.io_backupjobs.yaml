@@ -74,7 +74,12 @@ spec:
                   BackupClassName references a BackupClass that contains strategy and storage configuration.
                   The BackupClass will be resolved to determine the appropriate strategy and storage
                   based on the ApplicationRef.
+                  This field is immutable once the BackupJob is created.
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: backupClassName is immutable
+                  rule: self == oldSelf
               planRef:
                 description: |-
                   PlanRef refers to the Plan that requested this backup run.

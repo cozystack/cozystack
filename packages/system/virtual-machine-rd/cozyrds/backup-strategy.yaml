@@ -3,13 +3,13 @@ kind: Velero
 metadata:
   name: velero-backup-strategy-for-virtualmachines
 spec:
-  backupTemplate:
+  template:
     spec: # see https://velero.io/docs/v1.9/api-types/backup/
       includedNamespaces:
-      - {{ .metadata.namespace }}
+      - {{ .Application.metadata.namespace }}
 
       labelSelector:
-        apps.cozystack.io/application.Kind: {{ .kind }}
+        apps.cozystack.io/application.Kind: {{ .Application.kind }}
 
       includedResources:
         - helmreleases.helm.toolkit.fluxcd.io
