@@ -94,7 +94,7 @@ else
 fi
 
 # Extract scheduling if available
-SCHEDULING_CONSTRAINTS=$(echo "$SCHEDULING_CM" | jq -r '.data.["globalAppTopologySpreadConstraints"] // ""')
+SCHEDULING_CONSTRAINTS=$(echo "$SCHEDULING_CM" | jq -r '.data["globalAppTopologySpreadConstraints"] // ""')
 if [ -z "$SCHEDULING_CONSTRAINTS" ]; then
     SCHEDULING_CONSTRAINTS='""'
 else
