@@ -495,6 +495,27 @@ func CreateAllCustomFormsOverrides() []*dashboardv1alpha1.CustomFormsOverride {
 				createFormItem("spec.ports", "Ports", "array"),
 			},
 		}),
+
+		// Plans form override - backups.cozystack.io/v1alpha1
+		createCustomFormsOverride("default-/backups.cozystack.io/v1alpha1/plans", map[string]any{
+			"formItems": []any{
+				createFormItem("metadata.name", "Name", "text"),
+				createFormItem("metadata.namespace", "Namespace", "text"),
+				createFormItem("spec.applicationRef.kind", "Application Kind", "text"),
+				createFormItem("spec.applicationRef.name", "Application Name", "text"),
+				createFormItemWithAPI("spec.backupClassName", "Backup Class", "select", map[string]any{
+					"api": map[string]any{
+						"fetchUrl":       "/api/clusters/{clusterName}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
+						"pathToItems":    []any{"items"},
+						"pathToValue":    []any{"metadata", "name"},
+						"pathToLabel":    []any{"metadata", "name"},
+						"clusterNameVar": "clusterName",
+					},
+				}),
+				createFormItem("spec.schedule.type", "Schedule Type", "text"),
+				createFormItem("spec.schedule.cron", "Schedule Cron", "text"),
+			},
+		}),
 	}
 }
 
@@ -1556,13 +1577,9 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 									antdText("application-ref-label", true, "Application", nil),
 									parsedText("application-ref-value", "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}", nil),
 								}),
-								antdFlexVertical("spec-storage-ref-block", 4, []any{
-									antdText("storage-ref-label", true, "Storage", nil),
-									parsedText("storage-ref-value", "{reqsJsonPath[0]['.spec.storageRef.kind']['-']}.{reqsJsonPath[0]['.spec.storageRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.storageRef.name']['-']}", nil),
-								}),
-								antdFlexVertical("spec-strategy-ref-block", 4, []any{
-									antdText("strategy-ref-label", true, "Strategy", nil),
-									parsedText("strategy-ref-value", "{reqsJsonPath[0]['.spec.strategyRef.kind']['-']}.{reqsJsonPath[0]['.spec.strategyRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.strategyRef.name']['-']}", nil),
+								antdFlexVertical("spec-backup-class-name-block", 4, []any{
+									antdText("backup-class-name-label", true, "Backup Class", nil),
+									parsedText("backup-class-name-value", "{reqsJsonPath[0]['.spec.backupClassName']['-']}", nil),
 								}),
 								antdFlexVertical("spec-schedule-type-block", 4, []any{
 									antdText("schedule-type-label", true, "Schedule Type", nil),
@@ -1680,13 +1697,9 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 									antdText("application-ref-label", true, "Application", nil),
 									parsedText("application-ref-value", "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}", nil),
 								}),
-								antdFlexVertical("spec-storage-ref-block", 4, []any{
-									antdText("storage-ref-label", true, "Storage", nil),
-									parsedText("storage-ref-value", "{reqsJsonPath[0]['.spec.storageRef.kind']['-']}.{reqsJsonPath[0]['.spec.storageRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.storageRef.name']['-']}", nil),
-								}),
-								antdFlexVertical("spec-strategy-ref-block", 4, []any{
-									antdText("strategy-ref-label", true, "Strategy", nil),
-									parsedText("strategy-ref-value", "{reqsJsonPath[0]['.spec.strategyRef.name']['-']}", nil),
+								antdFlexVertical("spec-backup-class-name-block", 4, []any{
+									antdText("backup-class-name-label", true, "Backup Class", nil),
+									parsedText("backup-class-name-value", "{reqsJsonPath[0]['.spec.backupClassName']['-']}", nil),
 								}),
 								antdFlexVertical("status-backup-ref-block", 4, []any{
 									antdText("backup-ref-label", true, "Backup Ref", nil),
@@ -1864,13 +1877,9 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 									antdText("application-ref-label", true, "Application", nil),
 									parsedText("application-ref-value", "{reqsJsonPath[0]['.spec.applicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.applicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.applicationRef.name']['-']}", nil),
 								}),
-								antdFlexVertical("spec-storage-ref-block", 4, []any{
-									antdText("storage-ref-label", true, "Storage", nil),
-									parsedText("storage-ref-value", "{reqsJsonPath[0]['.spec.storageRef.kind']['-']}.{reqsJsonPath[0]['.spec.storageRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.storageRef.name']['-']}", nil),
-								}),
-								antdFlexVertical("spec-strategy-ref-block", 4, []any{
-									antdText("strategy-ref-label", true, "Strategy", nil),
-									parsedText("strategy-ref-value", "{reqsJsonPath[0]['.spec.strategyRef.kind']['-']}.{reqsJsonPath[0]['.spec.strategyRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.strategyRef.name']['-']}", nil),
+								antdFlexVertical("spec-backup-class-name-block", 4, []any{
+									antdText("backup-class-name-label", true, "Backup Class", nil),
+									parsedText("backup-class-name-value", "{reqsJsonPath[0]['.spec.backupClassName']['-']}", nil),
 								}),
 								antdFlexVertical("status-artifact-uri-block", 4, []any{
 									antdText("artifact-uri-label", true, "Artifact URI", nil),
@@ -2068,6 +2077,20 @@ func createFormItem(path, label, fieldType string) map[string]any {
 		"label": label,
 		"type":  fieldType,
 	}
+}
+
+// createFormItemWithAPI creates a form item with API endpoint for resource-based selects
+func createFormItemWithAPI(path, label, fieldType string, apiConfig map[string]any) map[string]any {
+	item := map[string]any{
+		"path":  path,
+		"label": label,
+		"type":  fieldType,
+	}
+	// Merge API configuration into the form item
+	for key, value := range apiConfig {
+		item[key] = value
+	}
+	return item
 }
 
 // ---------------- Workloadmonitor specific functions ----------------

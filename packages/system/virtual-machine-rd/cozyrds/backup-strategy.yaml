@@ -1,0 +1,32 @@
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Velero
+metadata:
+  name: velero-backup-strategy-for-virtualmachines
+spec:
+  backupTemplate:
+    spec: # see https://velero.io/docs/v1.9/api-types/backup/
+      includedNamespaces:
+      - {{ .metadata.namespace }}
+
+      labelSelector:
+        apps.cozystack.io/application.Kind: {{ .kind }}
+
+      includedResources:
+        - helmreleases.helm.toolkit.fluxcd.io
+        - virtualmachines.kubevirt.io
+        - virtualmachineinstances.kubevirt.io
+        - datavolumes.cdi.kubevirt.io
+        - persistentvolumeclaims
+        - services
+        - configmaps
+        - secrets
+
+      storageLocation: {{ .Parameters.backupStorageLocationName }}
+
+      volumeSnapshotLocations:
+        - {{ .Parameters.backupStorageLocationName }}
+      snapshotVolumes: true
+      snapshotMoveData: true
+
+      ttl: 720h0m0s
+      itemOperationTimeout: 24h0m0s
