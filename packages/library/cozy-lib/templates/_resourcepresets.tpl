@@ -46,14 +46,15 @@
 }}
 
 {{-   if not (hasKey $presets .) -}}
-{{-     printf "ERROR: Preset key '%s' invalid. Allowed values are %s" . (join "," (keys $presets)) | fail -}}
+{{-     $allowed := keys $presets | sortAlpha -}}
+{{-     printf "ERROR: Preset key '%s' invalid. Allowed values are %s" . (join "," $allowed) | fail -}}
 {{-   end }}
 {{-   index $presets . | toYaml }}
 {{- end }}
 
 {{/*
   Return a resource request/limit object based on a given preset.
-  {{- include "cozy-lib.resources.preset" list ("s1.nano" $) }}
+  {{- include "cozy-lib.resources.preset" (list "s1.nano" $) }}
 */}}
 {{- define "cozy-lib.resources.preset" -}}
 {{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
