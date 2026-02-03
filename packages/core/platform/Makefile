@@ -18,12 +18,12 @@ diff:
 image: image-migrations
 
 image-migrations:
-	docker buildx build --file images/migrations/Dockerfile . \
+	docker buildx build images/migrations \
 		--tag $(REGISTRY)/platform-migrations:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/platform-migrations:latest \
 		--cache-to type=inline \
 		--metadata-file images/migrations.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/platform-migrations:$(call settag,$(TAG))@$$(yq --exit-status '.["containerimage.digest"]' images/migrations.json --output-format json --raw-output)" \
+	IMAGE="$(REGISTRY)/platform-migrations:$(call settag,$(TAG))@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
 		yq --inplace '.migrations.image = strenv(IMAGE)' values.yaml
 	rm -f images/migrations.json
