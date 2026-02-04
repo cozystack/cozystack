@@ -14,14 +14,18 @@ spec:
     destination:
       name: {{ .Release.Name }}-destination
       namespace: {{ .Release.Namespace }}
-  {{- if .Values.networkMap }}
+  {{- if or .Values.networkMap .Values.storageMap }}
   map:
+    {{- if .Values.networkMap }}
     network:
       name: {{ .Release.Name }}
       namespace: {{ .Release.Namespace }}
+    {{- end }}
+    {{- if .Values.storageMap }}
     storage:
       name: {{ .Release.Name }}
       namespace: {{ .Release.Namespace }}
+    {{- end }}
   {{- end }}
   targetNamespace: {{ .Release.Namespace }}
   vms:
