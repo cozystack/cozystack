@@ -1,0 +1,34 @@
+{{- if .Values.vms }}
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Plan
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  warm: {{ .Values.warm }}
+  provider:
+    source:
+      name: {{ .Release.Name }}-source
+      namespace: {{ .Release.Namespace }}
+    destination:
+      name: {{ .Release.Name }}-destination
+      namespace: {{ .Release.Namespace }}
+  {{- if .Values.networkMap }}
+  map:
+    network:
+      name: {{ .Release.Name }}
+      namespace: {{ .Release.Namespace }}
+    storage:
+      name: {{ .Release.Name }}
+      namespace: {{ .Release.Namespace }}
+  {{- end }}
+  targetNamespace: {{ .Release.Namespace }}
+  vms:
+    {{- range .Values.vms }}
+    - id: {{ .id | quote }}
+      {{- with .name }}
+      name: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+{{- end }}
