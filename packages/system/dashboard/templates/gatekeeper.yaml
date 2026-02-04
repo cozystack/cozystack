@@ -89,7 +89,6 @@ spec:
             - --cookie-name=kc-access
             - --cookie-secure=true
             - --cookie-secret=$(TOKEN_PROXY_COOKIE_SECRET)
-            - --token-check-url=http://incloud-web-nginx.{{ .Release.Namespace }}.svc:8080/api/clusters/default/k8s/apis/core.cozystack.io/v1alpha1/tenantnamespaces
           env:
             - name: TOKEN_PROXY_COOKIE_SECRET
               valueFrom:
