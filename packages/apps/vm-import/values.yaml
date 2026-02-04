@@ -1,0 +1,47 @@
+##
+## @section VMware Source
+##
+
+## @param {string} sourceUrl - URL of the VMware vCenter server (e.g. `https://vcenter.example.com/sdk`).
+sourceUrl: ""
+
+## @param {string} sourceSecretName - Name of the Kubernetes Secret containing VMware credentials (`user`, `password`, `thumbprint` keys).
+sourceSecretName: ""
+
+##
+## @section Migration Plan
+##
+
+## @typedef {struct} VM - A virtual machine to migrate.
+## @field {string} id - The managed object reference ID of the VM in vSphere (e.g. `vm-123`).
+## @field {string} [name] - Optional target name for the VM in KubeVirt.
+
+## @param {[]VM} vms - List of virtual machines to migrate.
+vms: []
+
+## @param {bool} warm - Enable warm migration (incremental replication before cutover).
+warm: false
+
+##
+## @section Network Mapping
+##
+
+## @typedef {struct} NetworkMapEntry - Maps a source network to a destination network.
+## @field {string} sourceId - The managed object reference ID of the source network in vSphere.
+## @field {string} destinationType - Destination type: `pod` for pod network, or `multus` for a Multus network.
+## @field {string} [destinationName] - Name of the destination network (required if type is `multus`).
+## @field {string} [destinationNamespace] - Namespace of the destination network.
+
+## @param {[]NetworkMapEntry} networkMap - Mapping of source networks to destination networks.
+networkMap: []
+
+##
+## @section Storage Mapping
+##
+
+## @typedef {struct} StorageMapEntry - Maps a source datastore to a destination StorageClass.
+## @field {string} sourceId - The managed object reference ID of the source datastore in vSphere.
+## @field {string} storageClass - Name of the destination Kubernetes StorageClass.
+
+## @param {[]StorageMapEntry} storageMap - Mapping of source datastores to destination StorageClasses.
+storageMap: []
