@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -13,10 +16,13 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/securecookie"
+	"github.com/lestrrat-go/httprc/v3"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 )
 
 /* ----------------------------- flags ------------------------------------ */
@@ -26,7 +32,9 @@ var (
 	cookieName, cookieSecretB64     string
 	cookieSecure                    bool
 	cookieRefresh                   time.Duration
-	tokenCheckURL                   string
+	jwksURL                         string
+	saTokenPath                     string
+	saCACertPath                    string
 )
 
 func init() {
@@ -38,7 +46,70 @@ func init() {
 	flag.StringVar(&cookieSecretB64, "cookie-secret", "", "Base64-encoded cookie secret")
 	flag.BoolVar(&cookieSecure, "cookie-secure", false, "Set Secure flag on cookie")
 	flag.DurationVar(&cookieRefresh, "cookie-refresh", 0, "Cookie refresh interval (e.g. 1h)")
-	flag.StringVar(&tokenCheckURL, "token-check-url", "", "URL for external token validation")
+	flag.StringVar(&jwksURL, "jwks-url", "https://kubernetes.default.svc/openid/v1/jwks", "JWKS URL for token verification")
+	flag.StringVar(&saTokenPath, "sa-token-path", "/var/run/secrets/kubernetes.io/serviceaccount/token", "Path to service account token")
+	flag.StringVar(&saCACertPath, "sa-ca-cert-path", "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", "Path to service account CA certificate")
+
+	flag.Parse()
+
+	// Initialize jwkCache
+	ctx := context.Background()
+	// Load CA certificate
+	caCert, err := os.ReadFile(saCACertPath)
+	if err != nil {
+		jwkCacheErr := fmt.Errorf("failed to read CA cert: %w", err)
+		panic(jwkCacheErr)
+	}
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		jwkCacheErr := fmt.Errorf("failed to parse CA cert")
+		panic(jwkCacheErr)
+	}
+
+	// Create transport with SA token injection
+	transport := &saTokenTransport{
+		base: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: caCertPool,
+			},
+		},
+		tokenPath: saTokenPath,
+	}
+	transport.startRefresh(ctx, 5*time.Minute)
+
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	// Create httprc client with custom HTTP client
+	httprcClient := httprc.NewClient(
+		httprc.WithHTTPClient(httpClient),
+	)
+
+	// Create JWK cache
+	jwkCache, err = jwk.NewCache(ctx, httprcClient)
+	if err != nil {
+		jwkCacheErr := fmt.Errorf("failed to create JWK cache: %w", err)
+		panic(jwkCacheErr)
+	}
+
+	// Register the JWKS URL with refresh settings
+	if err := jwkCache.Register(ctx, jwksURL,
+		jwk.WithMinInterval(5*time.Minute),
+		jwk.WithMaxInterval(15*time.Minute),
+	); err != nil {
+		jwkCacheErr := fmt.Errorf("failed to register JWKS URL: %w", err)
+		panic(jwkCacheErr)
+	}
+
+	// Perform initial fetch to ensure the JWKS is available
+	if _, err := jwkCache.Refresh(ctx, jwksURL); err != nil {
+		jwkCacheErr := fmt.Errorf("failed to fetch initial JWKS: %w", err)
+		panic(jwkCacheErr)
+	}
+
+	log.Printf("JWK cache initialized with JWKS URL: %s", jwksURL)
 }
 
 /* ----------------------------- templates -------------------------------- */
@@ -117,42 +188,94 @@ var loginTmpl = template.Must(template.New("login").Parse(`
 </body>
 </html>`))
 
-/* ----------------------------- helpers ---------------------------------- */
+/* ----------------------------- JWK cache -------------------------------- */
 
-func decodeJWT(raw string) jwt.MapClaims {
-	if raw == "" {
-		return jwt.MapClaims{}
-	}
-	tkn, _, err := new(jwt.Parser).ParseUnverified(raw, jwt.MapClaims{})
-	if err != nil || tkn == nil {
-		return jwt.MapClaims{}
-	}
-	if c, ok := tkn.Claims.(jwt.MapClaims); ok {
-		return c
-	}
-	return jwt.MapClaims{}
+var (
+	jwkCache *jwk.Cache
+)
+
+// saTokenTransport adds the service account token to requests and refreshes it periodically.
+type saTokenTransport struct {
+	base      http.RoundTripper
+	tokenPath string
+	mu        sync.RWMutex
+	token     string
 }
 
-func externalTokenCheck(raw string) error {
-	if tokenCheckURL == "" {
+func (t *saTokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.RLock()
+	token := t.token
+	t.mu.RUnlock()
+
+	if token != "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return t.base.RoundTrip(req)
+}
+
+func (t *saTokenTransport) refreshToken() {
+	data, err := os.ReadFile(t.tokenPath)
+	if err != nil {
+		log.Printf("warning: failed to read SA token: %v", err)
+		return
+	}
+	t.mu.Lock()
+	t.token = string(data)
+	t.mu.Unlock()
+}
+
+func (t *saTokenTransport) startRefresh(ctx context.Context, interval time.Duration) {
+	t.refreshToken()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				t.refreshToken()
+			}
+		}
+	}()
+}
+
+/* ----------------------------- helpers ---------------------------------- */
+
+// verifyAndParseJWT verifies the token signature and returns the parsed token.
+func verifyAndParseJWT(ctx context.Context, raw string) (jwt.Token, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("empty token")
+	}
+
+	keySet, err := jwkCache.Lookup(ctx, jwksURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get JWKS: %w", err)
+	}
+
+	token, err := jwt.Parse([]byte(raw), jwt.WithKeySet(keySet))
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify token: %w", err)
+	}
+
+	return token, nil
+}
+
+// getClaim extracts a claim value from a verified token.
+func getClaim(token jwt.Token, key string) any {
+	if token == nil {
 		return nil
 	}
-	req, _ := http.NewRequest(http.MethodGet, tokenCheckURL, nil)
-	req.Header.Set("Authorization", "Bearer "+raw)
-	cli := &http.Client{Timeout: 5 * time.Second}
-	resp, err := cli.Do(req)
-	if err != nil {
-		return err
+	var val any
+	if err := token.Get(key, &val); err != nil {
+		return nil
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d", resp.StatusCode)
-	}
-	return nil
+	return val
 }
 
 func encodeSession(sc *securecookie.SecureCookie, token string, exp, issued int64) (string, error) {
-	v := map[string]interface{}{
+	v := map[string]any{
 		"access_token": token,
 		"expires":      exp,
 		"issued":       issued,
@@ -166,7 +289,6 @@ func encodeSession(sc *securecookie.SecureCookie, token string, exp, issued int6
 /* ----------------------------- main ------------------------------------- */
 
 func main() {
-	flag.Parse()
 	if upstream == "" {
 		log.Fatal("--upstream is required")
 	}
@@ -214,7 +336,11 @@ func main() {
 				}{Action: signIn, Err: "Token required"})
 				return
 			}
-			if err := externalTokenCheck(token); err != nil {
+
+			// Verify token signature using JWKS
+			verifiedToken, err := verifyAndParseJWT(r.Context(), token)
+			if err != nil {
+				log.Printf("token verification failed: %v", err)
 				_ = loginTmpl.Execute(w, struct {
 					Action string
 					Err    string
@@ -223,9 +349,8 @@ func main() {
 			}
 
 			exp := time.Now().Add(24 * time.Hour).Unix()
-			claims := decodeJWT(token)
-			if v, ok := claims["exp"].(float64); ok {
-				exp = int64(v)
+			if expTime, ok := verifiedToken.Expiration(); ok && !expTime.IsZero() {
+				exp = expTime.Unix()
 			}
 			session, _ := encodeSession(sc, token, exp, time.Now().Unix())
 			http.SetCookie(w, &http.Cookie{
@@ -264,7 +389,7 @@ func main() {
 			return
 		}
 		var token string
-		var sess map[string]interface{}
+		var sess map[string]any
 		if sc != nil {
 			if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -273,19 +398,25 @@ func main() {
 			token, _ = sess["access_token"].(string)
 		} else {
 			token = c.Value
-			sess = map[string]interface{}{
+			sess = map[string]any{
 				"expires": time.Now().Add(24 * time.Hour).Unix(),
 				"issued":  time.Now().Unix(),
 			}
 		}
-		claims := decodeJWT(token)
 
-		out := map[string]interface{}{
+		// Re-verify the token to ensure it's still valid
+		verifiedToken, err := verifyAndParseJWT(r.Context(), token)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		out := map[string]any{
 			"token":                 token,
-			"sub":                   claims["sub"],
-			"email":                 claims["email"],
-			"preferred_username":    claims["preferred_username"],
-			"groups":                claims["groups"],
+			"sub":                   getClaim(verifiedToken, "sub"),
+			"email":                 getClaim(verifiedToken, "email"),
+			"preferred_username":    getClaim(verifiedToken, "preferred_username"),
+			"groups":                getClaim(verifiedToken, "groups"),
 			"expires":               sess["expires"],
 			"issued":                sess["issued"],
 			"cookie_refresh_enable": cookieRefresh > 0,
@@ -303,7 +434,7 @@ func main() {
 			return
 		}
 		var token string
-		var sess map[string]interface{}
+		var sess map[string]any
 		if sc != nil {
 			if err := sc.Decode(cookieName, c.Value, &sess); err != nil {
 				http.Redirect(w, r, signIn, http.StatusFound)
@@ -312,7 +443,7 @@ func main() {
 			token, _ = sess["access_token"].(string)
 		} else {
 			token = c.Value
-			sess = map[string]interface{}{
+			sess = map[string]any{
 				"expires": time.Now().Add(24 * time.Hour).Unix(),
 				"issued":  time.Now().Unix(),
 			}
