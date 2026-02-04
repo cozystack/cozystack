@@ -18,7 +18,6 @@ build: build-deps
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
 	make -C packages/system/backup-controller image
-	make -C packages/system/backupstrategy-controller image
 	make -C packages/system/lineage-controller-webhook image
 	make -C packages/system/cilium image
 	make -C packages/system/linstor image

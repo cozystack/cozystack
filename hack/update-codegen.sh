@@ -28,7 +28,6 @@ OPERATOR_CRDDIR=packages/core/installer/definitions
 COZY_CONTROLLER_CRDDIR=packages/system/cozystack-controller/definitions
 COZY_RD_CRDDIR=packages/system/application-definition-crd/definition
 BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
-BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
 
 trap 'rm -rf ${TMPDIR}' EXIT
 
@@ -70,6 +69,6 @@ mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
         ${COZY_RD_CRDDIR}/cozystack.io_applicationdefinitions.yaml
 
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
-mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
+mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
 
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
