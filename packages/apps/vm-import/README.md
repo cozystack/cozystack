@@ -5,7 +5,7 @@ Import virtual machines from VMware vSphere using [Forklift](https://github.com/
 Forklift supports cold and warm migrations from VMware vSphere to KubeVirt, with automatic guest conversion via virt-v2v (virtio drivers installation, guest OS adaptation).
 
 - Docs: <https://forklift.konveyor.io/>
-- Github: <https://github.com/kubev2v/forklift>
+- GitHub: <https://github.com/kubev2v/forklift>
 
 ## How to use
 
