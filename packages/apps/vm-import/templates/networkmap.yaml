@@ -13,12 +13,14 @@ spec:
       destination:
         {{- if eq .destinationType "pod" }}
         type: pod
-        {{- else }}
+        {{- else if eq .destinationType "multus" }}
         type: multus
-        name: {{ .destinationName | quote }}
+        name: {{ required "networkMap.destinationName is required when destinationType=multus" .destinationName | quote }}
         {{- with .destinationNamespace }}
         namespace: {{ . | quote }}
         {{- end }}
+        {{- else }}
+        {{- fail (printf "networkMap.destinationType must be 'pod' or 'multus', got %q" .destinationType) }}
         {{- end }}
     {{- end }}
   provider:
