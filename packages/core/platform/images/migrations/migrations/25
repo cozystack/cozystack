@@ -1,0 +1,23 @@
+#!/bin/sh
+# Migration 25 --> 26
+# Remove legacy installer components during upgrade to v1.0
+
+set -euo pipefail
+
+echo "Removing legacy installer components..."
+
+# Delete old cozystack installer deployment
+kubectl delete deploy cozystack -n cozy-system --ignore-not-found
+
+# Delete old cozystack-assets statefulset
+kubectl delete sts cozystack-assets -n cozy-system --ignore-not-found
+
+# Delete old bootbox HelmReleases (will be recreated by new platform chart if enabled)
+kubectl delete hr bootbox -n cozy-system --ignore-not-found
+kubectl delete hr bootbox-rd -n cozy-system --ignore-not-found
+
+echo "Legacy cleanup completed"
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=26 --dry-run=client -o yaml | kubectl apply -f-
