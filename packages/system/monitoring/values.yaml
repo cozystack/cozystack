@@ -1,0 +1,82 @@
+host: ""
+
+metricsStorages:
+## Example:
+## metricsStorages:
+## - name: shortterm
+##   retentionPeriod: "3d"
+##   deduplicationInterval: "15s"
+##   storage: 10Gi
+##   storageClassName: ""
+##   vminsert:
+##     minAllowed:
+##       cpu: 200m
+##       memory: 512Mi
+##     maxAllowed:
+##       cpu: 1500m
+##       memory: 3Gi
+##   vmselect:
+##     minAllowed:
+##       cpu: 300m
+##       memory: 1Gi
+##     maxAllowed:
+##       cpu: 3500m
+##       memory: 6Gi
+##   vmstorage:
+##     minAllowed:
+##       cpu: 500m
+##       memory: 2Gi
+##     maxAllowed:
+##       cpu: 4000m
+##       memory: 8Gi
+- name: shortterm
+  retentionPeriod: "3d"
+  deduplicationInterval: "15s"
+  storage: 10Gi
+  storageClassName: ""
+- name: longterm
+  retentionPeriod: "14d"
+  deduplicationInterval: "5m"
+  storage: 10Gi
+  storageClassName: ""
+
+logsStorages:
+- name: generic
+  retentionPeriod: "1"
+  storage: 10Gi
+  storageClassName: replicated
+alerta:
+  storage: 10Gi
+  storageClassName: ""
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  alerts:
+    telegram:
+      token: ""
+      chatID: ""
+      disabledSeverity: []
+    slack:
+      url: ""
+      disabledSeverity: []
+grafana:
+  db:
+    size: 10Gi
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+vmagent:
+  externalLabels:
+    cluster: cozystack
+  remoteWrite:
+    urls:
+      - http://vminsert-shortterm:8480/insert/0/prometheus
+      - http://vminsert-longterm:8480/insert/0/prometheus
