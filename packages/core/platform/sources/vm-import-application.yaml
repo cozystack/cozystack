@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.vm-import-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: kubevirt
+      dependsOn:
+        - cozystack.networking
+        - cozystack.kubevirt
+        - cozystack.kubevirt-cdi
+        - cozystack.forklift
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: vm-import
+          path: apps/vm-import
+          libraries: ["cozy-lib"]
+        - name: vm-import-rd
+          path: system/vm-import-rd
+          install:
+            namespace: cozy-system
+            releaseName: vm-import-rd

@@ -1,0 +1,12 @@
+{{- if .Values.vms }}
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Migration
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  plan:
+    name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
