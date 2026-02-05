@@ -4,6 +4,8 @@ metadata:
   name: {{ .Release.Name }}-source
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   type: vsphere
   url: {{ required "sourceUrl is required" .Values.sourceUrl | quote }}
@@ -17,6 +19,8 @@ metadata:
   name: {{ .Release.Name }}-destination
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   type: openshift
   url: ""
