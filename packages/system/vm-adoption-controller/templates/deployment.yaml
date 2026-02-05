@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-adoption-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: vm-adoption-controller
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: vm-adoption-controller
+  template:
+    metadata:
+      labels:
+        app: vm-adoption-controller
+    spec:
+      serviceAccountName: vm-adoption-controller
+      containers:
+      - name: controller
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.Version }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        args:
+        - -v=2
+        {{- if .Values.controller.watchNamespace }}
+        - --namespace={{ .Values.controller.watchNamespace }}
+        {{- end }}
+        - --watch-interval={{ .Values.controller.watchInterval }}
+        {{- if .Values.controller.namePrefix }}
+        - --name-prefix={{ .Values.controller.namePrefix }}
+        {{- end }}
+        - --default-instance-type={{ .Values.controller.defaultInstanceType }}
+        - --default-preference={{ .Values.controller.defaultPreference }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
