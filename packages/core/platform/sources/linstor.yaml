@@ -18,11 +18,19 @@ spec:
     - cozystack.reloader
     - cozystack.snapshot-controller
     components:
+    - name: piraeus-operator-crds
+      path: system/piraeus-operator-crds
+      install:
+        privileged: true
+        namespace: cozy-linstor
+        releaseName: piraeus-operator-crds
     - name: piraeus-operator
       path: system/piraeus-operator
       install:
         namespace: cozy-linstor
         releaseName: piraeus-operator
+        dependsOn:
+        - piraeus-operator-crds
     - name: linstor
       path: system/linstor
       install:

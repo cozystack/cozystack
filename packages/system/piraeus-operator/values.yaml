@@ -1,5 +1,5 @@
 piraeus:
-  installCRDs: true
+  installCRDs: false
   autogenerate: false
   tls:
     certManagerIssuerRef:

@@ -1,0 +1,1 @@
+include ../../../hack/package.mk
