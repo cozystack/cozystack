@@ -2,6 +2,11 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "enableAdoption": {
+      "description": "Automatically label imported VMs for Cozystack adoption and dashboard visibility.",
+      "type": "boolean",
+      "default": true
+    },
     "networkMap": {
       "description": "Mapping of source networks to destination networks.",
       "type": "array",

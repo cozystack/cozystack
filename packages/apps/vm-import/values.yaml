@@ -22,6 +22,9 @@ vms: []
 ## @param {bool} warm - Enable warm migration (incremental replication before cutover).
 warm: false
 
+## @param {bool} enableAdoption - Automatically label imported VMs for Cozystack adoption and dashboard visibility.
+enableAdoption: true
+
 ##
 ## @section Network Mapping
 ##
