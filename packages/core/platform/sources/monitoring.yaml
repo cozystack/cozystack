@@ -31,28 +31,3 @@ spec:
             privileged: true
             namespace: cozy-monitoring
             releaseName: monitoring
-        - name: vertical-pod-autoscaler
-          path: system/vertical-pod-autoscaler
-          install:
-            namespace: cozy-vertical-pod-autoscaler
-            releaseName: vertical-pod-autoscaler
-        - name: postgres-operator
-          path: system/postgres-operator
-          install:
-            namespace: cozy-postgres-operator
-            releaseName: postgres-operator
-        - name: grafana-operator
-          path: system/grafana-operator
-          install:
-            namespace: cozy-grafana-operator
-            releaseName: grafana-operator
-        - name: victoria-metrics-operator
-          path: system/victoria-metrics-operator
-          install:
-            namespace: cozy-victoria-metrics-operator
-            releaseName: victoria-metrics-operator
-        - name: prometheus-operator-crds
-          path: system/prometheus-operator-crds
-          install:
-            namespace: cozy-prometheus-operator-crds
-            releaseName: prometheus-operator-crds
