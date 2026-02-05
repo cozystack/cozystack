@@ -6089,31 +6089,31 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: forklift-api
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: forklift-controller
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: forklift-operator
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: forklift-populator-controller
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: leader-election-role
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups:
   - ""
@@ -6717,7 +6717,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: leader-election-rolebinding
-  namespace: 
+  namespace: {{ .Release.Namespace }}{{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -6725,7 +6725,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: forklift-operator
-  namespace: 
+  namespace: {{ .Release.Namespace }}{{ .Release.Namespace }} 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -6738,7 +6738,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: forklift-api
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -6751,7 +6751,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: forklift-controller
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -6764,7 +6764,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: forklift-populator-controller
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -6777,7 +6777,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: forklift-operator
-  namespace: konveyor-forklift
+  namespace: {{ .Release.Namespace }}konveyor-forklift
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -6785,7 +6785,7 @@ metadata:
   labels:
     control-plane: controller-manager
   name: forklift-operator
-  namespace: 
+  namespace: {{ .Release.Namespace }}
 spec:
   replicas: 1
   selector:
@@ -6828,17 +6828,17 @@ spec:
         - name: VIRT_V2V_DONT_REQUEST_KVM
           value: 
         - name: SNAPSHOT_REMOVAL_TIMEOUT
-          value: 120
+          value: "120"
         - name: SNAPSHOT_STATUS_CHECK_RATE
-          value: 10
+          value: "10"
         - name: CLEANUP_RETRIES
-          value: 10
+          value: "10"
         - name: CDI_EXPORT_TOKEN_TTL
-          value: 
+          value:
         - name: FILESYSTEM_OVERHEAD
-          value: 0.055
+          value: "0.055"
         - name: BLOCK_OVERHEAD
-          value: 0
+          value: "0"
         - name: POPULATOR_CONTROLLER_IMAGE
           value: quay.io/kubev2v/populator-controller:v2.10.4
         - name: OVIRT_POPULATOR_IMAGE

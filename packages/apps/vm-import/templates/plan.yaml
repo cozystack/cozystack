@@ -5,8 +5,12 @@ metadata:
   name: {{ .Release.Name }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    vm-import.cozystack.io/adoption-enabled: {{ if hasKey .Values "enableAdoption" }}{{ .Values.enableAdoption | quote }}{{ else }}"true"{{ end }}
+    vm-import.cozystack.io/target-namespace: {{ .Release.Namespace | quote }}
+    vm-import.cozystack.io/import-name: {{ .Release.Name | quote }}
 spec:
-  warm: {{ .Values.warm }}
+  warm: {{ default false .Values.warm }}
   provider:
     source:
       name: {{ .Release.Name }}-source

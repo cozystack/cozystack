@@ -1,0 +1,79 @@
+# Example: Advanced VMware VM Import
+#
+# This example demonstrates:
+# - Warm migration (incremental replication)
+# - Multus network attachment
+# - Multiple storage classes
+# - VM name customization
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prod-vcenter-creds
+  namespace: production
+type: Opaque
+stringData:
+  user: migration-svc@vsphere.local
+  password: "ComplexP@ssw0rd!"
+  thumbprint: "11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33"
+
+---
+apiVersion: apps.cozystack.io/v1
+kind: VMImport
+metadata:
+  name: production-migration
+  namespace: production
+spec:
+  # VMware source
+  sourceUrl: "https://prod-vcenter.company.com/sdk"
+  sourceSecretName: "prod-vcenter-creds"
+
+  # VMs to import with custom names
+  vms:
+    - id: "vm-100"
+      name: "nginx-frontend-01"
+    - id: "vm-101"
+      name: "nginx-frontend-02"
+    - id: "vm-200"
+      name: "postgres-primary"
+    - id: "vm-201"
+      name: "postgres-replica"
+
+  # Warm migration: incremental replication before final cutover
+  # Reduces downtime significantly for large VMs
+  warm: true
+
+  # Advanced network mapping
+  networkMap:
+    # Frontend network -> Multus (VLAN 100)
+    - sourceId: "network-10"
+      destinationType: "multus"
+      destinationName: "frontend-net"
+      destinationNamespace: "production"
+
+    # Backend network -> Multus (VLAN 200)
+    - sourceId: "network-20"
+      destinationType: "multus"
+      destinationName: "backend-net"
+      destinationNamespace: "production"
+
+    # Management network -> Pod network
+    - sourceId: "network-30"
+      destinationType: "pod"
+
+  # Storage mapping with different tiers
+  storageMap:
+    # SSD datastore -> Fast replicated storage
+    - sourceId: "datastore-ssd-01"
+      storageClass: "replicated-fast"
+
+    # HDD datastore -> Standard storage
+    - sourceId: "datastore-hdd-01"
+      storageClass: "replicated"
+
+    # Backup datastore -> Cold storage
+    - sourceId: "datastore-backup"
+      storageClass: "cold-storage"
+
+  # Enable adoption (VMs visible in Cozystack dashboard)
+  enableAdoption: true

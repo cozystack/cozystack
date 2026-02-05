@@ -16,6 +16,7 @@ spec:
         - cozystack.kubevirt
         - cozystack.kubevirt-cdi
         - cozystack.forklift
+        - cozystack.vm-adoption-controller
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
