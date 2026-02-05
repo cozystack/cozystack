@@ -55,3 +55,44 @@ affinity:
 labels: {}
 # Additional annotations for pods
 podAnnotations: {}
+
+# Node Lifecycle Controller configuration
+# Automatically deletes unreachable NotReady nodes from the cluster
+nodeLifecycleController:
+  enabled: false
+  image:
+    repository: ghcr.io/cozystack/node-lifecycle-controller
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  # Label selector for nodes to manage
+  # Only nodes matching this selector will be considered for deletion
+  # Example: "node.kubernetes.io/instance-type" (nodes created by autoscaler)
+  nodeSelector: ""
+  # Comma-separated list of labels that protect nodes from deletion
+  protectedLabels: ""
+  # Duration a node must be NotReady before considering deletion
+  notReadyTimeout: 5m
+  # Timeout for ping checks
+  pingTimeout: 5s
+  # Number of ping attempts before considering node unreachable
+  pingCount: 3
+  # Interval between reconciliation loops
+  reconcileInterval: 30s
+  # Log actions without actually deleting nodes
+  dryRun: false
+  # Verbosity level (0-5)
+  verbosity: 2
+  # Leader election for HA
+  leaderElection:
+    enabled: true
+    resourceName: node-lifecycle-controller
+  # Number of replicas
+  replicaCount: 1
+  # Pod resources
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

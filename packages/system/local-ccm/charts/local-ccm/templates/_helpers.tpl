@@ -63,3 +63,35 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Node Lifecycle Controller fullname
+*/}}
+{{- define "node-lifecycle-controller.fullname" -}}
+{{- printf "%s-lifecycle" (include "local-ccm.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Node Lifecycle Controller labels
+*/}}
+{{- define "node-lifecycle-controller.labels" -}}
+helm.sh/chart: {{ include "local-ccm.chart" . }}
+{{ include "node-lifecycle-controller.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- with .Values.labels }}
+{{ toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Node Lifecycle Controller selector labels
+*/}}
+{{- define "node-lifecycle-controller.selectorLabels" -}}
+app.kubernetes.io/name: node-lifecycle-controller
+app.kubernetes.io/instance: {{ .Release.Name }}
+app: node-lifecycle-controller
+component: node-lifecycle
+{{- end }}
