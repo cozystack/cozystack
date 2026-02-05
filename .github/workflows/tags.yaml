@@ -291,17 +291,24 @@ jobs:
             echo "Changelog file $CHANGELOG_FILE does not exist"
           fi
 
+      - name: Setup Node.js
+        if: steps.check_changelog.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install GitHub Copilot CLI
+        if: steps.check_changelog.outputs.exists == 'false'
+        run: npm i -g @github/copilot
+
       - name: Generate changelog using AI
         if: steps.check_changelog.outputs.exists == 'false'
-        # Uses official run-gemini-cli action from GitHub Marketplace
-        # Requires GEMINI_API_KEY secret to be set in repository settings
-        # See: https://github.com/marketplace/actions/run-gemini-cli
-        uses: google-github-actions/run-gemini-cli@v0.1.18
-        with:
-          prompt: "prepare changelog file for tagged release v${{ steps.tag.outputs.version }}, use @docs/agents/changelog.md for it. Create the changelog file at docs/changelogs/v${{ steps.tag.outputs.version }}.md"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          copilot --prompt "prepare changelog file for tagged release v${{ steps.tag.outputs.version }}, use @docs/agents/changelog.md for it. Create the changelog file at docs/changelogs/v${{ steps.tag.outputs.version }}.md" \
+            --allow-all-tools --allow-all-paths < /dev/null
 
       - name: Create changelog branch and commit
         if: steps.check_changelog.outputs.exists == 'false'
