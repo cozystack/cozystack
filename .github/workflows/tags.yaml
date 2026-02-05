@@ -223,7 +223,7 @@ jobs:
       pull-requests: write
     if: needs.prepare-release.result == 'success'
     steps:
-      - name: Parse tag and get base branch
+      - name: Parse tag
         id: tag
         uses: actions/github-script@v7
         with:
@@ -235,15 +235,9 @@ jobs:
               return;
             }
             const version = m[1] + (m[2] ?? '');
-            const [maj, min] = m[1].split('.');
-            
-            // Determine base branch: if patch release (Z > 0), use release-X.Y, else use main
-            const patch = parseInt(m[1].split('.')[2]);
-            const baseBranch = patch > 0 ? `release-${maj}.${min}` : 'main';
-            
+
             core.setOutput('version', version);
             core.setOutput('tag', ref);
-            core.setOutput('base_branch', baseBranch);
 
       - name: Checkout main branch
         uses: actions/checkout@v4
