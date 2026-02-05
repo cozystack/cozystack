@@ -68,6 +68,109 @@ kubectl get migrations,plans -n <your-namespace>
 
 Once completed, the migrated VMs will be available as KubeVirt VirtualMachine resources in the target namespace.
 
+### 5. Verify imported VMs
+
+List the imported VMs:
+
+```bash
+kubectl get virtualmachines -n <your-namespace>
+kubectl get vm -n <your-namespace> -l forklift.konveyor.io/plan=<your-import-name>
+```
+
+Check if VMs are labeled for Cozystack adoption:
+
+```bash
+kubectl get vm -n <your-namespace> -l cozystack.io/adopted=true
+```
+
+## VM Lifecycle and Adoption
+
+### What happens during import?
+
+1. **Forklift Migration**: VMs are migrated from VMware and created as native KubeVirt `VirtualMachine` resources
+2. **Automatic Adoption**: If `enableAdoption: true` (default), the VM Adoption Controller automatically:
+   - Detects the imported VMs (via `forklift.konveyor.io/plan` label)
+   - Extracts VM configuration (instance type, disks, network, resources)
+   - Creates a `VMInstance` Cozystack CRD
+   - Labels the original VM as `cozystack.io/adopted: "true"`
+3. **Dashboard Integration**: The `VMInstance` is managed by Cozystack's controller, which creates a HelmRelease
+4. **Dashboard Visibility**: Adopted VMs appear in the Cozystack dashboard as regular VM Instances
+
+### What happens after import?
+
+Imported VMs are:
+- ✅ **Fully functional** KubeVirt VirtualMachines
+- ✅ **Automatically adopted** as Cozystack `VMInstance` resources (within ~30 seconds)
+- ✅ **Manageable** via the Cozystack dashboard with full functionality
+- ✅ **Manageable** via `kubectl` and Cozystack APIs
+- ✅ **Persistent** - they remain even if you delete the `vm-import` application
+
+### What happens when you delete the vm-import application?
+
+```bash
+kubectl delete vmimport <your-import-name> -n <your-namespace>
+```
+
+**Resources deleted:**
+- ❌ Migration Plan
+- ❌ Migration object
+- ❌ Network and Storage Maps
+
+**Resources preserved:**
+- ✅ **Providers** (source and destination) - kept for reuse in future imports
+- ✅ **All imported VMs** - never deleted
+- ✅ **All DataVolumes and disks** - never deleted
+- ✅ **VM data and state** - fully preserved
+
+**Important**: The imported VMs are **NOT managed by Helm** and are therefore **never deleted** when you remove the `vm-import` application. They remain as independent KubeVirt resources.
+
+### Managing imported VMs
+
+#### Automatic Management (Default with `enableAdoption: true`)
+
+Imported VMs are **automatically adopted** and appear in the Cozystack dashboard with full management capabilities:
+
+- Start/stop/restart VMs
+- Access console
+- Modify resources (CPU, memory)
+- Attach/detach disks
+- Configure networking
+- Cloud-init customization
+
+The adoption happens automatically within ~30 seconds of the import completing.
+
+#### Manual KubeVirt Management (if `enableAdoption: false`)
+If you disable automatic adoption, you can still use `kubectl` and KubeVirt APIs directly:
+
+```bash
+# Start/stop VM
+kubectl patch vm <vm-name> -n <namespace> --type merge -p '{"spec":{"running":true}}'
+kubectl patch vm <vm-name> -n <namespace> --type merge -p '{"spec":{"running":false}}'
+
+# View VM console
+virtctl console <vm-name> -n <namespace>
+
+# SSH into VM
+virtctl ssh <vm-name> -n <namespace>
+```
+
+**Note**: Manual adoption is still possible using the provided script, but it's rarely needed with automatic adoption enabled. See the [VM Adoption Guide](./docs/adoption.md) for details.
+
+### Cleanup
+
+To fully remove imported VMs from your cluster:
+
+```bash
+# 1. Delete the vm-import application (if not already done)
+kubectl delete vmimport <import-name> -n <namespace>
+
+# 2. Manually delete the VMs
+kubectl delete vm -n <namespace> -l forklift.konveyor.io/plan=<import-name>
+
+# 3. (Optional) Delete associated DataVolumes
+kubectl delete dv -n <namespace> -l forklift.konveyor.io/plan=<import-name>
+```
+
 ## Parameters
 
 ### VMware Source
@@ -80,12 +183,13 @@ Once completed, the migrated VMs will be available as KubeVirt VirtualMachine re
 
 ### Migration Plan
 
-| Name          | Description                                                           | Type       | Value   |
-| ------------- | --------------------------------------------------------------------- | ---------- | ------- |
-| `vms`         | List of virtual machines to migrate.                                  | `[]object` | `[]`    |
-| `vms[i].id`   | The managed object reference ID of the VM in vSphere (e.g. `vm-123`). | `string`   | `""`    |
-| `vms[i].name` | Optional target name for the VM in KubeVirt.                          | `string`   | `""`    |
-| `warm`        | Enable warm migration (incremental replication before cutover).       | `bool`     | `false` |
+| Name             | Description                                                                       | Type       | Value   |
+| ---------------- | --------------------------------------------------------------------------------- | ---------- | ------- |
+| `vms`            | List of virtual machines to migrate.                                              | `[]object` | `[]`    |
+| `vms[i].id`      | The managed object reference ID of the VM in vSphere (e.g. `vm-123`).             | `string`   | `""`    |
+| `vms[i].name`    | Optional target name for the VM in KubeVirt.                                      | `string`   | `""`    |
+| `warm`           | Enable warm migration (incremental replication before cutover).                   | `bool`     | `false` |
+| `enableAdoption` | Automatically label imported VMs for Cozystack adoption and dashboard visibility. | `bool`     | `true`  |
 
 
 ### Network Mapping
