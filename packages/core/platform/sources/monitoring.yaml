@@ -14,7 +14,6 @@ spec:
   variants:
     - name: default
       dependsOn:
-        - cozystack.cozystack-controller
         - cozystack.vertical-pod-autoscaler
         - cozystack.networking
         - cozystack.postgres-operator
