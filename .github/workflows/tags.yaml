@@ -213,3 +213,166 @@ jobs:
             } else {
               console.log(`PR already exists from ${head} to ${base}`);
             }
+
+  generate-changelog:
+    name: Generate Changelog
+    runs-on: [self-hosted]
+    needs: [prepare-release]
+    permissions:
+      contents: write
+      pull-requests: write
+    if: needs.prepare-release.result == 'success'
+    steps:
+      - name: Parse tag and get base branch
+        id: tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ref = context.ref.replace('refs/tags/', '');
+            const m = ref.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);
+            if (!m) {
+              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-(alpha|beta|rc).N'`);
+              return;
+            }
+            const version = m[1] + (m[2] ?? '');
+            const [maj, min] = m[1].split('.');
+            
+            // Determine base branch: if patch release (Z > 0), use release-X.Y, else use main
+            const patch = parseInt(m[1].split('.')[2]);
+            const baseBranch = patch > 0 ? `release-${maj}.${min}` : 'main';
+            
+            core.setOutput('version', version);
+            core.setOutput('tag', ref);
+            core.setOutput('base_branch', baseBranch);
+
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Check if changelog already exists
+        id: check_changelog
+        run: |
+          CHANGELOG_FILE="docs/changelogs/v${{ steps.tag.outputs.version }}.md"
+          if [ -f "$CHANGELOG_FILE" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Changelog file $CHANGELOG_FILE already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Changelog file $CHANGELOG_FILE does not exist"
+          fi
+
+      - name: Setup Node.js
+        if: steps.check_changelog.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install GitHub Copilot CLI
+        if: steps.check_changelog.outputs.exists == 'false'
+        run: npm i -g @github/copilot
+
+      - name: Generate changelog using AI
+        if: steps.check_changelog.outputs.exists == 'false'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          copilot --prompt "prepare changelog file for tagged release v${{ steps.tag.outputs.version }}, use @docs/agents/changelog.md for it. Create the changelog file at docs/changelogs/v${{ steps.tag.outputs.version }}.md" \
+            --allow-all-tools --allow-all-paths < /dev/null
+
+      - name: Create changelog branch and commit
+        if: steps.check_changelog.outputs.exists == 'false'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name  "cozystack-bot"
+          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
+          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          
+          CHANGELOG_FILE="docs/changelogs/v${{ steps.tag.outputs.version }}.md"
+          CHANGELOG_BRANCH="changelog-v${{ steps.tag.outputs.version }}"
+          
+          if [ -f "$CHANGELOG_FILE" ]; then
+            # Fetch latest main branch
+            git fetch origin main
+            
+            # Delete local branch if it exists
+            git branch -D "$CHANGELOG_BRANCH" 2>/dev/null || true
+            
+            # Create and checkout new branch from main
+            git checkout -b "$CHANGELOG_BRANCH" origin/main
+            
+            # Add and commit changelog
+            git add "$CHANGELOG_FILE"
+            if git diff --staged --quiet; then
+              echo "⚠️ No changes to commit (file may already be committed)"
+            else
+              git commit -m "docs: add changelog for v${{ steps.tag.outputs.version }}" -s
+              echo "✅ Changelog committed to branch $CHANGELOG_BRANCH"
+            fi
+            
+            # Push the branch (force push to update if it exists)
+            git push -f origin "$CHANGELOG_BRANCH"
+          else
+            echo "⚠️ Changelog file was not generated"
+            exit 1
+          fi
+
+      - name: Create PR for changelog
+        if: steps.check_changelog.outputs.exists == 'false'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const version = '${{ steps.tag.outputs.version }}';
+            const changelogBranch = `changelog-v${version}`;
+            const baseBranch = 'main';
+            
+            // Check if PR already exists
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              head:  `${context.repo.owner}:${changelogBranch}`,
+              base:   baseBranch,
+              state: 'open'
+            });
+            
+            if (prs.data.length > 0) {
+              const pr = prs.data[0];
+              console.log(`PR #${pr.number} already exists for changelog branch ${changelogBranch}`);
+              
+              // Update PR body with latest info
+              const body = `This PR adds the changelog for release \`v${version}\`.\n\n✅ Changelog has been automatically generated in \`docs/changelogs/v${version}.md\`.`;
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                pull_number: pr.number,
+                body: body
+              });
+              console.log(`Updated existing PR #${pr.number}`);
+            } else {
+              // Create new PR
+              const pr = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                head:  changelogBranch,
+                base:  baseBranch,
+                title: `docs: add changelog for v${version}`,
+                body:  `This PR adds the changelog for release \`v${version}\`.\n\n✅ Changelog has been automatically generated in \`docs/changelogs/v${version}.md\`.`,
+                draft: false
+              });
+              
+              // Add label if needed
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: pr.data.number,
+                labels: ['documentation', 'automated']
+              });
+              
+              console.log(`Created PR #${pr.data.number} for changelog`);
+            }
