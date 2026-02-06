@@ -24,33 +24,33 @@ az login --service-principal \
 
 ```bash
 az group create \
-  --name cozystack-autoscaler \
-  --location germanywestcentral
+  --name <resource-group> \
+  --location <location>
 ```
 
 ### 1.3 Create VNet and Subnet
 
 ```bash
 az network vnet create \
-  --resource-group cozystack-autoscaler \
+  --resource-group <resource-group> \
   --name cozystack-vnet \
   --address-prefix 10.2.0.0/16 \
   --subnet-name workers \
   --subnet-prefix 10.2.0.0/24 \
-  --location germanywestcentral
+  --location <location>
 ```
 
 ### 1.4 Create Network Security Group
 
 ```bash
 az network nsg create \
-  --resource-group cozystack-autoscaler \
+  --resource-group <resource-group> \
   --name cozystack-nsg \
-  --location germanywestcentral
+  --location <location>
 
 # Allow WireGuard
 az network nsg rule create \
-  --resource-group cozystack-autoscaler \
+  --resource-group <resource-group> \
   --nsg-name cozystack-nsg \
   --name AllowWireGuard \
   --priority 100 \
@@ -61,7 +61,7 @@ az network nsg rule create \
 
 # Allow Talos API
 az network nsg rule create \
-  --resource-group cozystack-autoscaler \
+  --resource-group <resource-group> \
   --nsg-name cozystack-nsg \
   --name AllowTalosAPI \
   --priority 110 \
@@ -72,7 +72,7 @@ az network nsg rule create \
 
 # Associate NSG with subnet
 az network vnet subnet update \
-  --resource-group cozystack-autoscaler \
+  --resource-group <resource-group> \
   --vnet-name cozystack-vnet \
   --name workers \
   --network-security-group cozystack-nsg
@@ -108,19 +108,12 @@ curl -s -X POST https://factory.talos.dev/schematics \
 
 Save the returned `id` as `SCHEMATIC_ID`.
 
-### 2.2 Create Storage Account and Upload VHD
+### 2.2 Create Managed Image from VHD
 
 ```bash
-# Create storage account
-az storage account create \
-  --name cozystacktalos \
-  --resource-group cozystack-autoscaler \
-  --location germanywestcentral \
-  --sku Standard_LRS
-
 # Download Talos Azure image
 curl -L -o azure-amd64.raw.xz \
-  "https://factory.talos.dev/image/${SCHEMATIC_ID}/v1.11.6/azure-amd64.raw.xz"
+  "https://factory.talos.dev/image/${SCHEMATIC_ID}/<talos-version>/azure-amd64.raw.xz"
 
 # Decompress
 xz -d azure-amd64.raw.xz
@@ -135,9 +128,9 @@ VHD_SIZE=$(stat -f%z azure-amd64.vhd)  # macOS
 
 # Create managed disk for upload
 az disk create \
-  --resource-group cozystack-autoscaler \
-  --name talos-v1.11.6 \
-  --location germanywestcentral \
+  --resource-group <resource-group> \
+  --name talos-<talos-version> \
+  --location <location> \
   --upload-type Upload \
   --upload-size-bytes $VHD_SIZE \
   --sku Standard_LRS \
@@ -146,8 +139,8 @@ az disk create \
 
 # Get SAS URL for upload
 SAS_URL=$(az disk grant-access \
-  --resource-group cozystack-autoscaler \
-  --name talos-v1.11.6 \
+  --resource-group <resource-group> \
+  --name talos-<talos-version> \
   --access-level Write \
   --duration-in-seconds 3600 \
   --query accessSAS --output tsv)
@@ -157,17 +150,17 @@ azcopy copy azure-amd64.vhd "$SAS_URL" --blob-type PageBlob
 
 # Revoke access
 az disk revoke-access \
-  --resource-group cozystack-autoscaler \
-  --name talos-v1.11.6
+  --resource-group <resource-group> \
+  --name talos-<talos-version>
 
 # Create managed image from disk
 az image create \
-  --resource-group cozystack-autoscaler \
-  --name talos-v1.11.6 \
-  --location germanywestcentral \
+  --resource-group <resource-group> \
+  --name talos-<talos-version> \
+  --location <location> \
   --os-type Linux \
   --hyper-v-generation V2 \
-  --source $(az disk show --resource-group cozystack-autoscaler --name talos-v1.11.6 --query id --output tsv)
+  --source $(az disk show --resource-group <resource-group> --name talos-<talos-version> --query id --output tsv)
 ```
 
 ## Step 3: Create Talos Machine Config for Azure
@@ -177,7 +170,8 @@ Create a machine config similar to the Hetzner one, with these Azure-specific ch
 ```yaml
 machine:
   nodeLabels:
-    kilo.squat.ai/location: azure      # <-- changed from 'hetzner-cloud'
+    kilo.squat.ai/location: azure
+    topology.kubernetes.io/zone: azure
   kubelet:
     nodeIP:
       validSubnets:
@@ -190,14 +184,14 @@ All other settings (cluster tokens, control plane endpoint, extensions, etc.) re
 
 ```bash
 IMAGE_ID=$(az image show \
-  --resource-group cozystack-autoscaler \
-  --name talos-v1.11.6 \
+  --resource-group <resource-group> \
+  --name talos-<talos-version> \
   --query id --output tsv)
 
 az vmss create \
-  --resource-group cozystack-autoscaler \
+  --resource-group <resource-group> \
   --name workers \
-  --location germanywestcentral \
+  --location <location> \
   --orchestration-mode Uniform \
   --image "$IMAGE_ID" \
   --vm-sku Standard_D2s_v3 \
@@ -216,82 +210,52 @@ az vmss create \
 **Important notes:**
 - Must use `--orchestration-mode Uniform` (cluster-autoscaler requires Uniform mode)
 - Must use `--public-ip-per-vm` for WireGuard connectivity
-- Check VM quota in your region: `az vm list-usage --location germanywestcentral`
+- Check VM quota in your region: `az vm list-usage --location <location>`
 - `--custom-data` passes the Talos machine config to new instances
 
-### Available VM sizes in Germany West Central
+## Step 5: Deploy Cluster Autoscaler
 
-| Family | Example | vCPU | RAM | Use case |
-|--------|---------|------|-----|----------|
-| D-series | Standard_D2s_v3 | 2 | 8 GB | General purpose |
-| D-series | Standard_D4s_v3 | 4 | 16 GB | General purpose |
-| NC T4 | Standard_NC4as_T4_v3 | 4 | 28 GB | GPU (T4) |
-| NC A100 | Standard_NC24ads_A100_v4 | 24 | 220 GB | GPU (A100) |
-| NC H100 | Standard_NC40ads_H100_v5 | 40 | 320 GB | GPU (H100) |
-
-## Step 5: Create Kubernetes Secrets
-
-### 5.1 Azure Credentials Secret
-
-```bash
-kubectl create namespace cozy-cluster-autoscaler-azure
-
-kubectl create secret generic azure-credentials \
-  --namespace cozy-cluster-autoscaler-azure \
-  --from-literal=ClientID="<APP_ID>" \
-  --from-literal=ClientSecret="<PASSWORD>" \
-  --from-literal=TenantID="<TENANT_ID>" \
-  --from-literal=SubscriptionID="<SUBSCRIPTION_ID>" \
-  --from-literal=ResourceGroup="cozystack-autoscaler" \
-  --from-literal=VMType="vmss"
-```
-
-### 5.2 Talos Machine Config Secret
-
-```bash
-kubectl create secret generic talos-config \
-  --namespace cozy-cluster-autoscaler-azure \
-  --from-file=cloud-init=machineconfig-azure.yaml
-```
-
-## Step 6: Deploy Cluster Autoscaler
-
-Example Package resource:
+Create the Package resource:
 
 ```yaml
 apiVersion: cozystack.io/v1alpha1
 kind: Package
 metadata:
   name: cozystack.cluster-autoscaler-azure
-  namespace: cozy-cluster-autoscaler-azure
 spec:
-  type: cluster-autoscaler
-  values:
-    cluster-autoscaler:
-      azureClientID: "<APP_ID>"
-      azureClientSecret: "<PASSWORD>"
-      azureTenantID: "<TENANT_ID>"
-      azureSubscriptionID: "<SUBSCRIPTION_ID>"
-      azureResourceGroup: "cozystack-autoscaler"
-      azureVMType: "vmss"
-      autoscalingGroups:
-        - name: workers
-          minSize: 0
-          maxSize: 10
+  variant: default
+  components:
+    cluster-autoscaler-azure:
+      values:
+        cluster-autoscaler:
+          azureClientID: "<APP_ID>"
+          azureClientSecret: "<PASSWORD>"
+          azureTenantID: "<TENANT_ID>"
+          azureSubscriptionID: "<SUBSCRIPTION_ID>"
+          azureResourceGroup: "<RESOURCE_GROUP>"
+          azureVMType: "vmss"
+          autoscalingGroups:
+            - name: workers
+              minSize: 0
+              maxSize: 10
+          rbac:
+            additionalRules:
+              - apiGroups:
+                  - coordination.k8s.io
+                resources:
+                  - leases
+                verbs:
+                  - create
+                  - get
+                  - update
 ```
 
-Or configure the HelmRelease directly with `secretKeyRefNameOverride` to use existing secrets:
-
-```yaml
-cluster-autoscaler:
-  secretKeyRefNameOverride: azure-credentials
-  autoscalingGroups:
-    - name: workers
-      minSize: 0
-      maxSize: 10
+Apply:
+```bash
+kubectl apply -f package.yaml
 ```
 
-## Step 7: Kilo WireGuard Endpoint Configuration
+## Step 6: Kilo WireGuard Endpoint Configuration
 
 **Important:** Azure nodes behind NAT need their public IP advertised as the WireGuard endpoint. Without this, the WireGuard tunnel between Hetzner and Azure nodes will not be established.
 
@@ -304,7 +268,7 @@ kubectl annotate node <NODE_NAME> \
 
 ### Automated Endpoint Configuration
 
-For automated endpoint detection, create a DaemonSet that runs on Azure nodes (`kilo.squat.ai/location=azure`) and:
+For automated endpoint detection, create a DaemonSet that runs on Azure nodes (`topology.kubernetes.io/zone=azure`) and:
 
 1. Queries Azure Instance Metadata Service (IMDS) for the public IP:
    ```bash
@@ -321,7 +285,7 @@ This ensures new autoscaled nodes automatically get proper WireGuard connectivit
 
 ```bash
 # Scale up
-az vmss scale --resource-group cozystack-autoscaler --name workers --new-capacity 1
+az vmss scale --resource-group <resource-group> --name workers --new-capacity 1
 
 # Check node joined
 kubectl get nodes -o wide
@@ -330,12 +294,12 @@ kubectl get nodes -o wide
 kubectl logs -n cozy-kilo <kilo-pod-on-azure-node>
 
 # Scale down
-az vmss scale --resource-group cozystack-autoscaler --name workers --new-capacity 0
+az vmss scale --resource-group <resource-group> --name workers --new-capacity 0
 ```
 
 ### Autoscaler test
 
-Deploy a workload with anti-affinity to trigger autoscaling:
+Deploy a workload to trigger autoscaling:
 
 ```yaml
 apiVersion: apps/v1
@@ -353,7 +317,7 @@ spec:
         app: test-azure
     spec:
       nodeSelector:
-        kilo.squat.ai/location: azure
+        topology.kubernetes.io/zone: azure
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.9
@@ -368,7 +332,7 @@ spec:
 ### Node doesn't join cluster
 - Check that the Talos machine config control plane endpoint is reachable from Azure
 - Verify NSG rules allow outbound traffic to port 6443
-- Check VMSS instance provisioning state: `az vmss list-instances --resource-group cozystack-autoscaler --name workers`
+- Check VMSS instance provisioning state: `az vmss list-instances --resource-group <resource-group> --name workers`
 
 ### WireGuard tunnel not established
 - Verify `kilo.squat.ai/force-endpoint` annotation is set with the public IP
@@ -376,26 +340,10 @@ spec:
 - Inspect kilo logs: `kubectl logs -n cozy-kilo <kilo-pod>`
 
 ### VM quota errors
-- Check quota: `az vm list-usage --location germanywestcentral`
+- Check quota: `az vm list-usage --location <location>`
 - Request quota increase via Azure portal
 - Try a different VM family that has available quota
 
 ### SkuNotAvailable errors
 - Some VM sizes may have capacity restrictions in certain regions
-- Try a different VM size: `az vm list-skus --location germanywestcentral --size <prefix>`
-
-## Current Infrastructure Reference
-
-Created in subscription `cdd9c3ff-ef22-46f5-916f-cf529408f367` (Sandbox autoscaler):
-
-| Resource | Name | Details |
-|----------|------|---------|
-| Resource Group | cozystack-autoscaler | germanywestcentral |
-| VNet | cozystack-vnet | 10.2.0.0/16 |
-| Subnet | workers | 10.2.0.0/24 |
-| NSG | cozystack-nsg | Allow UDP 51820, TCP 50000 |
-| Managed Image | talos-v1.11.6 | Talos with extensions (drbd, zfs, etc.) |
-| VMSS | workers | Standard_D2s_v3, Uniform, 0 instances |
-| Storage Account | cozystacktalos | Used for VHD upload |
-
-Service Principal: `78df2235-89b3-4b94-b6db-5573677eee57` (autoscaler-contributor)
+- Try a different VM size: `az vm list-skus --location <location> --size <prefix>`

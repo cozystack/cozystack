@@ -100,6 +100,7 @@ machine:
   # Node labels (applied automatically on join)
   nodeLabels:
     kilo.squat.ai/location: hetzner-cloud
+    topology.kubernetes.io/zone: hetzner-cloud
   kubelet:
     image: ghcr.io/siderolabs/kubelet:v1.33.1
     # Use vSwitch IP as internal IP
@@ -368,6 +369,7 @@ For multi-location clusters using Kilo mesh networking, add location label to ma
 machine:
   nodeLabels:
     kilo.squat.ai/location: hetzner-cloud
+    topology.kubernetes.io/zone: hetzner-cloud
 ```
 
 This allows Kilo to create proper WireGuard tunnels between your bare-metal nodes and Hetzner Cloud nodes.
