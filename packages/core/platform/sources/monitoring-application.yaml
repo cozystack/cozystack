@@ -14,10 +14,15 @@ spec:
       dependsOn:
         - cozystack.networking
         - cozystack.postgres-operator
+        - cozystack.grafana-operator
+        - cozystack.victoria-metrics-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
       components:
+        - name: monitoring-system
+          path: system/monitoring
+          libraries: ["cozy-lib"]
         - name: monitoring
           path: extra/monitoring
           libraries: ["cozy-lib"]

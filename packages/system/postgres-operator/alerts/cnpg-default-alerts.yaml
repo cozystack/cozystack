@@ -92,7 +92,7 @@ spec:
           potential service disruption and/or data loss.
         runbook_url: https://github.com/cloudnative-pg/charts/blob/main/charts/cluster/docs/runbooks/CNPGClusterOffline.md
       expr: |
-        sum by (namespace, pod) (cnpg_collector_up)) OR on() vector(0) == 0
+        (sum by (namespace, pod) (cnpg_collector_up) OR on() vector(0)) == 0
       for: 5m
       labels:
         severity: critical
