@@ -93,16 +93,3 @@ spec:
       - hosts:
         - "{{ printf "grafana.%s" (.Values.host | default $host) }}"
         secretName: grafana-ingress-tls
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: grafana
-spec:
-  replicas: 2
-  minReplicas: 1
-  kind: monitoring
-  type: grafana
-  selector:
-    app: grafana
-  version: {{ $.Chart.Version }}

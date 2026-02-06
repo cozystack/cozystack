@@ -23,19 +23,5 @@ spec:
     url: http://vminsert-{{ .name }}.{{ $.Release.Namespace }}.svc:8480/insert/0/prometheus/api/v1/write
   resources: {}
   selectAllByDefault: true
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: vmalert-{{ .name }}
-spec:
-  replicas: 1
-  minReplicas: 1
-  kind: monitoring
-  type: vmalert
-  selector:
-    app.kubernetes.io/instance: vmalert-{{ .name }}
-    app.kubernetes.io/name: vmalert
-  version: {{ $.Chart.Version }}
 {{- break }}
 {{- end }}
