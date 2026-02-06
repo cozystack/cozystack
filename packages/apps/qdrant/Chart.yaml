@@ -1,0 +1,11 @@
+apiVersion: v2
+name: qdrant
+description: Managed Qdrant vector database service
+icon: /logos/qdrant.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+appVersion: "v1.16.3"
+dependencies:
+  - name: cozy-lib
+    version: "*"
+    repository: "file://charts/cozy-lib"
