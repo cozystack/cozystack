@@ -33,12 +33,12 @@ func (m *Manager) ensureBreadcrumb(ctx context.Context, crd *cozyv1alpha1.Applic
 
 	key := plural // e.g., "virtualmachines"
 	label := labelPlural
-	link := fmt.Sprintf("/openapi-ui/{clusterName}/{namespace}/api-table/%s/%s/%s", strings.ToLower(group), strings.ToLower(version), plural)
+	link := fmt.Sprintf("/openapi-ui/{cluster}/{namespace}/api-table/%s/%s/%s", strings.ToLower(group), strings.ToLower(version), plural)
 	// If this is a module, change the first breadcrumb item to "Tenant Modules"
 	if crd.Spec.Dashboard != nil && crd.Spec.Dashboard.Module {
 		key = "tenantmodules"
 		label = "Tenant Modules"
-		link = "/openapi-ui/{clusterName}/{namespace}/api-table/core.cozystack.io/v1alpha1/tenantmodules"
+		link = "/openapi-ui/{cluster}/{namespace}/api-table/core.cozystack.io/v1alpha1/tenantmodules"
 	}
 
 	items := []any{

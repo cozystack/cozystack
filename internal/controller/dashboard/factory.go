@@ -162,7 +162,7 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 					"data": map[string]any{
 						"id":                   "vpc-subnets-table",
 						"baseprefix":           "/openapi-ui",
-						"clusterNamePartOfUrl": "{2}",
+						"cluster": "{2}",
 						"customizationId":      "virtualprivatecloud-subnets",
 						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/configmaps",
 						"fieldSelector": map[string]any{
@@ -190,7 +190,7 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 					"data": map[string]any{
 						"id":                   "resource-quotas-table",
 						"baseprefix":           "/openapi-ui",
-						"clusterNamePartOfUrl": "{2}",
+						"cluster": "{2}",
 						"customizationId":      "factory-resource-quotas",
 						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{reqsJsonPath[0]['.status.namespace']}/resourcequotas",
 						"pathToItems":          []any{`items`},
@@ -244,7 +244,7 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 					"data": map[string]any{
 						"id":                   "conditions-table",
 						"fetchUrl":             endpoint,
-						"clusterNamePartOfUrl": "{2}",
+						"cluster": "{2}",
 						"customizationId":      "factory-status-conditions",
 						"baseprefix":           "/openapi-ui",
 						"withoutControls":      true,
@@ -266,7 +266,7 @@ func workloadsTab(kind string) map[string]any {
 				"data": map[string]any{
 					"id":                   "workloads-table",
 					"fetchUrl":             "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors",
-					"clusterNamePartOfUrl": "{2}",
+					"cluster": "{2}",
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1alpha1.cozystack.io.workloadmonitors",
 					"pathToItems":          []any{"items"},
@@ -291,7 +291,7 @@ func servicesTab(kind string) map[string]any {
 				"data": map[string]any{
 					"id":                   "services-table",
 					"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
-					"clusterNamePartOfUrl": "{2}",
+					"cluster": "{2}",
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1.services",
 					"pathToItems":          []any{"items"},
@@ -317,7 +317,7 @@ func ingressesTab(kind string) map[string]any {
 				"data": map[string]any{
 					"id":                   "ingresses-table",
 					"fetchUrl":             "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses",
-					"clusterNamePartOfUrl": "{2}",
+					"cluster": "{2}",
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-networking.k8s.io.v1.ingresses",
 					"pathToItems":          []any{"items"},
@@ -343,7 +343,7 @@ func secretsTab(kind string) map[string]any {
 				"data": map[string]any{
 					"id":                   "secrets-table",
 					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecrets",
-					"clusterNamePartOfUrl": "{2}",
+					"cluster": "{2}",
 					"baseprefix":           "/openapi-ui",
 					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecrets",
 					"pathToItems":          []any{"items"},
