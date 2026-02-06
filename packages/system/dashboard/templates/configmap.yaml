@@ -1,6 +1,6 @@
 {{- $brandingConfig := .Values._cluster.branding | default dict }}
 
-{{- $tenantText := "v0.40.6" }}
+{{- $tenantText := "v0.40.7" }}
 {{- $footerText := "Cozystack" }}
 {{- $titleText := "Cozystack Dashboard" }}
 {{- $logoText := "" }}
