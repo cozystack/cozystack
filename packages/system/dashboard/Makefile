@@ -7,6 +7,9 @@ include ../../../hack/package.mk
 update: update-crd update-dockerfiles
 image: image-openapi-ui image-openapi-ui-k8s-bff image-token-proxy update-tenant-text
 
+frontend-dev:
+	hack/frontend-dev.sh
+
 
 update-dockerfiles:
 	@echo Update dockerfiles manually
