@@ -13,7 +13,7 @@ spec:
   size: 10Gi
   replicas: 1
   storageClass: ""
-  resourcesPreset: "nano"
+  resourcesPreset: "small"
   users:
     testuser:
       password: xai7Wepo
