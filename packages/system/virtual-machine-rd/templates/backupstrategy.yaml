@@ -1,3 +1,4 @@
+{{- if .Capabilities.APIVersions.Has "strategy.backups.cozystack.io/v1alpha1" }}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Velero
 metadata:
@@ -6,10 +7,11 @@ spec:
   template:
     spec: # see https://velero.io/docs/v1.9/api-types/backup/
       includedNamespaces:
-      - {{ .Application.metadata.namespace }}
+      - '{{ printf "{{ .Application.metadata.namespace }}" }}'
 
       labelSelector:
-        apps.cozystack.io/application.Kind: {{ .Application.kind }}
+        matchLabels:
+          apps.cozystack.io/application.Kind: '{{ printf "{{ .Application.kind }}" }}'
 
       includedResources:
         - helmreleases.helm.toolkit.fluxcd.io
@@ -21,12 +23,13 @@ spec:
         - configmaps
         - secrets
 
-      storageLocation: {{ .Parameters.backupStorageLocationName }}
+      storageLocation: '{{ printf "{{ .Parameters.backupStorageLocationName }}" }}'
 
       volumeSnapshotLocations:
-        - {{ .Parameters.backupStorageLocationName }}
+        - '{{ printf "{{ .Parameters.backupStorageLocationName }}" }}'
       snapshotVolumes: true
       snapshotMoveData: true
 
       ttl: 720h0m0s
       itemOperationTimeout: 24h0m0s
+{{- end }}
