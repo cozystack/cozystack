@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.qdrant-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: qdrant-system
+          path: system/qdrant
+        - name: qdrant
+          path: apps/qdrant
+          libraries: ["cozy-lib"]
+        - name: qdrant-rd
+          path: system/qdrant-rd
+          install:
+            namespace: cozy-system
+            releaseName: qdrant-rd
