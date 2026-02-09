@@ -12,7 +12,11 @@ metadata:
   labels:
     {{- include "virtual-machine.labels" . | nindent 4 }}
 spec:
-  running: {{ .Values.running | default "true" }}
+  {{- if hasKey .Values "runStrategy" }}
+  runStrategy: {{ .Values.runStrategy }}
+  {{- else }}
+  runStrategy: {{ ternary "Always" "Halted" (.Values.running | default true) }}
+  {{- end }}
 
   {{- with .Values.instanceType }}
   instancetype:

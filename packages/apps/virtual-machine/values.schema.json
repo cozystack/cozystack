@@ -154,10 +154,17 @@
         }
       }
     },
-    "running": {
-      "description": "Whether the virtual machine should be running.",
-      "type": "boolean",
-      "default": true
+    "runStrategy": {
+      "description": "Requested running state of the VirtualMachineInstance",
+      "type": "string",
+      "default": "Always",
+      "enum": [
+        "Always",
+        "Halted",
+        "Manual",
+        "RerunOnFailure",
+        "Once"
+      ]
     },
     "sshKeys": {
       "description": "List of SSH public keys for authentication.",
