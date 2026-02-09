@@ -49,49 +49,4 @@ spec:
             requests:
               storage: {{ .storage }}
     storageDataPath: /vm-data
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: {{ .name }}-vmstorage
-spec:
-  replicas: 2
-  minReplicas: 1
-  kind: monitoring
-  type: vmstorage
-  selector:
-    app.kubernetes.io/component: monitoring
-    app.kubernetes.io/instance: {{ .name }}
-    app.kubernetes.io/name: vmstorage
-  version: {{ $.Chart.Version }}
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: {{ .name }}-vmselect
-spec:
-  replicas: 2
-  minReplicas: 1
-  kind: monitoring
-  type: vmselect
-  selector:
-    app.kubernetes.io/component: monitoring
-    app.kubernetes.io/instance: {{ .name }}
-    app.kubernetes.io/name: vmselect
-  version: {{ $.Chart.Version }}
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: {{ .name }}-vminsert
-spec:
-  replicas: 2
-  minReplicas: 1
-  kind: monitoring
-  type: vminsert
-  selector:
-    app.kubernetes.io/component: monitoring
-    app.kubernetes.io/instance: {{ .name }}
-    app.kubernetes.io/name: vminsert
-  version: {{ $.Chart.Version }}
 {{- end }}

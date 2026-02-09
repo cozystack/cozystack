@@ -19,19 +19,4 @@ spec:
     accessModes: [ReadWriteOnce]
   retentionPeriod: "{{ .retentionPeriod }}"
   removePvcAfterDelete: true
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: vlogs-{{ .name }}
-spec:
-  replicas: 1
-  minReplicas: 1
-  kind: monitoring
-  type: vlogs
-  selector:
-    app.kubernetes.io/component: monitoring
-    app.kubernetes.io/instance: {{ .name }}
-    app.kubernetes.io/name: vlogs
-  version: {{ $.Chart.Version }}
 {{- end }}

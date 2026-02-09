@@ -275,11 +275,11 @@ kube-state-metrics:
 vmagent:
   externalLabels:
     cluster: cozystack
-    tenant: tenant-root
+    tenant: '{{ .Release.Namespace }}'
   remoteWrite:
     urls:
-      - http://vminsert-shortterm.tenant-root.svc:8480/insert/0/prometheus
-      - http://vminsert-longterm.tenant-root.svc:8480/insert/0/prometheus
+      - 'http://vminsert-shortterm.{{ .Release.Namespace }}.svc:8480/insert/0/prometheus'
+      - 'http://vminsert-longterm.{{ .Release.Namespace }}.svc:8480/insert/0/prometheus'
   extraArgs: {}
 
 fluent-bit:
@@ -342,7 +342,7 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match kube.*
-          Host vlogs-generic.tenant-root.svc
+          Host vlogs-generic.{{ .Release.Namespace }}.svc
           port 9428
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
@@ -353,7 +353,7 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match events.*
-          Host vlogs-generic.tenant-root.svc
+          Host vlogs-generic.{{ .Release.Namespace }}.svc
           port 9428
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,reason,meatdata_namespace,metadata_name&_msg_field=message&_time_field=date
@@ -364,7 +364,7 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match audit.*
-          Host vlogs-generic.tenant-root.svc
+          Host vlogs-generic.{{ .Release.Namespace }}.svc
           port 9428
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,stage,user_username,verb,requestUri&_msg_field=requestURI&_time_field=date
@@ -416,7 +416,7 @@ fluent-bit:
       [FILTER]
           Name modify
           Match *
-          Add tenant tenant-root
+          Add tenant {{ .Release.Namespace }}
       [FILTER]
           Name modify
           Match *

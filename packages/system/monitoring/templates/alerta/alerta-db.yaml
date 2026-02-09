@@ -33,17 +33,3 @@ spec:
   inheritedMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"
----
-apiVersion: cozystack.io/v1alpha1
-kind: WorkloadMonitor
-metadata:
-  name: alerta-db
-spec:
-  replicas: 2
-  minReplicas: 1
-  kind: monitoring
-  type: postgres
-  selector:
-    cnpg.io/cluster: alerta-db
-    cnpg.io/podRole: instance
-  version: {{ $.Chart.Version }}

@@ -1,0 +1,27 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vlogs-generic
+  namespace: cozy-monitoring
+spec:
+  type: ExternalName
+  externalName: vlogs-generic.tenant-root.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vminsert-shortterm
+  namespace: cozy-monitoring
+spec:
+  type: ExternalName
+  externalName: vminsert-shortterm.tenant-root.svc.cluster.local
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vminsert-longterm
+  namespace: cozy-monitoring
+spec:
+  type: ExternalName
+  externalName: vminsert-longterm.tenant-root.svc.cluster.local

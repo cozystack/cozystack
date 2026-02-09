@@ -1,0 +1,150 @@
+{{- range .Values.metricsStorages }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .name }}-vmstorage
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: vmstorage
+  selector:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/instance: {{ .name }}
+    app.kubernetes.io/name: vmstorage
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .name }}-vmselect
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: vmselect
+  selector:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/instance: {{ .name }}
+    app.kubernetes.io/name: vmselect
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .name }}-vminsert
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: vminsert
+  selector:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/instance: {{ .name }}
+    app.kubernetes.io/name: vminsert
+  version: {{ $.Chart.Version }}
+{{- end }}
+{{- range .Values.metricsStorages }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: vmalert-{{ .name }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: monitoring
+  type: vmalert
+  selector:
+    app.kubernetes.io/instance: vmalert-{{ .name }}
+    app.kubernetes.io/name: vmalert
+  version: {{ $.Chart.Version }}
+{{- break }}
+{{- end }}
+{{- range .Values.logsStorages }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: vlogs-{{ .name }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: monitoring
+  type: vlogs
+  selector:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/instance: {{ .name }}
+    app.kubernetes.io/name: vlogs
+  version: {{ $.Chart.Version }}
+{{- end }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: grafana
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: grafana
+  selector:
+    app: grafana
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: grafana-db
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: postgres
+  selector:
+    cnpg.io/cluster: grafana-db
+    cnpg.io/podRole: instance
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: alerta-db
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: postgres
+  selector:
+    cnpg.io/cluster: alerta-db
+    cnpg.io/podRole: instance
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: alerta
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: monitoring
+  type: alerta
+  selector:
+    app: alerta
+    release: alerta
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: alertmanager
+spec:
+  replicas: 3
+  minReplicas: 2
+  kind: monitoring
+  type: alertmanager
+  selector:
+    app.kubernetes.io/instance: alertmanager
+    app.kubernetes.io/name: vmalertmanager
+  version: {{ $.Chart.Version }}
