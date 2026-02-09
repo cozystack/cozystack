@@ -73,7 +73,6 @@ metadata:
   name: keycloakclient
 spec:
   advancedProtocolMappers: true
-  authorizationServicesEnabled: true
   clientId: kubernetes
   defaultClientScopes:
     - groups
