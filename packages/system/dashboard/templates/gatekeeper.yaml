@@ -65,6 +65,7 @@ spec:
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
             - --skip-provider-button
             - --scope=openid email profile offline_access
+            - --ssl-insecure-skip-verify=true
           env:
             - name: OAUTH2_PROXY_CLIENT_ID
               value: dashboard
