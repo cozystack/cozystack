@@ -41,7 +41,7 @@ virtctl ssh <user>@<vm>
 | `external`                | Enable external access from outside the cluster.        | `bool`     | `false`      |
 | `externalMethod`          | Method to pass through traffic to the VM.               | `string`   | `PortList`   |
 | `externalPorts`           | Ports to forward from outside the cluster.              | `[]int`    | `[22]`       |
-| `running`                 | Whether the virtual machine should be running.          | `bool`     | `true`       |
+| `runStrategy`             | Requested running state of the VirtualMachineInstance   | `string`   | `Always`     |
 | `instanceType`            | Virtual Machine instance type.                          | `string`   | `u1.medium`  |
 | `instanceProfile`         | Virtual Machine preferences profile.                    | `string`   | `ubuntu`     |
 | `systemDisk`              | System disk configuration.                              | `object`   | `{}`         |
