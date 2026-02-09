@@ -5,38 +5,6 @@ metadata:
   name: {{ include "tenant.name" . }}
   namespace: {{ include "tenant.name" . }}
 ---
-# == default role ==
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "tenant.name" . }}
-  namespace: {{ include "tenant.name" . }}
-rules:
-- apiGroups: [""]
-  resources: ["pods", "services", "persistentvolumes", "endpoints", "events", "resourcequotas"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: ["roles"]
-  verbs: ["get"]
-- apiGroups: ["apps.cozystack.io"]
-  resources: ['*']
-  verbs: ['*']
-- apiGroups:
-  - cozystack.io
-  resources:
-  - workloadmonitors
-  - workloads
-  verbs: ["get", "list", "watch"]
-- apiGroups:
-  - core.cozystack.io
-  resources:
-  - tenantmodules
-  - tenantsecrets
-  verbs: ["get", "list", "watch"]
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -62,60 +30,11 @@ subjects:
   name: {{ include "tenant.name" . }}
   namespace: {{ include "tenant.name" . }}
 roleRef:
-  kind: Role
-  name: {{ include "tenant.name" . }}
+  kind: ClusterRole
+  name: cozy-tenant
   apiGroup: rbac.authorization.k8s.io
 ---
-# == view role ==
----
-kind: Role
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: {{ include "tenant.name" . }}-view
-  namespace: {{ include "tenant.name" . }}
-rules:
-  - apiGroups:
-      - rbac.authorization.k8s.io
-    resources:
-      - roles
-    verbs:
-      - get
-  - apiGroups:
-      - apps.cozystack.io
-    resources:
-      - "*"
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - pods
-      - services
-      - persistentvolumes
-      - endpoints
-      - events
-      - resourcequotas
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - networking.k8s.io
-    resources:
-      - ingresses
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-    - cozystack.io
-    resources:
-    - workloadmonitors
-    - workloads
-    verbs: ["get", "list", "watch"]
----
+# == view role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -124,76 +43,11 @@ metadata:
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
-  kind: Role
-  name: {{ include "tenant.name" . }}-view
+  kind: ClusterRole
+  name: cozy-tenant-view
   apiGroup: rbac.authorization.k8s.io
-
 ---
-# == use role ==
----
-kind: Role
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: {{ include "tenant.name" . }}-use
-  namespace: {{ include "tenant.name" . }}
-rules:
-  - apiGroups: [rbac.authorization.k8s.io]
-    resources:
-    - roles
-    verbs:
-    - get
-  - apiGroups: ["apps.cozystack.io"]
-    resources:
-    - "*"
-    verbs:
-    - get
-    - list
-    - watch
-  - apiGroups: [""]
-    resources:
-      - pods
-      - services
-      - persistentvolumes
-      - endpoints
-      - events
-      - resourcequotas
-    verbs:
-    - get
-    - list
-    - watch
-  - apiGroups: ["networking.k8s.io"]
-    resources:
-    - ingresses
-    verbs:
-    - get
-    - list
-    - watch
-  - apiGroups: ["subresources.kubevirt.io"]
-    resources:
-    - virtualmachineinstances/console
-    - virtualmachineinstances/vnc
-    verbs:
-    - get
-    - list
-  - apiGroups: ["subresources.kubevirt.io"]
-    resources:
-      - virtualmachineinstances/portforward
-    verbs:
-      - get
-      - update
-  - apiGroups:
-    - cozystack.io
-    resources:
-    - workloadmonitors
-    - workloads
-    verbs: ["get", "list", "watch"]
-  - apiGroups:
-    - core.cozystack.io
-    resources:
-    - tenantmodules
-    - tenantsecrets
-    verbs: ["get", "list", "watch"]
----
+# == use role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -202,97 +56,11 @@ metadata:
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "use" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
-  kind: Role
-  name: {{ include "tenant.name" . }}-use
+  kind: ClusterRole
+  name: cozy-tenant-use
   apiGroup: rbac.authorization.k8s.io
 ---
-# == admin role ==
----
-kind: Role
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: {{ include "tenant.name" . }}-admin
-  namespace: {{ include "tenant.name" . }}
-rules:
-  - apiGroups: [rbac.authorization.k8s.io]
-    resources:
-    - roles
-    verbs:
-    - get
-  - apiGroups: [""]
-    resources:
-      - pods
-      - services
-      - persistentvolumes
-      - endpoints
-      - events
-      - resourcequotas
-    verbs:
-    - get
-    - list
-    - watch
-    - delete
-  - apiGroups: ["kubevirt.io"]
-    resources:
-    - virtualmachines
-    verbs:
-    - get
-    - list
-  - apiGroups: ["subresources.kubevirt.io"]
-    resources:
-    - virtualmachineinstances/console
-    - virtualmachineinstances/vnc
-    verbs:
-    - get
-    - list
-  - apiGroups: ["subresources.kubevirt.io"]
-    resources:
-      - virtualmachineinstances/portforward
-    verbs:
-      - get
-      - update
-  - apiGroups: ["apps.cozystack.io"]
-    resources:
-    - buckets
-    - clickhouses
-    - ferretdb
-    - foos
-    - httpcaches
-    - kafkas
-    - kuberneteses
-    - mysqls
-    - natses
-    - postgreses
-    - rabbitmqs
-    - redises
-    - seaweedfses
-    - tcpbalancers
-    - virtualmachines
-    - vmdisks
-    - vminstances
-    - infos
-    - virtualprivateclouds
-    verbs:
-    - get
-    - list
-    - watch
-    - create
-    - update
-    - patch
-    - delete
-  - apiGroups:
-    - cozystack.io
-    resources:
-    - workloadmonitors
-    - workloads
-    verbs: ["get", "list", "watch"]
-  - apiGroups:
-    - core.cozystack.io
-    resources:
-    - tenantmodules
-    - tenantsecrets
-    verbs: ["get", "list", "watch"]
----
+# == admin role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -301,72 +69,11 @@ metadata:
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "admin" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
-  kind: Role
-  name: {{ include "tenant.name" . }}-admin
+  kind: ClusterRole
+  name: cozy-tenant-admin
   apiGroup: rbac.authorization.k8s.io
 ---
-# == super admin role ==
----
-kind: Role
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: {{ include "tenant.name" . }}-super-admin
-  namespace: {{ include "tenant.name" . }}
-rules:
-  - apiGroups: [rbac.authorization.k8s.io]
-    resources:
-    - roles
-    verbs:
-    - get
-  - apiGroups: [""]
-    resources:
-      - pods
-      - services
-      - persistentvolumes
-      - endpoints
-      - events
-      - resourcequotas
-    verbs:
-    - get
-    - list
-    - watch
-    - delete
-  - apiGroups: ["kubevirt.io"]
-    resources:
-    - virtualmachines
-    verbs:
-    - '*'
-  - apiGroups: ["subresources.kubevirt.io"]
-    resources:
-    - virtualmachineinstances/console
-    - virtualmachineinstances/vnc
-    verbs:
-    - get
-    - list
-  - apiGroups: ["subresources.kubevirt.io"]
-    resources:
-      - virtualmachineinstances/portforward
-    verbs:
-      - get
-      - update
-  - apiGroups: ["apps.cozystack.io"]
-    resources:
-    - '*'
-    verbs:
-    - '*'
-  - apiGroups:
-    - cozystack.io
-    resources:
-    - workloadmonitors
-    - workloads
-    verbs: ["get", "list", "watch"]
-  - apiGroups:
-    - core.cozystack.io
-    resources:
-    - tenantmodules
-    - tenantsecrets
-    verbs: ["get", "list", "watch"]
----
+# == super admin role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
@@ -375,25 +82,11 @@ metadata:
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "super-admin" (include "tenant.name" .) ) | nindent 2 }}
 roleRef:
-  kind: Role
-  name: {{ include "tenant.name" . }}-super-admin
+  kind: ClusterRole
+  name: cozy-tenant-super-admin
   apiGroup: rbac.authorization.k8s.io
 ---
-# == dashboard role ==
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "tenant.name" . }}
-  namespace: cozy-public
-rules:
-- apiGroups: ["source.toolkit.fluxcd.io"]
-  resources: ["helmrepositories"]
-  verbs: ["get", "list"]
-- apiGroups: ["source.toolkit.fluxcd.io"]
-  resources: ["helmcharts"]
-  verbs: ["get", "list"]
----
+# == dashboard role binding ==
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -417,5 +110,5 @@ subjects:
   namespace: {{ include "tenant.name" . }}
 roleRef:
   kind: Role
-  name: {{ include "tenant.name" . }}
+  name: cozy-tenant-dashboard
   apiGroup: rbac.authorization.k8s.io
