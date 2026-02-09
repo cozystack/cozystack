@@ -17,6 +17,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.mongodb-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.nats-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.postgres-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.qdrant-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.rabbitmq-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.redis-application" $) }}
 {{- end }}

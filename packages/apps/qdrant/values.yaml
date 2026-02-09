@@ -1,0 +1,34 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each Qdrant replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of Qdrant replicas. Cluster mode is automatically enabled when replicas > 1.
+replicas: 1
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each Qdrant replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="small" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "small"
+
+## @param {quantity} size - Persistent Volume Claim size available for vector data storage.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+storageClass: ""
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
