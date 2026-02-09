@@ -41,6 +41,7 @@ spec:
         {{- with .Values.kilo.transitCIDR }}
         - --subnet={{ . }}
         {{- end }}
+        - --mtu={{ .Values.kilo.mtu | default 1420 }}
         - --internal-cidr=$(NODE_IP)/32
         env:
         - name: NODE_NAME

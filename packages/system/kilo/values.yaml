@@ -8,3 +8,4 @@ kilo:
   transitCIDR: 100.66.0.0/16
   meshGranularity: location
   cleanUpInterface: false
+  mtu: 1420
