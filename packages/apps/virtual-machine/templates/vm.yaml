@@ -71,15 +71,12 @@ spec:
         {{- include "virtual-machine.labels" . | nindent 8 }}
     spec:
       domain:
-        {{- if and .Values.resources .Values.resources.cpu .Values.resources.sockets }}
-        cpu:
-          cores: {{ .Values.resources.cpu }}
-          sockets: {{ .Values.resources.sockets }}
+        {{- $domainRes := include "virtual-machine.domainResources" . | fromJson -}}
+        {{- with $domainRes.cpu }}
+        cpu: {{- . | toYaml | nindent 10 }}
         {{- end }}
-        {{- if and .Values.resources .Values.resources.memory }}
-        resources:
-          requests:
-            memory: {{ .Values.resources.memory | quote }}
+        {{- with $domainRes.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
         {{- end }}
         firmware:
           uuid: {{ include "virtual-machine.stableUuid" . }}
