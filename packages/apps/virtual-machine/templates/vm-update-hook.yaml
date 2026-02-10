@@ -17,11 +17,7 @@
 {{- $needRemoveInstanceType := false -}}
 {{- $needRemoveCustomResources := false -}}
 
-{{- $existingHasInstanceType := false -}}
-{{- if and $existingVM $existingVM.spec.instancetype -}}
-  {{- $existingHasInstanceType = true -}}
-{{- end -}}
-
+{{- $existingHasInstanceType := and $existingVM $existingVM.spec.instancetype -}}
 {{- if and $existingHasInstanceType (not $instanceType) -}}
   {{- $needRemoveInstanceType = true -}}
 {{- else if and $existingHasInstanceType $instanceType -}}
