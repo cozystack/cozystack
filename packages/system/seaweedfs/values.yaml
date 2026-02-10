@@ -183,8 +183,8 @@ seaweedfs:
     ipAddresses: []
     keyAlgorithm: RSA
     keySize: 2048
-    duration: 2160h # 90d
-    renewBefore: 360h # 15d
+    duration: 87600h # 10 years
+    renewBefore: 720h # 30d
 db:
   replicas: 2
   size: 10Gi
