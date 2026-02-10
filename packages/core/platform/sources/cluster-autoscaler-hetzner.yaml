@@ -20,6 +20,5 @@ spec:
       - values.yaml
       - values-hetzner.yaml
       install:
-        privileged: true
         namespace: cozy-cluster-autoscaler-hetzner
         releaseName: cluster-autoscaler-hetzner

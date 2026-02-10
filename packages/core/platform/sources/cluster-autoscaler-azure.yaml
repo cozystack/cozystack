@@ -20,6 +20,5 @@ spec:
       - values.yaml
       - values-azure.yaml
       install:
-        privileged: true
         namespace: cozy-cluster-autoscaler-azure
         releaseName: cluster-autoscaler-azure
