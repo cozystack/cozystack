@@ -14,7 +14,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   secret: keycloak-credentials
-  url: https://keycloak.{{ $host }}
+  url: http://keycloak-http.cozy-keycloak.svc:8080
+  insecureSkipVerify: true
 
 ---
 
@@ -72,7 +73,6 @@ metadata:
   name: keycloakclient
 spec:
   advancedProtocolMappers: true
-  authorizationServicesEnabled: true
   clientId: kubernetes
   defaultClientScopes:
     - groups

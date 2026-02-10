@@ -51,6 +51,7 @@ publishing:
 authentication:
   oidc:
     enabled: false
+    insecureSkipVerify: false
     keycloakExtraRedirectUri: ""
 # Pod scheduling configuration
 scheduling:

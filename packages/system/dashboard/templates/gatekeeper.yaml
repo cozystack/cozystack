@@ -1,5 +1,6 @@
 {{- $host := index .Values._cluster "root-host" }}
 {{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- $oidcInsecureSkipVerify := index .Values._cluster "oidc-insecure-skip-verify" }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -65,6 +66,9 @@ spec:
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
             - --skip-provider-button
             - --scope=openid email profile offline_access
+            {{- if eq $oidcInsecureSkipVerify "true" }}
+            - --ssl-insecure-skip-verify=true
+            {{- end }}
           env:
             - name: OAUTH2_PROXY_CLIENT_ID
               value: dashboard
