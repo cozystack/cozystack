@@ -1,0 +1,13 @@
+{{- if ge (int .Values.controller.replicaCount) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "clustersecret-operator.controller.fullname" . }}
+  labels:
+    {{- include "clustersecret-operator.controller.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "clustersecret-operator.controller.selectorLabels" . | nindent 6 }}
+{{- end }}
