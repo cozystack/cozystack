@@ -1,11 +1,11 @@
 kilo:
   image:
     pullPolicy: IfNotPresent
-    tag: v1.0.0-beta.2@sha256:45ad01a89ebb5311735660a0d1a1df36eda4b6f960be1b6319d2b94d2a7db701
+    tag: v0.7.0@sha256:69c14b8292c0dc9045fd646d332811619a2d93bcc1f9e19e11da9a9a172c988c
     repository: ghcr.io/cozystack/cozystack/kilo
   podCIDR: 10.244.0.0/16
   serviceCIDR: 10.96.0.0/16
   transitCIDR: 100.66.0.0/16
   meshGranularity: location
   cleanUpInterface: false
-  mtu: 1420
+  mtu: auto
