@@ -1,0 +1,24 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cluster-autoscaler-azure
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: cluster-autoscaler-azure
+      path: system/cluster-autoscaler
+      valuesFiles:
+      - values.yaml
+      - values-azure.yaml
+      install:
+        namespace: cozy-cluster-autoscaler-azure
+        releaseName: cluster-autoscaler-azure

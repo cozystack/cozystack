@@ -1,0 +1,4 @@
+apiVersion: v2
+name: cozy-cluster-autoscaler
+description: Cluster Autoscaler for automatic node scaling
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
