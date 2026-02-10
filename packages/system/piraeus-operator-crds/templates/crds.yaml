@@ -1,0 +1,2171 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: linstorclusters.piraeus.io
+spec:
+  group: piraeus.io
+  names:
+    kind: LinstorCluster
+    listKind: LinstorClusterList
+    plural: linstorclusters
+    singular: linstorcluster
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: If the LINSTOR Cluster is available
+      jsonPath: .status.conditions[?(@.type=='Available')].status
+      name: Available
+      type: string
+    - description: If the LINSTOR Cluster is fully configured
+      jsonPath: .status.conditions[?(@.type=='Configured')].status
+      name: Configured
+      type: string
+    - description: The version of the LINSTOR Cluster
+      jsonPath: .status.version
+      name: Version
+      priority: 10
+      type: string
+    - description: The number of running/expected Satellites
+      jsonPath: .status.satellites
+      name: Satellites
+      type: string
+    - description: The used capacity in all storage pools
+      jsonPath: .status.capacity
+      name: Used Capacity
+      type: string
+    - description: The number of volumes in the cluster
+      jsonPath: .status.numberOfVolumes
+      name: Volumes
+      type: integer
+    - description: The number of snapshots in the cluster
+      jsonPath: .status.numberOfSnapshots
+      name: Snapshots
+      priority: 10
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: LinstorCluster is the Schema for the linstorclusters API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LinstorClusterSpec defines the desired state of LinstorCluster
+            properties:
+              affinityController:
+                description: AffinityController controls the deployment of the Affinity
+                  Controller Deployment.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                  replicas:
+                    description: Number of desired pods. Defaults to 1.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              apiTLS:
+                description: |-
+                  ApiTLS secures the LINSTOR API.
+
+                  This configures the TLS key and certificate used to secure the LINSTOR API.
+                nullable: true
+                properties:
+                  affinityControllerSecretName:
+                    description: |-
+                      AffinityControllerSecretName references a secret holding the TLS key and certificate used by the Affinity
+                      Controller to monitor volume state. Defaults to "linstor-affinity-controller-tls".
+                    type: string
+                  apiSecretName:
+                    description: |-
+                      ApiSecretName references a secret holding the TLS key and certificate used to protect the API.
+                      Defaults to "linstor-api-tls".
+                    type: string
+                  caReference:
+                    description: |-
+                      CAReference configures the CA certificate to use when validating TLS certificates.
+                      If not set, the TLS secret is expected to contain a "ca.crt" containing the CA certificate.
+                    properties:
+                      key:
+                        default: ca.crt
+                        description: |-
+                          Key to select in the resource.
+                          Defaults to ca.crt if not specified.
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind of the resource containing the CA Certificate,
+                          either a ConfigMap or Secret.
+                        enum:
+                        - ConfigMap
+                        - Secret
+                        type: string
+                      name:
+                        description: Name of the resource containing the CA Certificate.
+                        type: string
+                      optional:
+                        description: Optional specifies whether the resource and its
+                          key must exist.
+                        type: boolean
+                    required:
+                    - name
+                    type: object
+                  certManager:
+                    description: |-
+                      CertManager references a cert-manager Issuer or ClusterIssuer.
+                      If set, cert-manager.io/Certificate resources will be created, provisioning the secrets referenced in
+                      *SecretName using the issuer configured here.
+                    properties:
+                      group:
+                        description: Group of the resource being referred to.
+                        type: string
+                      kind:
+                        description: Kind of the resource being referred to.
+                        type: string
+                      name:
+                        description: Name of the resource being referred to.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  clientSecretName:
+                    description: |-
+                      ClientSecretName references a secret holding the TLS key and certificate used by the operator to configure
+                      the cluster. Defaults to "linstor-client-tls".
+                    type: string
+                  csiControllerSecretName:
+                    description: |-
+                      CsiControllerSecretName references a secret holding the TLS key and certificate used by the CSI Controller
+                      to provision volumes. Defaults to "linstor-csi-controller-tls".
+                    type: string
+                  csiNodeSecretName:
+                    description: |-
+                      CsiNodeSecretName references a secret holding the TLS key and certificate used by the CSI Nodes to query
+                      the volume state. Defaults to "linstor-csi-node-tls".
+                    type: string
+                  nfsServerSecretName:
+                    description: |-
+                      NFSServerSecretName references a secret holding the TLS key and certificate used by the NFS Server to query
+                      the cluster state. Defaults to "linstor-csi-nfs-server-tls".
+                    type: string
+                type: object
+              controller:
+                description: Controller controls the deployment of the LINSTOR Controller
+                  Deployment.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
+              csiController:
+                description: CSIController controls the deployment of the CSI Controller
+                  Deployment.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                  replicas:
+                    description: Number of desired pods. Defaults to 1.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              csiNode:
+                description: CSINode controls the deployment of the CSI Node DaemonSet.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
+              externalController:
+                description: |-
+                  ExternalController references an external controller.
+                  When set, the Operator will skip deploying a LINSTOR Controller and instead use the external cluster
+                  to register satellites.
+                properties:
+                  url:
+                    description: URL of the external controller.
+                    minLength: 3
+                    type: string
+                required:
+                - url
+                type: object
+              highAvailabilityController:
+                description: HighAvailabilityController controls the deployment of
+                  the High Availability Controller DaemonSet.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
+              internalTLS:
+                description: |-
+                  InternalTLS secures the connection between LINSTOR Controller and Satellite.
+
+                  This configures the client certificate used when the Controller connects to a Satellite. This only has an effect
+                  when the Satellite is configured to for secure connections using `LinstorSatellite.spec.internalTLS`.
+                nullable: true
+                properties:
+                  caReference:
+                    description: |-
+                      CAReference configures the CA certificate to use when validating TLS certificates.
+                      If not set, the TLS secret is expected to contain a "ca.crt" containing the CA certificate.
+                    properties:
+                      key:
+                        default: ca.crt
+                        description: |-
+                          Key to select in the resource.
+                          Defaults to ca.crt if not specified.
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind of the resource containing the CA Certificate,
+                          either a ConfigMap or Secret.
+                        enum:
+                        - ConfigMap
+                        - Secret
+                        type: string
+                      name:
+                        description: Name of the resource containing the CA Certificate.
+                        type: string
+                      optional:
+                        description: Optional specifies whether the resource and its
+                          key must exist.
+                        type: boolean
+                    required:
+                    - name
+                    type: object
+                  certManager:
+                    description: |-
+                      CertManager references a cert-manager Issuer or ClusterIssuer.
+                      If set, a Certificate resource will be created, provisioning the secret references in SecretName using the
+                      issuer configured here.
+                    properties:
+                      group:
+                        description: Group of the resource being referred to.
+                        type: string
+                      kind:
+                        description: Kind of the resource being referred to.
+                        type: string
+                      name:
+                        description: Name of the resource being referred to.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  secretName:
+                    description: SecretName references a secret holding the TLS key
+                      and certificates.
+                    type: string
+                type: object
+              linstorPassphraseSecret:
+                description: |-
+                  LinstorPassphraseSecret used to configure the LINSTOR master passphrase.
+
+                  The referenced secret must contain a single key "MASTER_PASSPHRASE". The master passphrase is used to
+                  * Derive encryption keys for volumes using the LUKS layer.
+                  * Store credentials for accessing remotes for backups.
+                  See https://linbit.com/drbd-user-guide/linstor-guide-1_0-en/#s-encrypt_commands for more information.
+                type: string
+              nfsServer:
+                description: NFSServer controls the deployment of the LINSTOR CSI
+                  NFS Server DaemonSet.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enable the component.
+                    type: boolean
+                  podTemplate:
+                    description: |-
+                      Template to apply to Pods of the component.
+
+                      The template is applied as a patch to the default deployment, so it can be "sparse", not listing any
+                      containers or volumes that should remain unchanged.
+                      See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                    type: object
+                    x-kubernetes-map-type: atomic
+                    x-kubernetes-preserve-unknown-fields: true
+                type: object
+              nodeAffinity:
+                description: |-
+                  NodeAffinity selects the nodes on which LINSTOR Satellites will be deployed.
+                  See https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+                properties:
+                  nodeSelectorTerms:
+                    description: Required. A list of node selector terms. The terms
+                      are ORed.
+                    items:
+                      description: |-
+                        A null or empty node selector term matches no objects. The requirements of
+                        them are ANDed.
+                        The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                      properties:
+                        matchExpressions:
+                          description: A list of node selector requirements by node's
+                            labels.
+                          items:
+                            description: |-
+                              A node selector requirement is a selector that contains values, a key, and an operator
+                              that relates the key and values.
+                            properties:
+                              key:
+                                description: The label key that the selector applies
+                                  to.
+                                type: string
+                              operator:
+                                description: |-
+                                  Represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                type: string
+                              values:
+                                description: |-
+                                  An array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. If the operator is Gt or Lt, the values
+                                  array must have a single element, which will be interpreted as an integer.
+                                  This array is replaced during a strategic merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchFields:
+                          description: A list of node selector requirements by node's
+                            fields.
+                          items:
+                            description: |-
+                              A node selector requirement is a selector that contains values, a key, and an operator
+                              that relates the key and values.
+                            properties:
+                              key:
+                                description: The label key that the selector applies
+                                  to.
+                                type: string
+                              operator:
+                                description: |-
+                                  Represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                type: string
+                              values:
+                                description: |-
+                                  An array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. If the operator is Gt or Lt, the values
+                                  array must have a single element, which will be interpreted as an integer.
+                                  This array is replaced during a strategic merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                    x-kubernetes-list-type: atomic
+                required:
+                - nodeSelectorTerms
+                type: object
+                x-kubernetes-map-type: atomic
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  NodeSelector selects the nodes on which LINSTOR Satellites will be deployed.
+                  See https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+                type: object
+              patches:
+                description: |-
+                  Patches is a list of kustomize patches to apply.
+
+                  See https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/patches/ for how to create patches.
+                items:
+                  description: Patch represent either a Strategic Merge Patch or a
+                    JSON patch and its targets.
+                  properties:
+                    options:
+                      description: Options is a list of options for the patch
+                      properties:
+                        allowKindChange:
+                          description: AllowKindChange allows kind changes to the
+                            resource.
+                          type: boolean
+                        allowNameChange:
+                          description: AllowNameChange allows name changes to the
+                            resource.
+                          type: boolean
+                      type: object
+                    patch:
+                      description: Patch is the content of a patch.
+                      minLength: 1
+                      type: string
+                    target:
+                      description: Target points to the resources that the patch is
+                        applied to
+                      properties:
+                        annotationSelector:
+                          description: |-
+                            AnnotationSelector is a string that follows the label selection expression
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#api
+                            It matches against the resource annotations.
+                          type: string
+                        group:
+                          type: string
+                        kind:
+                          type: string
+                        labelSelector:
+                          description: |-
+                            LabelSelector is a string that follows the label selection expression
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#api
+                            It matches against the resource labels.
+                          type: string
+                        name:
+                          description: Name of the resource.
+                          type: string
+                        namespace:
+                          description: Namespace the resource belongs to, if it can
+                            belong to a namespace.
+                          type: string
+                        version:
+                          type: string
+                      type: object
+                  required:
+                  - patch
+                  type: object
+                type: array
+              properties:
+                description: |-
+                  Properties to apply on the cluster level.
+
+                  Use to create default settings for DRBD that should apply to all resources or to configure some other cluster
+                  wide default.
+                items:
+                  properties:
+                    name:
+                      description: Name of the property to set.
+                      minLength: 1
+                      type: string
+                    value:
+                      description: Value to set the property to.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              repository:
+                description: Repository used to pull workload images.
+                type: string
+              tolerations:
+                description: |-
+                  Tolerations selects the nodes on which LINSTOR Satellites will be deployed.
+
+                  The default tolerations for DaemonSets are automatically added.
+                items:
+                  description: |-
+                    The pod this Toleration is attached to tolerates any taint that matches
+                    the triple <key,value,effect> using the matching operator <operator>.
+                  properties:
+                    effect:
+                      description: |-
+                        Effect indicates the taint effect to match. Empty means match all taint effects.
+                        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: |-
+                        Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                      type: string
+                    operator:
+                      description: |-
+                        Operator represents a key's relationship to the value.
+                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Exists is equivalent to wildcard for value, so that a pod can
+                        tolerate all taints of a particular category.
+                      type: string
+                    tolerationSeconds:
+                      description: |-
+                        TolerationSeconds represents the period of time the toleration (which must be
+                        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                        it is not set, which means tolerate the taint forever (do not evict). Zero and
+                        negative values will be treated as 0 (evict immediately) by the system.
+                      format: int64
+                      type: integer
+                    value:
+                      description: |-
+                        Value is the taint value the toleration matches to.
+                        If the operator is Exists, the value should be empty, otherwise just a regular string.
+                      type: string
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+            type: object
+          status:
+            description: LinstorClusterStatus defines the observed state of LinstorCluster
+            properties:
+              availableCapacityBytes:
+                description: The number of bytes in total in all storage pools in
+                  the LINSTOR Cluster.
+                format: int64
+                type: integer
+              capacity:
+                description: Capacity mirrors the information from TotalCapacityBytes
+                  and FreeCapacityBytes in a human-readable string
+                type: string
+              conditions:
+                description: Current LINSTOR Cluster state
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              freeCapacityBytes:
+                description: The number of bytes free in all storage pools in the
+                  LINSTOR Cluster.
+                format: int64
+                type: integer
+              numberOfSnapshots:
+                description: The number of snapshots in the LINSTOR Cluster.
+                format: int32
+                type: integer
+              numberOfVolumes:
+                description: The number of volumes in the LINSTOR Cluster.
+                format: int32
+                type: integer
+              runningSatellites:
+                description: The number of LINSTOR Satellites currently running.
+                format: int32
+                type: integer
+              satellites:
+                description: Satellites mirrors the information from ScheduledSatellites
+                  and RunningSatellites in a human-readable string
+                type: string
+              scheduledSatellites:
+                description: The number of LINSTOR Satellites that are expected to
+                  run.
+                format: int32
+                type: integer
+              version:
+                description: The Version of the LINSTOR Cluster.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: linstornodeconnections.piraeus.io
+spec:
+  group: piraeus.io
+  names:
+    kind: LinstorNodeConnection
+    listKind: LinstorNodeConnectionList
+    plural: linstornodeconnections
+    singular: linstornodeconnection
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: If the LINSTOR Node Connection is fully configured
+      jsonPath: .status.conditions[?(@.type=='Configured')].status
+      name: Configured
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: LinstorNodeConnection is the Schema for the linstornodeconnections
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LinstorNodeConnectionSpec defines the desired state of LinstorNodeConnection
+            properties:
+              paths:
+                description: Paths configure the network path used when connecting
+                  two nodes.
+                items:
+                  properties:
+                    interface:
+                      description: Interface to use on both nodes.
+                      type: string
+                    name:
+                      description: Name of the path.
+                      type: string
+                  required:
+                  - interface
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              properties:
+                description: |-
+                  Properties to apply for the node connection.
+
+                  Use to create default settings for DRBD that should apply to all resources connections between a set of
+                  cluster nodes.
+                items:
+                  properties:
+                    name:
+                      description: Name of the property to set.
+                      minLength: 1
+                      type: string
+                    value:
+                      description: Value to set the property to.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              selector:
+                description: |-
+                  Selector selects which pair of Satellites the connection should apply to.
+                  If not given, the connection will be applied to all connections.
+                items:
+                  description: SelectorTerm matches pairs of nodes by checking that
+                    the nodes match all specified requirements.
+                  properties:
+                    matchLabels:
+                      description: MatchLabels is a list of match expressions that
+                        the node pairs must meet.
+                      items:
+                        properties:
+                          key:
+                            description: Key is the name of a node label.
+                            minLength: 1
+                            type: string
+                          op:
+                            default: Exists
+                            description: |-
+                              Op to apply to the label.
+                              Exists (default) checks for the presence of the label on both nodes in the pair.
+                              DoesNotExist checks that the label is not present on either node in the pair.
+                              In checks for the presence of the label value given by Values on both nodes in the pair.
+                              NotIn checks that both nodes in the pair do not have any of the label values given by Values.
+                              Same checks that the label value is equal in the node pair.
+                              NotSame checks that the label value is not equal in the node pair.
+                            enum:
+                            - Exists
+                            - DoesNotExist
+                            - In
+                            - NotIn
+                            - Same
+                            - NotSame
+                            type: string
+                          values:
+                            description: Values to match on, using the provided Op.
+                            items:
+                              type: string
+                            type: array
+                        required:
+                        - key
+                        type: object
+                      type: array
+                  required:
+                  - matchLabels
+                  type: object
+                type: array
+            type: object
+          status:
+            description: LinstorNodeConnectionStatus defines the observed state of
+              LinstorNodeConnection
+            properties:
+              conditions:
+                description: Current LINSTOR Node Connection state
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: linstorsatelliteconfigurations.piraeus.io
+spec:
+  group: piraeus.io
+  names:
+    kind: LinstorSatelliteConfiguration
+    listKind: LinstorSatelliteConfigurationList
+    plural: linstorsatelliteconfigurations
+    singular: linstorsatelliteconfiguration
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: The node selector used
+      jsonPath: .spec.nodeSelector
+      name: Selector
+      type: string
+    - description: If the Configuration was applied
+      jsonPath: .status.conditions[?(@.type=='Applied')].status
+      name: Applied
+      type: string
+    - description: Number of Satellites this Configuration has been applied to
+      jsonPath: .status.matched
+      name: Matched
+      type: integer
+    - description: Satellites this Configuration has been applied to
+      jsonPath: .status.appliedTo
+      name: Satellites
+      priority: 10
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: LinstorSatelliteConfiguration is the Schema for the linstorsatelliteconfigurations
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              LinstorSatelliteConfigurationSpec defines a partial, desired state of a LinstorSatelliteSpec.
+
+              All the LinstorSatelliteConfiguration resources with matching NodeSelector will
+              be merged into a single LinstorSatelliteSpec.
+            properties:
+              deletionPolicy:
+                description: |-
+                  DeletionPolicy configures the way LinstorSatellite resources are deleted.
+
+                  A LinstorSatellite may be deleted because:
+                  * It no longer matches the affinity and node selector of the LinstorCluster resource.
+                  * The node it references has been removed from Kubernetes.
+                  * It was manually deleted outside the Operator.
+
+                  A LinstorSatellite may store the last copy of a volume, in which case it is not desirable to unconditionally remove
+                  the satellite from the cluster. For this reason, the following deletion policies exist:
+
+                  * DeletionPolicyEvacuate will start evacuation of the LINSTOR Satellite and wait until it completes before removing the LinstorSatellite object, comparable to the "linstor node evacuate" command.
+                  * DeletionPolicyRetain will retain the LINSTOR Satellite, keeping it registered in LINSTOR, but removing associated Kubernetes resources.
+                  * DeletionPolicyDelete will remove the LINSTOR Satellite from the LINSTOR Cluster without prior eviction, comparable to the "linstor node lost" command.
+                enum:
+                - Evacuate
+                - Retain
+                - Delete
+                type: string
+              evacuationStrategy:
+                description: EvacuationStrategy configures the evacuation of volumes
+                  from a Satellite when DeletionPolicy "Evacuate" is used.
+                nullable: true
+                properties:
+                  attachedVolumeReattachTimeout:
+                    default: 5m
+                    description: |-
+                      AttachedVolumeReattachTimeout configures how long evacuation waits for attached volumes to reattach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                  unattachedVolumeAttachTimeout:
+                    default: 5m
+                    description: |-
+                      UnattachedVolumeAttachTimeout configures how long evacuation waits for unattached volumes to attach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                type: object
+              internalTLS:
+                description: |-
+                  InternalTLS configures secure communication for the LINSTOR Satellite.
+
+                  If set, the control traffic between LINSTOR Controller and Satellite will be encrypted using mTLS.
+                nullable: true
+                properties:
+                  caReference:
+                    description: |-
+                      CAReference configures the CA certificate to use when validating TLS certificates.
+                      If not set, the TLS secret is expected to contain a "ca.crt" containing the CA certificate.
+                    properties:
+                      key:
+                        default: ca.crt
+                        description: |-
+                          Key to select in the resource.
+                          Defaults to ca.crt if not specified.
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind of the resource containing the CA Certificate,
+                          either a ConfigMap or Secret.
+                        enum:
+                        - ConfigMap
+                        - Secret
+                        type: string
+                      name:
+                        description: Name of the resource containing the CA Certificate.
+                        type: string
+                      optional:
+                        description: Optional specifies whether the resource and its
+                          key must exist.
+                        type: boolean
+                    required:
+                    - name
+                    type: object
+                  certManager:
+                    description: |-
+                      CertManager references a cert-manager Issuer or ClusterIssuer.
+                      If set, a Certificate resource will be created, provisioning the secret references in SecretName using the
+                      issuer configured here.
+                    properties:
+                      group:
+                        description: Group of the resource being referred to.
+                        type: string
+                      kind:
+                        description: Kind of the resource being referred to.
+                        type: string
+                      name:
+                        description: Name of the resource being referred to.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  secretName:
+                    description: SecretName references a secret holding the TLS key
+                      and certificates.
+                    type: string
+                  tlsHandshakeDaemon:
+                    description: |-
+                      TLSHandshakeDaemon enables tlshd for establishing TLS sessions for use by DRBD.
+
+                      If enabled, adds a new sidecar to the LINSTOR Satellite that runs the tlshd handshake daemon.
+                      The daemon uses the TLS certificate and key to establish secure connections on behalf of DRBD.
+                    type: boolean
+                type: object
+              ipFamilies:
+                description: |-
+                  IPFamilies configures the IP Family (IPv4 or IPv6) to use to connect to the LINSTOR Satellite.
+
+                  If set, the control traffic between LINSTOR Controller and Satellite will use only the given IP Family.
+                  If not set, the Operator will configure all families found in the Satellites Pods' Status.
+                items:
+                  description: IPFamily represents the IP Family (IPv4 or IPv6).
+                  enum:
+                  - IPv4
+                  - IPv6
+                  type: string
+                type: array
+              nodeAffinity:
+                description: |-
+                  NodeAffinity selects which LinstorSatellite resources this spec should be applied to.
+                  See https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+                properties:
+                  nodeSelectorTerms:
+                    description: Required. A list of node selector terms. The terms
+                      are ORed.
+                    items:
+                      description: |-
+                        A null or empty node selector term matches no objects. The requirements of
+                        them are ANDed.
+                        The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                      properties:
+                        matchExpressions:
+                          description: A list of node selector requirements by node's
+                            labels.
+                          items:
+                            description: |-
+                              A node selector requirement is a selector that contains values, a key, and an operator
+                              that relates the key and values.
+                            properties:
+                              key:
+                                description: The label key that the selector applies
+                                  to.
+                                type: string
+                              operator:
+                                description: |-
+                                  Represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                type: string
+                              values:
+                                description: |-
+                                  An array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. If the operator is Gt or Lt, the values
+                                  array must have a single element, which will be interpreted as an integer.
+                                  This array is replaced during a strategic merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchFields:
+                          description: A list of node selector requirements by node's
+                            fields.
+                          items:
+                            description: |-
+                              A node selector requirement is a selector that contains values, a key, and an operator
+                              that relates the key and values.
+                            properties:
+                              key:
+                                description: The label key that the selector applies
+                                  to.
+                                type: string
+                              operator:
+                                description: |-
+                                  Represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                type: string
+                              values:
+                                description: |-
+                                  An array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. If the operator is Gt or Lt, the values
+                                  array must have a single element, which will be interpreted as an integer.
+                                  This array is replaced during a strategic merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
+                    x-kubernetes-list-type: atomic
+                required:
+                - nodeSelectorTerms
+                type: object
+                x-kubernetes-map-type: atomic
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  NodeSelector selects which LinstorSatellite resources this spec should be applied to.
+                  See https://kubernetes.io/docs/concepts/configuration/assign-pod-node/
+                type: object
+              patches:
+                description: |-
+                  Patches is a list of kustomize patches to apply.
+
+                  See https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/patches/ for how to create patches.
+                items:
+                  description: Patch represent either a Strategic Merge Patch or a
+                    JSON patch and its targets.
+                  properties:
+                    options:
+                      description: Options is a list of options for the patch
+                      properties:
+                        allowKindChange:
+                          description: AllowKindChange allows kind changes to the
+                            resource.
+                          type: boolean
+                        allowNameChange:
+                          description: AllowNameChange allows name changes to the
+                            resource.
+                          type: boolean
+                      type: object
+                    patch:
+                      description: Patch is the content of a patch.
+                      minLength: 1
+                      type: string
+                    target:
+                      description: Target points to the resources that the patch is
+                        applied to
+                      properties:
+                        annotationSelector:
+                          description: |-
+                            AnnotationSelector is a string that follows the label selection expression
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#api
+                            It matches against the resource annotations.
+                          type: string
+                        group:
+                          type: string
+                        kind:
+                          type: string
+                        labelSelector:
+                          description: |-
+                            LabelSelector is a string that follows the label selection expression
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#api
+                            It matches against the resource labels.
+                          type: string
+                        name:
+                          description: Name of the resource.
+                          type: string
+                        namespace:
+                          description: Namespace the resource belongs to, if it can
+                            belong to a namespace.
+                          type: string
+                        version:
+                          type: string
+                      type: object
+                  required:
+                  - patch
+                  type: object
+                type: array
+              podTemplate:
+                description: |-
+                  Template to apply to Satellite Pods.
+
+                  The template is applied as a patch to the default resource, so it can be "sparse", not listing any
+                  containers or volumes that should remain unchanged.
+                  See https://kubernetes.io/docs/concepts/workloads/pods/#pod-templates
+                type: object
+                x-kubernetes-map-type: atomic
+                x-kubernetes-preserve-unknown-fields: true
+              properties:
+                description: Properties is a list of properties to set on the node.
+                items:
+                  properties:
+                    expandFrom:
+                      description: |-
+                        ExpandFrom can reference multiple resource fields at once.
+                        It either sets the property to an aggregate value based on matched resource fields, or expands to multiple
+                        properties.
+                      properties:
+                        delimiter:
+                          description: Delimiter used to join multiple key and value
+                            pairs together.
+                          type: string
+                        nameTemplate:
+                          description: |-
+                            NameTemplate defines how the property key is expanded.
+                            If set, the template is appended to the defined property name, creating multiple properties instead of one
+                            aggregate.
+                            * $1 is replaced with the matched key.
+                            * $2 is replaced with the matched value.
+                          type: string
+                        nodeFieldRef:
+                          description: Select a field of the node. Supports `metadata.name`,
+                            `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                          minLength: 1
+                          type: string
+                        valueTemplate:
+                          description: |-
+                            ValueTemplate defines how the property value is expanded.
+                            * $1 is replaced with the matched key.
+                            * $2 is replaced with the matched value.
+                          type: string
+                      required:
+                      - nodeFieldRef
+                      type: object
+                    name:
+                      description: Name of the property to set.
+                      minLength: 1
+                      type: string
+                    optional:
+                      description: Optional values are only set if they have a non-empty
+                        value
+                      type: boolean
+                    value:
+                      description: Value to set the property to.
+                      type: string
+                    valueFrom:
+                      description: ValueFrom sets the value from an existing resource.
+                      properties:
+                        nodeFieldRef:
+                          description: Select a field of the node. Supports `metadata.name`,
+                            `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                          minLength: 1
+                          type: string
+                      required:
+                      - nodeFieldRef
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              storagePools:
+                description: StoragePools is a list of storage pools to configure
+                  on the node.
+                items:
+                  properties:
+                    filePool:
+                      description: Configures a file system based storage pool, allocating
+                        a regular file per volume.
+                      properties:
+                        directory:
+                          description: Directory is the path to the host directory
+                            used to store volume data.
+                          type: string
+                      type: object
+                    fileThinPool:
+                      description: Configures a file system based storage pool, allocating
+                        a sparse file per volume.
+                      properties:
+                        directory:
+                          description: Directory is the path to the host directory
+                            used to store volume data.
+                          type: string
+                      type: object
+                    lvmPool:
+                      description: Configures a LVM Volume Group as storage pool.
+                      properties:
+                        volumeGroup:
+                          type: string
+                      type: object
+                    lvmThinPool:
+                      description: Configures a LVM Thin Pool as storage pool.
+                      properties:
+                        thinPool:
+                          description: ThinPool is the name of the thinpool LV (without
+                            VG prefix).
+                          type: string
+                        volumeGroup:
+                          type: string
+                      type: object
+                    name:
+                      description: Name of the storage pool in linstor.
+                      minLength: 3
+                      type: string
+                    properties:
+                      description: Properties to set on the storage pool.
+                      items:
+                        properties:
+                          expandFrom:
+                            description: |-
+                              ExpandFrom can reference multiple resource fields at once.
+                              It either sets the property to an aggregate value based on matched resource fields, or expands to multiple
+                              properties.
+                            properties:
+                              delimiter:
+                                description: Delimiter used to join multiple key and
+                                  value pairs together.
+                                type: string
+                              nameTemplate:
+                                description: |-
+                                  NameTemplate defines how the property key is expanded.
+                                  If set, the template is appended to the defined property name, creating multiple properties instead of one
+                                  aggregate.
+                                  * $1 is replaced with the matched key.
+                                  * $2 is replaced with the matched value.
+                                type: string
+                              nodeFieldRef:
+                                description: Select a field of the node. Supports
+                                  `metadata.name`, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                                minLength: 1
+                                type: string
+                              valueTemplate:
+                                description: |-
+                                  ValueTemplate defines how the property value is expanded.
+                                  * $1 is replaced with the matched key.
+                                  * $2 is replaced with the matched value.
+                                type: string
+                            required:
+                            - nodeFieldRef
+                            type: object
+                          name:
+                            description: Name of the property to set.
+                            minLength: 1
+                            type: string
+                          optional:
+                            description: Optional values are only set if they have
+                              a non-empty value
+                            type: boolean
+                          value:
+                            description: Value to set the property to.
+                            type: string
+                          valueFrom:
+                            description: ValueFrom sets the value from an existing
+                              resource.
+                            properties:
+                              nodeFieldRef:
+                                description: Select a field of the node. Supports
+                                  `metadata.name`, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                                minLength: 1
+                                type: string
+                            required:
+                            - nodeFieldRef
+                            type: object
+                        required:
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
+                    source:
+                      properties:
+                        hostDevices:
+                          description: HostDevices is a list of device paths used
+                            to configure the given pool.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                      type: object
+                    zfsPool:
+                      description: Configures a ZFS system based storage pool, allocating
+                        zvols from the given zpool.
+                      properties:
+                        zPool:
+                          description: ZPool is the name of the ZFS zpool.
+                          type: string
+                      type: object
+                    zfsThinPool:
+                      description: Configures a ZFS system based storage pool, allocating
+                        sparse zvols from the given zpool.
+                      properties:
+                        zPool:
+                          description: ZPool is the name of the ZFS zpool.
+                          type: string
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+            type: object
+          status:
+            description: LinstorSatelliteConfigurationStatus defines the observed
+              state of LinstorSatelliteConfiguration
+            properties:
+              appliedTo:
+                description: AppliedTo lists the LinstorSatellite resource this configuration
+                  was applied to
+                items:
+                  type: string
+                type: array
+              conditions:
+                description: Current LINSTOR Satellite Config state
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              matched:
+                description: Number of configured LinstorSatellite resource.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: linstorsatellites.piraeus.io
+spec:
+  group: piraeus.io
+  names:
+    kind: LinstorSatellite
+    listKind: LinstorSatelliteList
+    plural: linstorsatellites
+    singular: linstorsatellite
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: If the LINSTOR Satellite is connected
+      jsonPath: .status.conditions[?(@.type=='Available')].status
+      name: Connected
+      type: string
+    - description: If the LINSTOR Satellite is fully configured
+      jsonPath: .status.conditions[?(@.type=='Configured')].status
+      name: Configured
+      type: string
+    - description: The Satellite Configurations applied to this Satellite
+      jsonPath: .metadata.annotations.piraeus\.io/applied-configurations
+      name: Applied Configurations
+      priority: 10
+      type: string
+    - description: The deletion policy of the Satellite
+      jsonPath: .spec.deletionPolicy
+      name: Deletion Policy
+      type: string
+    - description: The used capacity on the node
+      jsonPath: .status.capacity
+      name: Used Capacity
+      type: string
+    - description: The number of volumes on the node
+      jsonPath: .status.numberOfVolumes
+      name: Volumes
+      type: integer
+    - description: The number of snapshots on the node
+      jsonPath: .status.numberOfSnapshots
+      name: Snapshots
+      priority: 10
+      type: integer
+    - description: The storage providers supported by the node
+      jsonPath: .status.storageProviders
+      name: Storage Providers
+      priority: 10
+      type: string
+    - description: The device layers supported by the node
+      jsonPath: .status.deviceLayers
+      name: Device Layers
+      priority: 10
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: LinstorSatellite is the Schema for the linstorsatellites API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LinstorSatelliteSpec defines the desired state of LinstorSatellite
+            properties:
+              clusterRef:
+                description: ClusterRef references the LinstorCluster used to create
+                  this LinstorSatellite.
+                properties:
+                  caReference:
+                    description: |-
+                      CAReference configures the CA certificate to use when validating TLS certificates.
+                      If not set, the TLS secret is expected to contain a "ca.crt" containing the CA certificate.
+                    properties:
+                      key:
+                        default: ca.crt
+                        description: |-
+                          Key to select in the resource.
+                          Defaults to ca.crt if not specified.
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind of the resource containing the CA Certificate,
+                          either a ConfigMap or Secret.
+                        enum:
+                        - ConfigMap
+                        - Secret
+                        type: string
+                      name:
+                        description: Name of the resource containing the CA Certificate.
+                        type: string
+                      optional:
+                        description: Optional specifies whether the resource and its
+                          key must exist.
+                        type: boolean
+                    required:
+                    - name
+                    type: object
+                  clientSecretName:
+                    description: ClientSecretName references the secret used by the
+                      operator to validate the https endpoint.
+                    type: string
+                  externalController:
+                    description: |-
+                      ExternalController references an external controller.
+                      When set, the Operator uses the external cluster to register satellites.
+                    properties:
+                      url:
+                        description: URL of the external controller.
+                        minLength: 3
+                        type: string
+                    required:
+                    - url
+                    type: object
+                  name:
+                    description: Name of the LinstorCluster resource controlling this
+                      satellite.
+                    type: string
+                type: object
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy configures the way LinstorSatellite resources are deleted.
+
+                  A LinstorSatellite may be deleted because:
+                  * It no longer matches the affinity and node selector of the LinstorCluster resource.
+                  * The node it references has been removed from Kubernetes.
+                  * It was manually deleted outside the Operator.
+
+                  A LinstorSatellite may store the last copy of a volume, in which case it is not desirable to unconditionally remove
+                  the satellite from the cluster. For this reason, the following deletion policies exist:
+
+                  * DeletionPolicyEvacuate will start evacuation of the LINSTOR Satellite and wait until it completes before removing the LinstorSatellite object, comparable to the "linstor node evacuate" command.
+                  * DeletionPolicyRetain will retain the LINSTOR Satellite, keeping it registered in LINSTOR, but removing associated Kubernetes resources.
+                  * DeletionPolicyDelete will remove the LINSTOR Satellite from the LINSTOR Cluster without prior eviction, comparable to the "linstor node lost" command.
+                enum:
+                - Evacuate
+                - Retain
+                - Delete
+                type: string
+              evacuationStrategy:
+                description: EvacuationStrategy configures the evacuation of volumes
+                  from a Satellite when DeletionPolicy "Evacuate" is used.
+                properties:
+                  attachedVolumeReattachTimeout:
+                    default: 5m
+                    description: |-
+                      AttachedVolumeReattachTimeout configures how long evacuation waits for attached volumes to reattach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                  unattachedVolumeAttachTimeout:
+                    default: 5m
+                    description: |-
+                      UnattachedVolumeAttachTimeout configures how long evacuation waits for unattached volumes to attach on
+                      different nodes. Setting this to 0 disable this evacuation step.
+                    type: string
+                type: object
+              internalTLS:
+                description: |-
+                  InternalTLS configures secure communication for the LINSTOR Satellite.
+
+                  If set, the control traffic between LINSTOR Controller and Satellite will be encrypted using mTLS.
+                  The Controller will use the client key from `LinstorCluster.spec.internalTLS` when connecting.
+                nullable: true
+                properties:
+                  caReference:
+                    description: |-
+                      CAReference configures the CA certificate to use when validating TLS certificates.
+                      If not set, the TLS secret is expected to contain a "ca.crt" containing the CA certificate.
+                    properties:
+                      key:
+                        default: ca.crt
+                        description: |-
+                          Key to select in the resource.
+                          Defaults to ca.crt if not specified.
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind of the resource containing the CA Certificate,
+                          either a ConfigMap or Secret.
+                        enum:
+                        - ConfigMap
+                        - Secret
+                        type: string
+                      name:
+                        description: Name of the resource containing the CA Certificate.
+                        type: string
+                      optional:
+                        description: Optional specifies whether the resource and its
+                          key must exist.
+                        type: boolean
+                    required:
+                    - name
+                    type: object
+                  certManager:
+                    description: |-
+                      CertManager references a cert-manager Issuer or ClusterIssuer.
+                      If set, a Certificate resource will be created, provisioning the secret references in SecretName using the
+                      issuer configured here.
+                    properties:
+                      group:
+                        description: Group of the resource being referred to.
+                        type: string
+                      kind:
+                        description: Kind of the resource being referred to.
+                        type: string
+                      name:
+                        description: Name of the resource being referred to.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  secretName:
+                    description: SecretName references a secret holding the TLS key
+                      and certificates.
+                    type: string
+                  tlsHandshakeDaemon:
+                    description: |-
+                      TLSHandshakeDaemon enables tlshd for establishing TLS sessions for use by DRBD.
+
+                      If enabled, adds a new sidecar to the LINSTOR Satellite that runs the tlshd handshake daemon.
+                      The daemon uses the TLS certificate and key to establish secure connections on behalf of DRBD.
+                    type: boolean
+                type: object
+              ipFamilies:
+                description: |-
+                  IPFamilies configures the IP Family (IPv4 or IPv6) to use to connect to the LINSTOR Satellite.
+
+                  If set, the control traffic between LINSTOR Controller and Satellite will use only the given IP Family.
+                  If not set, the Operator will configure all families found in the Satellites Pods' Status.
+                items:
+                  description: IPFamily represents the IP Family (IPv4 or IPv6).
+                  enum:
+                  - IPv4
+                  - IPv6
+                  type: string
+                type: array
+              patches:
+                description: |-
+                  Patches is a list of kustomize patches to apply.
+
+                  See https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/patches/ for how to create patches.
+                items:
+                  description: Patch represent either a Strategic Merge Patch or a
+                    JSON patch and its targets.
+                  properties:
+                    options:
+                      description: Options is a list of options for the patch
+                      properties:
+                        allowKindChange:
+                          description: AllowKindChange allows kind changes to the
+                            resource.
+                          type: boolean
+                        allowNameChange:
+                          description: AllowNameChange allows name changes to the
+                            resource.
+                          type: boolean
+                      type: object
+                    patch:
+                      description: Patch is the content of a patch.
+                      minLength: 1
+                      type: string
+                    target:
+                      description: Target points to the resources that the patch is
+                        applied to
+                      properties:
+                        annotationSelector:
+                          description: |-
+                            AnnotationSelector is a string that follows the label selection expression
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#api
+                            It matches against the resource annotations.
+                          type: string
+                        group:
+                          type: string
+                        kind:
+                          type: string
+                        labelSelector:
+                          description: |-
+                            LabelSelector is a string that follows the label selection expression
+                            https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#api
+                            It matches against the resource labels.
+                          type: string
+                        name:
+                          description: Name of the resource.
+                          type: string
+                        namespace:
+                          description: Namespace the resource belongs to, if it can
+                            belong to a namespace.
+                          type: string
+                        version:
+                          type: string
+                      type: object
+                  required:
+                  - patch
+                  type: object
+                type: array
+              properties:
+                description: Properties is a list of properties to set on the node.
+                items:
+                  properties:
+                    expandFrom:
+                      description: |-
+                        ExpandFrom can reference multiple resource fields at once.
+                        It either sets the property to an aggregate value based on matched resource fields, or expands to multiple
+                        properties.
+                      properties:
+                        delimiter:
+                          description: Delimiter used to join multiple key and value
+                            pairs together.
+                          type: string
+                        nameTemplate:
+                          description: |-
+                            NameTemplate defines how the property key is expanded.
+                            If set, the template is appended to the defined property name, creating multiple properties instead of one
+                            aggregate.
+                            * $1 is replaced with the matched key.
+                            * $2 is replaced with the matched value.
+                          type: string
+                        nodeFieldRef:
+                          description: Select a field of the node. Supports `metadata.name`,
+                            `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                          minLength: 1
+                          type: string
+                        valueTemplate:
+                          description: |-
+                            ValueTemplate defines how the property value is expanded.
+                            * $1 is replaced with the matched key.
+                            * $2 is replaced with the matched value.
+                          type: string
+                      required:
+                      - nodeFieldRef
+                      type: object
+                    name:
+                      description: Name of the property to set.
+                      minLength: 1
+                      type: string
+                    optional:
+                      description: Optional values are only set if they have a non-empty
+                        value
+                      type: boolean
+                    value:
+                      description: Value to set the property to.
+                      type: string
+                    valueFrom:
+                      description: ValueFrom sets the value from an existing resource.
+                      properties:
+                        nodeFieldRef:
+                          description: Select a field of the node. Supports `metadata.name`,
+                            `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                          minLength: 1
+                          type: string
+                      required:
+                      - nodeFieldRef
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              repository:
+                description: Repository used to pull workload images.
+                type: string
+              storagePools:
+                description: StoragePools is a list of storage pools to configure
+                  on the node.
+                items:
+                  properties:
+                    filePool:
+                      description: Configures a file system based storage pool, allocating
+                        a regular file per volume.
+                      properties:
+                        directory:
+                          description: Directory is the path to the host directory
+                            used to store volume data.
+                          type: string
+                      type: object
+                    fileThinPool:
+                      description: Configures a file system based storage pool, allocating
+                        a sparse file per volume.
+                      properties:
+                        directory:
+                          description: Directory is the path to the host directory
+                            used to store volume data.
+                          type: string
+                      type: object
+                    lvmPool:
+                      description: Configures a LVM Volume Group as storage pool.
+                      properties:
+                        volumeGroup:
+                          type: string
+                      type: object
+                    lvmThinPool:
+                      description: Configures a LVM Thin Pool as storage pool.
+                      properties:
+                        thinPool:
+                          description: ThinPool is the name of the thinpool LV (without
+                            VG prefix).
+                          type: string
+                        volumeGroup:
+                          type: string
+                      type: object
+                    name:
+                      description: Name of the storage pool in linstor.
+                      minLength: 3
+                      type: string
+                    properties:
+                      description: Properties to set on the storage pool.
+                      items:
+                        properties:
+                          expandFrom:
+                            description: |-
+                              ExpandFrom can reference multiple resource fields at once.
+                              It either sets the property to an aggregate value based on matched resource fields, or expands to multiple
+                              properties.
+                            properties:
+                              delimiter:
+                                description: Delimiter used to join multiple key and
+                                  value pairs together.
+                                type: string
+                              nameTemplate:
+                                description: |-
+                                  NameTemplate defines how the property key is expanded.
+                                  If set, the template is appended to the defined property name, creating multiple properties instead of one
+                                  aggregate.
+                                  * $1 is replaced with the matched key.
+                                  * $2 is replaced with the matched value.
+                                type: string
+                              nodeFieldRef:
+                                description: Select a field of the node. Supports
+                                  `metadata.name`, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                                minLength: 1
+                                type: string
+                              valueTemplate:
+                                description: |-
+                                  ValueTemplate defines how the property value is expanded.
+                                  * $1 is replaced with the matched key.
+                                  * $2 is replaced with the matched value.
+                                type: string
+                            required:
+                            - nodeFieldRef
+                            type: object
+                          name:
+                            description: Name of the property to set.
+                            minLength: 1
+                            type: string
+                          optional:
+                            description: Optional values are only set if they have
+                              a non-empty value
+                            type: boolean
+                          value:
+                            description: Value to set the property to.
+                            type: string
+                          valueFrom:
+                            description: ValueFrom sets the value from an existing
+                              resource.
+                            properties:
+                              nodeFieldRef:
+                                description: Select a field of the node. Supports
+                                  `metadata.name`, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`.
+                                minLength: 1
+                                type: string
+                            required:
+                            - nodeFieldRef
+                            type: object
+                        required:
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - name
+                      x-kubernetes-list-type: map
+                    source:
+                      properties:
+                        hostDevices:
+                          description: HostDevices is a list of device paths used
+                            to configure the given pool.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                      type: object
+                    zfsPool:
+                      description: Configures a ZFS system based storage pool, allocating
+                        zvols from the given zpool.
+                      properties:
+                        zPool:
+                          description: ZPool is the name of the ZFS zpool.
+                          type: string
+                      type: object
+                    zfsThinPool:
+                      description: Configures a ZFS system based storage pool, allocating
+                        sparse zvols from the given zpool.
+                      properties:
+                        zPool:
+                          description: ZPool is the name of the ZFS zpool.
+                          type: string
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - clusterRef
+            type: object
+          status:
+            description: LinstorSatelliteStatus defines the observed state of LinstorSatellite
+            properties:
+              availableCapacityBytes:
+                description: The number of bytes in total in all storage pools on
+                  this Satellite.
+                format: int64
+                type: integer
+              capacity:
+                description: Capacity mirrors the information from TotalCapacityBytes
+                  and FreeCapacityBytes in a human-readable string.
+                type: string
+              conditions:
+                description: Current LINSTOR Satellite state
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              deviceLayers:
+                description: DeviceLayers lists the device layers (LUKS, CACHE, etc...)
+                  this Satellite supports.
+                items:
+                  type: string
+                type: array
+              freeCapacityBytes:
+                description: The number of bytes free in all storage pools on this
+                  Satellite.
+                format: int64
+                type: integer
+              numberOfSnapshots:
+                description: The number of snapshots on this Satellite.
+                format: int32
+                type: integer
+              numberOfVolumes:
+                description: The number of volumes on this Satellite.
+                format: int32
+                type: integer
+              storageProviders:
+                description: StorageProviders lists the storage providers (LVM, ZFS,
+                  etc...) this Satellite supports.
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
