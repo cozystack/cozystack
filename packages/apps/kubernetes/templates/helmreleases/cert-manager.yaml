@@ -1,3 +1,13 @@
+{{- define "cozystack.defaultCertManagerValues" -}}
+{{- if $.Values.addons.gatewayAPI.enabled }}
+cert-manager:
+  config:
+    apiVersion: controller.config.cert-manager.io/v1alpha1
+    kind: ControllerConfiguration
+    enableGatewayAPI: true
+{{- end }}
+{{- end }}
+
 {{- if .Values.addons.certManager.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -29,11 +39,8 @@ spec:
     force: true
     remediation:
       retries: -1
-  {{- with .Values.addons.certManager.valuesOverride }}
   values:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-
+    {{- toYaml (deepCopy .Values.addons.certManager.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultCertManagerValues" .))) | nindent 4 }}
   dependsOn:
   {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
   - name: {{ .Release.Name }}
