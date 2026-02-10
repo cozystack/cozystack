@@ -7,13 +7,30 @@
 ## @field {quantity} [memory] - Memory (RAM) available to each replica.
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
-## @value nano
-## @value micro
-## @value small
-## @value medium
-## @value large
-## @value xlarge
-## @value 2xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
 
 ## @param {int} replicas - Number of replicas.
 replicas: 2
@@ -21,8 +38,8 @@ replicas: 2
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each FerretDB replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-## @param {ResourcesPreset} resourcesPreset="micro" - Default sizing preset used when `resources` is omitted.
-resourcesPreset: "micro"
+## @param {ResourcesPreset} resourcesPreset="u1.nano" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "u1.nano"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
