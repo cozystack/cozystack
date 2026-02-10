@@ -12,6 +12,11 @@
       "type": "string",
       "default": ""
     },
+    "cpuModel": {
+      "description": "Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map",
+      "type": "string",
+      "default": ""
+    },
     "external": {
       "description": "Enable external access from outside the cluster.",
       "type": "boolean",
