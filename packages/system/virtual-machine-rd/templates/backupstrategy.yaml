@@ -5,14 +5,17 @@ metadata:
   name: velero-backup-strategy-for-virtualmachines
 spec:
   template:
-    spec: # see https://velero.io/docs/v1.9/api-types/backup/
+    spec:
+      csiSnapshotTimeout: 10m0s
       includedNamespaces:
       - '{{ printf "{{ .Application.metadata.namespace }}" }}'
-
-      labelSelector:
-        matchLabels:
-          apps.cozystack.io/application.Kind: '{{ printf "{{ .Application.kind }}" }}'
-
+      orLabelSelector:
+      - matchLabels:
+          apps.cozystack.io/application.group: apps.cozystack.io
+          apps.cozystack.io/application.kind: '{{ printf "{{ .Application.kind }}" }}'
+          apps.cozystack.io/application.name: '{{ printf "{{ .Application.metadata.name }}"}}'
+      - matchLabels:
+          app.kubernetes.io/instance: 'virtual-machine-{{ printf "{{ .Application.metadata.name }}"}}' 
       includedResources:
         - helmreleases.helm.toolkit.fluxcd.io
         - virtualmachines.kubevirt.io
@@ -22,14 +25,11 @@ spec:
         - services
         - configmaps
         - secrets
-
       storageLocation: '{{ printf "{{ .Parameters.backupStorageLocationName }}" }}'
-
       volumeSnapshotLocations:
         - '{{ printf "{{ .Parameters.backupStorageLocationName }}" }}'
       snapshotVolumes: true
       snapshotMoveData: true
-
       ttl: 720h0m0s
       itemOperationTimeout: 24h0m0s
 {{- end }}
