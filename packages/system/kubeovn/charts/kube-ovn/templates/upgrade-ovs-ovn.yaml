@@ -31,6 +31,8 @@ rules:
       - daemonsets
     verbs:
       - list
+      - get
+      - watch
   - apiGroups:
       - apps
     resources:
