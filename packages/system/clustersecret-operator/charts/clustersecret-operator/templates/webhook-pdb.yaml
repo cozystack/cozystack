@@ -1,0 +1,13 @@
+{{- if ge (int .Values.webhook.replicaCount) 2 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "clustersecret-operator.webhook.fullname" . }}
+  labels:
+    {{- include "clustersecret-operator.webhook.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "clustersecret-operator.webhook.selectorLabels" . | nindent 6 }}
+{{- end }}

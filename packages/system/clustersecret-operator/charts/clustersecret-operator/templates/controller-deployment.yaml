@@ -1,0 +1,96 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clustersecret-operator.controller.fullname" . }}
+  labels:
+    {{- include "clustersecret-operator.controller.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controller.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "clustersecret-operator.controller.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.controller.podAnnotations | default .Values.global.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "clustersecret-operator.controller.selectorLabels" . | nindent 8 }}
+        {{- with .Values.controller.podLabels | default .Values.global.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.controller.imagePullSecrets | default .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.controller.podSecurityContext | default .Values.global.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.nodeSelector | default .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.affinity | default .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.topologySpreadConstraints | default .Values.global.topologySpreadConstraints }}
+      topologySpreadConstraints:
+      {{- range . }}
+      - {{ toYaml . | nindent 8 | trim }}
+        {{- if not .labelSelector }}
+        labelSelector:
+          matchLabels:
+            {{- include "clustersecret-operator.controller.selectorLabels" $ | nindent 12 }}
+        {{- end }}
+      {{- end }}
+      {{- else }}
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        nodeTaintsPolicy: Honor
+        whenUnsatisfiable: {{ .Values.controller.defaultHostNameSpreadPolicy | default .Values.global.defaultHostNameSpreadPolicy }}
+        labelSelector:
+          matchLabels:
+            {{- include "clustersecret-operator.controller.selectorLabels" . | nindent 12 }}
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        nodeTaintsPolicy: Honor
+        whenUnsatisfiable: {{ .Values.controller.defaultZoneSpreadPolicy | default .Values.global.defaultZoneSpreadPolicy }}
+        labelSelector:
+          matchLabels:
+            {{- include "clustersecret-operator.controller.selectorLabels" . | nindent 12 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations | default .Values.global.tolerations }}
+      tolerations:
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.controller.priorityClassName | default .Values.global.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      serviceAccountName: {{ include "clustersecret-operator.controller.fullname" . }}
+      automountServiceAccountToken: true
+      containers:
+      - name: controller
+        image: {{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Values.global.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.controller.image.pullPolicy | default .Values.global.image.pullPolicy }}
+        {{- with .Values.controller.securityContext | default .Values.global.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.controller.resources | nindent 12 }}
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        args:
+        - "--lease_namespace={{ .Release.Namespace }}"
+        - "--lease_name={{ include "clustersecret-operator.controller.fullname" . }}"
+        - "--lease_id=$(POD_NAME)"
+        - "--v={{ .Values.controller.logLevel | default .Values.global.logLevel | default 0 }}"

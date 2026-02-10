@@ -1,0 +1,7 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "clustersecret-operator.webhook.fullname" . }}
+  labels:
+    {{- include "clustersecret-operator.webhook.labels" . | nindent 4 }}
