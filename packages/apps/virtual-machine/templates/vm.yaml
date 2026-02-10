@@ -4,6 +4,9 @@
 {{- if and .Values.instanceProfile (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterPreference" "" .Values.instanceProfile)) }}
 {{-   fail (printf "Specified profile not exists in cluster: %s" .Values.instanceProfile) }}
 {{- end }}
+{{- if and (not .Values.instanceType) (not (and .Values.resources .Values.resources.cpu .Values.resources.sockets .Values.resources.memory)) }}
+{{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
+{{- end }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -67,15 +70,12 @@ spec:
         {{- include "virtual-machine.labels" . | nindent 8 }}
     spec:
       domain:
-        {{- if and .Values.resources .Values.resources.cpu .Values.resources.sockets }}
-        cpu:
-          cores: {{ .Values.resources.cpu }}
-          sockets: {{ .Values.resources.sockets }}
+        {{- $domainRes := include "virtual-machine.domainResources" . | fromJson -}}
+        {{- with $domainRes.cpu }}
+        cpu: {{- . | toYaml | nindent 10 }}
         {{- end }}
-        {{- if and .Values.resources .Values.resources.memory }}
-        resources:
-          requests:
-            memory: {{ .Values.resources.memory | quote }}
+        {{- with $domainRes.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
         {{- end }}
         firmware:
           uuid: {{ include "virtual-machine.stableUuid" . }}

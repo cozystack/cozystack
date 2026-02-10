@@ -14,14 +14,21 @@
 {{- $needUpdateProfile := false -}}
 {{- $needResizePVC := false -}}
 {{- $needRecreateService := false -}}
+{{- $needRemoveInstanceType := false -}}
+{{- $needRemoveCustomResources := false -}}
 
-{{- if and $existingVM $instanceType -}}
+{{- $existingHasInstanceType := and $existingVM $existingVM.spec.instancetype -}}
+{{- if and $existingHasInstanceType (not $instanceType) -}}
+  {{- $needRemoveInstanceType = true -}}
+{{- else if and $existingHasInstanceType $instanceType -}}
   {{- if not (eq $existingVM.spec.instancetype.name $instanceType) -}}
     {{- $needUpdateType = true -}}
   {{- end -}}
+{{- else if and $existingVM (not $existingHasInstanceType) $instanceType -}}
+  {{- $needRemoveCustomResources = true -}}
 {{- end -}}
 
-{{- if and $existingVM $instanceProfile -}}
+{{- if and $existingVM $existingVM.spec.preference $instanceProfile -}}
   {{- if not (eq $existingVM.spec.preference.name $instanceProfile) -}}
     {{- $needUpdateProfile = true -}}
   {{- end -}}
@@ -45,7 +52,7 @@
   {{- end -}}
 {{- end -}}
 
-{{- if or $needUpdateType $needUpdateProfile $needResizePVC $needRecreateService }}
+{{- if or $needUpdateType $needUpdateProfile $needResizePVC $needRecreateService $needRemoveInstanceType $needRemoveCustomResources }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -88,6 +95,20 @@ spec:
               kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
                 --type merge \
                 -p '{"spec":{"preference":{"name": "{{ $instanceProfile }}", "revisionName": null}}}'
+              {{- end }}
+
+              {{- if $needRemoveInstanceType }}
+              echo "Removing instancetype from VM (switching to custom resources)..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"instancetype":null{{- if not $instanceProfile }},"preference":null{{- end }},"template":{"spec":{"domain":{{ include "virtual-machine.domainResources" . }}}}}}'
+              {{- end }}
+
+              {{- if $needRemoveCustomResources }}
+              echo "Removing custom CPU/memory from domain (switching to instancetype)..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"instancetype":{"name":"{{ $instanceType }}","revisionName":null},"template":{"spec":{"domain":{"cpu":null,"resources":null}}}}}'
               {{- end }}
 
               {{- if $needResizePVC }}
