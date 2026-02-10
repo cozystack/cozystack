@@ -6,8 +6,8 @@ metadata:
 spec:
   replicas: {{ .Values.replicas }}
   minReplicas: 1
-  kind: mysql
-  type: mysql
+  kind: mariadb
+  type: mariadb
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
   version: {{ $.Chart.Version }}

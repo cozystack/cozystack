@@ -2,7 +2,7 @@
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource
 metadata:
-  name: cozystack.mysql-application
+  name: cozystack.mariadb-application
 spec:
   sourceRef:
     kind: OCIRepository
@@ -18,11 +18,11 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: mysql
-          path: apps/mysql
+        - name: mariadb
+          path: apps/mariadb
           libraries: ["cozy-lib"]
-        - name: mysql-rd
-          path: system/mysql-rd
+        - name: mariadb-rd
+          path: system/mariadb-rd
           install:
             namespace: cozy-system
-            releaseName: mysql-rd
+            releaseName: mariadb-rd

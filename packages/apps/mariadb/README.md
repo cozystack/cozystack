@@ -102,7 +102,7 @@ more details:
 | `backup`                 | Backup configuration.                           | `object` | `{}`                                                   |
 | `backup.enabled`         | Enable regular backups (default: false).        | `bool`   | `false`                                                |
 | `backup.s3Region`        | AWS S3 region where backups are stored.         | `string` | `us-east-1`                                            |
-| `backup.s3Bucket`        | S3 bucket used for storing backups.             | `string` | `s3.example.org/mysql-backups`                         |
+| `backup.s3Bucket`        | S3 bucket used for storing backups.             | `string` | `s3.example.org/mariadb-backups`                         |
 | `backup.schedule`        | Cron schedule for automated backups.            | `string` | `0 2 * * *`                                            |
 | `backup.cleanupStrategy` | Retention strategy for cleaning up old backups. | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
 | `backup.s3AccessKey`     | Access key for S3 authentication.               | `string` | `<your-access-key>`                                    |

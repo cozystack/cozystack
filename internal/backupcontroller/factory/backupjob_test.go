@@ -67,8 +67,8 @@ func TestBackupJob(t *testing.T) {
 				Spec: backupsv1alpha1.PlanSpec{
 					ApplicationRef: corev1.TypedLocalObjectReference{
 						// No APIGroup specified
-						Kind: "MySQL",
-						Name: "mysql1",
+						Kind: "MariaDB",
+						Name: "mariadb1",
 					},
 					BackupClassName: "velero",
 					Schedule: backupsv1alpha1.PlanSchedule{

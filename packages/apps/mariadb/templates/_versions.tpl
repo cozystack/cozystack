@@ -1,4 +1,4 @@
-{{- define "mysql.versionMap" }}
+{{- define "mariadb.versionMap" }}
 {{- $versionMap := .Files.Get "files/versions.yaml" | fromYaml }}
 {{- if not (hasKey $versionMap .Values.version) }}
     {{- printf `MariaDB version %s is not supported, allowed versions are %s` $.Values.version (keys $versionMap) | fail }}

@@ -141,13 +141,13 @@ func TestResolveBackupClass(t *testing.T) {
 							StrategyRef: corev1.TypedLocalObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
-								Name:     "velero-strategy-mysql",
+								Name:     "velero-strategy-mariadb",
 							},
 							Application: backupsv1alpha1.ApplicationSelector{
-								Kind: "MySQL",
+								Kind: "MariaDB",
 							},
 							Parameters: map[string]string{
-								"backupStorageLocationName": "mysql-storage",
+								"backupStorageLocationName": "mariadb-storage",
 							},
 						},
 					},
@@ -169,7 +169,7 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 		},
 		{
-			name: "successful resolution - matches MySQL strategy with explicit apiGroup",
+			name: "successful resolution - matches MariaDB strategy with explicit apiGroup",
 			backupClass: &backupsv1alpha1.BackupClass{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "velero",
@@ -180,14 +180,14 @@ func TestResolveBackupClass(t *testing.T) {
 							StrategyRef: corev1.TypedLocalObjectReference{
 								APIGroup: stringPtr("strategy.backups.cozystack.io"),
 								Kind:     "Velero",
-								Name:     "velero-strategy-mysql",
+								Name:     "velero-strategy-mariadb",
 							},
 							Application: backupsv1alpha1.ApplicationSelector{
 								APIGroup: stringPtr("apps.cozystack.io"),
-								Kind:     "MySQL",
+								Kind:     "MariaDB",
 							},
 							Parameters: map[string]string{
-								"backupStorageLocationName": "mysql-storage",
+								"backupStorageLocationName": "mariadb-storage",
 							},
 						},
 					},
@@ -195,18 +195,18 @@ func TestResolveBackupClass(t *testing.T) {
 			},
 			applicationRef: corev1.TypedLocalObjectReference{
 				APIGroup: stringPtr("apps.cozystack.io"),
-				Kind:     "MySQL",
-				Name:     "mysql1",
+				Kind:     "MariaDB",
+				Name:     "mariadb1",
 			},
 			backupClassName: "velero",
 			wantErr:         false,
 			expectedStrategyRef: &corev1.TypedLocalObjectReference{
 				APIGroup: stringPtr("strategy.backups.cozystack.io"),
 				Kind:     "Velero",
-				Name:     "velero-strategy-mysql",
+				Name:     "velero-strategy-mariadb",
 			},
 			expectedParams: map[string]string{
-				"backupStorageLocationName": "mysql-storage",
+				"backupStorageLocationName": "mariadb-storage",
 			},
 		},
 		{
