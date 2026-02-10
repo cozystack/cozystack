@@ -6,6 +6,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -20,8 +21,8 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
 
-// BackupVeleroStrategyReconciler reconciles BackupJob with a strategy referencing
-// Velero.strategy.backups.cozystack.io objects.
+// BackupJobReconciler reconciles BackupJob with a strategy from the
+// strategy.backups.cozystack.io API group.
 type BackupJobReconciler struct {
 	client.Client
 	dynamic.Interface
@@ -114,4 +115,28 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.BackupJob{}).
 		Complete(r)
+}
+
+func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	now := metav1.Now()
+	backupJob.Status.CompletedAt = &now
+	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
+	backupJob.Status.Message = message
+
+	// Add condition
+	backupJob.Status.Conditions = append(backupJob.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             "BackupFailed",
+		Message:            message,
+		LastTransitionTime: now,
+	})
+
+	if err := r.Status().Update(ctx, backupJob); err != nil {
+		logger.Error(err, "failed to update BackupJob status to Failed")
+		return ctrl.Result{}, err
+	}
+	logger.Debug("BackupJob failed", "message", message)
+	return ctrl.Result{}, nil
 }

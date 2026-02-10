@@ -56,6 +56,8 @@ type VeleroSpec struct {
 // templated from a Velero backup strategy.
 type VeleroTemplate struct {
 	Spec velerov1.BackupSpec `json:"spec"`
+	// +optional
+	RestoreSpec *velerov1.RestoreSpec `json:"restoreSpec,omitempty"`
 }
 
 type VeleroStatus struct {

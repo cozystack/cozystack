@@ -14,3 +14,8 @@ func (r *BackupJobReconciler) reconcileJob(ctx context.Context, j *backupsv1alph
 	_ = resolved // Use resolved BackupClass parameters when implementing your job strategy
 	return ctrl.Result{}, nil
 }
+
+func (r *RestoreJobReconciler) reconcileJobRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
+	_ = log.FromContext(ctx)
+	return ctrl.Result{}, nil
+}
