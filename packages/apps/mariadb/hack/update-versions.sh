@@ -5,9 +5,9 @@ set -o nounset
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MYSQL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VALUES_FILE="${MYSQL_DIR}/values.yaml"
-VERSIONS_FILE="${MYSQL_DIR}/files/versions.yaml"
+MARIADB_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VALUES_FILE="${MARIADB_DIR}/values.yaml"
+VERSIONS_FILE="${MARIADB_DIR}/files/versions.yaml"
 MARIADB_API_URL="https://downloads.mariadb.org/rest-api/mariadb/"
 
 # Check if jq is installed

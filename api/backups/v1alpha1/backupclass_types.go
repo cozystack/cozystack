@@ -73,7 +73,7 @@ type ApplicationSelector struct {
 	// +optional
 	APIGroup *string `json:"apiGroup,omitempty"`
 
-	// Kind is the kind of the application (e.g., VirtualMachine, MySQL).
+	// Kind is the kind of the application (e.g., VirtualMachine, MariaDB).
 	Kind string `json:"kind"`
 }
 

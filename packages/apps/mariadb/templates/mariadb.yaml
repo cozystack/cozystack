@@ -8,7 +8,7 @@ spec:
     name: {{ .Release.Name }}-credentials
     key: root
 
-  image: "mariadb:{{ include "mysql.versionMap" $ }}"
+  image: "mariadb:{{ include "mariadb.versionMap" $ }}"
 
   port: 3306
 
