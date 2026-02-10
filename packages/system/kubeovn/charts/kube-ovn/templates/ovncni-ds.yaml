@@ -122,9 +122,7 @@ spec:
           - --secure-serving={{- .Values.func.SECURE_SERVING }}
           - --enable-ovn-ipsec={{- .Values.func.ENABLE_OVN_IPSEC }}
           - --set-vxlan-tx-off={{- .Values.func.SET_VXLAN_TX_OFF }}
-          {{- with .Values.mtu }}
-          - --mtu={{ . }}
-          {{- end }}
+          - --non-primary-cni-mode={{- .Values.cni_conf.NON_PRIMARY_CNI }}
         securityContext:
           runAsUser: 0
           privileged: false
@@ -143,7 +141,7 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: status.podIP
-          - name: KUBE_NODE_NAME
+          - name: NODE_NAME
             valueFrom:
               fieldRef:
                 fieldPath: spec.nodeName
@@ -227,6 +225,7 @@ spec:
           limits:
             cpu: {{ index .Values "kube-ovn-cni" "limits" "cpu" }}
             memory: {{ index .Values "kube-ovn-cni" "limits" "memory" }}
+            ephemeral-storage: {{ index .Values "kube-ovn-cni" "limits" "ephemeral-storage" }}
       nodeSelector:
         kubernetes.io/os: "linux"
       volumes:

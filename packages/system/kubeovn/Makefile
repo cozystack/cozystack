@@ -1,5 +1,3 @@
-KUBEOVN_TAG=v0.40.0
-
 export NAME=kubeovn
 export NAMESPACE=cozy-$(NAME)
 
@@ -8,6 +6,6 @@ include ../../../scripts/package.mk
 
 update:
 	rm -rf charts values.yaml Chart.yaml
-	tag=$(KUBEOVN_TAG) && \
-	curl -sSL https://github.com/cozystack/kubeovn/archive/refs/tags/$${tag}.tar.gz | \
-	tar xzvf - --strip 2 kubeovn-$${tag#*v}/chart
+	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/cozystack/kubeovn-chart | awk -F'[/^]' 'END{print $$3}') && \
+	curl -sSL https://github.com/cozystack/kubeovn-chart/archive/refs/tags/$${tag}.tar.gz | \
+	tar xzvf - --strip 2 kubeovn-chart-$${tag#*v}/chart
