@@ -4,7 +4,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant
+  name: cozy:tenant
 aggregationRule:
   clusterRoleSelectors:
   - matchLabels:
@@ -14,7 +14,7 @@ rules: []
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-base
+  name: cozy:tenant:base
   labels:
     rbac.cozystack.io/aggregate-to-tenant: "true"
 rules:
@@ -49,7 +49,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-view
+  name: cozy:tenant:view
   labels:
     rbac.cozystack.io/aggregate-to-tenant-use: "true"
     rbac.cozystack.io/aggregate-to-tenant-admin: "true"
@@ -63,7 +63,7 @@ rules: []
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-view-base
+  name: cozy:tenant:view:base
   labels:
     rbac.cozystack.io/aggregate-to-tenant-view: "true"
 rules:
@@ -115,7 +115,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-use
+  name: cozy:tenant:use
   labels:
     rbac.cozystack.io/aggregate-to-tenant-admin: "true"
     rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
@@ -128,7 +128,7 @@ rules: []
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-use-base
+  name: cozy:tenant:use:base
   labels:
     rbac.cozystack.io/aggregate-to-tenant-use: "true"
 rules:
@@ -158,7 +158,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-admin
+  name: cozy:tenant:admin
   labels:
     rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
 aggregationRule:
@@ -170,7 +170,7 @@ rules: []
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-admin-base
+  name: cozy:tenant:admin:base
   labels:
     rbac.cozystack.io/aggregate-to-tenant-admin: "true"
 rules:
@@ -222,7 +222,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-super-admin
+  name: cozy:tenant:super-admin
 aggregationRule:
   clusterRoleSelectors:
   - matchLabels:
@@ -232,7 +232,7 @@ rules: []
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozy-tenant-super-admin-base
+  name: cozy:tenant:super-admin:base
   labels:
     rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
 rules:
