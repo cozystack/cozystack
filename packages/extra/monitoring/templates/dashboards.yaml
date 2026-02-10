@@ -1,0 +1,16 @@
+{{- range (split "\n" (.Files.Get "dashboards.list")) }}
+{{- $parts := split "/" . }}
+{{- if eq (len $parts) 2 }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: {{ $parts._0 }}-{{ $parts._1 }}
+spec:
+  folder: {{ $parts._0 }}
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  url: http://grafana-dashboards.cozy-grafana-operator.svc/{{ . }}.json
+{{- end }}
+{{- end }}
