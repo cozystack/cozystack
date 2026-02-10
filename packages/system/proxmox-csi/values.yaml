@@ -1,0 +1,22 @@
+proxmox-cloud-controller-manager:
+  fullnameOverride: proxmox-cloud-controller-manager
+  
+  enabledControllers:
+    - cloud-node
+    - cloud-node-lifecycle
+  
+  # Deploy CCM only on control-plane nodes
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule
+
+proxmox-csi-plugin:
+  fullnameOverride: proxmox-csi-plugin
+
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule

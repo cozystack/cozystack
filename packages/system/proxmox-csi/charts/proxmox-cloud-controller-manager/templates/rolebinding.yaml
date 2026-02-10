@@ -1,0 +1,26 @@
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: system:{{ include "proxmox-cloud-controller-manager.fullname" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:{{ include "proxmox-cloud-controller-manager.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "proxmox-cloud-controller-manager.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: system:{{ include "proxmox-cloud-controller-manager.fullname" . }}:extension-apiserver-authentication-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "proxmox-cloud-controller-manager.fullname" . }}
+    namespace: {{ .Release.Namespace }}

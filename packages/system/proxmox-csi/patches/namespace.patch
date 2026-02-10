@@ -1,0 +1,13 @@
+diff --git a/apps/proxmox-csi/charts/proxmox-cloud-controller-manager/templates/rolebinding.yaml b/apps/proxmox-csi/charts/proxmox-cloud-controller-manager/templates/rolebinding.yaml
+index 0ed037f..32b065e 100644
+--- a/apps/proxmox-csi/charts/proxmox-cloud-controller-manager/templates/rolebinding.yaml
++++ b/apps/proxmox-csi/charts/proxmox-cloud-controller-manager/templates/rolebinding.yaml
+@@ -9,7 +9,7 @@ roleRef:
+ subjects:
+ - kind: ServiceAccount
+   name: {{ include "proxmox-cloud-controller-manager.fullname" . }}
+-  namespace: kube-system
++  namespace: {{ .Release.Namespace }}
+ ---
+ apiVersion: rbac.authorization.k8s.io/v1
+ kind: RoleBinding
