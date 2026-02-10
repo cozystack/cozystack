@@ -131,7 +131,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.backupstrategy-controller" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
