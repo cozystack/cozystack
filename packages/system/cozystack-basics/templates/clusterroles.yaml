@@ -194,7 +194,6 @@ rules:
   resources:
   - buckets
   - clickhouses
-  - ferretdb
   - foos
   - httpcaches
   - kafkas
