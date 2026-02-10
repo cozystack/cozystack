@@ -74,6 +74,9 @@ gpus: []
 ## gpus:
 ## - name: nvidia.com/GA102GL_A10
 
+## @param {string} cpuModel - Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
+cpuModel: ""
+
 ## @param {Resources} [resources] - Resource configuration for the virtual machine.
 resources: {}
 ## Example:
