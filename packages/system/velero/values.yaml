@@ -9,6 +9,13 @@ velero:
       volumeMounts:
         - mountPath: /target
           name: plugins
+    - image: quay.io/kubevirt/kubevirt-velero-plugin:v0.8.0
+      name: kubevirt-kubevirt-velero-plugin
+      imagePullPolicy: IfNotPresent
+      volumeMounts:
+      - mountPath: /target
+        name: plugins
+
   deployNodeAgent: true
   configuration:
     # defaultVolumesToFsBackup: true
