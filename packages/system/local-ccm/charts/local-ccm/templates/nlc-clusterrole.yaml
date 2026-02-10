@@ -2,16 +2,20 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "node-lifecycle-controller.fullname" . }}
+  name: {{ include "local-ccm.fullname" . }}-nlc
   labels:
-    {{- include "node-lifecycle-controller.labels" . | nindent 4 }}
+    {{- include "local-ccm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-lifecycle-controller
 rules:
+# Node management
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch", "delete"]
+# Events for recording actions
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create", "patch"]
+# Leader election
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["get", "create", "update"]

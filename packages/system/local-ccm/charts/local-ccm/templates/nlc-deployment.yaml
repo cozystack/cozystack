@@ -1,0 +1,78 @@
+{{- if .Values.nodeLifecycleController.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "local-ccm.fullname" . }}-nlc
+  labels:
+    {{- include "local-ccm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-lifecycle-controller
+spec:
+  replicas: {{ .Values.nodeLifecycleController.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "local-ccm.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: node-lifecycle-controller
+  template:
+    metadata:
+      labels:
+        {{- include "local-ccm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: node-lifecycle-controller
+      {{- with .Values.nodeLifecycleController.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "local-ccm.fullname" . }}-nlc
+      {{- if .Values.nodeLifecycleController.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- with .Values.nodeLifecycleController.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeLifecycleController.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeLifecycleController.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeLifecycleController.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: node-lifecycle-controller
+        image: "{{ .Values.nodeLifecycleController.image.repository }}:{{ .Values.nodeLifecycleController.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.nodeLifecycleController.image.pullPolicy }}
+        command:
+        - /usr/local/bin/node-lifecycle-controller
+        args:
+        - --watch-autoscaler-taint={{ .Values.nodeLifecycleController.controller.watchAutoscalerTaint }}
+        {{- if .Values.nodeLifecycleController.controller.nodeSelector }}
+        - --node-selector={{ .Values.nodeLifecycleController.controller.nodeSelector }}
+        {{- end }}
+        {{- if .Values.nodeLifecycleController.controller.protectedLabels }}
+        - --protected-labels={{ .Values.nodeLifecycleController.controller.protectedLabels }}
+        {{- end }}
+        - --not-ready-timeout={{ .Values.nodeLifecycleController.controller.notReadyTimeout }}
+        - --ping-timeout={{ .Values.nodeLifecycleController.controller.pingTimeout }}
+        - --ping-count={{ .Values.nodeLifecycleController.controller.pingCount }}
+        - --reconcile-interval={{ .Values.nodeLifecycleController.controller.reconcileInterval }}
+        - --leader-elect={{ .Values.nodeLifecycleController.leaderElection.enabled }}
+        - --leader-elect-id={{ .Values.nodeLifecycleController.leaderElection.resourceName }}
+        - --namespace=$(POD_NAMESPACE)
+        - --dry-run={{ .Values.nodeLifecycleController.controller.dryRun }}
+        - --v={{ .Values.nodeLifecycleController.controller.verbosity }}
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        securityContext:
+          {{- toYaml .Values.nodeLifecycleController.securityContext | nindent 10 }}
+        resources:
+          {{- toYaml .Values.nodeLifecycleController.resources | nindent 10 }}
+{{- end }}

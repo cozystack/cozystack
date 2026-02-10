@@ -2,7 +2,7 @@
 
 image:
   repository: ghcr.io/cozystack/local-ccm
-  tag: v0.2.1
+  tag: v0.3.0
   pullPolicy: Always
 # Service account configuration
 serviceAccount:
@@ -55,39 +55,49 @@ affinity:
 labels: {}
 # Additional annotations for pods
 podAnnotations: {}
-
-# Node Lifecycle Controller configuration
-# Automatically deletes unreachable NotReady nodes from the cluster
+# Node Lifecycle Controller - deletes unreachable NotReady nodes
 nodeLifecycleController:
-  enabled: false
+  # Enable node lifecycle controller
+  enabled: true
   image:
-    repository: ghcr.io/cozystack/node-lifecycle-controller
-    tag: v0.1.0
+    repository: ghcr.io/cozystack/local-ccm
+    tag: "v0.3.0" # Defaults to appVersion
     pullPolicy: IfNotPresent
-  # Label selector for nodes to manage
-  # Only nodes matching this selector will be considered for deletion
-  # Example: "node.kubernetes.io/instance-type" (nodes created by autoscaler)
-  nodeSelector: ""
-  # Comma-separated list of labels that protect nodes from deletion
-  protectedLabels: ""
-  # Duration a node must be NotReady before considering deletion
-  notReadyTimeout: 5m
-  # Timeout for ping checks
-  pingTimeout: 5s
-  # Number of ping attempts before considering node unreachable
-  pingCount: 3
-  # Interval between reconciliation loops
-  reconcileInterval: 30s
-  # Log actions without actually deleting nodes
-  dryRun: false
-  # Verbosity level (0-5)
-  verbosity: 2
+  # Controller configuration
+  controller:
+    # Watch only nodes with ToBeDeletedByClusterAutoscaler taint
+    # Ignored when nodeSelector is set
+    watchAutoscalerTaint: true
+    # Label selector for nodes to manage
+    # Only nodes matching this selector will be considered for deletion
+    # Example: "node.kubernetes.io/instance-type" (nodes created by autoscaler)
+    nodeSelector: ""
+    # Comma-separated list of labels/annotations that protect nodes from deletion
+    # Nodes with any of these labels will never be deleted
+    # Example: "kilo.squat.ai/leader,cluster-autoscaler.kubernetes.io/scale-down-disabled"
+    protectedLabels: ""
+    # Duration a node must be NotReady before considering deletion
+    notReadyTimeout: 5m
+    # Timeout for ping checks
+    pingTimeout: 5s
+    # Number of ping attempts before considering node unreachable
+    pingCount: 3
+    # Interval between reconciliation loops
+    reconcileInterval: 30s
+    # Log actions without actually deleting nodes
+    dryRun: false
+    # Verbosity level (0-5)
+    verbosity: 2
   # Leader election for HA
   leaderElection:
     enabled: true
     resourceName: node-lifecycle-controller
-  # Number of replicas
+  # Number of replicas (only 1 will be active due to leader election)
   replicaCount: 1
+  # Service account configuration
+  serviceAccount:
+    create: true
+    annotations: {}
   # Pod resources
   resources:
     requests:
@@ -96,3 +106,36 @@ nodeLifecycleController:
     limits:
       cpu: 100m
       memory: 64Mi
+  # Security context for the pod
+  podSecurityContext:
+    runAsNonRoot: false # Need root for ICMP ping
+  # Security context for the container
+  securityContext:
+    capabilities:
+      add:
+        - NET_RAW # Required for ICMP ping
+    runAsUser: 0 # Must run as root for raw sockets
+  # Node selector for the controller pod
+  nodeSelector: {}
+  # Tolerations for the controller pod
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+  # Affinity for the controller pod
+  affinity:
+    nodeAffinity:
+      # Prefer to run on control-plane nodes
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+  # Additional annotations for pods
+  podAnnotations: {}
+  # Use host network for ping to work across network boundaries
+  hostNetwork: true
