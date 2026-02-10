@@ -35,7 +35,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -87,6 +86,9 @@ func main() {
 	var platformSourceURL string
 	var platformSourceName string
 	var platformSourceRef string
+	var cozyDockerConfigSecretName string
+	var cozyDockerConfigSecretNamespace string
+	var cozyDockerConfigNamespaceSelector string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -110,6 +112,9 @@ func main() {
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
+	flag.StringVar(&cozyDockerConfigSecretName, "cozy-docker-config-secret-name", "cozystack-registry", "The name of the secret containing cluster-wide dockerconfig authentication data. Ignored if empty.")
+	flag.StringVar(&cozyDockerConfigSecretNamespace, "cozy-docker-config-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide dockerconfig authentication data.")
+	flag.StringVar(&cozyDockerConfigNamespaceSelector, "cozy-docker-config-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide dockerconfig authentication data must be replicated.")
 
 	opts := zap.Options{
 		Development: true,
@@ -134,20 +139,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Parse docker config namespace selector before manager creation to configure cache
+	var dockerConfigTargetNSSelector labels.Selector
+	if cozyDockerConfigSecretName != "" {
+		dockerConfigTargetNSSelector, err = labels.Parse(cozyDockerConfigNamespaceSelector)
+		if err != nil {
+			setupLog.Error(err, "could not parse namespace label selector", "flag", "cozy-docker-config-namespace-selector")
+			os.Exit(1)
+		}
+	}
+
+	// Determine namespace cache label selector.
+	// If docker config replication uses a different namespace selector,
+	// we cache all namespaces and rely on reconciler predicates for filtering.
+	nsCacheLabelSelector := targetNSSelector
+	if dockerConfigTargetNSSelector != nil && dockerConfigTargetNSSelector.String() != targetNSSelector.String() {
+		nsCacheLabelSelector = labels.Everything()
+	}
+
 	// Start the controller manager
 	setupLog.Info("Starting controller manager")
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme: scheme,
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				// Cache only Secrets named <secretName> (in any namespace)
-				&corev1.Secret{}: {
-					Field: fields.OneTermEqualSelector("metadata.name", cozyValuesSecretName),
-				},
+				// Multiple controllers watch secrets with different names,
+				// so we cannot use a single field selector to filter by name.
+				// Reconciler predicates handle name-based filtering.
+				&corev1.Secret{}: {},
 
 				// Cache only Namespaces that match a label selector
 				&corev1.Namespace{}: {
-					Label: targetNSSelector,
+					Label: nsCacheLabelSelector,
 				},
 			},
 		},
@@ -228,12 +251,28 @@ func main() {
 	if err := (&cozyvaluesreplicator.SecretReplicatorReconciler{
 		Client:                  mgr.GetClient(),
 		Scheme:                  mgr.GetScheme(),
+		ControllerName:          "cozy-values-replicator",
 		SourceNamespace:         cozyValuesSecretNamespace,
 		SecretName:              cozyValuesSecretName,
 		TargetNamespaceSelector: targetNSSelector,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CozyValuesReplicator")
 		os.Exit(1)
+	}
+
+	if cozyDockerConfigSecretName != "" {
+		// Setup SecretReplicator reconciler for Docker config secret
+		if err := (&cozyvaluesreplicator.SecretReplicatorReconciler{
+			Client:                  mgr.GetClient(),
+			Scheme:                  mgr.GetScheme(),
+			ControllerName:          "docker-config-replicator",
+			SourceNamespace:         cozyDockerConfigSecretNamespace,
+			SecretName:              cozyDockerConfigSecretName,
+			TargetNamespaceSelector: dockerConfigTargetNSSelector,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "DockerConfigReplicator")
+			os.Exit(1)
+		}
 	}
 
 	// +kubebuilder:scaffold:builder

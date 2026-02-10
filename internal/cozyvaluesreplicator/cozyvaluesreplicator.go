@@ -41,6 +41,10 @@ type SecretReplicatorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
+	// ControllerName is the unique name for this controller instance.
+	// Required when multiple SecretReplicatorReconciler instances are registered.
+	ControllerName string
+
 	// Source of truth:
 	SourceNamespace string
 	SecretName      string
@@ -140,7 +144,13 @@ func (r *SecretReplicatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		GenericFunc: func(event.GenericEvent) bool { return false },
 	}
 
+	name := r.ControllerName
+	if name == "" {
+		name = "secret-replicator"
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
+		Named(name).
 		// (b) Watch all Secrets with the chosen name; this also ensures Secret objects are cached.
 		For(&corev1.Secret{}, builder.WithPredicates(secretNameOnly)).
 
