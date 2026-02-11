@@ -162,8 +162,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	}
 
 	// Validate name length against Helm release and label limits
-	if err := r.validateNameLength(app.Name); err != nil {
-		return nil, apierrors.NewBadRequest(err.Error())
+	if nameLenErrs := r.validateNameLength(app.Name); len(nameLenErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nameLenErrs)
 	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
@@ -1014,7 +1014,7 @@ func filterInternalKeys(values *apiextv1.JSON) *apiextv1.JSON {
 	if values == nil || len(values.Raw) == 0 {
 		return values
 	}
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(values.Raw, &data); err != nil {
 		return values
 	}
@@ -1035,7 +1035,7 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 	if values == nil || len(values.Raw) == 0 {
 		return nil
 	}
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(values.Raw, &data); err != nil {
 		return err
 	}
@@ -1047,7 +1047,8 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 	return nil
 }
 
-// maxHelmReleaseName is the maximum length of a Helm release name (DNS-1123 subdomain).
+// maxHelmReleaseName is the Helm release name limit. Helm reserves room for
+// chart-generated resource suffixes within the 63-char DNS-1035 label limit.
 const maxHelmReleaseName = 53
 
 // maxK8sLabelValue is the maximum length of a Kubernetes label value.
@@ -1057,7 +1058,13 @@ const maxK8sLabelValue = 63
 // For all apps: prefix + name must fit within the Helm release name limit (53 chars).
 // For Tenants: additionally checks that the host label (name + "." + rootHost) fits
 // within the Kubernetes label value limit (63 chars).
-func (r *REST) validateNameLength(name string) error {
+//
+// Note: rootHost is read once at API server startup from the cozystack-values Secret.
+// Changing root-host requires an API server restart for validation to reflect the new value.
+func (r *REST) validateNameLength(name string) field.ErrorList {
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
 	helmMax := maxHelmReleaseName - len(r.releaseConfig.Prefix)
 	maxLen := helmMax
 
@@ -1069,15 +1076,18 @@ func (r *REST) validateNameLength(name string) error {
 	}
 
 	if maxLen <= 0 {
-		return fmt.Errorf("configuration error: no valid name length possible (release prefix %q, root host %q)",
-			r.releaseConfig.Prefix, r.rootHost)
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("configuration error: no valid name length possible (release prefix %q, root host %q)",
+				r.releaseConfig.Prefix, r.rootHost)))
+		return allErrs
 	}
 
 	if len(name) > maxLen {
-		return fmt.Errorf("name %q is too long: maximum %d characters allowed (release prefix %q, root host %q)",
-			name, maxLen, r.releaseConfig.Prefix, r.rootHost)
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must be no more than %d characters (release prefix %q, root host %q)",
+				maxLen, r.releaseConfig.Prefix, r.rootHost)))
 	}
-	return nil
+	return allErrs
 }
 
 // convertHelmReleaseToApplication implements the actual conversion logic
@@ -1233,7 +1243,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 	for i := range apps {
 		app := &apps[i]
 		row := metav1.TableRow{
-			Cells:  []interface{}{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+			Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 			Object: runtime.RawExtension{Object: app},
 		}
 		table.Rows = append(table.Rows, row)
@@ -1257,7 +1267,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 
 	a := app
 	row := metav1.TableRow{
-		Cells:  []interface{}{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+		Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 		Object: runtime.RawExtension{Object: &a},
 	}
 	table.Rows = append(table.Rows, row)

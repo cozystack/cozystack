@@ -19,7 +19,6 @@ const (
 	baseListRef   = apiPrefix + ".ApplicationList"
 	baseStatusRef = apiPrefix + ".ApplicationStatus"
 	smp           = "application/strategic-merge-patch+json"
-
 )
 
 // deepCopySchema clones *spec.Schema via JSON-marshal/unmarshal.
@@ -102,9 +101,9 @@ func cloneKindSchemas(kind string, base, baseStatus, baseList *spec.Schema, v3 b
 
 	// GVK-extensions
 	setGVK := func(s *spec.Schema, k string) {
-		s.Extensions = map[string]interface{}{
-			"x-kubernetes-group-version-kind": []interface{}{
-				map[string]interface{}{"group": "apps.cozystack.io", "version": "v1alpha1", "kind": k},
+		s.Extensions = map[string]any{
+			"x-kubernetes-group-version-kind": []any{
+				map[string]any{"group": "apps.cozystack.io", "version": "v1alpha1", "kind": k},
 			},
 		}
 	}
@@ -133,35 +132,35 @@ func cloneKindSchemas(kind string, base, baseStatus, baseList *spec.Schema, v3 b
 }
 
 // rewriteDocRefs rewrites all $ref in the OpenAPI document
-func rewriteDocRefs(doc interface{}) ([]byte, error) {
+func rewriteDocRefs(doc any) ([]byte, error) {
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal OpenAPI document: %w", err)
 	}
-	var any interface{}
-	if err := json.Unmarshal(raw, &any); err != nil {
+	var parsed any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, err
 	}
-	walkAndRewriteRefs(any, "")
-	return json.Marshal(any)
+	walkAndRewriteRefs(parsed, "")
+	return json.Marshal(parsed)
 }
 
 // walkAndRewriteRefs walks arbitrary JSON (map/array) and
 //   - when encountering x-kubernetes-group-version-kind, extracts kind,
 //     updating the currentKind context;
 //   - rewrites all $ref inside the current context from Application* → kind*.
-func walkAndRewriteRefs(node interface{}, currentKind string) {
+func walkAndRewriteRefs(node any, currentKind string) {
 	switch n := node.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		if gvk, ok := n["x-kubernetes-group-version-kind"]; ok {
 			switch g := gvk.(type) {
-			case map[string]interface{}:
+			case map[string]any:
 				if k, ok := g["kind"].(string); ok {
 					currentKind = k
 				}
-			case []interface{}:
+			case []any:
 				if len(g) > 0 {
-					if mm, ok := g[0].(map[string]interface{}); ok {
+					if mm, ok := g[0].(map[string]any); ok {
 						if k, ok := mm["kind"].(string); ok {
 							currentKind = k
 						}
@@ -178,7 +177,7 @@ func walkAndRewriteRefs(node interface{}, currentKind string) {
 			}
 			walkAndRewriteRefs(v, currentKind)
 		}
-	case []interface{}:
+	case []any:
 		for _, v := range n {
 			walkAndRewriteRefs(v, currentKind)
 		}
@@ -293,7 +292,7 @@ func sanitizeForV2(s *spec.Schema) {
 		if hasIntAndStringAnyOf(s.AnyOf) {
 			s.Type = spec.StringOrArray{"string"}
 			if s.Extensions == nil {
-				s.Extensions = map[string]interface{}{}
+				s.Extensions = map[string]any{}
 			}
 			s.Extensions["x-kubernetes-int-or-string"] = true
 		}

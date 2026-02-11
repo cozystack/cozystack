@@ -220,6 +220,7 @@ func parseRootHostFromSecret(secret *corev1.Secret) string {
 		} `json:"_cluster"`
 	}
 	if err := yaml.Unmarshal(valuesYAML, &values); err != nil {
+		klog.Warningf("failed to parse values.yaml from cozystack-values secret: %v", err)
 		return ""
 	}
 

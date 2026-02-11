@@ -172,13 +172,13 @@ func TestValidateNameLength(t *testing.T) {
 				rootHost: tt.rootHost,
 			}
 
-			err := r.validateNameLength(tt.appName)
+			errs := r.validateNameLength(tt.appName)
 
-			if tt.wantError && err == nil {
-				t.Errorf("expected error for name %q (len=%d), got nil", tt.appName, len(tt.appName))
+			if tt.wantError && len(errs) == 0 {
+				t.Errorf("expected error for name %q (len=%d), got none", tt.appName, len(tt.appName))
 			}
-			if !tt.wantError && err != nil {
-				t.Errorf("unexpected error for name %q (len=%d): %v", tt.appName, len(tt.appName), err)
+			if !tt.wantError && len(errs) > 0 {
+				t.Errorf("unexpected error for name %q (len=%d): %v", tt.appName, len(tt.appName), errs)
 			}
 		})
 	}
