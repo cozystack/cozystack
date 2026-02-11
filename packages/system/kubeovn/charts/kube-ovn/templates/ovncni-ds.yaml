@@ -98,9 +98,13 @@ spec:
           - --mirror-iface={{- .Values.debug.MIRROR_IFACE }}
           - --node-switch={{ .Values.networking.NODE_SUBNET }}
           - --encap-checksum=true
-          - --service-cluster-ip-range={{ .Values.ipv4.SVC_CIDR }}
-          {{- if .Values.global.logVerbosity }}
-          - --v={{ .Values.global.logVerbosity }}
+          - --service-cluster-ip-range=
+          {{- if eq .Values.networking.NET_STACK "dual_stack" -}}
+          {{ .Values.dual_stack.SVC_CIDR }}
+          {{- else if eq .Values.networking.NET_STACK "ipv4" -}}
+          {{ .Values.ipv4.SVC_CIDR }}
+          {{- else if eq .Values.networking.NET_STACK "ipv6" -}}
+          {{ .Values.ipv6.SVC_CIDR }}
           {{- end }}
           {{- if eq .Values.networking.NETWORK_TYPE "vlan" }}
           - --iface=
@@ -121,9 +125,7 @@ spec:
           - --secure-serving={{- .Values.func.SECURE_SERVING }}
           - --enable-ovn-ipsec={{- .Values.func.ENABLE_OVN_IPSEC }}
           - --set-vxlan-tx-off={{- .Values.func.SET_VXLAN_TX_OFF }}
-          {{- with .Values.mtu }}
-          - --mtu={{ . }}
-          {{- end }}
+          - --non-primary-cni-mode={{- .Values.cni_conf.NON_PRIMARY_CNI }}
         securityContext:
           runAsUser: 0
           privileged: false
@@ -142,7 +144,7 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: status.podIP
-          - name: KUBE_NODE_NAME
+          - name: NODE_NAME
             valueFrom:
               fieldRef:
                 fieldPath: spec.nodeName
@@ -226,6 +228,7 @@ spec:
           limits:
             cpu: {{ index .Values "kube-ovn-cni" "limits" "cpu" }}
             memory: {{ index .Values "kube-ovn-cni" "limits" "memory" }}
+            ephemeral-storage: {{ index .Values "kube-ovn-cni" "limits" "ephemeral-storage" }}
       nodeSelector:
         kubernetes.io/os: "linux"
       volumes:

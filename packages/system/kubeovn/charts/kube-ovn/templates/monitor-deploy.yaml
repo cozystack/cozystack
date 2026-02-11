@@ -81,7 +81,7 @@ spec:
           env:
             - name: ENABLE_SSL
               value: "{{ .Values.networking.ENABLE_SSL }}"
-            - name: KUBE_NODE_NAME
+            - name: NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
@@ -110,6 +110,7 @@ spec:
             limits:
               cpu: {{ index .Values "kube-ovn-monitor" "limits" "cpu" }}
               memory: {{ index .Values "kube-ovn-monitor" "limits" "memory" }}
+              ephemeral-storage: {{ index .Values "kube-ovn-monitor" "limits" "ephemeral-storage" }}
           volumeMounts:
             - mountPath: /var/run/ovn
               name: host-run-ovn
