@@ -10,16 +10,16 @@ Tenant names must follow DNS-1035 naming rules:
 -   Must start with a lowercase letter (`a-z`)
 -   Can only contain lowercase letters, numbers, and hyphens (`a-z`, `0-9`, `-`)
 -   Must end with a letter or number (not a hyphen)
--   Maximum length: 40 characters
+-   Maximum length depends on the cluster configuration (Helm release prefix and root domain)
 
-**Note:** Using dashes (`-`) in tenant names is discouraged, unlike with other services.
+**Note:** Using dashes (`-`) in tenant names is **allowed but discouraged**, unlike with other services.
 This is to keep consistent naming in tenants, nested tenants, and services deployed in them.
+Names with dashes (e.g., `foo-bar`) may lead to ambiguous parsing of internal resource names like `tenant-foo-bar`.
 
 For example:
 
 -   The root tenant is named `root`, but internally it's referenced as `tenant-root`.
 -   A nested tenant could be named `foo`, which would result in `tenant-foo` in service names and URLs.
--   However, a tenant can not be named `foo-bar`, because parsing names such as `tenant-foo-bar` would be ambiguous.
 
 ### Unique domains
 

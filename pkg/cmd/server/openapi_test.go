@@ -24,10 +24,9 @@ import (
 
 func TestPatchObjectMetaNameValidation(t *testing.T) {
 	tests := []struct {
-		name          string
-		schemas       map[string]*spec.Schema
-		wantPattern   string
-		wantMaxLength *int64
+		name        string
+		schemas     map[string]*spec.Schema
+		wantPattern string
 	}{
 		{
 			name: "patches ObjectMeta name field",
@@ -40,14 +39,12 @@ func TestPatchObjectMetaNameValidation(t *testing.T) {
 					},
 				},
 			},
-			wantPattern:   applicationNamePattern,
-			wantMaxLength: ptr(int64(applicationNameMaxLength)),
+			wantPattern: applicationNamePattern,
 		},
 		{
-			name:          "no panic when ObjectMeta missing",
-			schemas:       map[string]*spec.Schema{},
-			wantPattern:   "",
-			wantMaxLength: nil,
+			name:        "no panic when ObjectMeta missing",
+			schemas:     map[string]*spec.Schema{},
+			wantPattern: "",
 		},
 		{
 			name: "no panic when name field missing",
@@ -58,8 +55,7 @@ func TestPatchObjectMetaNameValidation(t *testing.T) {
 					},
 				},
 			},
-			wantPattern:   "",
-			wantMaxLength: nil,
+			wantPattern: "",
 		},
 	}
 
@@ -69,7 +65,7 @@ func TestPatchObjectMetaNameValidation(t *testing.T) {
 
 			objMeta, ok := tt.schemas[objectMetaRef]
 			if !ok {
-				if tt.wantPattern != "" || tt.wantMaxLength != nil {
+				if tt.wantPattern != "" {
 					t.Error("expected ObjectMeta to exist")
 				}
 				return
@@ -77,7 +73,7 @@ func TestPatchObjectMetaNameValidation(t *testing.T) {
 
 			name, ok := objMeta.Properties["name"]
 			if !ok {
-				if tt.wantPattern != "" || tt.wantMaxLength != nil {
+				if tt.wantPattern != "" {
 					t.Error("expected name field to exist")
 				}
 				return
@@ -86,13 +82,6 @@ func TestPatchObjectMetaNameValidation(t *testing.T) {
 			if name.Pattern != tt.wantPattern {
 				t.Errorf("Pattern = %q, want %q", name.Pattern, tt.wantPattern)
 			}
-			if (name.MaxLength == nil) != (tt.wantMaxLength == nil) {
-				t.Errorf("MaxLength nil mismatch")
-			} else if name.MaxLength != nil && *name.MaxLength != *tt.wantMaxLength {
-				t.Errorf("MaxLength = %d, want %d", *name.MaxLength, *tt.wantMaxLength)
-			}
 		})
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

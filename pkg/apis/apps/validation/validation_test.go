@@ -36,7 +36,7 @@ func TestValidateApplicationName(t *testing.T) {
 		{"valid lowercase", "my-tenant", false},
 		{"valid long name", "my-very-long-tenant-name", false},
 		{"valid double hyphen", "my--tenant", false},
-		{"valid max length (40 chars)", strings.Repeat("a", 40), false},
+		{"valid at DNS-1035 max (63 chars)", strings.Repeat("a", 63), false},
 
 		// Invalid: starts with wrong character
 		{"starts with digit", "1john", true},
@@ -64,8 +64,8 @@ func TestValidateApplicationName(t *testing.T) {
 		{"leading space", " tenant", true},
 		{"trailing space", "tenant ", true},
 
-		// Invalid: length
-		{"too long (41 chars)", strings.Repeat("a", 41), true},
+		// Invalid: exceeds DNS-1035 max length (63)
+		{"too long (64 chars)", strings.Repeat("a", 64), true},
 		{"way too long (100 chars)", strings.Repeat("a", 100), true},
 	}
 

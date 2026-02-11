@@ -24,8 +24,6 @@ const (
 	objectMetaRef = "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"
 	// applicationNamePattern is DNS-1035 regex for Application names.
 	applicationNamePattern = `^[a-z]([-a-z0-9]*[a-z0-9])?$`
-	// applicationNameMaxLength is the maximum length for Application names.
-	applicationNameMaxLength = 40
 )
 
 // patchObjectMetaNameValidation adds DNS-1035 validation to metadata.name.
@@ -38,8 +36,6 @@ func patchObjectMetaNameValidation(schemas map[string]*spec.Schema) {
 
 	if name, ok := objMeta.Properties["name"]; ok {
 		name.Pattern = applicationNamePattern
-		maxLen := int64(applicationNameMaxLength)
-		name.MaxLength = &maxLen
 		objMeta.Properties["name"] = name
 	}
 }
@@ -53,8 +49,6 @@ func patchObjectMetaNameValidationV2(defs map[string]spec.Schema) {
 
 	if name, ok := objMeta.Properties["name"]; ok {
 		name.Pattern = applicationNamePattern
-		maxLen := int64(applicationNameMaxLength)
-		name.MaxLength = &maxLen
 		objMeta.Properties["name"] = name
 	}
 	defs[objectMetaRef] = objMeta
