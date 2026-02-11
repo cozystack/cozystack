@@ -45,7 +45,7 @@ manifests:
 	helm template installer packages/core/installer -n cozy-system \
 		-s templates/cozystack-operator.yaml \
 		-s templates/packagesource.yaml \
-		> _out/assets/cozystack-operator.yaml
+		> _out/assets/cozystack-operator-talos.yaml
 	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
 	helm template installer packages/core/installer -n cozy-system \
 		-s templates/cozystack-operator.yaml \

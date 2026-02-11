@@ -4,7 +4,7 @@ set -xe
 version=${VERSION:-$(git describe --tags)}
 
 gh release upload --clobber $version _out/assets/cozystack-crds.yaml
-gh release upload --clobber $version _out/assets/cozystack-operator.yaml
+gh release upload --clobber $version _out/assets/cozystack-operator-talos.yaml
 gh release upload --clobber $version _out/assets/cozystack-operator-generic.yaml
 gh release upload --clobber $version _out/assets/cozystack-operator-hosted.yaml
 gh release upload --clobber $version _out/assets/metal-amd64.iso

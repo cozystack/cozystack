@@ -5,8 +5,8 @@
     echo "Missing: _out/assets/cozystack-crds.yaml" >&2
     exit 1
   fi
-  if [ ! -f _out/assets/cozystack-operator.yaml ]; then
-    echo "Missing: _out/assets/cozystack-operator.yaml" >&2
+  if [ ! -f _out/assets/cozystack-operator-talos.yaml ]; then
+    echo "Missing: _out/assets/cozystack-operator-talos.yaml" >&2
     exit 1
   fi
 }
@@ -17,7 +17,7 @@
 
   # Apply installer manifests (CRDs + operator)
   kubectl apply -f _out/assets/cozystack-crds.yaml
-  kubectl apply -f _out/assets/cozystack-operator.yaml
+  kubectl apply -f _out/assets/cozystack-operator-talos.yaml
 
   # Wait for the operator deployment to become available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
