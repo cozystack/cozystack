@@ -91,10 +91,11 @@ type REST struct {
 	singularName  string
 	releaseConfig config.ReleaseConfig
 	specSchema    *structuralschema.Structural
+	rootHost      string
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
-func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST {
+func NewREST(c client.Client, w client.WithWatch, config *config.Resource, rootHost string) *REST {
 	var specSchema *structuralschema.Structural
 
 	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
@@ -133,6 +134,7 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		singularName:  config.Application.Singular,
 		releaseConfig: config.Release,
 		specSchema:    specSchema,
+		rootHost:      rootHost,
 	}
 }
 
@@ -157,6 +159,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// Validate Application name conforms to DNS-1035
 	if errs := validation.ValidateApplicationName(app.Name, field.NewPath("metadata").Child("name")); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+
+	// Validate name length against Helm release and label limits
+	if err := r.validateNameLength(app.Name); err != nil {
+		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
@@ -475,6 +482,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if !ok {
 		klog.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
+	}
+
+	// Validate name length against Helm release and label limits
+	if err := r.validateNameLength(app.Name); err != nil {
+		return nil, false, apierrors.NewBadRequest(err.Error())
 	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
@@ -1032,6 +1044,39 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 		if strings.HasPrefix(key, "_") {
 			return fmt.Errorf("values key %q is reserved (keys starting with '_' are not allowed)", key)
 		}
+	}
+	return nil
+}
+
+// maxHelmReleaseName is the maximum length of a Helm release name (DNS-1123 subdomain).
+const maxHelmReleaseName = 53
+
+// maxK8sLabelValue is the maximum length of a Kubernetes label value.
+const maxK8sLabelValue = 63
+
+// validateNameLength checks that the application name won't exceed Kubernetes limits.
+// For all apps: prefix + name must fit within the Helm release name limit (53 chars).
+// For Tenants: additionally checks that the host label (name + "." + rootHost) fits
+// within the Kubernetes label value limit (63 chars).
+func (r *REST) validateNameLength(name string) error {
+	helmMax := maxHelmReleaseName - len(r.releaseConfig.Prefix)
+	maxLen := helmMax
+
+	if r.kindName == "Tenant" && r.rootHost != "" {
+		hostLabelMax := maxK8sLabelValue - len(r.rootHost) - 1 // -1 for the dot separator
+		if hostLabelMax < maxLen {
+			maxLen = hostLabelMax
+		}
+	}
+
+	if maxLen <= 0 {
+		return fmt.Errorf("configuration error: no valid name length possible (release prefix %q, root host %q)",
+			r.releaseConfig.Prefix, r.rootHost)
+	}
+
+	if len(name) > maxLen {
+		return fmt.Errorf("name %q is too long: maximum %d characters allowed (release prefix %q, root host %q)",
+			name, maxLen, r.releaseConfig.Prefix, r.rootHost)
 	}
 	return nil
 }

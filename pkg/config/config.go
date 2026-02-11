@@ -19,6 +19,7 @@ package config
 // ResourceConfig represents the structure of the configuration file.
 type ResourceConfig struct {
 	Resources []Resource `yaml:"resources"`
+	RootHost  string     // cluster root host from cozystack-values secret
 }
 
 // Resource describes an individual resource.
