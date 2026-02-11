@@ -42,6 +42,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	basecompatibility "k8s.io/component-base/compatibility"
 	baseversion "k8s.io/component-base/version"
+	"k8s.io/klog/v2"
 	netutils "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	k8sconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -191,11 +192,11 @@ func (o *CozyServerOptions) Complete() error {
 		Name:      "cozystack-values",
 	}, secret)
 	if err != nil {
-		fmt.Printf("Warning: failed to read cozystack-values secret: %v\n", err)
+		klog.Warningf("failed to read cozystack-values secret: %v", err)
 	} else {
 		o.ResourceConfig.RootHost = parseRootHostFromSecret(secret)
 		if o.ResourceConfig.RootHost != "" {
-			fmt.Printf("Loaded root-host: %s\n", o.ResourceConfig.RootHost)
+			klog.Infof("Loaded root-host: %s", o.ResourceConfig.RootHost)
 		}
 	}
 
