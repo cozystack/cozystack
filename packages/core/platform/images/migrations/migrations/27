@@ -1,0 +1,15 @@
+#!/bin/sh
+# Migration 27 --> 28
+
+set -euo pipefail
+
+# Migrate Piraeus CRDs to piraeus-operator-crds Helm release
+for crd in linstorclusters.piraeus.io linstornodeconnections.piraeus.io linstorsatelliteconfigurations.piraeus.io linstorsatellites.piraeus.io; do
+  kubectl annotate crd "$crd" meta.helm.sh/release-namespace=cozy-linstor meta.helm.sh/release-name=piraeus-operator-crds --overwrite
+  kubectl label crd "$crd" app.kubernetes.io/managed-by=Helm helm.toolkit.fluxcd.io/namespace=cozy-linstor helm.toolkit.fluxcd.io/name=piraeus-operator-crds --overwrite
+done
+kubectl delete secret -n cozy-linstor -l name=piraeus-operator,owner=helm --ignore-not-found
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=28 --dry-run=client -o yaml | kubectl apply -f-
