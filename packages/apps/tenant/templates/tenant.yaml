@@ -8,7 +8,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "tenant.name" . }}
+  name: cozy:tenant
   namespace: {{ include "tenant.name" . }}
 subjects:
 {{- if ne .Release.Namespace "tenant-root" }}
@@ -31,66 +31,66 @@ subjects:
   namespace: {{ include "tenant.name" . }}
 roleRef:
   kind: ClusterRole
-  name: cozy-tenant
+  name: cozy:tenant
   apiGroup: rbac.authorization.k8s.io
 ---
 # == view role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: {{ include "tenant.name" . }}-view
+  name: cozy:tenant:view
   namespace: {{ include "tenant.name" . }}
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: ClusterRole
-  name: cozy-tenant-view
+  name: cozy:tenant:view
   apiGroup: rbac.authorization.k8s.io
 ---
 # == use role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: {{ include "tenant.name" . }}-use
+  name: cozy:tenant:use
   namespace: {{ include "tenant.name" . }}
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "use" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: ClusterRole
-  name: cozy-tenant-use
+  name: cozy:tenant:use
   apiGroup: rbac.authorization.k8s.io
 ---
 # == admin role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: {{ include "tenant.name" . }}-admin
+  name: cozy:tenant:admin
   namespace: {{ include "tenant.name" . }}
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "admin" (include "tenant.name" .)) | nindent 2 }}
 roleRef:
   kind: ClusterRole
-  name: cozy-tenant-admin
+  name: cozy:tenant:admin
   apiGroup: rbac.authorization.k8s.io
 ---
 # == super admin role binding ==
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: {{ include "tenant.name" . }}-super-admin
+  name: cozy:tenant:super-admin
   namespace: {{ include "tenant.name" . }}
 subjects:
 {{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "super-admin" (include "tenant.name" .) ) | nindent 2 }}
 roleRef:
   kind: ClusterRole
-  name: cozy-tenant-super-admin
+  name: cozy:tenant:super-admin
   apiGroup: rbac.authorization.k8s.io
 ---
 # == dashboard role binding ==
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "tenant.name" . }}
+  name: cozy:{{ include "tenant.name" . }}:dashboard
   namespace: cozy-public
 subjects:
 - kind: Group
@@ -110,5 +110,5 @@ subjects:
   namespace: {{ include "tenant.name" . }}
 roleRef:
   kind: Role
-  name: cozy-tenant-dashboard
+  name: cozy:tenant:dashboard
   apiGroup: rbac.authorization.k8s.io

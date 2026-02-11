@@ -4,7 +4,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: cozy-tenant-dashboard
+  name: cozy:tenant:dashboard
   namespace: cozy-public
 rules:
 - apiGroups: ["source.toolkit.fluxcd.io"]
