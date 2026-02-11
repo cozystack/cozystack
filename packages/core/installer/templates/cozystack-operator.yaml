@@ -63,12 +63,33 @@ spec:
         {{- if .Values.cozystackOperator.platformSourceRef }}
         - --platform-source-ref={{ .Values.cozystackOperator.platformSourceRef }}
         {{- end }}
+        {{- if eq .Values.cozystackOperator.variant "talos" }}
         env:
         # Talos KubePrism endpoint
         - name: KUBERNETES_SERVICE_HOST
           value: "localhost"
         - name: KUBERNETES_SERVICE_PORT
           value: "7445"
+        {{- else if eq .Values.cozystackOperator.variant "generic" }}
+        env:
+        # Generic Kubernetes: read from ConfigMap
+        # Create cozystack-operator-config ConfigMap before applying this manifest
+        - name: KUBERNETES_SERVICE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: cozystack-operator-config
+              key: KUBERNETES_SERVICE_HOST
+              optional: false
+        - name: KUBERNETES_SERVICE_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: cozystack-operator-config
+              key: KUBERNETES_SERVICE_PORT
+              optional: false
+        {{- else if eq .Values.cozystackOperator.variant "hosted" }}
+        # Hosted: use in-cluster service account, no env override needed
+        env: []
+        {{- end }}
       hostNetwork: true
       tolerations:
       - key: "node.kubernetes.io/not-ready"
