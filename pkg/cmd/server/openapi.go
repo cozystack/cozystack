@@ -20,39 +20,7 @@ const (
 	baseStatusRef = apiPrefix + ".ApplicationStatus"
 	smp           = "application/strategic-merge-patch+json"
 
-	// objectMetaRef is the OpenAPI reference for Kubernetes ObjectMeta.
-	objectMetaRef = "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"
-	// applicationNamePattern is DNS-1035 regex for Application names.
-	applicationNamePattern = `^[a-z]([-a-z0-9]*[a-z0-9])?$`
 )
-
-// patchObjectMetaNameValidation adds DNS-1035 validation to metadata.name.
-// This ensures UI form validation matches backend validation.
-func patchObjectMetaNameValidation(schemas map[string]*spec.Schema) {
-	objMeta, ok := schemas[objectMetaRef]
-	if !ok || objMeta == nil {
-		return
-	}
-
-	if name, ok := objMeta.Properties["name"]; ok {
-		name.Pattern = applicationNamePattern
-		objMeta.Properties["name"] = name
-	}
-}
-
-// patchObjectMetaNameValidationV2 adds DNS-1035 validation for Swagger v2.
-func patchObjectMetaNameValidationV2(defs map[string]spec.Schema) {
-	objMeta, ok := defs[objectMetaRef]
-	if !ok {
-		return
-	}
-
-	if name, ok := objMeta.Properties["name"]; ok {
-		name.Pattern = applicationNamePattern
-		objMeta.Properties["name"] = name
-	}
-	defs[objectMetaRef] = objMeta
-}
 
 // deepCopySchema clones *spec.Schema via JSON-marshal/unmarshal.
 func deepCopySchema(in *spec.Schema) *spec.Schema {
@@ -295,9 +263,6 @@ func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 			}
 		}
 
-		// Add name validation to ObjectMeta for UI form validation
-		patchObjectMetaNameValidation(doc.Components.Schemas)
-
 		// Rewrite all $ref in the document
 		out, err := rewriteDocRefs(doc)
 		if err != nil {
@@ -378,9 +343,6 @@ func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spe
 		if !(ok1 && ok2 && ok3) && len(kindSchemas) > 0 {
 			return sw, fmt.Errorf("base Application* schemas not found")
 		}
-
-		// Add name validation to ObjectMeta for UI form validation
-		patchObjectMetaNameValidationV2(defs)
 
 		for kind, raw := range kindSchemas {
 			ref := apiPrefix + "." + kind
