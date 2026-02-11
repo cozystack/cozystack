@@ -1,4 +1,4 @@
 cozystackOperator:
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.0.0-beta.2@sha256:aaea9d8430187f208e6464cb6f102dcbbcdb0584b6a7a8a690ad91fc1f5d45e6
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.0.0-beta.3@sha256:3cacecfc318e8314300bba8538b475fb8d50b2bf3106533faa8d942e4ed14448
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
-  platformSourceRef: 'digest=sha256:f59e562f2c91446117773ad457251d567706ea2964251a2b0acc65060fd1f3bc'
+  platformSourceRef: 'digest=sha256:e5ddcf5a02d17b17fc7ffa8c87ddeaa25a01d928a63fb297f6b25b669bb6b7c7'
