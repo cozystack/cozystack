@@ -35,8 +35,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/duration"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -1075,17 +1075,25 @@ func (r *REST) validateNameLength(name string) field.ErrorList {
 		}
 	}
 
+	isTenantWithHost := r.kindName == "Tenant" && r.rootHost != ""
+
 	if maxLen <= 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath, name,
-			fmt.Sprintf("configuration error: no valid name length possible (release prefix %q, root host %q)",
-				r.releaseConfig.Prefix, r.rootHost)))
+		msg := fmt.Sprintf("configuration error: no valid name length possible (release prefix %q)", r.releaseConfig.Prefix)
+		if isTenantWithHost {
+			msg = fmt.Sprintf("configuration error: no valid name length possible (release prefix %q, root host %q)",
+				r.releaseConfig.Prefix, r.rootHost)
+		}
+		allErrs = append(allErrs, field.Invalid(fldPath, name, msg))
 		return allErrs
 	}
 
 	if len(name) > maxLen {
-		allErrs = append(allErrs, field.Invalid(fldPath, name,
-			fmt.Sprintf("must be no more than %d characters (release prefix %q, root host %q)",
-				maxLen, r.releaseConfig.Prefix, r.rootHost)))
+		msg := fmt.Sprintf("must be no more than %d characters (release prefix %q)", maxLen, r.releaseConfig.Prefix)
+		if isTenantWithHost {
+			msg = fmt.Sprintf("must be no more than %d characters (release prefix %q, root host %q)",
+				maxLen, r.releaseConfig.Prefix, r.rootHost)
+		}
+		allErrs = append(allErrs, field.Invalid(fldPath, name, msg))
 	}
 	return allErrs
 }
