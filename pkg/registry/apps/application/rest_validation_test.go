@@ -128,6 +128,38 @@ func TestValidateNameLength(t *testing.T) {
 			appName:   strings.Repeat("a", 53-len("mysql-")), // at helm boundary
 			wantError: false,
 		},
+		{
+			name:      "prefix consuming all helm capacity returns config error",
+			kindName:  "MySQL",
+			prefix:    strings.Repeat("x", 53), // prefix == maxHelmReleaseName → helmMax = 0
+			rootHost:  "",
+			appName:   "a",
+			wantError: true,
+		},
+		{
+			name:      "prefix exceeding helm capacity returns config error",
+			kindName:  "MySQL",
+			prefix:    strings.Repeat("x", 60), // prefix > maxHelmReleaseName → helmMax < 0
+			rootHost:  "",
+			appName:   "a",
+			wantError: true,
+		},
+		{
+			name:      "tenant with rootHost consuming all label capacity returns config error",
+			kindName:  "Tenant",
+			prefix:    "t-",
+			rootHost:  strings.Repeat("h", 62), // 62 chars → hostLabelMax = 63-62-1 = 0, helmMax = 51
+			appName:   "a",
+			wantError: true,
+		},
+		{
+			name:      "tenant with rootHost exceeding label capacity returns config error",
+			kindName:  "Tenant",
+			prefix:    "t-",
+			rootHost:  strings.Repeat("h", 70), // 70 chars → hostLabelMax = 63-70-1 = -8, helmMax = 51
+			appName:   "a",
+			wantError: true,
+		},
 	}
 
 	for _, tt := range tests {
