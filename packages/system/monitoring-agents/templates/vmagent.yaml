@@ -10,12 +10,12 @@ spec:
   shardCount: 1
   externalLabels:
     cluster: {{ .Values.vmagent.externalLabels.cluster }}
-    tenant: {{ .Values.vmagent.externalLabels.tenant }}
+    tenant: {{ .Values.global.target }}
   extraArgs:
     {{- toYaml (deepCopy .Values.vmagent.extraArgs | mergeOverwrite (fromYaml (include "monitoring-agents.vmagent.defaultExtraArgs" .))) | nindent 4 }}
   remoteWrite:
   {{- range .Values.vmagent.remoteWrite.urls }}
-  - url: {{ . | quote }}
+  - url: {{ tpl . $ | quote }}
   {{- end }}
 
   scrapeInterval: 30s

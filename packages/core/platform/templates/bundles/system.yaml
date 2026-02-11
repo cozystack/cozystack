@@ -136,7 +136,8 @@
 {{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.metrics-server" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.monitoring-agents" $) }}
+{{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}
+{{include "cozystack.platform.package" (list "cozystack.monitoring-agents" "default" $ $monitoringAgentsComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.goldpinger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.prometheus-operator-crds" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.grafana-operator" $) }}
