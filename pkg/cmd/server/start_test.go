@@ -96,6 +96,11 @@ func TestParseRootHostFromSecret(t *testing.T) {
 			secret:   &corev1.Secret{},
 			expected: "",
 		},
+		{
+			name:     "nil secret",
+			secret:   nil,
+			expected: "",
+		},
 	}
 
 	for _, tt := range tests {

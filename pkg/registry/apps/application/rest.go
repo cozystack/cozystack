@@ -484,6 +484,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 	}
 
+	// Validate Application name conforms to DNS-1035
+	if errs := validation.ValidateApplicationName(app.Name, field.NewPath("metadata").Child("name")); len(errs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+
 	// Validate name length against Helm release and label limits
 	if err := r.validateNameLength(app.Name); err != nil {
 		return nil, false, apierrors.NewBadRequest(err.Error())

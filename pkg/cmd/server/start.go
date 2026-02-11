@@ -115,6 +115,9 @@ func (o *CozyServerOptions) Complete() error {
 	if err := v1alpha1.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("failed to register types: %w", err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return fmt.Errorf("failed to register core types: %w", err)
+	}
 
 	cfg, err := k8sconfig.GetConfig()
 	if err != nil {
@@ -182,24 +185,17 @@ func (o *CozyServerOptions) Complete() error {
 	}
 
 	// Read root-host from cozystack-values secret (best-effort, non-fatal)
-	coreScheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(coreScheme)
-	coreClient, err := client.New(cfg, client.Options{Scheme: coreScheme})
+	secret := &corev1.Secret{}
+	err = o.Client.Get(context.Background(), client.ObjectKey{
+		Namespace: "cozy-system",
+		Name:      "cozystack-values",
+	}, secret)
 	if err != nil {
-		fmt.Printf("Warning: failed to create client for reading cozystack-values secret: %v\n", err)
+		fmt.Printf("Warning: failed to read cozystack-values secret: %v\n", err)
 	} else {
-		secret := &corev1.Secret{}
-		err := coreClient.Get(context.Background(), client.ObjectKey{
-			Namespace: "cozy-system",
-			Name:      "cozystack-values",
-		}, secret)
-		if err != nil {
-			fmt.Printf("Warning: failed to read cozystack-values secret: %v\n", err)
-		} else {
-			o.ResourceConfig.RootHost = parseRootHostFromSecret(secret)
-			if o.ResourceConfig.RootHost != "" {
-				fmt.Printf("Loaded root-host: %s\n", o.ResourceConfig.RootHost)
-			}
+		o.ResourceConfig.RootHost = parseRootHostFromSecret(secret)
+		if o.ResourceConfig.RootHost != "" {
+			fmt.Printf("Loaded root-host: %s\n", o.ResourceConfig.RootHost)
 		}
 	}
 
