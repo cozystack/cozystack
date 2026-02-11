@@ -1,0 +1,133 @@
+suite: Extra StorageClasses tests
+
+templates:
+  - templates/extra-storageclasses.yaml
+
+tests:
+  - it: renders nothing when extraStorageClasses is empty
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates one StorageClass per entry
+    set:
+      extraStorageClasses:
+        - name: nfs-data
+          server: "10.96.1.1"
+          share: "/"
+          mountOptions:
+            - nfsvers=4.1
+        - name: nfs-backup
+          server: "10.96.2.2"
+          share: "/"
+          mountOptions:
+            - nfsvers=4.1
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: sets correct provisioner
+    set:
+      extraStorageClasses:
+        - name: nfs-test
+          server: "10.96.1.1"
+          share: "/"
+          mountOptions:
+            - nfsvers=4.1
+    asserts:
+      - equal:
+          path: provisioner
+          value: nfs.csi.k8s.io
+
+  - it: sets server and share parameters
+    set:
+      extraStorageClasses:
+        - name: nfs-mydata
+          server: "10.96.50.100"
+          share: "/exports"
+          mountOptions:
+            - nfsvers=4.1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: nfs-mydata
+      - equal:
+          path: parameters.server
+          value: "10.96.50.100"
+      - equal:
+          path: parameters.share
+          value: "/exports"
+
+  - it: sets mount options
+    set:
+      extraStorageClasses:
+        - name: nfs-test
+          server: "10.96.1.1"
+          share: "/"
+          mountOptions:
+            - nfsvers=4.1
+    asserts:
+      - equal:
+          path: mountOptions[0]
+          value: nfsvers=4.1
+
+  - it: allows volume expansion
+    set:
+      extraStorageClasses:
+        - name: nfs-test
+          server: "10.96.1.1"
+          share: "/"
+          mountOptions:
+            - nfsvers=4.1
+    asserts:
+      - equal:
+          path: allowVolumeExpansion
+          value: true
+
+  - it: uses Delete reclaim policy
+    set:
+      extraStorageClasses:
+        - name: nfs-test
+          server: "10.96.1.1"
+          share: "/"
+          mountOptions:
+            - nfsvers=4.1
+    asserts:
+      - equal:
+          path: reclaimPolicy
+          value: Delete
+
+  - it: creates distinct StorageClasses for multiple shares
+    set:
+      extraStorageClasses:
+        - name: nfs-alpha
+          server: "10.96.10.1"
+          share: "/"
+          mountOptions:
+            - nfsvers=4.1
+        - name: nfs-beta
+          server: "10.96.20.2"
+          share: "/data"
+          mountOptions:
+            - nfsvers=4.1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: nfs-alpha
+        documentIndex: 0
+      - equal:
+          path: parameters.server
+          value: "10.96.10.1"
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: nfs-beta
+        documentIndex: 1
+      - equal:
+          path: parameters.server
+          value: "10.96.20.2"
+        documentIndex: 1
+      - equal:
+          path: parameters.share
+          value: "/data"
+        documentIndex: 1

@@ -3,6 +3,25 @@ run_kubernetes_test() {
     local test_name="$2"
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
+    local nfs_name="${test_name}"
+
+  # Create NFS volume for testing NFS mount
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: NFS
+metadata:
+  name: "${nfs_name}"
+  namespace: tenant-test
+spec:
+  size: 1Gi
+  storageClass: replicated
+EOF
+
+  # Wait for NFS HelmRelease to be ready
+  kubectl -n tenant-test wait hr nfs-${nfs_name} --timeout=120s --for=condition=ready
+
+  # Wait for NFS PVC to be bound
+  kubectl -n tenant-test wait pvc nfs-${nfs_name} --timeout=120s --for=jsonpath='{.status.phase}'=Bound
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -59,6 +78,9 @@ spec:
       minReplicas: 0
       roles:
       - ingress-nginx
+  nfs:
+    instances:
+    - name: "${nfs_name}"
   storageClass: replicated
   version: "${k8s_version}"
 EOF
@@ -214,19 +236,81 @@ fi
     exit 1
   fi
 
-  # Cleanup
+  # Cleanup LoadBalancer test
   kubectl delete deployment --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
   kubectl delete service --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
+
+  # Test NFS mount in tenant cluster
+  # Wait for NFS StorageClass to appear in tenant cluster
+  timeout 120 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get sc nfs-'"${nfs_name}"' 2>/dev/null; do sleep 5; done'
+
+  # Create PVC with NFS StorageClass
+  kubectl --kubeconfig tenantkubeconfig-${test_name} apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-test-pvc
+  namespace: tenant-test
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: nfs-${nfs_name}
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+  # Wait for PVC to be bound
+  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pvc nfs-test-pvc -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Bound
+
+  # Create Pod that writes and reads data from NFS volume
+  kubectl --kubeconfig tenantkubeconfig-${test_name} apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nfs-test-pod
+  namespace: tenant-test
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ["sh", "-c", "echo 'nfs-mount-ok' > /data/test.txt && cat /data/test.txt"]
+    volumeMounts:
+    - name: nfs-vol
+      mountPath: /data
+  volumes:
+  - name: nfs-vol
+    persistentVolumeClaim:
+      claimName: nfs-test-pvc
+  restartPolicy: Never
+EOF
+
+  # Wait for Pod to complete successfully
+  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pod nfs-test-pod -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Succeeded
+
+  # Verify NFS data integrity
+  nfs_result=$(kubectl --kubeconfig tenantkubeconfig-${test_name} logs nfs-test-pod -n tenant-test)
+  if [ "$nfs_result" != "nfs-mount-ok" ]; then
+    echo "NFS mount test failed: expected 'nfs-mount-ok', got '$nfs_result'" >&2
+    exit 1
+  fi
+
+  # Cleanup NFS test resources in tenant cluster
+  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pod nfs-test-pod -n tenant-test
+  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pvc nfs-test-pvc -n tenant-test
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 
-  for component in cilium coredns csi vsnap-crd; do
+  for component in cilium coredns csi nfs-driver vsnap-crd; do
       kubectl wait hr kubernetes-${test_name}-${component} -n tenant-test --timeout=1m --for=condition=ready
     done
     kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
 
   # Clean up by deleting the Kubernetes resource
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name
+
+  # Clean up NFS volume
+  kubectl -n tenant-test delete nfs.apps.cozystack.io ${nfs_name}
 
 }

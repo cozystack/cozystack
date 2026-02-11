@@ -15,6 +15,7 @@
         "gpuOperator",
         "ingressNginx",
         "monitoringAgents",
+        "nfs",
         "velero",
         "verticalPodAutoscaler"
       ],
@@ -186,6 +187,22 @@
               "type": "boolean",
               "default": false
             },
+            "valuesOverride": {
+              "description": "Custom Helm values overrides.",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "nfs": {
+          "description": "NFS CSI driver addon.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "valuesOverride"
+          ],
+          "properties": {
             "valuesOverride": {
               "description": "Custom Helm values overrides.",
               "type": "object",
@@ -499,6 +516,30 @@
       "description": "External hostname for Kubernetes cluster. Defaults to `\u003ccluster-name\u003e.\u003ctenant-host\u003e` if empty.",
       "type": "string",
       "default": ""
+    },
+    "nfs": {
+      "description": "NFS configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "instances": {
+          "description": "List of NFS volume instances to connect. Each creates a StorageClass named `nfs-\u003cname\u003e` in the tenant cluster.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "description": "Name of the NFS volume instance in the same namespace.",
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
     },
     "nodeGroups": {
       "description": "Worker nodes configuration map.",

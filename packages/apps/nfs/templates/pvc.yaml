@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "nfs.labels" . | nindent 4 }}
+spec:
+  accessModes:
+  - ReadWriteMany
+  {{- with .Values.storageClass }}
+  storageClassName: "{{ . }}"
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.size }}

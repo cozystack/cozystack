@@ -1,0 +1,20 @@
+{{- $pvc := lookup "v1" "PersistentVolumeClaim" .Release.Namespace .Values.pvcName }}
+{{- $pv := lookup "v1" "PersistentVolume" "" $pvc.spec.volumeName }}
+{{- $nfsExport := index $pv.spec.csi.volumeAttributes "linstor.csi.linbit.com/nfs-export" }}
+{{- $parsed := urlParse $nfsExport }}
+{{- $port := last (splitList ":" $parsed.host) }}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-nfs-{{ .Values.pvcName }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:app.kubernetes.io/component: linstor-csi-nfs-server
+        k8s:io.kubernetes.pod.namespace: cozy-linstor
+    toPorts:
+    - ports:
+      - port: "{{ $port }}"
+        protocol: TCP

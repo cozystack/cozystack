@@ -108,6 +108,15 @@ See the reference for components utilized in this service:
 | `host`                              | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty. | `string`            | `""`        |
 
 
+### NFS
+
+| Name                    | Description                                                                                                    | Type       | Value |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- | ---------- | ----- |
+| `nfs`                   | NFS configuration.                                                                                             | `object`   | `{}`  |
+| `nfs.instances`         | List of NFS volume instances to connect. Each creates a StorageClass named `nfs-<name>` in the tenant cluster. | `[]object` | `[]`  |
+| `nfs.instances[i].name` | Name of the NFS volume instance in the same namespace.                                                         | `string`   | `""`  |
+
+
 ### Cluster Addons
 
 | Name                                          | Description                                                                 | Type       | Value     |
@@ -141,6 +150,8 @@ See the reference for components utilized in this service:
 | `addons.velero.valuesOverride`                | Custom Helm values overrides.                                               | `object`   | `{}`      |
 | `addons.coredns`                              | CoreDNS addon.                                                              | `object`   | `{}`      |
 | `addons.coredns.valuesOverride`               | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.nfs`                                  | NFS CSI driver addon.                                                       | `object`   | `{}`      |
+| `addons.nfs.valuesOverride`                   | Custom Helm values overrides.                                               | `object`   | `{}`      |
 
 
 ### Kubernetes Control Plane Configuration

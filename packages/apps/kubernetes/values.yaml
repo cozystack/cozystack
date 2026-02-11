@@ -63,6 +63,24 @@ version: "v1.33"
 host: ""
 
 ##
+## @section NFS
+##
+
+## @typedef {struct} NFSInstance - Reference to an NFS volume instance.
+## @field {string} name - Name of the NFS volume instance in the same namespace.
+
+## @typedef {struct} NFS - NFS configuration.
+## @field {[]NFSInstance} instances - List of NFS volume instances to connect. Each creates a StorageClass named `nfs-<name>` in the tenant cluster.
+
+## @param {NFS} nfs - NFS configuration.
+nfs:
+  instances: []
+  ## Example:
+  ## instances:
+  ## - name: my-data
+  ## - name: my-backup
+
+##
 ## @section Cluster Addons
 ##
 
@@ -108,6 +126,9 @@ host: ""
 ## @typedef {struct} CoreDNSAddon - CoreDNS addon.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
+## @typedef {struct} NFSAddon - NFS CSI driver addon.
+## @field {object} valuesOverride - Custom Helm values overrides.
+
 ## @typedef {struct} Addons - Cluster addons configuration.
 ## @field {CertManagerAddon} certManager - Cert-manager addon.
 ## @field {CiliumAddon} cilium - Cilium CNI plugin.
@@ -119,6 +140,7 @@ host: ""
 ## @field {VerticalPodAutoscalerAddon} verticalPodAutoscaler - Vertical Pod Autoscaler.
 ## @field {VeleroAddon} velero - Velero backup/restore addon.
 ## @field {CoreDNSAddon} coredns - CoreDNS addon.
+## @field {NFSAddon} nfs - NFS CSI driver addon.
 
 ## @param {Addons} addons - Cluster addons configuration.
 addons:
@@ -149,6 +171,8 @@ addons:
     enabled: false
     valuesOverride: {}
   coredns:
+    valuesOverride: {}
+  nfs:
     valuesOverride: {}
 
 ##

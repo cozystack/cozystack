@@ -1,0 +1,9 @@
+##
+## @section Common parameters
+##
+
+## @param {string} storageClass - StorageClass used to store the data.
+storageClass: "replicated"
+
+## @param {quantity} size - Volume size for NFS storage.
+size: 10Gi

@@ -1,0 +1,45 @@
+suite: NFS driver HelmRelease tests
+
+templates:
+  - templates/helmreleases/nfs-driver.yaml
+
+tests:
+  - it: renders nothing when instances is empty
+    release:
+      name: kubernetes-test
+      namespace: tenant-root
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when instances is not set
+    release:
+      name: kubernetes-test
+      namespace: tenant-root
+    set:
+      nfs.instances: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: fails when NFS PVC is not found
+    release:
+      name: kubernetes-test
+      namespace: tenant-root
+    set:
+      nfs.instances:
+        - name: my-data
+    asserts:
+      - failedTemplate:
+          errorMessage: "NFS PVC not found in namespace tenant-root: nfs-my-data"
+
+  - it: constructs correct PVC name for lookup
+    release:
+      name: kubernetes-test
+      namespace: custom-ns
+    set:
+      nfs.instances:
+        - name: backup
+    asserts:
+      - failedTemplate:
+          errorMessage: "NFS PVC not found in namespace custom-ns: nfs-backup"

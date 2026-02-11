@@ -1,0 +1,21 @@
+apiVersion: cozystack.io/v1alpha1
+kind: ApplicationDefinition
+metadata:
+  name: nfs
+spec:
+  application:
+    kind: NFS
+    plural: nfs
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{"size":{"description":"Volume size for NFS storage.","default":"10Gi","pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true},"storageClass":{"description":"StorageClass used to store the data.","type":"string","default":"replicated"}}}
+  release:
+    prefix: nfs-
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-nfs-application-default-nfs
+      namespace: cozy-system
+  dashboard:
+    description: Managed NFS storage
+    plural: NFS
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcikiLz4KPHBhdGggZD0iTTM2IDU4VjEwNEMzNiAxMDcuMzE0IDM4LjY4NjMgMTEwIDQyIDExMEgxMDJDMTA1LjMxNCAxMTAgMTA4IDEwNy4zMTQgMTA4IDEwNFY1MkMxMDggNDguNjg2MyAxMDUuMzE0IDQ2IDEwMiA0Nkg3MEw2MiAzNEg0MkMzOC42ODYzIDM0IDM2IDM2LjY4NjMgMzYgNDBWNThaIiBmaWxsPSIjMTU2NUMwIi8+CjxwYXRoIGQ9Ik0zMCA2MkMzMCA1OC42ODYzIDMyLjY4NjMgNTYgMzYgNTZIMTA4QzExMS4zMTQgNTYgMTE0IDU4LjY4NjMgMTE0IDYyVjEwNEMxMTQgMTA3LjMxNCAxMTEuMzE0IDExMCAxMDggMTEwSDM2QzMyLjY4NjMgMTEwIDMwIDEwNy4zMTQgMzAgMTA0VjYyWiIgZmlsbD0iIzQyQTVGNSIvPgo8cGF0aCBkPSJNNjMgNzZWOTRNNjMgNzZMNTQgODVNNjMgNzZMNzIgODUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iNCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CjxwYXRoIGQ9Ik04MSA5NFY3Nk04MSA5NEw5MCA4NU04MSA5NEw3MiA4NSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI0IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPGRlZnM+CjxsaW5lYXJHcmFkaWVudCBpZD0icGFpbnQwX2xpbmVhciIgeDE9IjAiIHkxPSIwIiB4Mj0iMTQ0IiB5Mj0iMTQ0IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CjxzdG9wIHN0b3AtY29sb3I9IiNFM0YyRkQiLz4KPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjNjRCNUY2Ii8+CjwvbGluZWFyR3JhZGllbnQ+CjwvZGVmcz4KPC9zdmc+Cg==
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "storageClass"], ["spec", "size"]]

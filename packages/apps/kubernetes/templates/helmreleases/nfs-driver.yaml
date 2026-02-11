@@ -1,0 +1,67 @@
+{{- if .Values.nfs.instances }}
+{{- $extraStorageClasses := list }}
+{{- range .Values.nfs.instances }}
+{{-   $pvcName := printf "nfs-%s" .name }}
+{{-   $pvc := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $pvcName }}
+{{-   if not $pvc }}
+{{-     fail (printf "NFS PVC not found in namespace %s: %s" $.Release.Namespace $pvcName) }}
+{{-   end }}
+{{-   if not $pvc.spec.volumeName }}
+{{-     fail (printf "NFS PVC %s is not yet bound" $pvcName) }}
+{{-   end }}
+{{-   $pv := lookup "v1" "PersistentVolume" "" $pvc.spec.volumeName }}
+{{-   if not $pv }}
+{{-     fail (printf "PersistentVolume %s not found for PVC %s" $pvc.spec.volumeName $pvcName) }}
+{{-   end }}
+{{-   $nfsExport := index $pv.spec.csi.volumeAttributes "linstor.csi.linbit.com/nfs-export" }}
+{{-   if not $nfsExport }}
+{{-     fail (printf "PV %s has no linstor.csi.linbit.com/nfs-export attribute" $pv.metadata.name) }}
+{{-   end }}
+{{-   $parsed := urlParse $nfsExport }}
+{{-   $hostParts := splitList ":" $parsed.host }}
+{{-   $server := first $hostParts }}
+{{-   $port := last $hostParts }}
+{{-   $sc := dict "name" (printf "nfs-%s" .name) "server" $server "share" $parsed.path "mountOptions" (list (printf "nfsvers=4.2") (printf "port=%s" $port)) }}
+{{-   $extraStorageClasses = append $extraStorageClasses $sc }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-nfs-driver
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: nfs-driver
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-nfs-driver
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-nfs-driver
+  storageNamespace: cozy-nfs-driver
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  values:
+    {{- $defaultValues := dict "csi-driver-nfs" (dict "storageClass" (dict "create" false)) "extraStorageClasses" $extraStorageClasses }}
+    {{- toYaml (deepCopy .Values.addons.nfs.valuesOverride | mergeOverwrite $defaultValues) | nindent 4 }}
+  dependsOn:
+  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
+  - name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+{{- end }}

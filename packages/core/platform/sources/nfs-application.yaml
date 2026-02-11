@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.nfs-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: nfs-system
+          path: system/nfs
+        - name: nfs
+          path: apps/nfs
+          libraries: ["cozy-lib"]
+        - name: nfs-rd
+          path: system/nfs-rd
+          install:
+            namespace: cozy-system
+            releaseName: nfs-rd

@@ -58,6 +58,8 @@ spec:
           path: system/prometheus-operator-crds
         - name: kubernetes-metrics-server
           path: system/metrics-server
+        - name: kubernetes-nfs-driver
+          path: system/nfs-driver
         - name: kubernetes
           path: apps/kubernetes
           libraries: ["cozy-lib"]

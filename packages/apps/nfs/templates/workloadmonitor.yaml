@@ -1,0 +1,12 @@
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: nfs
+  type: nfs
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  version: {{ $.Chart.Version }}

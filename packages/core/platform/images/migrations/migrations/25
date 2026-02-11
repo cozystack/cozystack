@@ -12,6 +12,9 @@ kubectl delete deploy cozystack -n cozy-system --ignore-not-found
 # Delete old cozystack-assets statefulset
 kubectl delete sts cozystack-assets -n cozy-system --ignore-not-found
 
+kubectl delete helmrepositories.source.toolkit.fluxcd.io -n cozy-public cozystack-apps cozystack-extra --ignore-not-found --wait=false
+kubectl delete helmrepositories.source.toolkit.fluxcd.io -n cozy-system cozystack-system --ignore-not-found --wait=false
+
 # Delete old bootbox HelmReleases (will be recreated by new platform chart if enabled)
 kubectl delete hr bootbox -n cozy-system --ignore-not-found
 kubectl delete hr bootbox-rd -n cozy-system --ignore-not-found
