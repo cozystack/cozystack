@@ -57,23 +57,23 @@ kubectl get hr -A --no-headers | awk '$4 != "True"' | \
   done
 
 echo "Collecting packages..."
-kubectl get packages -A > $REPORT_DIR/kubernetes/packages.txt 2>&1
-kubectl get packages -A --no-headers | awk '$4 != "True"' | \
-  while read NAMESPACE NAME _; do
-    DIR=$REPORT_DIR/kubernetes/packages/$NAMESPACE/$NAME
+kubectl get packages > $REPORT_DIR/kubernetes/packages.txt 2>&1
+kubectl get packages --no-headers | awk '$3 != "True"' | \
+  while read NAME _; do
+    DIR=$REPORT_DIR/kubernetes/packages/$NAME
     mkdir -p $DIR
-    kubectl get package -n $NAMESPACE $NAME -o yaml > $DIR/package.yaml 2>&1
-    kubectl describe package -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+    kubectl get package $NAME -o yaml > $DIR/package.yaml 2>&1
+    kubectl describe package $NAME > $DIR/describe.txt 2>&1
   done
 
 echo "Collecting packagesources..."
-kubectl get packagesources -A > $REPORT_DIR/kubernetes/packagesources.txt 2>&1
-kubectl get packagesources -A --no-headers | awk '$4 != "True"' | \
-  while read NAMESPACE NAME _; do
-    DIR=$REPORT_DIR/kubernetes/packagesources/$NAMESPACE/$NAME
+kubectl get packagesources > $REPORT_DIR/kubernetes/packagesources.txt 2>&1
+kubectl get packagesources --no-headers | awk '$3 != "True"' | \
+  while read NAME _; do
+    DIR=$REPORT_DIR/kubernetes/packagesources/$NAME
     mkdir -p $DIR
-    kubectl get packagesource -n $NAMESPACE $NAME -o yaml > $DIR/packagesource.yaml 2>&1
-    kubectl describe packagesource -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
+    kubectl get packagesource $NAME -o yaml > $DIR/packagesource.yaml 2>&1
+    kubectl describe packagesource $NAME > $DIR/describe.txt 2>&1
   done
 
 echo "Collecting pods..."
@@ -82,7 +82,7 @@ kubectl get pod -A --no-headers | awk '$4 !~ /Running|Succeeded|Completed/' |
   while read NAMESPACE NAME _ STATE _; do
     DIR=$REPORT_DIR/kubernetes/pods/$NAMESPACE/$NAME
     mkdir -p $DIR
-    CONTAINERS=$(kubectl get pod -o jsonpath='{.spec.containers[*].name}' -n $NAMESPACE $NAME)
+    CONTAINERS=$(kubectl get pod -o jsonpath='{.spec.containers[*].name} {.spec.initContainers[*].name}' -n $NAMESPACE $NAME)
     kubectl get pod -n $NAMESPACE $NAME -o yaml > $DIR/pod.yaml 2>&1
     kubectl describe pod -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
     if [ "$STATE" != "Pending" ]; then
