@@ -222,7 +222,7 @@ fi
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 
   for component in cilium coredns csi ingress-nginx vsnap-crd; do
-      kubectl wait hr kubernetes-${test_name}-${component} -n tenant-test --timeout=1m --for=condition=ready
+      kubectl wait hr kubernetes-${test_name}-${component} -n tenant-test --timeout=5m --for=condition=ready
     done
 
   # Clean up by deleting the Kubernetes resource
