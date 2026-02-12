@@ -167,6 +167,7 @@ spec:
           args:
             - "--endpoint=unix:/csi/csi.sock"
             - "--node-name=$(KUBE_NODE_NAME)"
+            - "--run-controller-service=false"
             - "--v=5"
           env:
             - name: KUBE_NODE_NAME
