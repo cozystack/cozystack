@@ -149,9 +149,9 @@ for entry in "${INSTANCES[@]}"; do
 
   if [ -n "$VALUES_SECRET" ] && resource_exists "$NAMESPACE" "secret" "$VALUES_SECRET"; then
     echo "    Reading values from secret: ${VALUES_SECRET}"
-    VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o jsonpath="{.data.${VALUES_KEY}}" 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o jsonpath="{.data.${VALUES_KEY}}" 2>/dev/null | base64 -d 2>/dev/null || true)
     if [ -z "$VALUES_YAML" ]; then
-      VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o jsonpath="{.stringData.${VALUES_KEY}}" 2>/dev/null || echo "")
+      VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o jsonpath="{.stringData.${VALUES_KEY}}" 2>/dev/null || true)
     fi
     if [ -n "$VALUES_YAML" ]; then
       EXTERNAL=$(echo "$VALUES_YAML" | yq -r '.external // false')
@@ -194,7 +194,7 @@ for entry in "${INSTANCES[@]}"; do
   echo "  --- Save LoadBalancer IP ---"
   LB_IP=""
   if [ "$EXTERNAL" = "true" ] && resource_exists "$NAMESPACE" "svc" "$OLD_NAME"; then
-    LB_IP=$(kubectl -n "$NAMESPACE" get svc "$OLD_NAME" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+    LB_IP=$(kubectl -n "$NAMESPACE" get svc "$OLD_NAME" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
     if [ -n "$LB_IP" ]; then
       echo "    LoadBalancer IP: ${LB_IP}"
     else
@@ -314,8 +314,9 @@ PVCEOF
 
   # --- 2i: Clone Secrets ---
   echo "  --- Clone Secrets ---"
-  for secret in $(kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values"); do
+  kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
+    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | while IFS= read -r secret; do
     old_secret_name="${secret#secret/}"
     suffix="${old_secret_name#${OLD_NAME}}"
     new_secret_name="${NEW_INSTANCE_NAME}${suffix}"
@@ -540,8 +541,9 @@ SVCEOF
 
   # --- 2q: Delete old resources ---
   echo "  --- Delete old resources ---"
-  for secret in $(kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values"); do
+  kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
+    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | while IFS= read -r secret; do
     old_secret_name="${secret#secret/}"
     delete_resource "$NAMESPACE" "secret" "$old_secret_name"
   done
@@ -714,7 +716,7 @@ for entry in "${INSTANCES[@]}"; do
   instance="${entry#*/}"
   disk_name="${NEW_DISK_PREFIX}-${instance}"
   for i in $(seq 1 60); do
-    ready=$(kubectl -n "$ns" get hr "$disk_name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+    ready=$(kubectl -n "$ns" get hr "$disk_name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
     if [ "$ready" = "True" ]; then
       echo "  [OK] ${ns}/hr/${disk_name} is Ready"
       break
