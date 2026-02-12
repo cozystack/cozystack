@@ -1,0 +1,168 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-nfs-setup
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-nfs-setup
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "patch", "update"]
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnetworkpolicies"]
+    verbs: ["create", "get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-nfs-setup
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-nfs-setup
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-nfs-setup
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-nfs-setup
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-nfs-setup
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-nfs-setup
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-nfs-setup
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-nfs-setup
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-nfs-setup
+      restartPolicy: Never
+      containers:
+        - name: setup
+          image: docker.io/alpine/k8s:1.33.4
+          command: ["sh", "-xec"]
+          args:
+            - |
+              PVC_NAME="{{ .Release.Name }}"
+              NAMESPACE="{{ .Release.Namespace }}"
+
+              # Get PV name from PVC (PVC is bound since we mount it)
+              PV_NAME=$(kubectl get pvc "$PVC_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.volumeName}')
+
+              # Get NFS export URL from PV
+              NFS_EXPORT=$(kubectl get pv "$PV_NAME" -o 'jsonpath={.spec.csi.volumeAttributes.linstor\.csi\.linbit\.com/nfs-export}')
+
+              # Parse port from URL (format: nfs://host:port/path)
+              PORT=$(echo "$NFS_EXPORT" | sed -E 's|.*://[^:]+:([0-9]+)/.*|\1|')
+
+              # Get PVC UID for owner reference
+              PVC_UID=$(kubectl get pvc "$PVC_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')
+
+              # Parse host and path from URL
+              HOST=$(echo "$NFS_EXPORT" | sed -E 's|.*://([^:]+):.*|\1|')
+              PATH_EXPORT=$(echo "$NFS_EXPORT" | sed -E 's|.*://[^/]+(/.*)|\1|')
+
+              # Create credentials secret with NFS access info
+              cat <<EOF | kubectl apply -f -
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: ${PVC_NAME}-credentials
+                namespace: ${NAMESPACE}
+                ownerReferences:
+                - apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  name: ${PVC_NAME}
+                  uid: ${PVC_UID}
+              type: Opaque
+              stringData:
+                host: "${HOST}"
+                port: "${PORT}"
+                path: "${PATH_EXPORT}"
+                endpoint: "nfs://${HOST}:${PORT}${PATH_EXPORT}"
+              EOF
+
+              # Apply CiliumNetworkPolicy with owner reference to PVC
+              cat <<EOF | kubectl apply -f -
+              apiVersion: cilium.io/v2
+              kind: CiliumNetworkPolicy
+              metadata:
+                name: allow-nfs-${PVC_NAME}
+                namespace: ${NAMESPACE}
+                ownerReferences:
+                - apiVersion: v1
+                  kind: PersistentVolumeClaim
+                  name: ${PVC_NAME}
+                  uid: ${PVC_UID}
+              spec:
+                endpointSelector: {}
+                egress:
+                - toEndpoints:
+                  - matchLabels:
+                      k8s:app.kubernetes.io/component: linstor-csi-nfs-server
+                      k8s:io.kubernetes.pod.namespace: cozy-linstor
+                  toPorts:
+                  - ports:
+                    - port: "${PORT}"
+                      protocol: TCP
+              EOF
+          volumeMounts:
+            - name: data
+              mountPath: /mnt/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}

@@ -17,8 +17,6 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
-        - name: nfs-system
-          path: system/nfs
         - name: nfs
           path: apps/nfs
           libraries: ["cozy-lib"]
