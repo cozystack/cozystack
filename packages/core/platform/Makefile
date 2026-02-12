@@ -1,19 +1,18 @@
-NAME=platform
+NAME=cozystack-platform
 NAMESPACE=cozy-system
 
 include ../../../hack/common-envs.mk
 
 show:
-	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain
+	cozyhr show --namespace $(NAMESPACE) $(NAME)
 
 apply:
-	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl apply --filename -
-	kubectl delete helmreleases.helm.toolkit.fluxcd.io --selector cozystack.io/marked-for-deletion=true --all-namespaces
+	cozyhr apply --namespace $(NAMESPACE) $(NAME)
 
 reconcile: apply
 
 diff:
-	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl diff --filename -
+	cozyhr diff --namespace $(NAMESPACE) $(NAME)
 
 image: image-migrations
 
