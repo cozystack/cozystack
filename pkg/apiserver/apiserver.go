@@ -208,7 +208,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	// --- dynamically-configured, per-tenant resources ---
 	appsV1alpha1Storage := map[string]rest.Storage{}
 	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(cli, watchCli, &resConfig, c.ResourceConfig.RootHost)
+		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
 		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
 	}
 	appsApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)

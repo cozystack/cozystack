@@ -42,11 +42,9 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	basecompatibility "k8s.io/component-base/compatibility"
 	baseversion "k8s.io/component-base/version"
-	"k8s.io/klog/v2"
 	netutils "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	k8sconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/yaml"
 )
 
 // CozyServerOptions holds the state for the Cozy API server
@@ -185,46 +183,7 @@ func (o *CozyServerOptions) Complete() error {
 		o.ResourceConfig.Resources = append(o.ResourceConfig.Resources, resource)
 	}
 
-	// Read root-host from cozystack-values secret (best-effort, non-fatal)
-	secret := &corev1.Secret{}
-	err = o.Client.Get(context.Background(), client.ObjectKey{
-		Namespace: "cozy-system",
-		Name:      "cozystack-values",
-	}, secret)
-	if err != nil {
-		klog.Warningf("failed to read cozystack-values secret: %v", err)
-	} else {
-		o.ResourceConfig.RootHost = parseRootHostFromSecret(secret)
-		if o.ResourceConfig.RootHost != "" {
-			klog.Infof("Loaded root-host: %s", o.ResourceConfig.RootHost)
-		}
-	}
-
 	return nil
-}
-
-// parseRootHostFromSecret extracts _cluster.root-host from the cozystack-values secret.
-func parseRootHostFromSecret(secret *corev1.Secret) string {
-	if secret == nil || secret.Data == nil {
-		return ""
-	}
-
-	valuesYAML, ok := secret.Data["values.yaml"]
-	if !ok || len(valuesYAML) == 0 {
-		return ""
-	}
-
-	var values struct {
-		Cluster struct {
-			RootHost string `json:"root-host"`
-		} `json:"_cluster"`
-	}
-	if err := yaml.Unmarshal(valuesYAML, &values); err != nil {
-		klog.Warningf("failed to parse values.yaml from cozystack-values secret: %v", err)
-		return ""
-	}
-
-	return values.Cluster.RootHost
 }
 
 // Validate checks the correctness of the options

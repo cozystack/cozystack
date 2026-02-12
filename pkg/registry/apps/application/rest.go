@@ -91,11 +91,10 @@ type REST struct {
 	singularName  string
 	releaseConfig config.ReleaseConfig
 	specSchema    *structuralschema.Structural
-	rootHost      string
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
-func NewREST(c client.Client, w client.WithWatch, config *config.Resource, rootHost string) *REST {
+func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST {
 	var specSchema *structuralschema.Structural
 
 	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
@@ -134,7 +133,6 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource, rootH
 		singularName:  config.Application.Singular,
 		releaseConfig: config.Release,
 		specSchema:    specSchema,
-		rootHost:      rootHost,
 	}
 }
 
@@ -1051,49 +1049,23 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 // chart-generated resource suffixes within the 63-char DNS-1035 label limit.
 const maxHelmReleaseName = 53
 
-// maxK8sLabelValue is the maximum length of a Kubernetes label value.
-const maxK8sLabelValue = 63
-
 // validateNameLength checks that the application name won't exceed Kubernetes limits.
-// For all apps: prefix + name must fit within the Helm release name limit (53 chars).
-// For Tenants: additionally checks that the host label (name + "." + rootHost) fits
-// within the Kubernetes label value limit (63 chars).
-//
-// Note: rootHost is read once at API server startup from the cozystack-values Secret.
-// Changing root-host requires an API server restart for validation to reflect the new value.
+// prefix + name must fit within the Helm release name limit (53 chars).
 func (r *REST) validateNameLength(name string) field.ErrorList {
 	fldPath := field.NewPath("metadata").Child("name")
 	allErrs := field.ErrorList{}
 
-	helmMax := maxHelmReleaseName - len(r.releaseConfig.Prefix)
-	maxLen := helmMax
-
-	if r.kindName == "Tenant" && r.rootHost != "" {
-		hostLabelMax := maxK8sLabelValue - len(r.rootHost) - 1 // -1 for the dot separator
-		if hostLabelMax < maxLen {
-			maxLen = hostLabelMax
-		}
-	}
-
-	isTenantWithHost := r.kindName == "Tenant" && r.rootHost != ""
+	maxLen := maxHelmReleaseName - len(r.releaseConfig.Prefix)
 
 	if maxLen <= 0 {
-		msg := fmt.Sprintf("configuration error: no valid name length possible (release prefix %q)", r.releaseConfig.Prefix)
-		if isTenantWithHost {
-			msg = fmt.Sprintf("configuration error: no valid name length possible (release prefix %q, root host %q)",
-				r.releaseConfig.Prefix, r.rootHost)
-		}
-		allErrs = append(allErrs, field.Invalid(fldPath, name, msg))
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("configuration error: no valid name length possible (release prefix %q)", r.releaseConfig.Prefix)))
 		return allErrs
 	}
 
 	if len(name) > maxLen {
-		msg := fmt.Sprintf("must be no more than %d characters (release prefix %q)", maxLen, r.releaseConfig.Prefix)
-		if isTenantWithHost {
-			msg = fmt.Sprintf("must be no more than %d characters (release prefix %q, root host %q)",
-				maxLen, r.releaseConfig.Prefix, r.rootHost)
-		}
-		allErrs = append(allErrs, field.Invalid(fldPath, name, msg))
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must be no more than %d characters (release prefix %q)", maxLen, r.releaseConfig.Prefix)))
 	}
 	return allErrs
 }

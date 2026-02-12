@@ -28,111 +28,48 @@ func TestValidateNameLength(t *testing.T) {
 		name      string
 		kindName  string
 		prefix    string
-		rootHost  string
 		appName   string
 		wantError bool
 	}{
 		{
-			name:      "non-tenant short name passes",
+			name:      "short name passes",
 			kindName:  "MySQL",
 			prefix:    "mysql-",
-			rootHost:  "example.com",
 			appName:   "mydb",
 			wantError: false,
 		},
 		{
-			name:      "non-tenant at helm boundary passes",
+			name:      "at helm boundary passes",
 			kindName:  "MySQL",
 			prefix:    "mysql-",
-			rootHost:  "example.com",
 			appName:   strings.Repeat("a", 53-len("mysql-")), // exactly 47 chars
 			wantError: false,
 		},
 		{
-			name:      "non-tenant exceeding helm limit fails",
+			name:      "exceeding helm limit fails",
 			kindName:  "MySQL",
 			prefix:    "mysql-",
-			rootHost:  "example.com",
 			appName:   strings.Repeat("a", 53-len("mysql-")+1), // 48 chars
 			wantError: true,
 		},
 		{
-			name:      "tenant no rootHost within helm limit passes",
+			name:      "tenant within helm limit passes",
 			kindName:  "Tenant",
 			prefix:    "tenant-",
-			rootHost:  "",
 			appName:   strings.Repeat("a", 53-len("tenant-")), // 46 chars
 			wantError: false,
 		},
 		{
-			name:      "tenant no rootHost exceeding helm limit fails",
+			name:      "tenant exceeding helm limit fails",
 			kindName:  "Tenant",
 			prefix:    "tenant-",
-			rootHost:  "",
 			appName:   strings.Repeat("a", 53-len("tenant-")+1), // 47 chars
 			wantError: true,
-		},
-		{
-			name:      "tenant with rootHost within both limits passes",
-			kindName:  "Tenant",
-			prefix:    "tenant-",
-			rootHost:  "example.com", // 11 chars → host label max = 63-11-1 = 51
-			appName:   "short",
-			wantError: false,
-		},
-		{
-			name:     "tenant with short rootHost helm limit is still stricter",
-			kindName: "Tenant",
-			prefix:   "tenant-",
-			rootHost: "example.com",                          // 11 chars → host label max = 51, helm max = 46
-			appName:  strings.Repeat("a", 53-len("tenant-")), // 46 chars — at Helm boundary
-			wantError: false,
-		},
-		{
-			name:     "tenant with long rootHost at host label boundary passes",
-			kindName: "Tenant",
-			prefix:   "tenant-",
-			rootHost: "long-subdomain.hosting.example.com",                                    // 34 chars → host label max = 63-34-1 = 28
-			appName:  strings.Repeat("a", 63-len("long-subdomain.hosting.example.com")-1), // exactly 28 chars
-			wantError: false,
-		},
-		{
-			name:     "tenant with long rootHost exceeding host label limit fails",
-			kindName: "Tenant",
-			prefix:   "tenant-",
-			rootHost: "long-subdomain.hosting.example.com",                                      // 34 chars → host label max = 28
-			appName:  strings.Repeat("a", 63-len("long-subdomain.hosting.example.com")-1+1), // 29 chars
-			wantError: true,
-		},
-		{
-			name:      "tenant host label limit stricter than helm limit",
-			kindName:  "Tenant",
-			prefix:    "tenant-",
-			rootHost:  "very-long-subdomain.hosting.example.com", // 39 chars → host label max = 63-39-1 = 23
-			appName:   strings.Repeat("a", 24),                   // 24 > 23 (host limit) but < 46 (helm limit)
-			wantError: true,
-		},
-		{
-			name:      "tenant short rootHost where helm limit is stricter",
-			kindName:  "Tenant",
-			prefix:    "tenant-",
-			rootHost:  "x.co",                                     // 4 chars → host label max = 63-4-1 = 58, helm max = 46
-			appName:   strings.Repeat("a", 53-len("tenant-")+1), // 47 > 46 (helm limit) but < 58 (host limit)
-			wantError: true,
-		},
-		{
-			name:      "non-tenant ignores rootHost for limit calculation",
-			kindName:  "MySQL",
-			prefix:    "mysql-",
-			rootHost:  "very-long-subdomain.hosting.example.com",
-			appName:   strings.Repeat("a", 53-len("mysql-")), // at helm boundary
-			wantError: false,
 		},
 		{
 			name:      "prefix consuming all helm capacity returns config error",
 			kindName:  "MySQL",
 			prefix:    strings.Repeat("x", 53), // prefix == maxHelmReleaseName → helmMax = 0
-			rootHost:  "",
 			appName:   "a",
 			wantError: true,
 		},
@@ -140,23 +77,6 @@ func TestValidateNameLength(t *testing.T) {
 			name:      "prefix exceeding helm capacity returns config error",
 			kindName:  "MySQL",
 			prefix:    strings.Repeat("x", 60), // prefix > maxHelmReleaseName → helmMax < 0
-			rootHost:  "",
-			appName:   "a",
-			wantError: true,
-		},
-		{
-			name:      "tenant with rootHost consuming all label capacity returns config error",
-			kindName:  "Tenant",
-			prefix:    "t-",
-			rootHost:  strings.Repeat("h", 62), // 62 chars → hostLabelMax = 63-62-1 = 0, helmMax = 51
-			appName:   "a",
-			wantError: true,
-		},
-		{
-			name:      "tenant with rootHost exceeding label capacity returns config error",
-			kindName:  "Tenant",
-			prefix:    "t-",
-			rootHost:  strings.Repeat("h", 70), // 70 chars → hostLabelMax = 63-70-1 = -8, helmMax = 51
 			appName:   "a",
 			wantError: true,
 		},
@@ -169,7 +89,6 @@ func TestValidateNameLength(t *testing.T) {
 				releaseConfig: config.ReleaseConfig{
 					Prefix: tt.prefix,
 				},
-				rootHost: tt.rootHost,
 			}
 
 			errs := r.validateNameLength(tt.appName)

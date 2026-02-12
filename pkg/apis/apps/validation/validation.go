@@ -25,7 +25,7 @@ import (
 // This is required because Application names are used to create Kubernetes resources
 // (Services, Namespaces, etc.) that must have DNS-1035 compliant names.
 // Note: length validation is handled separately by validateNameLength in the REST
-// handler, which computes dynamic limits based on Helm release prefix and root-host.
+// handler, which computes dynamic limits based on Helm release prefix.
 func ValidateApplicationName(name string, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
