@@ -11,6 +11,10 @@ NEW_DISK_PREFIX="vm-disk"
 NEW_INSTANCE_PREFIX="vm-instance"
 PROTECTION_WEBHOOK_NAME="protection-webhook"
 PROTECTION_WEBHOOK_NS="protection-webhook"
+CDI_APISERVER_NS="cozy-kubevirt-cdi"
+CDI_APISERVER_DEPLOY="cdi-apiserver"
+CDI_VALIDATING_WEBHOOKS="cdi-api-datavolume-validate cdi-api-dataimportcron-validate cdi-api-populator-validate cdi-api-validate"
+CDI_MUTATING_WEBHOOKS="cdi-api-datavolume-mutate"
 
 # ============================================================
 # Helper functions
@@ -272,7 +276,8 @@ for entry in "${INSTANCES[@]}"; do
         echo "    [SKIP] PVC ${NEW_DISK_NAME} already Bound"
       fi
     else
-      echo "    [CREATE] PVC ${NEW_DISK_NAME} -> PV ${PV_NAME}"
+      PV_VOLUME_MODE=$(kubectl get pv "$PV_NAME" -o jsonpath='{.spec.volumeMode}' 2>/dev/null || echo "Filesystem")
+      echo "    [CREATE] PVC ${NEW_DISK_NAME} -> PV ${PV_NAME} (volumeMode=${PV_VOLUME_MODE})"
       cat <<PVCEOF | kubectl -n "$NAMESPACE" apply -f -
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -285,6 +290,7 @@ metadata:
     app.kubernetes.io/instance: ${NEW_DISK_NAME}
 spec:
   accessModes: ["ReadWriteMany"]
+  volumeMode: ${PV_VOLUME_MODE}
   storageClassName: "${SYSTEM_DISK_STORAGE_CLASS}"
   volumeName: "${PV_NAME}"
   resources:
@@ -447,7 +453,7 @@ stringData:
     cpuModel: "${CPU_MODEL}"
     resources: ${RESOURCES}
     sshKeys: ${SSH_KEYS}
-    cloudInit: $(echo "$CLOUD_INIT" | jq -Rs .)
+    cloudInit: $(printf '%s' "$CLOUD_INIT" | jq -Rs .)
     cloudInitSeed: "${CLOUD_INIT_SEED}"
 ISEOF
   else
@@ -569,23 +575,30 @@ echo ""
 echo "--- Step 3: Delete protected resources ---"
 
 if [ ${#ALL_PROTECTED_RESOURCES[@]} -gt 0 ]; then
-  echo "  --- Temporarily disabling protection-webhook ---"
+  WEBHOOK_EXISTS=false
+  if kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" --no-headers 2>/dev/null | grep -q .; then
+    WEBHOOK_EXISTS=true
+  fi
 
-  WEBHOOK_REPLICAS=$(kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" \
-    -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+  if [ "$WEBHOOK_EXISTS" = "true" ]; then
+    echo "  --- Temporarily disabling protection-webhook ---"
 
-  echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> 0 (was ${WEBHOOK_REPLICAS})"
-  kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" --replicas=0
+    WEBHOOK_REPLICAS=$(kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" \
+      -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
 
-  echo "  [PATCH] Set failurePolicy=Ignore on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
-  kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
-    jq '.webhooks[].failurePolicy = "Ignore"' | \
-    kubectl apply -f -
+    echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> 0 (was ${WEBHOOK_REPLICAS})"
+    kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" --replicas=0
 
-  echo "  Waiting for webhook pods to terminate..."
-  kubectl -n "$PROTECTION_WEBHOOK_NS" wait --for=delete pod \
-    -l app.kubernetes.io/name=protection-webhook --timeout=60s 2>/dev/null || true
-  sleep 3
+    echo "  [PATCH] Set failurePolicy=Ignore on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
+    kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
+      jq '.webhooks[].failurePolicy = "Ignore"' | \
+      kubectl apply -f - 2>/dev/null || true
+
+    echo "  Waiting for webhook pods to terminate..."
+    kubectl -n "$PROTECTION_WEBHOOK_NS" wait --for=delete pod \
+      -l app.kubernetes.io/name=protection-webhook --timeout=60s 2>/dev/null || true
+    sleep 3
+  fi
 
   for entry in "${ALL_PROTECTED_RESOURCES[@]}"; do
     ns="${entry%%:*}"
@@ -594,15 +607,17 @@ if [ ${#ALL_PROTECTED_RESOURCES[@]} -gt 0 ]; then
     kubectl -n "$ns" delete "$res" --wait=false 2>/dev/null || true
   done
 
-  echo "  [PATCH] Set failurePolicy=Fail on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
-  kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
-    jq '.webhooks[].failurePolicy = "Fail"' | \
-    kubectl apply -f -
+  if [ "$WEBHOOK_EXISTS" = "true" ]; then
+    echo "  [PATCH] Set failurePolicy=Fail on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
+    kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
+      jq '.webhooks[].failurePolicy = "Fail"' | \
+      kubectl apply -f - 2>/dev/null || true
 
-  echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> ${WEBHOOK_REPLICAS}"
-  kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" \
-    --replicas="$WEBHOOK_REPLICAS"
-  echo "  --- protection-webhook restored ---"
+    echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> ${WEBHOOK_REPLICAS}"
+    kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" \
+      --replicas="$WEBHOOK_REPLICAS"
+    echo "  --- protection-webhook restored ---"
+  fi
 else
   echo "  [SKIP] No protected resources to delete"
 fi
@@ -626,10 +641,52 @@ for pv_name in "${ALL_PV_NAMES[@]}"; do
 done
 
 # ============================================================
-# STEP 5: Unsuspend vm-disk HelmReleases first
+# STEP 5: Temporarily disable CDI datavolume webhooks
+# ============================================================
+# CDI's datavolume-validate webhook rejects DataVolume creation when a PVC
+# with the same name already exists. We must disable it so that vm-disk
+# HelmReleases can reconcile and adopt the pre-created PVCs.
+# We scale down both cdi-operator (which recreates webhook configs) and
+# cdi-apiserver (which serves the webhooks), then delete webhook configs.
+# Both are restored after vm-disk HRs reconcile.
+echo ""
+echo "--- Step 5: Temporarily disable CDI webhooks ---"
+
+CDI_OPERATOR_REPLICAS=$(kubectl -n "$CDI_APISERVER_NS" get deploy cdi-operator \
+  -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+CDI_APISERVER_REPLICAS=$(kubectl -n "$CDI_APISERVER_NS" get deploy "$CDI_APISERVER_DEPLOY" \
+  -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+
+echo "  [SCALE] cdi-operator -> 0 (was ${CDI_OPERATOR_REPLICAS})"
+kubectl -n "$CDI_APISERVER_NS" scale deploy cdi-operator --replicas=0
+echo "  [SCALE] ${CDI_APISERVER_DEPLOY} -> 0 (was ${CDI_APISERVER_REPLICAS})"
+kubectl -n "$CDI_APISERVER_NS" scale deploy "$CDI_APISERVER_DEPLOY" --replicas=0
+
+echo "  Waiting for cdi pods to terminate..."
+kubectl -n "$CDI_APISERVER_NS" wait --for=delete pod \
+  -l cdi.kubevirt.io=cdi-apiserver --timeout=60s 2>/dev/null || true
+kubectl -n "$CDI_APISERVER_NS" wait --for=delete pod \
+  -l name=cdi-operator --timeout=60s 2>/dev/null || true
+
+for wh in $CDI_VALIDATING_WEBHOOKS; do
+  if kubectl get validatingwebhookconfiguration "$wh" >/dev/null 2>&1; then
+    echo "  [DELETE] validatingwebhookconfiguration/${wh}"
+    kubectl delete validatingwebhookconfiguration "$wh" 2>/dev/null || true
+  fi
+done
+for wh in $CDI_MUTATING_WEBHOOKS; do
+  if kubectl get mutatingwebhookconfiguration "$wh" >/dev/null 2>&1; then
+    echo "  [DELETE] mutatingwebhookconfiguration/${wh}"
+    kubectl delete mutatingwebhookconfiguration "$wh" 2>/dev/null || true
+  fi
+done
+sleep 2
+
+# ============================================================
+# STEP 6: Unsuspend vm-disk HelmReleases first
 # ============================================================
 echo ""
-echo "--- Step 5: Unsuspend vm-disk HelmReleases ---"
+echo "--- Step 6: Unsuspend vm-disk HelmReleases ---"
 for entry in "${INSTANCES[@]}"; do
   ns="${entry%%/*}"
   instance="${entry#*/}"
@@ -643,6 +700,10 @@ for entry in "${INSTANCES[@]}"; do
     else
       echo "  [SKIP] ${ns}/hr/${disk_name} already not suspended"
     fi
+    # Force immediate reconciliation
+    echo "  [TRIGGER] Reconcile ${ns}/hr/${disk_name}"
+    kubectl -n "$ns" annotate hr "$disk_name" --overwrite \
+      "reconcile.fluxcd.io/requestedAt=$(date +%s)" 2>/dev/null || true
   fi
 done
 
@@ -652,21 +713,44 @@ for entry in "${INSTANCES[@]}"; do
   ns="${entry%%/*}"
   instance="${entry#*/}"
   disk_name="${NEW_DISK_PREFIX}-${instance}"
-  for i in $(seq 1 30); do
+  for i in $(seq 1 60); do
     ready=$(kubectl -n "$ns" get hr "$disk_name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
     if [ "$ready" = "True" ]; then
       echo "  [OK] ${ns}/hr/${disk_name} is Ready"
       break
+    fi
+    if [ "$i" = "60" ]; then
+      echo "  [WARN] ${ns}/hr/${disk_name} did not become Ready within timeout"
     fi
     sleep 5
   done
 done
 
 # ============================================================
-# STEP 6: Unsuspend vm-instance HelmReleases
+# STEP 7: Restore CDI webhooks
+# ============================================================
+# Scale cdi-operator and cdi-apiserver back up.
+# cdi-apiserver will recreate webhook configurations automatically on start.
+echo ""
+echo "--- Step 7: Restore CDI webhooks ---"
+
+echo "  [SCALE] cdi-operator -> ${CDI_OPERATOR_REPLICAS}"
+kubectl -n "$CDI_APISERVER_NS" scale deploy cdi-operator \
+  --replicas="$CDI_OPERATOR_REPLICAS"
+echo "  [SCALE] ${CDI_APISERVER_DEPLOY} -> ${CDI_APISERVER_REPLICAS}"
+kubectl -n "$CDI_APISERVER_NS" scale deploy "$CDI_APISERVER_DEPLOY" \
+  --replicas="$CDI_APISERVER_REPLICAS"
+
+echo "  Waiting for CDI to be ready..."
+kubectl -n "$CDI_APISERVER_NS" rollout status deploy cdi-operator --timeout=120s 2>/dev/null || true
+kubectl -n "$CDI_APISERVER_NS" rollout status deploy "$CDI_APISERVER_DEPLOY" --timeout=120s 2>/dev/null || true
+echo "  --- CDI webhooks restored ---"
+
+# ============================================================
+# STEP 8: Unsuspend vm-instance HelmReleases
 # ============================================================
 echo ""
-echo "--- Step 6: Unsuspend vm-instance HelmReleases ---"
+echo "--- Step 8: Unsuspend vm-instance HelmReleases ---"
 for entry in "${INSTANCES[@]}"; do
   ns="${entry%%/*}"
   instance="${entry#*/}"
