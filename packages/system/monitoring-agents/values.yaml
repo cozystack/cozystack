@@ -1,3 +1,6 @@
+global:
+  target: cozy-monitoring
+
 kube-state-metrics:
   extraArgs:
     - --metric-labels-allowlist=pods=[*],deployments=[*]
@@ -275,11 +278,10 @@ kube-state-metrics:
 vmagent:
   externalLabels:
     cluster: cozystack
-    tenant: '{{ .Release.Namespace }}'
   remoteWrite:
     urls:
-      - 'http://vminsert-shortterm.{{ .Release.Namespace }}.svc:8480/insert/0/prometheus'
-      - 'http://vminsert-longterm.{{ .Release.Namespace }}.svc:8480/insert/0/prometheus'
+      - http://vminsert-shortterm.{{ .Values.global.target }}.svc:8480/insert/0/prometheus
+      - http://vminsert-longterm.{{ .Values.global.target }}.svc:8480/insert/0/prometheus
   extraArgs: {}
 
 fluent-bit:
@@ -342,7 +344,7 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match kube.*
-          Host vlogs-generic.{{ .Release.Namespace }}.svc
+          Host vlogs-generic.{{ .Values.global.target }}.svc
           port 9428
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
@@ -353,7 +355,7 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match events.*
-          Host vlogs-generic.{{ .Release.Namespace }}.svc
+          Host vlogs-generic.{{ .Values.global.target }}.svc
           port 9428
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,reason,meatdata_namespace,metadata_name&_msg_field=message&_time_field=date
@@ -364,7 +366,7 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match audit.*
-          Host vlogs-generic.{{ .Release.Namespace }}.svc
+          Host vlogs-generic.{{ .Values.global.target }}.svc
           port 9428
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,stage,user_username,verb,requestUri&_msg_field=requestURI&_time_field=date
@@ -416,7 +418,7 @@ fluent-bit:
       [FILTER]
           Name modify
           Match *
-          Add tenant {{ .Release.Namespace }}
+          Add tenant {{ .Values.global.target }}
       [FILTER]
           Name modify
           Match *
