@@ -25,7 +25,7 @@ spec:
   backup:
     enabled: false
     s3Region: us-east-1
-    s3Bucket: s3.example.org/postgres-backups
+    s3Bucket: s3.example.org/mariadb-backups
     schedule: "0 2 * * *"
     cleanupStrategy: "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
     s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
