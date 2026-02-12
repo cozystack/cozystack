@@ -12,7 +12,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.clickhouse-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.foundationdb-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kafka-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.mysql-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.mariadb-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.mongodb-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.nats-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.postgres-application" $) }}

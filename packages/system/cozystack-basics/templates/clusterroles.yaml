@@ -198,7 +198,7 @@ rules:
   - httpcaches
   - kafkas
   - kuberneteses
-  - mysqls
+  - mariadbs
   - natses
   - postgreses
   - rabbitmqs

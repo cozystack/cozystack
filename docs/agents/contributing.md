@@ -27,7 +27,7 @@ git commit --signoff -m "[component] Brief description of changes"
 
 **Component prefixes:**
 - System: `[dashboard]`, `[platform]`, `[cilium]`, `[kube-ovn]`, `[linstor]`, `[fluxcd]`, `[cluster-api]`
-- Apps: `[postgres]`, `[mysql]`, `[redis]`, `[kafka]`, `[clickhouse]`, `[virtual-machine]`, `[kubernetes]`
+- Apps: `[postgres]`, `[mariadb]`, `[redis]`, `[kafka]`, `[clickhouse]`, `[virtual-machine]`, `[kubernetes]`
 - Other: `[tests]`, `[ci]`, `[docs]`, `[maintenance]`
 
 **Examples:**

@@ -1,0 +1,616 @@
+#!/bin/bash
+# Migration 28 --> 29
+# Rename all mysql-prefixed resources to mariadb- across the cluster.
+# Discovers all MySQL HelmReleases by label, migrates each instance.
+# Idempotent: safe to re-run.
+
+set -euo pipefail
+
+OLD_PREFIX="mysql"
+NEW_PREFIX="mariadb"
+MARIADB_OPERATOR_NS="cozy-mariadb-operator"
+MARIADB_WEBHOOK_NAME="mariadb-operator-webhook"
+PROTECTION_WEBHOOK_NAME="protection-webhook"
+PROTECTION_WEBHOOK_NS="protection-webhook"
+declare -A OPERATOR_REPLICAS=()
+declare -A ORIGINAL_PV_POLICIES=()
+
+# ============================================================
+# Helper functions
+# ============================================================
+
+resource_exists() {
+  local ns="$1" type="$2" name="$3"
+  kubectl -n "$ns" get "$type" "$name" --no-headers 2>/dev/null | grep -q .
+}
+
+delete_resource() {
+  local ns="$1" type="$2" name="$3"
+  if resource_exists "$ns" "$type" "$name"; then
+    echo "    [DELETE] ${type}/${name}"
+    kubectl -n "$ns" delete "$type" "$name" --wait=false
+  else
+    echo "    [SKIP] ${type}/${name} already gone"
+  fi
+}
+
+clone_resource() {
+  local ns="$1" type="$2" old_name="$3" new_name="$4" old_instance="$5" new_instance="$6"
+
+  if resource_exists "$ns" "$type" "$new_name"; then
+    echo "    [SKIP] ${type}/${new_name} already exists"
+    return 0
+  fi
+  if ! resource_exists "$ns" "$type" "$old_name"; then
+    echo "    [SKIP] ${type}/${old_name} not found"
+    return 0
+  fi
+
+  echo "    [CREATE] ${type}/${new_name} from ${old_name}"
+  kubectl -n "$ns" get "$type" "$old_name" -o json | \
+    jq --arg new_name "$new_name" --arg old "$old_instance" --arg new "$new_instance" '
+      .metadata.name = $new_name |
+      del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp,
+          .metadata.generation, .metadata.managedFields, .metadata.selfLink,
+          .metadata.ownerReferences) |
+      del(.status) |
+      .metadata.labels = ((.metadata.labels // {}) | with_entries(
+        if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+      .metadata.annotations = ((.metadata.annotations // {}) | with_entries(
+        select(.key != "kubectl.kubernetes.io/last-applied-configuration") |
+        if (.value | type) == "string" then .value |= gsub($old; $new) else . end))
+    ' | kubectl -n "$ns" apply -f -
+}
+
+patch_webhook_policy() {
+  local name="$1" policy="$2"
+  echo "  [PATCH] Set failurePolicy=${policy} on ValidatingWebhookConfiguration/${name}"
+  kubectl get validatingwebhookconfiguration "$name" -o json | \
+    jq --arg p "$policy" '.webhooks[].failurePolicy = $p' | \
+    kubectl apply -f -
+}
+
+# ============================================================
+# STEP 1: Discover all MySQL instances
+# ============================================================
+echo "=== Discovering MySQL HelmReleases ==="
+INSTANCES=()
+while IFS=/ read -r ns name; do
+  [ -z "$ns" ] && continue
+  instance="${name#${OLD_PREFIX}-}"
+  INSTANCES+=("${ns}/${instance}")
+  echo "  Found: ${ns}/${name} (instance=${instance})"
+done < <(kubectl get hr -A -l "apps.cozystack.io/application.kind=MySQL" \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+if [ ${#INSTANCES[@]} -eq 0 ]; then
+  echo "  No MySQL HelmReleases found. Nothing to migrate."
+
+  # Recover operator if a prior run left it scaled down
+  for deploy in mariadb-operator mariadb-operator-cert-controller mariadb-operator-webhook; do
+    current=$(kubectl -n "$MARIADB_OPERATOR_NS" get deploy "$deploy" \
+      -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+    if [ "$current" = "0" ]; then
+      echo "  [RECOVER] Scaling ${deploy} -> 1"
+      kubectl -n "$MARIADB_OPERATOR_NS" scale deploy "$deploy" --replicas=1
+    fi
+  done
+
+  # Restore webhook if left at Ignore
+  current_policy=$(kubectl get validatingwebhookconfiguration "$MARIADB_WEBHOOK_NAME" \
+    -o jsonpath='{.webhooks[0].failurePolicy}' 2>/dev/null || echo "unknown")
+  if [ "$current_policy" = "Ignore" ]; then
+    patch_webhook_policy "$MARIADB_WEBHOOK_NAME" "Fail"
+  fi
+
+  # Unsuspend any new HelmReleases left suspended from a prior partial run
+  while IFS=/ read -r ns name; do
+    [ -z "$ns" ] && continue
+    suspended=$(kubectl -n "$ns" get hr "$name" -o jsonpath='{.spec.suspend}' 2>/dev/null || echo "false")
+    if [ "$suspended" = "true" ]; then
+      echo "  [UNSUSPEND] ${ns}/hr/${name}"
+      kubectl -n "$ns" patch hr "$name" --type=merge -p '{"spec":{"suspend":false}}'
+    fi
+  done < <(kubectl get hr -A -l "apps.cozystack.io/application.kind=MariaDB" \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=29 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+echo "  Total: ${#INSTANCES[@]} instance(s)"
+
+# ============================================================
+# STEP 2: Scale down mariadb-operator and disable its webhook
+# ============================================================
+echo ""
+echo "--- Step 2: Scale down mariadb-operator ---"
+for deploy in mariadb-operator mariadb-operator-cert-controller mariadb-operator-webhook; do
+  current=$(kubectl -n "$MARIADB_OPERATOR_NS" get deploy "$deploy" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "0")
+  OPERATOR_REPLICAS["$deploy"]="$current"
+  if [ "$current" != "0" ]; then
+    echo "  [SCALE] ${deploy} -> 0 (was ${current})"
+    kubectl -n "$MARIADB_OPERATOR_NS" scale deploy "$deploy" --replicas=0
+  else
+    echo "  [SKIP] ${deploy} already scaled to 0"
+  fi
+done
+
+echo "  Waiting for operator pods to terminate..."
+kubectl -n "$MARIADB_OPERATOR_NS" wait --for=delete pod \
+  -l app.kubernetes.io/instance=mariadb-operator --timeout=60s 2>/dev/null || true
+
+current_policy=$(kubectl get validatingwebhookconfiguration "$MARIADB_WEBHOOK_NAME" \
+  -o jsonpath='{.webhooks[0].failurePolicy}' 2>/dev/null || echo "unknown")
+if [ "$current_policy" = "Fail" ]; then
+  patch_webhook_policy "$MARIADB_WEBHOOK_NAME" "Ignore"
+else
+  echo "  [SKIP] Webhook ${MARIADB_WEBHOOK_NAME} already failurePolicy=${current_policy}"
+fi
+
+# ============================================================
+# STEP 3: Migrate each instance
+# ============================================================
+ALL_PV_NAMES=()
+ALL_PROTECTED_RESOURCES=()
+
+for entry in "${INSTANCES[@]}"; do
+  NAMESPACE="${entry%%/*}"
+  INSTANCE="${entry#*/}"
+  OLD_NAME="${OLD_PREFIX}-${INSTANCE}"
+  NEW_NAME="${NEW_PREFIX}-${INSTANCE}"
+
+  echo ""
+  echo "======================================================================"
+  echo "=== Migrating: ${OLD_NAME} -> ${NEW_NAME} in ${NAMESPACE}"
+  echo "======================================================================"
+
+  # --- 3a: Suspend old HelmRelease ---
+  echo "  --- Suspend HelmRelease ---"
+  if resource_exists "$NAMESPACE" "hr" "$OLD_NAME"; then
+    suspended=$(kubectl -n "$NAMESPACE" get hr "$OLD_NAME" -o jsonpath='{.spec.suspend}' 2>/dev/null || echo "false")
+    if [ "$suspended" != "true" ]; then
+      echo "    [SUSPEND] hr/${OLD_NAME}"
+      kubectl -n "$NAMESPACE" patch hr "$OLD_NAME" --type=merge -p '{"spec":{"suspend":true}}'
+    else
+      echo "    [SKIP] hr/${OLD_NAME} already suspended"
+    fi
+  else
+    echo "    [SKIP] hr/${OLD_NAME} not found"
+  fi
+
+  # --- 3b: Switch PV reclaim policy to Retain ---
+  echo "  --- Switch PV reclaim to Retain ---"
+  PV_NAMES=()
+  replicas=$(kubectl -n "$NAMESPACE" get mariadb.k8s.mariadb.com "$OLD_NAME" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null || true)
+  if [ -z "$replicas" ]; then
+    # Fallback: count existing PVCs matching the old or new name pattern
+    replicas=$(kubectl -n "$NAMESPACE" get pvc --no-headers -o name 2>/dev/null \
+      | grep -cE "storage-${OLD_NAME}-[0-9]+$|storage-${NEW_NAME}-[0-9]+$" || echo "0")
+    echo "    [INFO] MariaDB CR not found, derived replicas=${replicas} from existing PVCs"
+  fi
+  for i in $(seq 0 $((replicas - 1))); do
+    pvc_name="storage-${OLD_NAME}-${i}"
+    if resource_exists "$NAMESPACE" "pvc" "$pvc_name"; then
+      pv_name=$(kubectl -n "$NAMESPACE" get pvc "$pvc_name" -o jsonpath='{.spec.volumeName}')
+      PV_NAMES+=("$pv_name")
+      ALL_PV_NAMES+=("$pv_name")
+      current_policy=$(kubectl get pv "$pv_name" -o jsonpath='{.spec.persistentVolumeReclaimPolicy}')
+      if [ "$current_policy" != "Retain" ]; then
+        echo "    [PATCH] PV ${pv_name}: ${current_policy} -> Retain"
+        ORIGINAL_PV_POLICIES["$pv_name"]="$current_policy"
+        kubectl patch pv "$pv_name" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+      else
+        echo "    [SKIP] PV ${pv_name} already Retain"
+      fi
+    else
+      new_pvc_name="storage-${NEW_NAME}-${i}"
+      if resource_exists "$NAMESPACE" "pvc" "$new_pvc_name"; then
+        pv_name=$(kubectl -n "$NAMESPACE" get pvc "$new_pvc_name" -o jsonpath='{.spec.volumeName}')
+        PV_NAMES+=("$pv_name")
+        ALL_PV_NAMES+=("$pv_name")
+        echo "    [SKIP] New PVC ${new_pvc_name} already exists, PV=${pv_name}"
+      else
+        echo "    [WARN] Neither old nor new PVC found for index ${i}"
+        PV_NAMES+=("")
+      fi
+    fi
+  done
+
+  # --- 3c: Delete old StatefulSet and Deployment ---
+  echo "  --- Delete old StatefulSet/Deployment ---"
+  if resource_exists "$NAMESPACE" "statefulset" "$OLD_NAME"; then
+    echo "    [DELETE] statefulset/${OLD_NAME} (cascade=orphan)"
+    kubectl -n "$NAMESPACE" delete statefulset "$OLD_NAME" --cascade=orphan
+  else
+    echo "    [SKIP] statefulset/${OLD_NAME} already gone"
+  fi
+  if resource_exists "$NAMESPACE" "deployment" "${OLD_NAME}-metrics"; then
+    echo "    [DELETE] deployment/${OLD_NAME}-metrics"
+    kubectl -n "$NAMESPACE" delete deployment "${OLD_NAME}-metrics"
+  else
+    echo "    [SKIP] deployment/${OLD_NAME}-metrics already gone"
+  fi
+
+  # --- 3d: Delete old pods ---
+  echo "  --- Delete old pods ---"
+  for i in $(seq 0 $((replicas - 1))); do
+    pod_name="${OLD_NAME}-${i}"
+    if resource_exists "$NAMESPACE" "pod" "$pod_name"; then
+      echo "    [DELETE] pod/${pod_name}"
+      kubectl -n "$NAMESPACE" delete pod "$pod_name" --grace-period=30
+    else
+      echo "    [SKIP] pod/${pod_name} already gone"
+    fi
+  done
+  for pod in $(kubectl -n "$NAMESPACE" get pods \
+    -l app.kubernetes.io/name=mysqld-exporter,app.kubernetes.io/instance="${OLD_NAME}" \
+    -o name 2>/dev/null); do
+    echo "    [DELETE] ${pod}"
+    kubectl -n "$NAMESPACE" delete "$pod" --grace-period=30
+  done
+
+  # --- 3e: Migrate PVCs ---
+  echo "  --- Migrate PVCs ---"
+  for i in $(seq 0 $((replicas - 1))); do
+    old_pvc="storage-${OLD_NAME}-${i}"
+    new_pvc="storage-${NEW_NAME}-${i}"
+    pv_name="${PV_NAMES[$i]:-}"
+
+    if [ -z "$pv_name" ]; then
+      echo "    [WARN] No PV found for index ${i}, skipping"
+      continue
+    fi
+
+    if resource_exists "$NAMESPACE" "pvc" "$new_pvc"; then
+      new_phase=$(kubectl -n "$NAMESPACE" get pvc "$new_pvc" \
+        -o jsonpath='{.status.phase}' 2>/dev/null || echo "unknown")
+      if [ "$new_phase" = "Bound" ]; then
+        echo "    [SKIP] PVC ${new_pvc} already Bound"
+        continue
+      fi
+    fi
+
+    if resource_exists "$NAMESPACE" "pvc" "$old_pvc"; then
+      storage_size=$(kubectl -n "$NAMESPACE" get pvc "$old_pvc" \
+        -o jsonpath='{.spec.resources.requests.storage}')
+      storage_class=$(kubectl -n "$NAMESPACE" get pvc "$old_pvc" \
+        -o jsonpath='{.spec.storageClassName}')
+      old_labels=$(kubectl -n "$NAMESPACE" get pvc "$old_pvc" -o json | \
+        jq --arg old "$OLD_NAME" --arg new "$NEW_NAME" \
+          '(.metadata.labels // {}) | with_entries(
+            if (.value | type) == "string" and .value == $old then .value = $new else . end)')
+
+      if ! resource_exists "$NAMESPACE" "pvc" "$new_pvc"; then
+        echo "    [CREATE] PVC ${new_pvc} -> PV ${pv_name}"
+        cat <<PVCEOF | kubectl -n "$NAMESPACE" apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${new_pvc}
+  namespace: ${NAMESPACE}
+  labels: ${old_labels}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: "${storage_class}"
+  volumeName: "${pv_name}"
+  resources:
+    requests:
+      storage: "${storage_size}"
+PVCEOF
+      fi
+
+      new_pvc_uid=$(kubectl -n "$NAMESPACE" get pvc "$new_pvc" -o jsonpath='{.metadata.uid}')
+      echo "    [PATCH] Rebind PV ${pv_name} -> ${new_pvc}"
+      kubectl patch pv "$pv_name" --type=merge -p "{
+        \"spec\":{\"claimRef\":{\"apiVersion\":\"v1\",\"kind\":\"PersistentVolumeClaim\",
+          \"name\":\"${new_pvc}\",\"namespace\":\"${NAMESPACE}\",\"uid\":\"${new_pvc_uid}\"}}
+      }"
+
+      echo "    Waiting for PVC ${new_pvc} to bind..."
+      kubectl -n "$NAMESPACE" wait pvc "$new_pvc" \
+        --for=jsonpath='{.status.phase}'=Bound --timeout=60s
+      echo "    [OK] PVC ${new_pvc} is Bound"
+    fi
+  done
+
+  # --- 3f: Clone Services ---
+  echo "  --- Clone Services ---"
+  for suffix in "" "-internal" "-primary" "-secondary" "-metrics"; do
+    old_svc="${OLD_NAME}${suffix}"
+    new_svc="${NEW_NAME}${suffix}"
+    if resource_exists "$NAMESPACE" "svc" "$old_svc"; then
+      if resource_exists "$NAMESPACE" "svc" "$new_svc"; then
+        echo "    [SKIP] svc/${new_svc} already exists"
+      else
+        echo "    [CREATE] svc/${new_svc} from ${old_svc}"
+        kubectl -n "$NAMESPACE" get svc "$old_svc" -o json | \
+          jq --arg new_svc "$new_svc" --arg old "$OLD_NAME" --arg new "$NEW_NAME" '
+            .metadata.name = $new_svc |
+            del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp,
+                .metadata.generation, .metadata.managedFields, .metadata.selfLink,
+                .metadata.ownerReferences) |
+            del(.status) |
+            del(.spec.clusterIP, .spec.clusterIPs) |
+            .metadata.labels = ((.metadata.labels // {}) | with_entries(
+              if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+            .metadata.annotations = ((.metadata.annotations // {}) | with_entries(
+              select(.key != "kubectl.kubernetes.io/last-applied-configuration") |
+              if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+            .spec.selector = ((.spec.selector // {}) | with_entries(
+              if (.value | type) == "string" then .value |= gsub($old; $new) else . end))
+          ' | kubectl -n "$NAMESPACE" apply -f -
+      fi
+    fi
+  done
+
+  # --- 3g: Clone Secrets ---
+  echo "  --- Clone Secrets ---"
+  for secret in $(kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
+    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release"); do
+    old_secret_name="${secret#secret/}"
+    new_secret_name="${NEW_NAME}${old_secret_name#${OLD_NAME}}"
+    clone_resource "$NAMESPACE" "secret" "$old_secret_name" "$new_secret_name" "$OLD_NAME" "$NEW_NAME"
+  done
+
+  # --- 3h: Clone ConfigMaps ---
+  echo "  --- Clone ConfigMaps ---"
+  for cm in $(kubectl -n "$NAMESPACE" get configmap -o name 2>/dev/null \
+    | grep "configmap/${OLD_NAME}"); do
+    old_cm_name="${cm#configmap/}"
+    new_cm_name="${NEW_NAME}${old_cm_name#${OLD_NAME}}"
+    clone_resource "$NAMESPACE" "configmap" "$old_cm_name" "$new_cm_name" "$OLD_NAME" "$NEW_NAME"
+  done
+
+  # --- 3i: Clone MariaDB CR ---
+  echo "  --- Clone MariaDB CR ---"
+  if resource_exists "$NAMESPACE" "mariadb.k8s.mariadb.com" "$OLD_NAME"; then
+    if resource_exists "$NAMESPACE" "mariadb.k8s.mariadb.com" "$NEW_NAME"; then
+      echo "    [SKIP] mariadb.k8s.mariadb.com/${NEW_NAME} already exists"
+    else
+      echo "    [CREATE] mariadb.k8s.mariadb.com/${NEW_NAME}"
+      kubectl -n "$NAMESPACE" get mariadb.k8s.mariadb.com "$OLD_NAME" -o json | \
+        jq --arg old "$OLD_NAME" --arg new "$NEW_NAME" '
+          .metadata.name = $new |
+          del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp,
+              .metadata.generation, .metadata.managedFields, .metadata.selfLink,
+              .metadata.finalizers, .metadata.ownerReferences) |
+          del(.status) |
+          .metadata.labels = ((.metadata.labels // {}) | with_entries(
+            if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+          .metadata.annotations = ((.metadata.annotations // {}) | with_entries(
+            select(.key != "kubectl.kubernetes.io/last-applied-configuration") |
+            if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+          .spec = (.spec | tostring | gsub($old; $new) | fromjson)
+        ' | kubectl -n "$NAMESPACE" apply -f -
+    fi
+  fi
+
+  # --- 3j: Clone Users, Databases, Grants ---
+  echo "  --- Clone Users, Databases, Grants ---"
+  for kind in "user.k8s.mariadb.com" "database.k8s.mariadb.com" "grant.k8s.mariadb.com"; do
+    for resource in $(kubectl -n "$NAMESPACE" get "$kind" -o name 2>/dev/null | grep "${OLD_NAME}"); do
+      old_res_name="${resource##*/}"
+      new_res_name="${NEW_NAME}${old_res_name#${OLD_NAME}}"
+      if resource_exists "$NAMESPACE" "$kind" "$new_res_name"; then
+        echo "    [SKIP] ${kind}/${new_res_name} already exists"
+      else
+        echo "    [CREATE] ${kind}/${new_res_name}"
+        kubectl -n "$NAMESPACE" get "$kind" "$old_res_name" -o json | \
+          jq --arg old "$OLD_NAME" --arg new "$NEW_NAME" --arg new_name "$new_res_name" '
+            .metadata.name = $new_name |
+            del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp,
+                .metadata.generation, .metadata.managedFields, .metadata.selfLink,
+                .metadata.finalizers, .metadata.ownerReferences) |
+            del(.status) |
+            .metadata.labels = ((.metadata.labels // {}) | with_entries(
+              if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+            .metadata.annotations = ((.metadata.annotations // {}) | with_entries(
+              select(.key != "kubectl.kubernetes.io/last-applied-configuration") |
+              if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+            .spec = (.spec | tostring | gsub($old; $new) | fromjson)
+          ' | kubectl -n "$NAMESPACE" apply -f -
+      fi
+    done
+  done
+
+  # --- 3k: Clone WorkloadMonitor ---
+  echo "  --- Clone WorkloadMonitor ---"
+  clone_resource "$NAMESPACE" "workloadmonitor.cozystack.io" "$OLD_NAME" "$NEW_NAME" "$OLD_NAME" "$NEW_NAME"
+
+  # --- 3l: Create new HelmRelease (suspended) ---
+  echo "  --- Create new HelmRelease (suspended) ---"
+  if resource_exists "$NAMESPACE" "hr" "$NEW_NAME"; then
+    echo "    [SKIP] hr/${NEW_NAME} already exists"
+  elif resource_exists "$NAMESPACE" "hr" "$OLD_NAME"; then
+    echo "    [CREATE] hr/${NEW_NAME} from ${OLD_NAME} (suspended)"
+    kubectl -n "$NAMESPACE" get hr "$OLD_NAME" -o json | \
+      jq --arg old "$OLD_NAME" --arg new "$NEW_NAME" \
+         --arg old_prefix "$OLD_PREFIX" --arg new_prefix "$NEW_PREFIX" '
+        .metadata.name = $new |
+        del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp,
+            .metadata.generation, .metadata.managedFields, .metadata.selfLink,
+            .metadata.finalizers, .metadata.ownerReferences) |
+        del(.status) |
+        .metadata.labels = ((.metadata.labels // {}) | with_entries(
+          if (.value | type) == "string" then .value |= gsub($old; $new) else . end) |
+          if .["apps.cozystack.io/application.kind"] == "MySQL"
+          then .["apps.cozystack.io/application.kind"] = "MariaDB"
+          else . end) |
+        .metadata.annotations = ((.metadata.annotations // {}) | with_entries(
+          select(.key != "kubectl.kubernetes.io/last-applied-configuration") |
+          if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+        (if .spec.chart.spec.chart == $old_prefix
+         then .spec.chart.spec.chart = $new_prefix else . end) |
+        .spec.suspend = true
+      ' | kubectl -n "$NAMESPACE" apply -f -
+  else
+    echo "    [WARN] hr/${OLD_NAME} not found, cannot clone"
+  fi
+
+  # --- 3m: Delete old unprotected resources ---
+  echo "  --- Delete old resources ---"
+  for kind in "grant.k8s.mariadb.com" "database.k8s.mariadb.com" "user.k8s.mariadb.com"; do
+    for resource in $(kubectl -n "$NAMESPACE" get "$kind" -o name 2>/dev/null | grep "${OLD_NAME}"); do
+      old_res_name="${resource##*/}"
+      kubectl -n "$NAMESPACE" patch "$kind" "$old_res_name" --type=json \
+        -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+      echo "    [DELETE] ${kind}/${old_res_name}"
+      kubectl -n "$NAMESPACE" delete "$kind" "$old_res_name" --wait=false 2>/dev/null || true
+    done
+  done
+
+  if resource_exists "$NAMESPACE" "mariadb.k8s.mariadb.com" "$OLD_NAME"; then
+    kubectl -n "$NAMESPACE" patch mariadb.k8s.mariadb.com "$OLD_NAME" --type=json \
+      -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+    delete_resource "$NAMESPACE" "mariadb.k8s.mariadb.com" "$OLD_NAME"
+  fi
+
+  for secret in $(kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
+    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release"); do
+    old_secret_name="${secret#secret/}"
+    delete_resource "$NAMESPACE" "secret" "$old_secret_name"
+  done
+
+  for cm in $(kubectl -n "$NAMESPACE" get configmap -o name 2>/dev/null \
+    | grep "configmap/${OLD_NAME}"); do
+    old_cm_name="${cm#configmap/}"
+    delete_resource "$NAMESPACE" "configmap" "$old_cm_name"
+  done
+
+  delete_resource "$NAMESPACE" "workloadmonitor.cozystack.io" "$OLD_NAME"
+
+  if resource_exists "$NAMESPACE" "hr" "$OLD_NAME"; then
+    kubectl -n "$NAMESPACE" patch hr "$OLD_NAME" --type=json \
+      -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+    delete_resource "$NAMESPACE" "hr" "$OLD_NAME"
+  fi
+
+  echo "    [DELETE] secrets with label owner=helm,name=${OLD_NAME}"
+  kubectl -n "$NAMESPACE" delete secret -l "owner=helm,name=${OLD_NAME}" 2>/dev/null || true
+
+  # Collect protected resources for batch deletion
+  for suffix in "" "-internal" "-primary" "-secondary" "-metrics"; do
+    svc_name="${OLD_NAME}${suffix}"
+    if resource_exists "$NAMESPACE" "svc" "$svc_name"; then
+      ALL_PROTECTED_RESOURCES+=("${NAMESPACE}:svc/${svc_name}")
+    fi
+  done
+  for i in $(seq 0 $((replicas - 1))); do
+    old_pvc="storage-${OLD_NAME}-${i}"
+    if resource_exists "$NAMESPACE" "pvc" "$old_pvc"; then
+      ALL_PROTECTED_RESOURCES+=("${NAMESPACE}:pvc/${old_pvc}")
+    fi
+  done
+done
+
+# ============================================================
+# STEP 4: Delete protected resources (PVCs, Services)
+# ============================================================
+echo ""
+echo "--- Step 4: Delete protected resources ---"
+
+if [ ${#ALL_PROTECTED_RESOURCES[@]} -gt 0 ]; then
+  echo "  --- Temporarily disabling protection-webhook ---"
+
+  WEBHOOK_REPLICAS=$(kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+
+  echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> 0 (was ${WEBHOOK_REPLICAS})"
+  kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" --replicas=0
+
+  patch_webhook_policy "$PROTECTION_WEBHOOK_NAME" "Ignore"
+
+  echo "  Waiting for webhook pods to terminate..."
+  kubectl -n "$PROTECTION_WEBHOOK_NS" wait --for=delete pod \
+    -l app.kubernetes.io/name=protection-webhook --timeout=60s 2>/dev/null || true
+  sleep 3
+
+  for entry in "${ALL_PROTECTED_RESOURCES[@]}"; do
+    ns="${entry%%:*}"
+    res="${entry#*:}"
+    echo "  [DELETE] ${ns}/${res}"
+    kubectl -n "$ns" delete "$res" --wait=false 2>/dev/null || true
+  done
+
+  patch_webhook_policy "$PROTECTION_WEBHOOK_NAME" "Fail"
+
+  echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> ${WEBHOOK_REPLICAS}"
+  kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" \
+    --replicas="$WEBHOOK_REPLICAS"
+  echo "  --- protection-webhook restored ---"
+else
+  echo "  [SKIP] No protected resources to delete"
+fi
+
+# ============================================================
+# STEP 5: Restore PV reclaim policies
+# ============================================================
+echo ""
+echo "--- Step 5: Restore PV reclaim policies ---"
+for pv_name in "${ALL_PV_NAMES[@]}"; do
+  if [ -n "$pv_name" ]; then
+    original="${ORIGINAL_PV_POLICIES[$pv_name]:-}"
+    if [ -n "$original" ]; then
+      echo "  [PATCH] PV ${pv_name}: Retain -> ${original}"
+      kubectl patch pv "$pv_name" -p "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"${original}\"}}"
+    else
+      echo "  [SKIP] PV ${pv_name} was already Retain, leaving as-is"
+    fi
+  fi
+done
+
+# ============================================================
+# STEP 6: Restore mariadb-operator
+# ============================================================
+echo ""
+echo "--- Step 6: Restore mariadb-operator ---"
+
+current_policy=$(kubectl get validatingwebhookconfiguration "$MARIADB_WEBHOOK_NAME" \
+  -o jsonpath='{.webhooks[0].failurePolicy}' 2>/dev/null || echo "unknown")
+if [ "$current_policy" = "Ignore" ]; then
+  patch_webhook_policy "$MARIADB_WEBHOOK_NAME" "Fail"
+else
+  echo "  [SKIP] Webhook ${MARIADB_WEBHOOK_NAME} already failurePolicy=${current_policy}"
+fi
+
+for deploy in mariadb-operator mariadb-operator-cert-controller mariadb-operator-webhook; do
+  current=$(kubectl -n "$MARIADB_OPERATOR_NS" get deploy "$deploy" \
+    -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+  if [ "$current" = "0" ]; then
+    target="${OPERATOR_REPLICAS[$deploy]:-1}"
+    echo "  [SCALE] ${deploy} -> ${target}"
+    kubectl -n "$MARIADB_OPERATOR_NS" scale deploy "$deploy" --replicas="$target"
+  else
+    echo "  [SKIP] ${deploy} already running (replicas=${current})"
+  fi
+done
+
+# ============================================================
+# STEP 7: Unsuspend all new HelmReleases
+# ============================================================
+echo ""
+echo "--- Step 7: Unsuspend new HelmReleases ---"
+for entry in "${INSTANCES[@]}"; do
+  ns="${entry%%/*}"
+  instance="${entry#*/}"
+  new_name="${NEW_PREFIX}-${instance}"
+  if resource_exists "$ns" "hr" "$new_name"; then
+    suspended=$(kubectl -n "$ns" get hr "$new_name" \
+      -o jsonpath='{.spec.suspend}' 2>/dev/null || echo "false")
+    if [ "$suspended" = "true" ]; then
+      echo "  [UNSUSPEND] ${ns}/hr/${new_name}"
+      kubectl -n "$ns" patch hr "$new_name" --type=merge -p '{"spec":{"suspend":false}}'
+    else
+      echo "  [SKIP] ${ns}/hr/${new_name} already not suspended"
+    fi
+  fi
+done
+
+echo ""
+echo "=== Migration complete (${#INSTANCES[@]} instance(s)) ==="
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=29 --dry-run=client -o yaml | kubectl apply -f-

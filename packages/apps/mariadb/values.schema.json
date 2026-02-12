@@ -40,7 +40,7 @@
         "s3Bucket": {
           "description": "S3 bucket used for storing backups.",
           "type": "string",
-          "default": "s3.example.org/mysql-backups"
+          "default": "s3.example.org/mariadb-backups"
         },
         "s3Region": {
           "description": "AWS S3 region where backups are stored.",
