@@ -12,6 +12,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-cp-kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-infra-kubevirt" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.nfs-application" $) }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.virtual-machine-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
