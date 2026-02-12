@@ -36,28 +36,29 @@ virtctl ssh <user>@<vm>
 
 ### Common parameters
 
-| Name                | Description                                                         | Type       | Value       |
-| ------------------- | ------------------------------------------------------------------- | ---------- | ----------- |
-| `external`          | Enable external access from outside the cluster.                    | `bool`     | `false`     |
-| `externalMethod`    | Method to pass through traffic to the VM.                           | `string`   | `PortList`  |
-| `externalPorts`     | Ports to forward from outside the cluster.                          | `[]int`    | `[22]`      |
-| `running`           | Determines if the virtual machine should be running.                | `bool`     | `true`      |
-| `instanceType`      | Virtual Machine instance type.                                      | `string`   | `u1.medium` |
-| `instanceProfile`   | Virtual Machine preferences profile.                                | `string`   | `ubuntu`    |
-| `disks`             | List of disks to attach.                                            | `[]object` | `[]`        |
-| `disks[i].name`     | Disk name.                                                          | `string`   | `""`        |
-| `disks[i].bus`      | Disk bus type (e.g. "sata").                                        | `string`   | `""`        |
-| `subnets`           | Additional subnets                                                  | `[]object` | `[]`        |
-| `subnets[i].name`   | Subnet name                                                         | `string`   | `""`        |
-| `gpus`              | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM). | `[]object` | `[]`        |
-| `gpus[i].name`      | The name of the GPU resource to attach.                             | `string`   | `""`        |
-| `resources`         | Resource configuration for the virtual machine.                     | `object`   | `{}`        |
-| `resources.cpu`     | Number of CPU cores allocated.                                      | `quantity` | `""`        |
-| `resources.memory`  | Amount of memory allocated.                                         | `quantity` | `""`        |
-| `resources.sockets` | Number of CPU sockets (vCPU topology).                              | `quantity` | `""`        |
-| `sshKeys`           | List of SSH public keys for authentication.                         | `[]string` | `[]`        |
-| `cloudInit`         | Cloud-init user data.                                               | `string`   | `""`        |
-| `cloudInitSeed`     | Seed string to generate SMBIOS UUID for the VM.                     | `string`   | `""`        |
+| Name                | Description                                                                                                                       | Type       | Value       |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------- |
+| `external`          | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`     |
+| `externalMethod`    | Method to pass through traffic to the VM.                                                                                         | `string`   | `PortList`  |
+| `externalPorts`     | Ports to forward from outside the cluster.                                                                                        | `[]int`    | `[22]`      |
+| `runStrategy`       | Requested running state of the VirtualMachineInstance                                                                             | `string`   | `Always`    |
+| `instanceType`      | Virtual Machine instance type.                                                                                                    | `string`   | `u1.medium` |
+| `instanceProfile`   | Virtual Machine preferences profile.                                                                                              | `string`   | `ubuntu`    |
+| `disks`             | List of disks to attach.                                                                                                          | `[]object` | `[]`        |
+| `disks[i].name`     | Disk name.                                                                                                                        | `string`   | `""`        |
+| `disks[i].bus`      | Disk bus type (e.g. "sata").                                                                                                      | `string`   | `""`        |
+| `subnets`           | Additional subnets                                                                                                                | `[]object` | `[]`        |
+| `subnets[i].name`   | Subnet name                                                                                                                       | `string`   | `""`        |
+| `gpus`              | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                                                               | `[]object` | `[]`        |
+| `gpus[i].name`      | The name of the GPU resource to attach.                                                                                           | `string`   | `""`        |
+| `cpuModel`          | Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map | `string`   | `""`        |
+| `resources`         | Resource configuration for the virtual machine.                                                                                   | `object`   | `{}`        |
+| `resources.cpu`     | Number of CPU cores allocated.                                                                                                    | `quantity` | `""`        |
+| `resources.memory`  | Amount of memory allocated.                                                                                                       | `quantity` | `""`        |
+| `resources.sockets` | Number of CPU sockets (vCPU topology).                                                                                            | `quantity` | `""`        |
+| `sshKeys`           | List of SSH public keys for authentication.                                                                                       | `[]string` | `[]`        |
+| `cloudInit`         | Cloud-init user data.                                                                                                             | `string`   | `""`        |
+| `cloudInitSeed`     | Seed string to generate SMBIOS UUID for the VM.                                                                                   | `string`   | `""`        |
 
 
 ## U Series
