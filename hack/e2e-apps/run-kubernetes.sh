@@ -218,6 +218,61 @@ fi
   kubectl delete deployment --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
   kubectl delete service --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
 
+  # Test RWX NFS mount in tenant cluster (uses kubevirt CSI driver with RWX support)
+  kubectl --kubeconfig tenantkubeconfig-${test_name} apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-test-pvc
+  namespace: tenant-test
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: kubevirt
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+  # Wait for PVC to be bound
+  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pvc nfs-test-pvc -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Bound
+
+  # Create Pod that writes and reads data from NFS volume
+  kubectl --kubeconfig tenantkubeconfig-${test_name} apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nfs-test-pod
+  namespace: tenant-test
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ["sh", "-c", "echo 'nfs-mount-ok' > /data/test.txt && cat /data/test.txt"]
+    volumeMounts:
+    - name: nfs-vol
+      mountPath: /data
+  volumes:
+  - name: nfs-vol
+    persistentVolumeClaim:
+      claimName: nfs-test-pvc
+  restartPolicy: Never
+EOF
+
+  # Wait for Pod to complete successfully
+  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pod nfs-test-pod -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Succeeded
+
+  # Verify NFS data integrity
+  nfs_result=$(kubectl --kubeconfig tenantkubeconfig-${test_name} logs nfs-test-pod -n tenant-test)
+  if [ "$nfs_result" != "nfs-mount-ok" ]; then
+    echo "NFS mount test failed: expected 'nfs-mount-ok', got '$nfs_result'" >&2
+    exit 1
+  fi
+
+  # Cleanup NFS test resources in tenant cluster
+  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pod nfs-test-pod -n tenant-test
+  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pvc nfs-test-pvc -n tenant-test
+
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 
