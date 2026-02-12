@@ -12,16 +12,14 @@ tests:
   - it: creates one StorageClass per entry
     set:
       extraStorageClasses:
-        - name: nfs-data
+        nfs-data:
           server: "10.96.1.1"
           share: "/"
-          mountOptions:
-            - nfsvers=4.1
-        - name: nfs-backup
+          port: "2049"
+        nfs-backup:
           server: "10.96.2.2"
           share: "/"
-          mountOptions:
-            - nfsvers=4.1
+          port: "2050"
     asserts:
       - hasDocuments:
           count: 2
@@ -29,11 +27,10 @@ tests:
   - it: sets correct provisioner
     set:
       extraStorageClasses:
-        - name: nfs-test
+        nfs-test:
           server: "10.96.1.1"
           share: "/"
-          mountOptions:
-            - nfsvers=4.1
+          port: "2049"
     asserts:
       - equal:
           path: provisioner
@@ -42,11 +39,10 @@ tests:
   - it: sets server and share parameters
     set:
       extraStorageClasses:
-        - name: nfs-mydata
+        nfs-mydata:
           server: "10.96.50.100"
           share: "/exports"
-          mountOptions:
-            - nfsvers=4.1
+          port: "2049"
     asserts:
       - equal:
           path: metadata.name
@@ -58,27 +54,28 @@ tests:
           path: parameters.share
           value: "/exports"
 
-  - it: sets mount options
+  - it: sets mount options with port
     set:
       extraStorageClasses:
-        - name: nfs-test
+        nfs-test:
           server: "10.96.1.1"
           share: "/"
-          mountOptions:
-            - nfsvers=4.1
+          port: "2049"
     asserts:
       - equal:
           path: mountOptions[0]
-          value: nfsvers=4.1
+          value: nfsvers=4.2
+      - equal:
+          path: mountOptions[1]
+          value: port=2049
 
   - it: allows volume expansion
     set:
       extraStorageClasses:
-        - name: nfs-test
+        nfs-test:
           server: "10.96.1.1"
           share: "/"
-          mountOptions:
-            - nfsvers=4.1
+          port: "2049"
     asserts:
       - equal:
           path: allowVolumeExpansion
@@ -87,11 +84,10 @@ tests:
   - it: uses Delete reclaim policy
     set:
       extraStorageClasses:
-        - name: nfs-test
+        nfs-test:
           server: "10.96.1.1"
           share: "/"
-          mountOptions:
-            - nfsvers=4.1
+          port: "2049"
     asserts:
       - equal:
           path: reclaimPolicy
@@ -100,16 +96,14 @@ tests:
   - it: creates distinct StorageClasses for multiple shares
     set:
       extraStorageClasses:
-        - name: nfs-alpha
+        nfs-alpha:
           server: "10.96.10.1"
           share: "/"
-          mountOptions:
-            - nfsvers=4.1
-        - name: nfs-beta
+          port: "2049"
+        nfs-beta:
           server: "10.96.20.2"
           share: "/data"
-          mountOptions:
-            - nfsvers=4.1
+          port: "2050"
     asserts:
       - equal:
           path: metadata.name
