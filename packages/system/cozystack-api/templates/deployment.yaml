@@ -1,18 +1,12 @@
 apiVersion: apps/v1
-{{- if .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
-kind: DaemonSet
-{{- else }}
 kind: Deployment
-{{- end }}
 metadata:
   name: cozystack-api
   namespace: cozy-system
   labels:
     app: cozystack-api
 spec:
-  {{- if not .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
   replicas: {{ .Values.cozystackAPI.replicas }}
-  {{- end }}
   selector:
     matchLabels:
       app: cozystack-api
@@ -24,27 +18,19 @@ spec:
       tolerations:
       - operator: Exists
       serviceAccountName: cozystack-api
-      {{- if .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
-      {{- with .Values.cozystackAPI.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- end }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
       containers:
       - name: cozystack-api
         args:
         - --tls-cert-file=/tmp/cozystack-api-certs/tls.crt
         - --tls-private-key-file=/tmp/cozystack-api-certs/tls.key
-        {{- if .Values.cozystackAPI.localK8sAPIEndpoint.enabled }}
-        env:
-        - name: KUBERNETES_SERVICE_HOST
-          valueFrom:
-            fieldRef:
-              apiVersion: v1
-              fieldPath: status.hostIP
-        - name: KUBERNETES_SERVICE_PORT
-          value: "6443"
-        {{- end }}
         image: "{{ .Values.cozystackAPI.image }}"
         ports:
         - containerPort: 443
