@@ -1,29 +1,4 @@
 {{- if .Values.nfs.instances }}
-{{- $extraStorageClasses := list }}
-{{- range .Values.nfs.instances }}
-{{-   $pvcName := printf "nfs-%s" .name }}
-{{-   $pvc := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $pvcName }}
-{{-   if not $pvc }}
-{{-     fail (printf "NFS PVC not found in namespace %s: %s" $.Release.Namespace $pvcName) }}
-{{-   end }}
-{{-   if not $pvc.spec.volumeName }}
-{{-     fail (printf "NFS PVC %s is not yet bound" $pvcName) }}
-{{-   end }}
-{{-   $pv := lookup "v1" "PersistentVolume" "" $pvc.spec.volumeName }}
-{{-   if not $pv }}
-{{-     fail (printf "PersistentVolume %s not found for PVC %s" $pvc.spec.volumeName $pvcName) }}
-{{-   end }}
-{{-   $nfsExport := index $pv.spec.csi.volumeAttributes "linstor.csi.linbit.com/nfs-export" }}
-{{-   if not $nfsExport }}
-{{-     fail (printf "PV %s has no linstor.csi.linbit.com/nfs-export attribute" $pv.metadata.name) }}
-{{-   end }}
-{{-   $parsed := urlParse $nfsExport }}
-{{-   $hostParts := splitList ":" $parsed.host }}
-{{-   $server := first $hostParts }}
-{{-   $port := last $hostParts }}
-{{-   $sc := dict "name" (printf "nfs-%s" .name) "server" $server "share" $parsed.path "mountOptions" (list (printf "nfsvers=4.2") (printf "port=%s" $port)) }}
-{{-   $extraStorageClasses = append $extraStorageClasses $sc }}
-{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -54,9 +29,29 @@ spec:
     force: true
     remediation:
       retries: -1
+  valuesFrom:
+  {{- range .Values.nfs.instances }}
+  {{- $secretName := printf "nfs-%s-credentials" .name }}
+  - kind: Secret
+    name: {{ $secretName }}
+    valuesKey: host
+    targetPath: extraStorageClasses.nfs-{{ .name }}.server
+  - kind: Secret
+    name: {{ $secretName }}
+    valuesKey: port
+    targetPath: extraStorageClasses.nfs-{{ .name }}.port
+  - kind: Secret
+    name: {{ $secretName }}
+    valuesKey: path
+    targetPath: extraStorageClasses.nfs-{{ .name }}.share
+  {{- end }}
   values:
-    {{- $defaultValues := dict "csi-driver-nfs" (dict "storageClass" (dict "create" false)) "extraStorageClasses" $extraStorageClasses }}
-    {{- toYaml (deepCopy .Values.addons.nfs.valuesOverride | mergeOverwrite $defaultValues) | nindent 4 }}
+    csi-driver-nfs:
+      storageClass:
+        create: false
+    {{- with .Values.addons.nfs.valuesOverride }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   dependsOn:
   {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
   - name: {{ .Release.Name }}
