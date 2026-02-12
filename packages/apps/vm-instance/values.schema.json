@@ -12,6 +12,11 @@
       "type": "string",
       "default": ""
     },
+    "cpuModel": {
+      "description": "Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map",
+      "type": "string",
+      "default": ""
+    },
     "disks": {
       "description": "List of disks to attach.",
       "type": "array",
@@ -175,10 +180,17 @@
         }
       }
     },
-    "running": {
-      "description": "Determines if the virtual machine should be running.",
-      "type": "boolean",
-      "default": true
+    "runStrategy": {
+      "description": "Requested running state of the VirtualMachineInstance",
+      "type": "string",
+      "default": "Always",
+      "enum": [
+        "Always",
+        "Halted",
+        "Manual",
+        "RerunOnFailure",
+        "Once"
+      ]
     },
     "sshKeys": {
       "description": "List of SSH public keys for authentication.",

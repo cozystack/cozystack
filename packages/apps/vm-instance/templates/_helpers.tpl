@@ -71,6 +71,29 @@ Generate a stable UUID for cloud-init re-initialization upon upgrade.
 {{- end }}
 
 {{/*
+Domain resources (cpu, memory) as a JSON object.
+Used in vm.yaml for rendering and in the update hook for merge patches.
+*/}}
+{{- define "virtual-machine.domainResources" -}}
+{{- $result := dict -}}
+{{- if or .Values.cpuModel (and .Values.resources .Values.resources.cpu .Values.resources.sockets) -}}
+  {{- $cpu := dict -}}
+  {{- if and .Values.resources .Values.resources.cpu .Values.resources.sockets -}}
+    {{- $_ := set $cpu "cores" (.Values.resources.cpu | int64) -}}
+    {{- $_ := set $cpu "sockets" (.Values.resources.sockets | int64) -}}
+  {{- end -}}
+  {{- if .Values.cpuModel -}}
+    {{- $_ := set $cpu "model" .Values.cpuModel -}}
+  {{- end -}}
+  {{- $_ := set $result "cpu" $cpu -}}
+{{- end -}}
+{{- if and .Values.resources .Values.resources.memory -}}
+  {{- $_ := set $result "resources" (dict "requests" (dict "memory" .Values.resources.memory)) -}}
+{{- end -}}
+{{- $result | toJson -}}
+{{- end -}}
+
+{{/*
 Node Affinity for Windows VMs
 */}}
 {{- define "virtual-machine.nodeAffinity" -}}
