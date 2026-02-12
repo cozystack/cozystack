@@ -6,6 +6,13 @@ set -euo pipefail
 # Remove old cozystack-resource-definition-crd HelmRelease (renamed to application-definition-crd)
 kubectl delete hr -n cozy-system cozystack-resource-definition-crd --ignore-not-found
 
+kubectl delete secrets -n cozy-system $(
+  kubectl get secrets -n cozy-system \
+    -l owner=helm \
+    -o jsonpath='{range .items[*]}{.metadata.labels.name}{" "}{.metadata.name}{"\n"}{end}' \
+  | awk '$1 ~ /-rd$/ {print $2}'
+) --ignore-not-found
+
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
   --from-literal=version=24 --dry-run=client -o yaml | kubectl apply -f-
