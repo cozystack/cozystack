@@ -32,6 +32,7 @@ spec:
             - "--endpoint=$(CSI_ENDPOINT)"
             - "--infra-cluster-namespace=$(INFRACLUSTER_NAMESPACE)"
             - "--infra-cluster-labels=$(INFRACLUSTER_LABELS)"
+            - "--run-node-service=false"
             - "--v=5"
           ports:
             - name: healthz
