@@ -1,10 +1,3 @@
 cozystackAPI:
   image: ghcr.io/cozystack/cozystack/cozystack-api:v1.0.0-beta.3@sha256:a263702859c36f85d097c300c1be462aaa45a3955d69e9ae72a37cabf6dadaa9
-  localK8sAPIEndpoint:
-    enabled: true
   replicas: 2
-  # nodeSelector for DaemonSet mode (localK8sAPIEndpoint.enabled: true)
-  # Talos uses empty value: "node-role.kubernetes.io/control-plane": ""
-  # Generic k8s (k3s, kubeadm) uses: "node-role.kubernetes.io/control-plane": "true"
-  nodeSelector:
-    node-role.kubernetes.io/control-plane: ""
