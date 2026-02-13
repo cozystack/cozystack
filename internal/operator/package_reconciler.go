@@ -803,7 +803,7 @@ func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1
 			namespace.Labels["pod-security.kubernetes.io/enforce"] = "privileged"
 		}
 
-		if err := r.createOrUpdateNamespace(ctx, namespace); err != nil {
+		if err := r.createOrUpdateNamespace(ctx, namespace, pkg.Name); err != nil {
 			logger.Error(err, "failed to reconcile namespace", "name", nsName, "privileged", info.privileged)
 			return fmt.Errorf("failed to reconcile namespace %s: %w", nsName, err)
 		}
@@ -813,16 +813,19 @@ func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1
 	return nil
 }
 
-// createOrUpdateNamespace creates or updates a namespace using server-side apply
-func (r *PackageReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace) error {
+// createOrUpdateNamespace creates or updates a namespace using server-side apply.
+// Each Package uses its own field owner to prevent different Packages sharing the same
+// namespace from overwriting each other's labels. This ensures that if any Package sets
+// the privileged PSA label, other Packages reconciling the same namespace won't remove it.
+func (r *PackageReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace, packageName string) error {
 	// Ensure TypeMeta is set for server-side apply
 	namespace.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
 
-	// Use server-side apply with field manager
-	// This is atomic and avoids race conditions from Get/Create/Update pattern
-	// Labels and annotations will be merged automatically by the server
-	// Each label/annotation key is treated as a separate field, so existing ones are preserved
-	return r.Patch(ctx, namespace, client.Apply, client.FieldOwner("cozystack-package-controller"))
+	// Use per-Package field owner to avoid conflicts between Packages sharing a namespace.
+	// ForceOwnership is needed to take over fields from the previous shared field owner
+	// ("cozystack-package-controller") during the transition.
+	fieldOwner := fmt.Sprintf("cozystack-package-%s", packageName)
+	return r.Patch(ctx, namespace, client.Apply, client.FieldOwner(fieldOwner), client.ForceOwnership)
 }
 
 // cleanupOrphanedHelmReleases removes HelmReleases that are no longer needed
