@@ -266,11 +266,13 @@ EOF
   nfs_result=$(kubectl --kubeconfig tenantkubeconfig-${test_name} logs nfs-test-pod -n tenant-test)
   if [ "$nfs_result" != "nfs-mount-ok" ]; then
     echo "NFS mount test failed: expected 'nfs-mount-ok', got '$nfs_result'" >&2
+    kubectl --kubeconfig tenantkubeconfig-${test_name} delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null || true
+    kubectl --kubeconfig tenantkubeconfig-${test_name} delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null || true
     exit 1
   fi
 
   # Cleanup NFS test resources in tenant cluster
-  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pod nfs-test-pod -n tenant-test
+  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pod nfs-test-pod -n tenant-test --wait
   kubectl --kubeconfig tenantkubeconfig-${test_name} delete pvc nfs-test-pvc -n tenant-test
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)

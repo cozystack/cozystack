@@ -71,6 +71,9 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		"nfsvers=4.2",
 		fmt.Sprintf("port=%s", port),
 	}
+	if req.GetReadonly() {
+		mountOptions = append(mountOptions, "ro")
+	}
 
 	klog.V(3).Infof("Mounting NFS %s at %s with options %v", source, targetPath, mountOptions)
 	if err := w.mounter.Mount(source, targetPath, "nfs", mountOptions); err != nil {
@@ -95,6 +98,7 @@ func (w *WrappedNodeService) NodeExpandVolume(ctx context.Context, req *csi.Node
 func isNFSMount(path string, m mount.Interface) bool {
 	mountPoints, err := m.List()
 	if err != nil {
+		klog.Warningf("Failed to list mount points: %v", err)
 		return false
 	}
 	for _, mp := range mountPoints {

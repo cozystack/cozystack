@@ -16,8 +16,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
 
 FROM quay.io/centos/centos:stream9
 
-ENTRYPOINT ["./kubevirt-csi-driver"]
-
 RUN dnf install -y e2fsprogs xfsprogs nfs-utils && dnf clean all
 
 COPY --from=builder /src/kubevirt-csi-driver .
+
+ENTRYPOINT ["./kubevirt-csi-driver"]

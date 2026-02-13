@@ -59,7 +59,7 @@ func handle() {
 	}
 	klog.V(2).Infof("Driver vendor %v %v", service.VendorName, service.VendorVersion)
 
-	if (infraClusterLabels == nil || *infraClusterLabels == "") && !*runNodeService {
+	if (infraClusterLabels == nil || *infraClusterLabels == "") && *runControllerService {
 		klog.Fatal("infra-cluster-labels must be set")
 	}
 	if volumePrefix == nil || *volumePrefix == "" {
@@ -111,7 +111,7 @@ func handle() {
 	if *nodeName != "" {
 		node, err := tenantClientSet.CoreV1().Nodes().Get(context.TODO(), *nodeName, v1.GetOptions{})
 		if err != nil {
-			klog.Fatal(fmt.Errorf("failed to find node by name %v: %v", nodeName, err))
+			klog.Fatal(fmt.Errorf("failed to find node by name %v: %v", *nodeName, err))
 		}
 		if node.Spec.ProviderID == "" {
 			klog.Fatal("provider name missing from node, something's not right")
@@ -209,7 +209,7 @@ func parseLabels() map[string]string {
 		labelPair := strings.SplitN(label, "=", 2)
 
 		if len(labelPair) != 2 {
-			panic("Bad labels format. Should be 'key=value,key=value,...'")
+			klog.Fatal("Bad labels format. Should be 'key=value,key=value,...'")
 		}
 
 		infraClusterLabelsMap[labelPair[0]] = labelPair[1]

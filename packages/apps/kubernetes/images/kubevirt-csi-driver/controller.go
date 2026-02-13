@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 
@@ -77,13 +78,13 @@ func isRWXFilesystem(caps []*csi.VolumeCapability) bool {
 // compatibility with upstream snapshot and clone operations.
 // For all other requests, delegates to upstream.
 func (w *WrappedControllerService) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "missing request")
+	}
 	if !isRWXFilesystem(req.GetVolumeCapabilities()) {
 		return w.ControllerService.CreateVolume(ctx, req)
 	}
 
-	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "missing request")
-	}
 	if len(req.GetName()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "name missing in request")
 	}
@@ -260,9 +261,9 @@ func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, 
 	klog.V(3).Infof("Publishing NFS volume %s to node %s/%s", dvName, vmNamespace, vmName)
 
 	// Get VMI for CiliumNetworkPolicy ownerReference
-	vmi, err := w.virtClient.GetVirtualMachine(ctx, w.infraNamespace, vmName)
+	vmi, err := w.virtClient.GetVirtualMachine(ctx, vmNamespace, vmName)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get VMI %s: %v", vmName, err)
+		return nil, status.Errorf(codes.Internal, "failed to get VMI %s/%s: %v", vmNamespace, vmName, err)
 	}
 
 	// Wait for PVC to be bound (CDI handles immediate binding via annotation)
@@ -316,7 +317,11 @@ func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, 
 				"ownerReferences": []interface{}{vmiOwnerRef},
 			},
 			"spec": map[string]interface{}{
-				"endpointSelector": map[string]interface{}{},
+				"endpointSelector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{
+						"kubevirt.io/vm": vmName,
+					},
+				},
 				"egress": []interface{}{
 					map[string]interface{}{
 						"toEndpoints": []interface{}{
@@ -405,7 +410,9 @@ func (w *WrappedControllerService) ControllerExpandVolume(ctx context.Context, r
 
 	// For NFS volumes, no node-side expansion is needed
 	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, req.GetVolumeId(), metav1.GetOptions{})
-	if err == nil && hasRWXAccessMode(pvc) {
+	if err != nil {
+		klog.Warningf("Failed to check PVC access mode for %s/%s: %v", w.infraNamespace, req.GetVolumeId(), err)
+	} else if hasRWXAccessMode(pvc) {
 		resp.NodeExpansionRequired = false
 	}
 
@@ -414,73 +421,77 @@ func (w *WrappedControllerService) ControllerExpandVolume(ctx context.Context, r
 
 // addCNPOwnerReference adds a VMI ownerReference to an existing CiliumNetworkPolicy.
 func (w *WrappedControllerService) addCNPOwnerReference(ctx context.Context, namespace, cnpName string, ownerRef map[string]interface{}) error {
-	existing, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Get(ctx, cnpName, metav1.GetOptions{})
-	if err != nil {
-		return status.Errorf(codes.Internal, "failed to get CiliumNetworkPolicy %s: %v", cnpName, err)
-	}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Get(ctx, cnpName, metav1.GetOptions{})
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to get CiliumNetworkPolicy %s: %v", cnpName, err)
+		}
 
-	ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
-	uid, _, _ := unstructured.NestedString(ownerRef, "uid")
-	for _, ref := range ownerRefs {
-		if refMap, ok := ref.(map[string]interface{}); ok {
-			if refMap["uid"] == uid {
-				return nil // already present
+		ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
+		uid, _, _ := unstructured.NestedString(ownerRef, "uid")
+		for _, ref := range ownerRefs {
+			if refMap, ok := ref.(map[string]interface{}); ok {
+				if refMap["uid"] == uid {
+					return nil // already present
+				}
 			}
 		}
-	}
 
-	ownerRefs = append(ownerRefs, ownerRef)
-	if err := unstructured.SetNestedSlice(existing.Object, ownerRefs, "metadata", "ownerReferences"); err != nil {
-		return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
-	}
-	if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-		return status.Errorf(codes.Internal, "failed to update CiliumNetworkPolicy %s: %v", cnpName, err)
-	}
-	klog.V(3).Infof("Added ownerReference to CiliumNetworkPolicy %s", cnpName)
-	return nil
+		ownerRefs = append(ownerRefs, ownerRef)
+		if err := unstructured.SetNestedSlice(existing.Object, ownerRefs, "metadata", "ownerReferences"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
+		}
+		if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		klog.V(3).Infof("Added ownerReference to CiliumNetworkPolicy %s", cnpName)
+		return nil
+	})
 }
 
 // removeCNPOwnerReference removes a VMI ownerReference from a CiliumNetworkPolicy.
 // Deletes the CNP if no ownerReferences remain.
 func (w *WrappedControllerService) removeCNPOwnerReference(ctx context.Context, namespace, cnpName, vmName string) error {
-	existing, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Get(ctx, cnpName, metav1.GetOptions{})
-	if err != nil {
-		if errors.IsNotFound(err) {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Get(ctx, cnpName, metav1.GetOptions{})
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return status.Errorf(codes.Internal, "failed to get CiliumNetworkPolicy %s: %v", cnpName, err)
+		}
+
+		ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
+		var remaining []interface{}
+		for _, ref := range ownerRefs {
+			if refMap, ok := ref.(map[string]interface{}); ok {
+				if refMap["name"] == vmName {
+					continue
+				}
+			}
+			remaining = append(remaining, ref)
+		}
+
+		if len(remaining) == 0 {
+			// Last owner — delete CNP
+			if err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Delete(ctx, cnpName, metav1.DeleteOptions{}); err != nil {
+				if !errors.IsNotFound(err) {
+					return status.Errorf(codes.Internal, "failed to delete CiliumNetworkPolicy %s: %v", cnpName, err)
+				}
+			}
+			klog.V(3).Infof("Deleted CiliumNetworkPolicy %s (no more owners)", cnpName)
 			return nil
 		}
-		return status.Errorf(codes.Internal, "failed to get CiliumNetworkPolicy %s: %v", cnpName, err)
-	}
 
-	ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
-	var remaining []interface{}
-	for _, ref := range ownerRefs {
-		if refMap, ok := ref.(map[string]interface{}); ok {
-			if refMap["name"] == vmName {
-				continue
-			}
+		if err := unstructured.SetNestedSlice(existing.Object, remaining, "metadata", "ownerReferences"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
 		}
-		remaining = append(remaining, ref)
-	}
-
-	if len(remaining) == 0 {
-		// Last owner — delete CNP
-		if err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Delete(ctx, cnpName, metav1.DeleteOptions{}); err != nil {
-			if !errors.IsNotFound(err) {
-				return status.Errorf(codes.Internal, "failed to delete CiliumNetworkPolicy %s: %v", cnpName, err)
-			}
+		if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return err
 		}
-		klog.V(3).Infof("Deleted CiliumNetworkPolicy %s (no more owners)", cnpName)
+		klog.V(3).Infof("Removed VMI %s ownerReference from CiliumNetworkPolicy %s", vmName, cnpName)
 		return nil
-	}
-
-	if err := unstructured.SetNestedSlice(existing.Object, remaining, "metadata", "ownerReferences"); err != nil {
-		return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
-	}
-	if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-		return status.Errorf(codes.Internal, "failed to update CiliumNetworkPolicy %s: %v", cnpName, err)
-	}
-	klog.V(3).Infof("Removed VMI %s ownerReference from CiliumNetworkPolicy %s", vmName, cnpName)
-	return nil
+	})
 }
 
 func hasRWXAccessMode(pvc *corev1.PersistentVolumeClaim) bool {
