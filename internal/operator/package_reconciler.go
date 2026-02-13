@@ -736,53 +736,39 @@ func (r *PackageReconciler) updateDependentPackagesDependencies(ctx context.Cont
 	return nil
 }
 
-// reconcileNamespaces creates or updates namespaces based on components in the variant
+// reconcileNamespaces creates or updates namespaces based on components in the variant.
+// For each namespace, it checks ALL Packages sharing that namespace to determine whether
+// the namespace should be privileged — it is privileged if ANY Package has a privileged
+// component installed in it.
 func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1alpha1.Package, variant *cozyv1alpha1.Variant) error {
 	logger := log.FromContext(ctx)
 
-	// Collect namespaces from components
-	// Map: namespace -> {isPrivileged}
-	type namespaceInfo struct {
-		privileged bool
-	}
-	namespacesMap := make(map[string]namespaceInfo)
-
+	// Collect namespaces from this Package's components
+	targetNamespaces := make(map[string]struct{})
 	for _, component := range variant.Components {
-		// Skip components without Install section
 		if component.Install == nil {
 			continue
 		}
-
-		// Check if component is disabled via Package spec
 		if pkgComponent, ok := pkg.Spec.Components[component.Name]; ok {
 			if pkgComponent.Enabled != nil && !*pkgComponent.Enabled {
 				continue
 			}
 		}
-
-		// Namespace must be set
 		namespace := component.Install.Namespace
 		if namespace == "" {
 			return fmt.Errorf("component %s has empty namespace in Install section", component.Name)
 		}
+		targetNamespaces[namespace] = struct{}{}
+	}
 
-		info, exists := namespacesMap[namespace]
-		if !exists {
-			info = namespaceInfo{
-				privileged: false,
-			}
-		}
-
-		// If component is privileged, mark namespace as privileged
-		if component.Install.Privileged {
-			info.privileged = true
-		}
-
-		namespacesMap[namespace] = info
+	// Determine which namespaces should be privileged by checking ALL Packages
+	privileged, err := r.resolvePrivilegedNamespaces(ctx, targetNamespaces)
+	if err != nil {
+		return fmt.Errorf("failed to resolve privileged namespaces: %w", err)
 	}
 
 	// Create or update all namespaces
-	for nsName, info := range namespacesMap {
+	for nsName := range targetNamespaces {
 		namespace := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:   nsName,
@@ -793,39 +779,89 @@ func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1
 			},
 		}
 
-		// Add system label only for non-tenant namespaces
 		if !strings.HasPrefix(nsName, "tenant-") {
 			namespace.Labels["cozystack.io/system"] = "true"
 		}
 
-		// Add privileged label if needed
-		if info.privileged {
+		if privileged[nsName] {
 			namespace.Labels["pod-security.kubernetes.io/enforce"] = "privileged"
 		}
 
-		if err := r.createOrUpdateNamespace(ctx, namespace, pkg.Name); err != nil {
-			logger.Error(err, "failed to reconcile namespace", "name", nsName, "privileged", info.privileged)
+		if err := r.createOrUpdateNamespace(ctx, namespace); err != nil {
+			logger.Error(err, "failed to reconcile namespace", "name", nsName, "privileged", privileged[nsName])
 			return fmt.Errorf("failed to reconcile namespace %s: %w", nsName, err)
 		}
-		logger.Info("reconciled namespace", "name", nsName, "privileged", info.privileged)
+		logger.Info("reconciled namespace", "name", nsName, "privileged", privileged[nsName])
 	}
 
 	return nil
 }
 
-// createOrUpdateNamespace creates or updates a namespace using server-side apply.
-// Each Package uses its own field owner to prevent different Packages sharing the same
-// namespace from overwriting each other's labels. This ensures that if any Package sets
-// the privileged PSA label, other Packages reconciling the same namespace won't remove it.
-func (r *PackageReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace, packageName string) error {
-	// Ensure TypeMeta is set for server-side apply
-	namespace.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
+// resolvePrivilegedNamespaces checks all PackageSources and their corresponding Packages
+// to determine which of the given namespaces require the privileged PodSecurity level.
+// A namespace is privileged if ANY active Package has a component with privileged: true in it.
+func (r *PackageReconciler) resolvePrivilegedNamespaces(ctx context.Context, namespaces map[string]struct{}) (map[string]bool, error) {
+	result := make(map[string]bool)
 
-	// Use per-Package field owner to avoid conflicts between Packages sharing a namespace.
-	// ForceOwnership is needed to take over fields from the previous shared field owner
-	// ("cozystack-package-controller") during the transition.
-	fieldOwner := fmt.Sprintf("cozystack-package-%s", packageName)
-	return r.Patch(ctx, namespace, client.Apply, client.FieldOwner(fieldOwner), client.ForceOwnership)
+	packageSources := &cozyv1alpha1.PackageSourceList{}
+	if err := r.List(ctx, packageSources); err != nil {
+		return nil, fmt.Errorf("failed to list PackageSources: %w", err)
+	}
+
+	for i := range packageSources.Items {
+		ps := &packageSources.Items[i]
+
+		// Check if a Package exists for this PackageSource
+		pkg := &cozyv1alpha1.Package{}
+		if err := r.Get(ctx, types.NamespacedName{Name: ps.Name}, pkg); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to get Package %s: %w", ps.Name, err)
+		}
+
+		// Resolve active variant
+		variantName := pkg.Spec.Variant
+		if variantName == "" {
+			variantName = "default"
+		}
+
+		var variant *cozyv1alpha1.Variant
+		for j := range ps.Spec.Variants {
+			if ps.Spec.Variants[j].Name == variantName {
+				variant = &ps.Spec.Variants[j]
+				break
+			}
+		}
+		if variant == nil {
+			continue
+		}
+
+		for _, component := range variant.Components {
+			if component.Install == nil {
+				continue
+			}
+			if pkgComponent, ok := pkg.Spec.Components[component.Name]; ok {
+				if pkgComponent.Enabled != nil && !*pkgComponent.Enabled {
+					continue
+				}
+			}
+			if _, relevant := namespaces[component.Install.Namespace]; !relevant {
+				continue
+			}
+			if component.Install.Privileged {
+				result[component.Install.Namespace] = true
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// createOrUpdateNamespace creates or updates a namespace using server-side apply.
+func (r *PackageReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace) error {
+	namespace.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
+	return r.Patch(ctx, namespace, client.Apply, client.FieldOwner("cozystack-package-controller"), client.ForceOwnership)
 }
 
 // cleanupOrphanedHelmReleases removes HelmReleases that are no longer needed
