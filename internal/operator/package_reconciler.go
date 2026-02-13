@@ -211,13 +211,13 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					Namespace: "cozy-system",
 				},
 				Install: &helmv2.Install{
-				Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
+					Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
 					Remediation: &helmv2.InstallRemediation{
 						Retries: -1,
 					},
 				},
 				Upgrade: &helmv2.Upgrade{
-				Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
+					Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
 					Remediation: &helmv2.UpgradeRemediation{
 						Retries: -1,
 					},
@@ -387,6 +387,7 @@ func (r *PackageReconciler) createOrUpdateHelmRelease(ctx context.Context, hr *h
 	}
 	hr.SetAnnotations(annotations)
 
+	hr.Spec.Suspend = existing.Spec.Suspend
 	// Update Spec
 	existing.Spec = hr.Spec
 	existing.SetLabels(hr.GetLabels())
@@ -816,7 +817,7 @@ func (r *PackageReconciler) reconcileNamespaces(ctx context.Context, pkg *cozyv1
 func (r *PackageReconciler) createOrUpdateNamespace(ctx context.Context, namespace *corev1.Namespace) error {
 	// Ensure TypeMeta is set for server-side apply
 	namespace.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
-	
+
 	// Use server-side apply with field manager
 	// This is atomic and avoids race conditions from Get/Create/Update pattern
 	// Labels and annotations will be merged automatically by the server
