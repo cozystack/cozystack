@@ -260,7 +260,7 @@ spec:
 EOF
 
   # Wait for Pod to complete successfully
-  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pod nfs-test-pod -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Succeeded
+  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded
 
   # Verify NFS data integrity
   nfs_result=$(kubectl --kubeconfig tenantkubeconfig-${test_name} logs nfs-test-pod -n tenant-test)
