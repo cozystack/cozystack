@@ -32,8 +32,6 @@ type ApplicationDefinitionReconciler struct {
 	mu          sync.Mutex
 	lastEvent   time.Time
 	lastHandled time.Time
-
-	CozystackAPIKind string
 }
 
 func (r *ApplicationDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -67,7 +65,7 @@ func (r *ApplicationDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) err
 }
 
 type appDefHashView struct {
-	Name string                                `json:"name"`
+	Name string                                 `json:"name"`
 	Spec cozyv1alpha1.ApplicationDefinitionSpec `json:"spec"`
 }
 
@@ -155,23 +153,13 @@ func (r *ApplicationDefinitionReconciler) getWorkload(
 	ctx context.Context,
 	key types.NamespacedName,
 ) (tpl *corev1.PodTemplateSpec, obj client.Object, patch client.Patch, err error) {
-	if r.CozystackAPIKind == "Deployment" {
-		dep := &appsv1.Deployment{}
-		if err := r.Get(ctx, key, dep); err != nil {
-			return nil, nil, nil, err
-		}
-		obj = dep
-		tpl = &dep.Spec.Template
-		patch = client.MergeFrom(dep.DeepCopy())
-	} else {
-		ds := &appsv1.DaemonSet{}
-		if err := r.Get(ctx, key, ds); err != nil {
-			return nil, nil, nil, err
-		}
-		obj = ds
-		tpl = &ds.Spec.Template
-		patch = client.MergeFrom(ds.DeepCopy())
+	dep := &appsv1.Deployment{}
+	if err := r.Get(ctx, key, dep); err != nil {
+		return nil, nil, nil, err
 	}
+	obj = dep
+	tpl = &dep.Spec.Template
+	patch = client.MergeFrom(dep.DeepCopy())
 	if tpl.Annotations == nil {
 		tpl.Annotations = make(map[string]string)
 	}
