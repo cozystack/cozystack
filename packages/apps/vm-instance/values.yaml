@@ -31,8 +31,15 @@ externalMethod: PortList
 externalPorts:
 - 22
 
-## @param {bool} running - Determines if the virtual machine should be running.
-running: true
+## @enum {string} RunStrategy - Requested running state of the VirtualMachineInstance
+## @value Always - VMI should always be running
+## @value Halted - VMI should never be running
+## @value Manual - VMI can be started/stopped using API endpoints
+## @value RerunOnFailure - VMI will initially be running and restarted if a failure occurs, but will not be restarted upon successful completion
+## @value Once - VMI will run once and not be restarted upon completion regardless if the completion is of phase Failure or Success
+
+## @param {RunStrategy} runStrategy - Requested running state of the VirtualMachineInstance
+runStrategy: Always
 
 ## @param {string} instanceType - Virtual Machine instance type.
 instanceType: "u1.medium"
@@ -61,6 +68,9 @@ gpus: []
 ## Example:
 ## gpus:
 ## - name: nvidia.com/GA102GL_A10
+
+## @param {string} cpuModel - Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
+cpuModel: ""
 
 ## @param {Resources} [resources] - Resource configuration for the virtual machine.
 resources: {}

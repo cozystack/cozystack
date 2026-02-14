@@ -2,26 +2,43 @@
 {{- $namespace := .Release.Namespace -}}
 
 {{- $existingVM := lookup "kubevirt.io/v1" "VirtualMachine" $namespace $vmName -}}
+{{- $existingService := lookup "v1" "Service" $namespace $vmName -}}
 
 {{- $instanceType := .Values.instanceType | default "" -}}
 {{- $instanceProfile := .Values.instanceProfile | default "" -}}
+{{- $desiredServiceType := ternary "LoadBalancer" "ClusterIP" .Values.external -}}
 
 {{- $needUpdateType := false -}}
 {{- $needUpdateProfile := false -}}
+{{- $needRecreateService := false -}}
+{{- $needRemoveInstanceType := false -}}
+{{- $needRemoveCustomResources := false -}}
 
-{{- if and $existingVM $instanceType -}}
+{{- $existingHasInstanceType := and $existingVM $existingVM.spec.instancetype -}}
+{{- if and $existingHasInstanceType (not $instanceType) -}}
+  {{- $needRemoveInstanceType = true -}}
+{{- else if and $existingHasInstanceType $instanceType -}}
   {{- if not (eq $existingVM.spec.instancetype.name $instanceType) -}}
     {{- $needUpdateType = true -}}
   {{- end -}}
+{{- else if and $existingVM (not $existingHasInstanceType) $instanceType -}}
+  {{- $needRemoveCustomResources = true -}}
 {{- end -}}
 
-{{- if and $existingVM $instanceProfile -}}
+{{- if and $existingVM $existingVM.spec.preference $instanceProfile -}}
   {{- if not (eq $existingVM.spec.preference.name $instanceProfile) -}}
     {{- $needUpdateProfile = true -}}
   {{- end -}}
 {{- end -}}
 
-{{- if or $needUpdateType $needUpdateProfile }}
+{{- if $existingService -}}
+  {{- $currentServiceType := $existingService.spec.type -}}
+  {{- if ne $currentServiceType $desiredServiceType -}}
+    {{- $needRecreateService = true -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if or $needUpdateType $needUpdateProfile $needRecreateService $needRemoveInstanceType $needRemoveCustomResources }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -58,12 +75,31 @@ spec:
                 --type merge \
                 -p '{"spec":{"instancetype":{"name": "{{ $instanceType }}", "revisionName": null}}}'
               {{- end }}
-              
+
               {{- if $needUpdateProfile }}
               echo "Patching VirtualMachine for preference update..."
               kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
                 --type merge \
                 -p '{"spec":{"preference":{"name": "{{ $instanceProfile }}", "revisionName": null}}}'
+              {{- end }}
+
+              {{- if $needRemoveInstanceType }}
+              echo "Removing instancetype from VM (switching to custom resources)..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"instancetype":null{{- if not $instanceProfile }},"preference":null{{- end }},"template":{"spec":{"domain":{{ include "virtual-machine.domainResources" . }}}}}}'
+              {{- end }}
+
+              {{- if $needRemoveCustomResources }}
+              echo "Removing custom CPU/memory from domain (switching to instancetype)..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"instancetype":{"name":"{{ $instanceType }}","revisionName":null},"template":{"spec":{"domain":{"cpu":null,"resources":null}}}}}'
+              {{- end }}
+
+              {{- if $needRecreateService }}
+              echo "Removing Service..."
+              kubectl delete service --cascade=orphan -n {{ $namespace }} {{ $vmName }}
               {{- end }}
 ---
 apiVersion: v1
@@ -87,6 +123,10 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachines"]
     verbs: ["patch", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["{{ $vmName }}"]
+    verbs: ["delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

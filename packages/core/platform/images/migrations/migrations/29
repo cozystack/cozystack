@@ -1,0 +1,777 @@
+#!/bin/bash
+# Migration 29 --> 30
+# Convert virtual-machine HelmReleases to vm-disk + vm-instance.
+# Discovers all VirtualMachine HelmReleases by label, migrates each instance.
+# Idempotent: safe to re-run.
+
+set -euo pipefail
+
+OLD_PREFIX="virtual-machine"
+NEW_DISK_PREFIX="vm-disk"
+NEW_INSTANCE_PREFIX="vm-instance"
+PROTECTION_WEBHOOK_NAME="protection-webhook"
+PROTECTION_WEBHOOK_NS="protection-webhook"
+CDI_APISERVER_NS="cozy-kubevirt-cdi"
+CDI_APISERVER_DEPLOY="cdi-apiserver"
+CDI_VALIDATING_WEBHOOKS="cdi-api-datavolume-validate cdi-api-dataimportcron-validate cdi-api-populator-validate cdi-api-validate"
+CDI_MUTATING_WEBHOOKS="cdi-api-datavolume-mutate"
+
+# ============================================================
+# Helper functions
+# ============================================================
+
+resource_exists() {
+  local ns="$1" type="$2" name="$3"
+  kubectl -n "$ns" get "$type" "$name" --no-headers 2>/dev/null | grep -q .
+}
+
+delete_resource() {
+  local ns="$1" type="$2" name="$3"
+  if resource_exists "$ns" "$type" "$name"; then
+    echo "    [DELETE] ${type}/${name}"
+    kubectl -n "$ns" delete "$type" "$name" --wait=false
+  else
+    echo "    [SKIP] ${type}/${name} already gone"
+  fi
+}
+
+clone_resource() {
+  local ns="$1" type="$2" old_name="$3" new_name="$4" old_instance="$5" new_instance="$6"
+
+  if resource_exists "$ns" "$type" "$new_name"; then
+    echo "    [SKIP] ${type}/${new_name} already exists"
+    return 0
+  fi
+  if ! resource_exists "$ns" "$type" "$old_name"; then
+    echo "    [SKIP] ${type}/${old_name} not found"
+    return 0
+  fi
+
+  echo "    [CREATE] ${type}/${new_name} from ${old_name}"
+  kubectl -n "$ns" get "$type" "$old_name" -o json | \
+    jq --arg new_name "$new_name" --arg old "$old_instance" --arg new "$new_instance" '
+      .metadata.name = $new_name |
+      del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp,
+          .metadata.generation, .metadata.managedFields, .metadata.selfLink,
+          .metadata.ownerReferences) |
+      del(.status) |
+      .metadata.labels = ((.metadata.labels // {}) | with_entries(
+        if (.value | type) == "string" then .value |= gsub($old; $new) else . end)) |
+      .metadata.annotations = ((.metadata.annotations // {}) | with_entries(
+        select(.key != "kubectl.kubernetes.io/last-applied-configuration") |
+        if (.value | type) == "string" then .value |= gsub($old; $new) else . end))
+    ' | kubectl -n "$ns" apply -f -
+}
+
+# ============================================================
+# STEP 1: Discover all VirtualMachine instances
+# ============================================================
+echo "=== Discovering VirtualMachine HelmReleases ==="
+INSTANCES=()
+while IFS=/ read -r ns name; do
+  [ -z "$ns" ] && continue
+  instance="${name#${OLD_PREFIX}-}"
+  INSTANCES+=("${ns}/${instance}")
+  echo "  Found: ${ns}/${name} (instance=${instance})"
+done < <(kubectl get hr -A -l "apps.cozystack.io/application.kind=VirtualMachine" \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+if [ ${#INSTANCES[@]} -eq 0 ]; then
+  echo "  No VirtualMachine HelmReleases found. Nothing to migrate."
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=30 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+echo "  Total: ${#INSTANCES[@]} instance(s)"
+
+# ============================================================
+# STEP 2: Migrate each instance
+# ============================================================
+ALL_PV_NAMES=()
+ALL_PROTECTED_RESOURCES=()
+
+for entry in "${INSTANCES[@]}"; do
+  NAMESPACE="${entry%%/*}"
+  INSTANCE="${entry#*/}"
+  OLD_NAME="${OLD_PREFIX}-${INSTANCE}"
+  NEW_DISK_NAME="${NEW_DISK_PREFIX}-${INSTANCE}"
+  NEW_INSTANCE_NAME="${NEW_INSTANCE_PREFIX}-${INSTANCE}"
+
+  echo ""
+  echo "======================================================================"
+  echo "=== Migrating: ${OLD_NAME} -> ${NEW_DISK_NAME} + ${NEW_INSTANCE_NAME} in ${NAMESPACE}"
+  echo "======================================================================"
+
+  # --- 2a: Suspend old HelmRelease ---
+  echo "  --- Suspend HelmRelease ---"
+  if resource_exists "$NAMESPACE" "hr" "$OLD_NAME"; then
+    suspended=$(kubectl -n "$NAMESPACE" get hr "$OLD_NAME" -o jsonpath='{.spec.suspend}' 2>/dev/null || echo "false")
+    if [ "$suspended" != "true" ]; then
+      echo "    [SUSPEND] hr/${OLD_NAME}"
+      kubectl -n "$NAMESPACE" patch hr "$OLD_NAME" --type=merge -p '{"spec":{"suspend":true}}'
+    else
+      echo "    [SKIP] hr/${OLD_NAME} already suspended"
+    fi
+  else
+    echo "    [SKIP] hr/${OLD_NAME} not found"
+  fi
+
+  # --- 2b: Extract values from HelmRelease ---
+  echo "  --- Extract values ---"
+  VALUES_SECRET=""
+  VALUES_KEY="values.yaml"
+  if resource_exists "$NAMESPACE" "hr" "$OLD_NAME"; then
+    VALUES_SECRET=$(kubectl -n "$NAMESPACE" get hr "$OLD_NAME" -o json | \
+      jq -r '.spec.valuesFrom // [] | map(select(.kind == "Secret" and (.name | test("cozystack-values") | not))) | .[0].name // ""')
+    if [ -n "$VALUES_SECRET" ]; then
+      VALUES_KEY=$(kubectl -n "$NAMESPACE" get hr "$OLD_NAME" -o json | \
+        jq -r '.spec.valuesFrom // [] | map(select(.kind == "Secret" and (.name | test("cozystack-values") | not))) | .[0].valuesKey // "values.yaml"')
+    fi
+  fi
+
+  # Extract values from secret
+  EXTERNAL="false"
+  EXTERNAL_METHOD="PortList"
+  EXTERNAL_PORTS='[22]'
+  INSTANCE_TYPE="u1.medium"
+  INSTANCE_PROFILE="ubuntu"
+  RUN_STRATEGY="Always"
+  SYSTEM_DISK_IMAGE="ubuntu"
+  SYSTEM_DISK_STORAGE="5Gi"
+  SYSTEM_DISK_STORAGE_CLASS="replicated"
+  SSH_KEYS="[]"
+  CLOUD_INIT=""
+  CLOUD_INIT_SEED=""
+  SUBNETS="[]"
+  GPUS="[]"
+  CPU_MODEL=""
+  RESOURCES="{}"
+
+  if [ -n "$VALUES_SECRET" ] && resource_exists "$NAMESPACE" "secret" "$VALUES_SECRET"; then
+    echo "    Reading values from secret: ${VALUES_SECRET}"
+    VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o jsonpath="{.data.${VALUES_KEY}}" 2>/dev/null | base64 -d 2>/dev/null || true)
+    if [ -z "$VALUES_YAML" ]; then
+      VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o jsonpath="{.stringData.${VALUES_KEY}}" 2>/dev/null || true)
+    fi
+    if [ -n "$VALUES_YAML" ]; then
+      EXTERNAL=$(echo "$VALUES_YAML" | yq -r '.external // false')
+      EXTERNAL_METHOD=$(echo "$VALUES_YAML" | yq -r '.externalMethod // "PortList"')
+      EXTERNAL_PORTS=$(echo "$VALUES_YAML" | yq -c '.externalPorts // [22]')
+      INSTANCE_TYPE=$(echo "$VALUES_YAML" | yq -r '.instanceType // "u1.medium"')
+      INSTANCE_PROFILE=$(echo "$VALUES_YAML" | yq -r '.instanceProfile // "ubuntu"')
+      RUN_STRATEGY=$(echo "$VALUES_YAML" | yq -r '.runStrategy // (if .running == false then "Halted" else "Always" end)')
+      SYSTEM_DISK_IMAGE=$(echo "$VALUES_YAML" | yq -r '.systemDisk.image // "ubuntu"')
+      SYSTEM_DISK_STORAGE=$(echo "$VALUES_YAML" | yq -r '.systemDisk.storage // "5Gi"')
+      SYSTEM_DISK_STORAGE_CLASS=$(echo "$VALUES_YAML" | yq -r '.systemDisk.storageClass // "replicated"')
+      SSH_KEYS=$(echo "$VALUES_YAML" | yq -c '.sshKeys // []')
+      CLOUD_INIT=$(echo "$VALUES_YAML" | yq -r '.cloudInit // ""')
+      CLOUD_INIT_SEED=$(echo "$VALUES_YAML" | yq -r '.cloudInitSeed // ""')
+      SUBNETS=$(echo "$VALUES_YAML" | yq -c '.subnets // []')
+      GPUS=$(echo "$VALUES_YAML" | yq -c '.gpus // []')
+      CPU_MODEL=$(echo "$VALUES_YAML" | yq -r '.cpuModel // ""')
+      RESOURCES=$(echo "$VALUES_YAML" | yq -c '.resources // {}')
+    fi
+  fi
+
+  echo "    external=${EXTERNAL}, instanceType=${INSTANCE_TYPE}, image=${SYSTEM_DISK_IMAGE}"
+
+  # --- 2c: Save kube-ovn IP ---
+  echo "  --- Save kube-ovn IP ---"
+  OVN_IP=""
+  OVN_MAC=""
+  OVN_SUBNET="ovn-default"
+  OVN_IP_NAME="${OLD_NAME}.${NAMESPACE}"
+  if kubectl get ip.kubeovn.io "$OVN_IP_NAME" --no-headers 2>/dev/null | grep -q .; then
+    OVN_IP=$(kubectl get ip.kubeovn.io "$OVN_IP_NAME" -o jsonpath='{.spec.ipAddress}')
+    OVN_MAC=$(kubectl get ip.kubeovn.io "$OVN_IP_NAME" -o jsonpath='{.spec.macAddress}')
+    OVN_SUBNET=$(kubectl get ip.kubeovn.io "$OVN_IP_NAME" -o jsonpath='{.spec.subnet}')
+    echo "    kube-ovn IP: ${OVN_IP}, MAC: ${OVN_MAC}, subnet: ${OVN_SUBNET}"
+  else
+    echo "    [SKIP] No kube-ovn IP resource found"
+  fi
+
+  # --- 2d: Save LoadBalancer IP (if external=true) ---
+  echo "  --- Save LoadBalancer IP ---"
+  LB_IP=""
+  if [ "$EXTERNAL" = "true" ] && resource_exists "$NAMESPACE" "svc" "$OLD_NAME"; then
+    LB_IP=$(kubectl -n "$NAMESPACE" get svc "$OLD_NAME" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    if [ -n "$LB_IP" ]; then
+      echo "    LoadBalancer IP: ${LB_IP}"
+    else
+      echo "    [WARN] external=true but no LoadBalancer IP assigned"
+    fi
+  else
+    echo "    [SKIP] Not external or no service"
+  fi
+
+  # --- 2e: Switch PV reclaim policy to Retain ---
+  echo "  --- Switch PV reclaim to Retain ---"
+  PV_NAME=""
+  if resource_exists "$NAMESPACE" "pvc" "$OLD_NAME"; then
+    PV_NAME=$(kubectl -n "$NAMESPACE" get pvc "$OLD_NAME" -o jsonpath='{.spec.volumeName}')
+    if [ -n "$PV_NAME" ]; then
+      ALL_PV_NAMES+=("$PV_NAME")
+      current_policy=$(kubectl get pv "$PV_NAME" -o jsonpath='{.spec.persistentVolumeReclaimPolicy}')
+      if [ "$current_policy" != "Retain" ]; then
+        echo "    [PATCH] PV ${PV_NAME}: ${current_policy} -> Retain"
+        kubectl patch pv "$PV_NAME" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+      else
+        echo "    [SKIP] PV ${PV_NAME} already Retain"
+      fi
+    fi
+  elif resource_exists "$NAMESPACE" "pvc" "$NEW_DISK_NAME"; then
+    PV_NAME=$(kubectl -n "$NAMESPACE" get pvc "$NEW_DISK_NAME" -o jsonpath='{.spec.volumeName}')
+    ALL_PV_NAMES+=("$PV_NAME")
+    echo "    [SKIP] New PVC ${NEW_DISK_NAME} already exists, PV=${PV_NAME}"
+  else
+    echo "    [WARN] No PVC found for ${OLD_NAME} or ${NEW_DISK_NAME}"
+  fi
+
+  # --- 2f: Stop and delete the VirtualMachine ---
+  echo "  --- Stop VirtualMachine ---"
+  if resource_exists "$NAMESPACE" "vm" "$OLD_NAME"; then
+    echo "    [PATCH] Stop VM ${OLD_NAME}"
+    kubectl -n "$NAMESPACE" patch vm "$OLD_NAME" --type merge -p '{"spec":{"runStrategy":"Halted"}}' 2>/dev/null || \
+    kubectl -n "$NAMESPACE" patch vm "$OLD_NAME" --type merge -p '{"spec":{"running":false}}' 2>/dev/null || true
+
+    echo "    Waiting for VMI to terminate..."
+    kubectl -n "$NAMESPACE" wait --for=delete vmi "$OLD_NAME" --timeout=120s 2>/dev/null || true
+  fi
+
+  # --- 2g: Delete VirtualMachine CR (cascades to DataVolume and PVC) ---
+  echo "  --- Delete VirtualMachine CR ---"
+  if resource_exists "$NAMESPACE" "vm" "$OLD_NAME"; then
+    echo "    [DELETE] vm/${OLD_NAME}"
+    kubectl -n "$NAMESPACE" delete vm "$OLD_NAME" --wait=true --timeout=60s 2>/dev/null || true
+  fi
+
+  echo "    Waiting for old PVC to be deleted..."
+  for i in $(seq 1 30); do
+    if ! resource_exists "$NAMESPACE" "pvc" "$OLD_NAME"; then
+      echo "    [OK] PVC ${OLD_NAME} deleted"
+      break
+    fi
+    sleep 2
+  done
+
+  # If PVC still exists (orphaned), delete it manually
+  if resource_exists "$NAMESPACE" "pvc" "$OLD_NAME"; then
+    echo "    [DELETE] Orphaned pvc/${OLD_NAME}"
+    kubectl -n "$NAMESPACE" delete pvc "$OLD_NAME" --wait=false 2>/dev/null || true
+  fi
+
+  # Delete orphaned DataVolume if still present
+  if resource_exists "$NAMESPACE" "dv" "$OLD_NAME"; then
+    echo "    [DELETE] Orphaned dv/${OLD_NAME}"
+    kubectl -n "$NAMESPACE" delete dv "$OLD_NAME" --wait=false 2>/dev/null || true
+  fi
+
+  # --- 2h: Create new PVC for vm-disk ---
+  echo "  --- Create new PVC for vm-disk ---"
+  if [ -n "$PV_NAME" ]; then
+    if resource_exists "$NAMESPACE" "pvc" "$NEW_DISK_NAME"; then
+      new_phase=$(kubectl -n "$NAMESPACE" get pvc "$NEW_DISK_NAME" \
+        -o jsonpath='{.status.phase}' 2>/dev/null || echo "unknown")
+      if [ "$new_phase" = "Bound" ]; then
+        echo "    [SKIP] PVC ${NEW_DISK_NAME} already Bound"
+      fi
+    else
+      PV_VOLUME_MODE=$(kubectl get pv "$PV_NAME" -o jsonpath='{.spec.volumeMode}' 2>/dev/null || echo "Filesystem")
+      echo "    [CREATE] PVC ${NEW_DISK_NAME} -> PV ${PV_NAME} (volumeMode=${PV_VOLUME_MODE})"
+      cat <<PVCEOF | kubectl -n "$NAMESPACE" apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${NEW_DISK_NAME}
+  namespace: ${NAMESPACE}
+  annotations:
+    cdi.kubevirt.io/allowClaimAdoption: "true"
+  labels:
+    app.kubernetes.io/instance: ${NEW_DISK_NAME}
+spec:
+  accessModes: ["ReadWriteMany"]
+  volumeMode: ${PV_VOLUME_MODE}
+  storageClassName: "${SYSTEM_DISK_STORAGE_CLASS}"
+  volumeName: "${PV_NAME}"
+  resources:
+    requests:
+      storage: "${SYSTEM_DISK_STORAGE}"
+PVCEOF
+
+      new_pvc_uid=$(kubectl -n "$NAMESPACE" get pvc "$NEW_DISK_NAME" -o jsonpath='{.metadata.uid}')
+      echo "    [PATCH] Rebind PV ${PV_NAME} -> ${NEW_DISK_NAME}"
+      kubectl patch pv "$PV_NAME" --type=merge -p "{
+        \"spec\":{\"claimRef\":{\"apiVersion\":\"v1\",\"kind\":\"PersistentVolumeClaim\",
+          \"name\":\"${NEW_DISK_NAME}\",\"namespace\":\"${NAMESPACE}\",\"uid\":\"${new_pvc_uid}\"}}
+      }"
+
+      echo "    Waiting for PVC ${NEW_DISK_NAME} to bind..."
+      kubectl -n "$NAMESPACE" wait pvc "$NEW_DISK_NAME" \
+        --for=jsonpath='{.status.phase}'=Bound --timeout=60s
+      echo "    [OK] PVC ${NEW_DISK_NAME} is Bound"
+    fi
+  fi
+
+  # --- 2i: Clone Secrets ---
+  echo "  --- Clone Secrets ---"
+  kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
+    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | while IFS= read -r secret; do
+    old_secret_name="${secret#secret/}"
+    suffix="${old_secret_name#${OLD_NAME}}"
+    new_secret_name="${NEW_INSTANCE_NAME}${suffix}"
+    clone_resource "$NAMESPACE" "secret" "$old_secret_name" "$new_secret_name" "$OLD_NAME" "$NEW_INSTANCE_NAME"
+  done
+
+  # --- 2j: Clone WorkloadMonitor ---
+  echo "  --- Clone WorkloadMonitor ---"
+  clone_resource "$NAMESPACE" "workloadmonitor.cozystack.io" "$OLD_NAME" "$NEW_INSTANCE_NAME" "$OLD_NAME" "$NEW_INSTANCE_NAME"
+
+  # --- 2k: Migrate kube-ovn IP ---
+  echo "  --- Migrate kube-ovn IP ---"
+  NEW_OVN_IP_NAME="${NEW_INSTANCE_NAME}.${NAMESPACE}"
+  if [ -n "$OVN_IP" ]; then
+    if kubectl get ip.kubeovn.io "$NEW_OVN_IP_NAME" --no-headers 2>/dev/null | grep -q .; then
+      echo "    [SKIP] ip.kubeovn.io/${NEW_OVN_IP_NAME} already exists"
+    else
+      echo "    [CREATE] ip.kubeovn.io/${NEW_OVN_IP_NAME}"
+      cat <<IPEOF | kubectl apply -f -
+apiVersion: kubeovn.io/v1
+kind: IP
+metadata:
+  name: ${NEW_OVN_IP_NAME}
+  labels:
+    ${OVN_SUBNET}: ""
+    ovn.kubernetes.io/ip_reserved: "true"
+    ovn.kubernetes.io/subnet: ${OVN_SUBNET}
+spec:
+  ipAddress: "${OVN_IP}"
+  v4IpAddress: "${OVN_IP}"
+  v6IpAddress: ""
+  macAddress: "${OVN_MAC}"
+  namespace: "${NAMESPACE}"
+  podName: "${NEW_INSTANCE_NAME}"
+  podType: "VirtualMachine"
+  subnet: "${OVN_SUBNET}"
+  attachIps: []
+  attachMacs: []
+  attachSubnets: []
+IPEOF
+    fi
+
+    # Delete old kube-ovn IP resource
+    if kubectl get ip.kubeovn.io "$OVN_IP_NAME" --no-headers 2>/dev/null | grep -q .; then
+      echo "    [DELETE] ip.kubeovn.io/${OVN_IP_NAME}"
+      kubectl delete ip.kubeovn.io "$OVN_IP_NAME" 2>/dev/null || true
+    fi
+  fi
+
+  # --- 2l: Create vm-disk values secret ---
+  echo "  --- Create vm-disk values secret ---"
+  DISK_VALUES_SECRET="${NEW_DISK_NAME}-values"
+  if ! resource_exists "$NAMESPACE" "secret" "$DISK_VALUES_SECRET"; then
+    echo "    [CREATE] secret/${DISK_VALUES_SECRET}"
+    cat <<DSEOF | kubectl -n "$NAMESPACE" apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${DISK_VALUES_SECRET}
+  namespace: ${NAMESPACE}
+stringData:
+  values.yaml: |
+    source:
+      image:
+        name: "${SYSTEM_DISK_IMAGE}"
+    optical: false
+    storage: "${SYSTEM_DISK_STORAGE}"
+    storageClass: "${SYSTEM_DISK_STORAGE_CLASS}"
+DSEOF
+  else
+    echo "    [SKIP] secret/${DISK_VALUES_SECRET} already exists"
+  fi
+
+  # --- 2m: Create vm-disk HelmRelease (suspended) ---
+  echo "  --- Create vm-disk HelmRelease (suspended) ---"
+  if resource_exists "$NAMESPACE" "hr" "$NEW_DISK_NAME"; then
+    echo "    [SKIP] hr/${NEW_DISK_NAME} already exists"
+  else
+    echo "    [CREATE] hr/${NEW_DISK_NAME}"
+    cat <<DHREOF | kubectl -n "$NAMESPACE" apply -f -
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: ${NEW_DISK_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    sharding.fluxcd.io/key: tenants
+    apps.cozystack.io/application.kind: VMDisk
+    apps.cozystack.io/application.name: vm-disk
+spec:
+  suspend: true
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-vm-disk-application-kubevirt-vm-disk
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: ${DISK_VALUES_SECRET}
+    valuesKey: values.yaml
+DHREOF
+  fi
+
+  # --- 2n: Create vm-instance values secret ---
+  echo "  --- Create vm-instance values secret ---"
+  INSTANCE_VALUES_SECRET="${NEW_INSTANCE_NAME}-values"
+  if ! resource_exists "$NAMESPACE" "secret" "$INSTANCE_VALUES_SECRET"; then
+    echo "    [CREATE] secret/${INSTANCE_VALUES_SECRET}"
+    cat <<ISEOF | kubectl -n "$NAMESPACE" apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${INSTANCE_VALUES_SECRET}
+  namespace: ${NAMESPACE}
+stringData:
+  values.yaml: |
+    external: ${EXTERNAL}
+    externalMethod: "${EXTERNAL_METHOD}"
+    externalPorts: ${EXTERNAL_PORTS}
+    runStrategy: "${RUN_STRATEGY}"
+    instanceType: "${INSTANCE_TYPE}"
+    instanceProfile: "${INSTANCE_PROFILE}"
+    disks:
+    - name: "${INSTANCE}"
+    subnets: ${SUBNETS}
+    gpus: ${GPUS}
+    cpuModel: "${CPU_MODEL}"
+    resources: ${RESOURCES}
+    sshKeys: ${SSH_KEYS}
+    cloudInit: $(printf '%s' "$CLOUD_INIT" | jq -Rs .)
+    cloudInitSeed: "${CLOUD_INIT_SEED}"
+ISEOF
+  else
+    echo "    [SKIP] secret/${INSTANCE_VALUES_SECRET} already exists"
+  fi
+
+  # --- 2o: Create vm-instance HelmRelease (suspended) ---
+  echo "  --- Create vm-instance HelmRelease (suspended) ---"
+  if resource_exists "$NAMESPACE" "hr" "$NEW_INSTANCE_NAME"; then
+    echo "    [SKIP] hr/${NEW_INSTANCE_NAME} already exists"
+  else
+    # Build valuesFrom list - include cozystack-values if the old HR had it
+    COZYSTACK_VALUES_FROM=""
+    if resource_exists "$NAMESPACE" "secret" "cozystack-values"; then
+      COZYSTACK_VALUES_FROM='  - kind: Secret
+    name: cozystack-values'
+    fi
+
+    echo "    [CREATE] hr/${NEW_INSTANCE_NAME}"
+    cat <<IHREOF | kubectl -n "$NAMESPACE" apply -f -
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: ${NEW_INSTANCE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    sharding.fluxcd.io/key: tenants
+    apps.cozystack.io/application.kind: VMInstance
+    apps.cozystack.io/application.name: vm-instance
+spec:
+  suspend: true
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-vm-instance-application-kubevirt-vm-instance
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: ${INSTANCE_VALUES_SECRET}
+    valuesKey: values.yaml
+${COZYSTACK_VALUES_FROM}
+IHREOF
+  fi
+
+  # --- 2p: If external=true, pre-create LoadBalancer service with metallb annotation ---
+  echo "  --- Handle external service ---"
+  if [ "$EXTERNAL" = "true" ] && [ -n "$LB_IP" ]; then
+    if resource_exists "$NAMESPACE" "svc" "$NEW_INSTANCE_NAME"; then
+      echo "    [SKIP] svc/${NEW_INSTANCE_NAME} already exists"
+    else
+      echo "    [CREATE] svc/${NEW_INSTANCE_NAME} with metallb IP ${LB_IP}"
+      cat <<SVCEOF | kubectl -n "$NAMESPACE" apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${NEW_INSTANCE_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    apps.cozystack.io/user-service: "true"
+    app.kubernetes.io/name: vm-instance
+    app.kubernetes.io/instance: ${NEW_INSTANCE_NAME}
+  annotations:
+    networking.cozystack.io/wholeIP: "true"
+    metallb.universe.tf/loadBalancerIPs: "${LB_IP}"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: vm-instance
+    app.kubernetes.io/instance: ${NEW_INSTANCE_NAME}
+  ports:
+  - port: 65535
+SVCEOF
+    fi
+  fi
+
+  # --- 2q: Delete old resources ---
+  echo "  --- Delete old resources ---"
+  kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
+    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | while IFS= read -r secret; do
+    old_secret_name="${secret#secret/}"
+    delete_resource "$NAMESPACE" "secret" "$old_secret_name"
+  done
+
+  delete_resource "$NAMESPACE" "workloadmonitor.cozystack.io" "$OLD_NAME"
+
+  if resource_exists "$NAMESPACE" "hr" "$OLD_NAME"; then
+    kubectl -n "$NAMESPACE" patch hr "$OLD_NAME" --type=json \
+      -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
+    delete_resource "$NAMESPACE" "hr" "$OLD_NAME"
+  fi
+
+  echo "    [DELETE] secrets with label owner=helm,name=${OLD_NAME}"
+  kubectl -n "$NAMESPACE" delete secret -l "owner=helm,name=${OLD_NAME}" 2>/dev/null || true
+
+  # Delete old values secret
+  if [ -n "$VALUES_SECRET" ]; then
+    delete_resource "$NAMESPACE" "secret" "$VALUES_SECRET"
+  fi
+
+  # Collect protected resources for batch deletion
+  if resource_exists "$NAMESPACE" "svc" "$OLD_NAME"; then
+    ALL_PROTECTED_RESOURCES+=("${NAMESPACE}:svc/${OLD_NAME}")
+  fi
+done
+
+# ============================================================
+# STEP 3: Delete protected resources (Services)
+# ============================================================
+echo ""
+echo "--- Step 3: Delete protected resources ---"
+
+if [ ${#ALL_PROTECTED_RESOURCES[@]} -gt 0 ]; then
+  WEBHOOK_EXISTS=false
+  if kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" --no-headers 2>/dev/null | grep -q .; then
+    WEBHOOK_EXISTS=true
+  fi
+
+  if [ "$WEBHOOK_EXISTS" = "true" ]; then
+    echo "  --- Temporarily disabling protection-webhook ---"
+
+    WEBHOOK_REPLICAS=$(kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" \
+      -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+
+    echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> 0 (was ${WEBHOOK_REPLICAS})"
+    kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" --replicas=0
+
+    echo "  [PATCH] Set failurePolicy=Ignore on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
+    kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
+      jq '.webhooks[].failurePolicy = "Ignore"' | \
+      kubectl apply -f - 2>/dev/null || true
+
+    echo "  Waiting for webhook pods to terminate..."
+    kubectl -n "$PROTECTION_WEBHOOK_NS" wait --for=delete pod \
+      -l app.kubernetes.io/name=protection-webhook --timeout=60s 2>/dev/null || true
+    sleep 3
+  fi
+
+  for entry in "${ALL_PROTECTED_RESOURCES[@]}"; do
+    ns="${entry%%:*}"
+    res="${entry#*:}"
+    echo "  [DELETE] ${ns}/${res}"
+    kubectl -n "$ns" delete "$res" --wait=false 2>/dev/null || true
+  done
+
+  if [ "$WEBHOOK_EXISTS" = "true" ]; then
+    echo "  [PATCH] Set failurePolicy=Fail on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
+    kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
+      jq '.webhooks[].failurePolicy = "Fail"' | \
+      kubectl apply -f - 2>/dev/null || true
+
+    echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> ${WEBHOOK_REPLICAS}"
+    kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" \
+      --replicas="$WEBHOOK_REPLICAS"
+    echo "  --- protection-webhook restored ---"
+  fi
+else
+  echo "  [SKIP] No protected resources to delete"
+fi
+
+# ============================================================
+# STEP 4: Restore PV reclaim policies
+# ============================================================
+echo ""
+echo "--- Step 4: Restore PV reclaim policies ---"
+for pv_name in "${ALL_PV_NAMES[@]}"; do
+  if [ -n "$pv_name" ]; then
+    current_policy=$(kubectl get pv "$pv_name" \
+      -o jsonpath='{.spec.persistentVolumeReclaimPolicy}' 2>/dev/null || echo "unknown")
+    if [ "$current_policy" = "Retain" ]; then
+      echo "  [PATCH] PV ${pv_name}: Retain -> Delete"
+      kubectl patch pv "$pv_name" -p '{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}'
+    else
+      echo "  [SKIP] PV ${pv_name} already ${current_policy}"
+    fi
+  fi
+done
+
+# ============================================================
+# STEP 5: Temporarily disable CDI datavolume webhooks
+# ============================================================
+# CDI's datavolume-validate webhook rejects DataVolume creation when a PVC
+# with the same name already exists. We must disable it so that vm-disk
+# HelmReleases can reconcile and adopt the pre-created PVCs.
+# We scale down both cdi-operator (which recreates webhook configs) and
+# cdi-apiserver (which serves the webhooks), then delete webhook configs.
+# Both are restored after vm-disk HRs reconcile.
+echo ""
+echo "--- Step 5: Temporarily disable CDI webhooks ---"
+
+CDI_OPERATOR_REPLICAS=$(kubectl -n "$CDI_APISERVER_NS" get deploy cdi-operator \
+  -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+CDI_APISERVER_REPLICAS=$(kubectl -n "$CDI_APISERVER_NS" get deploy "$CDI_APISERVER_DEPLOY" \
+  -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+
+echo "  [SCALE] cdi-operator -> 0 (was ${CDI_OPERATOR_REPLICAS})"
+kubectl -n "$CDI_APISERVER_NS" scale deploy cdi-operator --replicas=0
+echo "  [SCALE] ${CDI_APISERVER_DEPLOY} -> 0 (was ${CDI_APISERVER_REPLICAS})"
+kubectl -n "$CDI_APISERVER_NS" scale deploy "$CDI_APISERVER_DEPLOY" --replicas=0
+
+echo "  Waiting for cdi pods to terminate..."
+kubectl -n "$CDI_APISERVER_NS" wait --for=delete pod \
+  -l cdi.kubevirt.io=cdi-apiserver --timeout=60s 2>/dev/null || true
+kubectl -n "$CDI_APISERVER_NS" wait --for=delete pod \
+  -l name=cdi-operator --timeout=60s 2>/dev/null || true
+
+for wh in $CDI_VALIDATING_WEBHOOKS; do
+  if kubectl get validatingwebhookconfiguration "$wh" >/dev/null 2>&1; then
+    echo "  [DELETE] validatingwebhookconfiguration/${wh}"
+    kubectl delete validatingwebhookconfiguration "$wh" 2>/dev/null || true
+  fi
+done
+for wh in $CDI_MUTATING_WEBHOOKS; do
+  if kubectl get mutatingwebhookconfiguration "$wh" >/dev/null 2>&1; then
+    echo "  [DELETE] mutatingwebhookconfiguration/${wh}"
+    kubectl delete mutatingwebhookconfiguration "$wh" 2>/dev/null || true
+  fi
+done
+sleep 2
+
+# ============================================================
+# STEP 6: Unsuspend vm-disk HelmReleases first
+# ============================================================
+echo ""
+echo "--- Step 6: Unsuspend vm-disk HelmReleases ---"
+for entry in "${INSTANCES[@]}"; do
+  ns="${entry%%/*}"
+  instance="${entry#*/}"
+  disk_name="${NEW_DISK_PREFIX}-${instance}"
+  if resource_exists "$ns" "hr" "$disk_name"; then
+    suspended=$(kubectl -n "$ns" get hr "$disk_name" \
+      -o jsonpath='{.spec.suspend}' 2>/dev/null || echo "false")
+    if [ "$suspended" = "true" ]; then
+      echo "  [UNSUSPEND] ${ns}/hr/${disk_name}"
+      kubectl -n "$ns" patch hr "$disk_name" --type=merge -p '{"spec":{"suspend":false}}'
+    else
+      echo "  [SKIP] ${ns}/hr/${disk_name} already not suspended"
+    fi
+    # Force immediate reconciliation
+    echo "  [TRIGGER] Reconcile ${ns}/hr/${disk_name}"
+    kubectl -n "$ns" annotate hr "$disk_name" --overwrite \
+      "reconcile.fluxcd.io/requestedAt=$(date +%s)" 2>/dev/null || true
+  fi
+done
+
+# Wait for disk HelmReleases to become ready
+echo "  Waiting for vm-disk HelmReleases to reconcile..."
+for entry in "${INSTANCES[@]}"; do
+  ns="${entry%%/*}"
+  instance="${entry#*/}"
+  disk_name="${NEW_DISK_PREFIX}-${instance}"
+  for i in $(seq 1 60); do
+    ready=$(kubectl -n "$ns" get hr "$disk_name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+    if [ "$ready" = "True" ]; then
+      echo "  [OK] ${ns}/hr/${disk_name} is Ready"
+      break
+    fi
+    if [ "$i" = "60" ]; then
+      echo "  [WARN] ${ns}/hr/${disk_name} did not become Ready within timeout"
+    fi
+    sleep 5
+  done
+done
+
+# ============================================================
+# STEP 7: Restore CDI webhooks
+# ============================================================
+# Scale cdi-operator and cdi-apiserver back up.
+# cdi-apiserver will recreate webhook configurations automatically on start.
+echo ""
+echo "--- Step 7: Restore CDI webhooks ---"
+
+echo "  [SCALE] cdi-operator -> ${CDI_OPERATOR_REPLICAS}"
+kubectl -n "$CDI_APISERVER_NS" scale deploy cdi-operator \
+  --replicas="$CDI_OPERATOR_REPLICAS"
+echo "  [SCALE] ${CDI_APISERVER_DEPLOY} -> ${CDI_APISERVER_REPLICAS}"
+kubectl -n "$CDI_APISERVER_NS" scale deploy "$CDI_APISERVER_DEPLOY" \
+  --replicas="$CDI_APISERVER_REPLICAS"
+
+echo "  Waiting for CDI to be ready..."
+kubectl -n "$CDI_APISERVER_NS" rollout status deploy cdi-operator --timeout=120s 2>/dev/null || true
+kubectl -n "$CDI_APISERVER_NS" rollout status deploy "$CDI_APISERVER_DEPLOY" --timeout=120s 2>/dev/null || true
+echo "  --- CDI webhooks restored ---"
+
+# ============================================================
+# STEP 8: Unsuspend vm-instance HelmReleases
+# ============================================================
+echo ""
+echo "--- Step 8: Unsuspend vm-instance HelmReleases ---"
+for entry in "${INSTANCES[@]}"; do
+  ns="${entry%%/*}"
+  instance="${entry#*/}"
+  instance_name="${NEW_INSTANCE_PREFIX}-${instance}"
+  if resource_exists "$ns" "hr" "$instance_name"; then
+    suspended=$(kubectl -n "$ns" get hr "$instance_name" \
+      -o jsonpath='{.spec.suspend}' 2>/dev/null || echo "false")
+    if [ "$suspended" = "true" ]; then
+      echo "  [UNSUSPEND] ${ns}/hr/${instance_name}"
+      kubectl -n "$ns" patch hr "$instance_name" --type=merge -p '{"spec":{"suspend":false}}'
+    else
+      echo "  [SKIP] ${ns}/hr/${instance_name} already not suspended"
+    fi
+  fi
+done
+
+echo ""
+echo "=== Migration complete (${#INSTANCES[@]} instance(s)) ==="
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=30 --dry-run=client -o yaml | kubectl apply -f-
