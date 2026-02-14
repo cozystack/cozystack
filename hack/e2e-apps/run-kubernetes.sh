@@ -56,7 +56,7 @@ spec:
       gpus: []
       instanceType: u1.medium
       maxReplicas: 10
-      minReplicas: 0
+      minReplicas: 2
       roles:
       - ingress-nginx
   storageClass: replicated
