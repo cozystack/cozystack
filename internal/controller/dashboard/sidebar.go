@@ -22,8 +22,8 @@ import (
 //
 // Menu rules:
 //   - The first section is "Marketplace" with two hardcoded entries:
-//   - Marketplace  (/openapi-ui/{clusterName}/{namespace}/factory/marketplace)
-//   - Tenant Info  (/openapi-ui/{clusterName}/{namespace}/factory/info-details/info)
+//   - Marketplace  (/openapi-ui/{cluster}/{namespace}/factory/marketplace)
+//   - Tenant Info  (/openapi-ui/{cluster}/{namespace}/factory/info-details/info)
 //   - All other sections are built from CRDs where spec.dashboard != nil.
 //   - Categories are ordered strictly as:
 //     Marketplace, IaaS, PaaS, NaaS, <others A→Z>, Resources, Backups, Administration
@@ -91,7 +91,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 			// Weight (default 0)
 			weight := def.Spec.Dashboard.Weight
 
-			link := fmt.Sprintf("/openapi-ui/{clusterName}/{namespace}/api-table/%s/%s/%s", g, v, plural)
+			link := fmt.Sprintf("/openapi-ui/{cluster}/{namespace}/api-table/%s/%s/%s", g, v, plural)
 
 			categories[cat] = append(categories[cat], item{
 				Key:    plural,
@@ -146,7 +146,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 				map[string]any{
 					"key":   "marketplace",
 					"label": "Marketplace",
-					"link":  "/openapi-ui/{clusterName}/{namespace}/factory/marketplace",
+					"link":  "/openapi-ui/{cluster}/{namespace}/factory/marketplace",
 				},
 			},
 		},
@@ -205,12 +205,12 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 			map[string]any{
 				"key":   "info",
 				"label": "Info",
-				"link":  "/openapi-ui/{clusterName}/{namespace}/factory/info-details/info",
+				"link":  "/openapi-ui/{cluster}/{namespace}/factory/info-details/info",
 			},
 			map[string]any{
 				"key":   "modules",
 				"label": "Modules",
-				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/core.cozystack.io/v1alpha1/tenantmodules",
+				"link":  "/openapi-ui/{cluster}/{namespace}/api-table/core.cozystack.io/v1alpha1/tenantmodules",
 			},
 			map[string]any{
 				"key":   "loadbalancer-services",
@@ -220,7 +220,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 			map[string]any{
 				"key":   "tenants",
 				"label": "Tenants",
-				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/apps.cozystack.io/v1alpha1/tenants",
+				"link":  "/openapi-ui/{cluster}/{namespace}/api-table/apps.cozystack.io/v1alpha1/tenants",
 			},
 		},
 	})

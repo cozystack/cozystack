@@ -49,6 +49,8 @@ func (m *Manager) ensureStaticResource(ctx context.Context, obj client.Object) e
 			resource.(*dashv1alpha1.Navigation).Spec = o.Spec
 		case *dashv1alpha1.TableUriMapping:
 			resource.(*dashv1alpha1.TableUriMapping).Spec = o.Spec
+		case *dashv1alpha1.CFOMapping:
+			resource.(*dashv1alpha1.CFOMapping).Spec = o.Spec
 		}
 		// Ensure labels are always set
 		m.addDashboardLabels(resource, nil, ResourceTypeStatic)

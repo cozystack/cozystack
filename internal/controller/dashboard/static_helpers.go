@@ -1134,7 +1134,7 @@ func yamlEditor(id, cluster string, isNameSpaced bool, typeName string, prefillV
 			"cluster":                   cluster,
 			"isNameSpaced":              isNameSpaced,
 			"type":                      "builtin",
-			"typeName":                  typeName,
+			"plural":                    typeName,
 			"prefillValuesRequestIndex": prefillValuesRequestIndex,
 			"substractHeight":           float64(400),
 		},

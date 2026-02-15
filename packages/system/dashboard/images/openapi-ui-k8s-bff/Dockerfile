@@ -1,9 +1,10 @@
-# imported from https://github.com/cozystack/openapi-ui-k8s-bff
+# imported from https://github.com/PRO-Robotech/openapi-ui-k8s-bff
 ARG NODE_VERSION=20.18.1
 FROM node:${NODE_VERSION}-alpine AS builder
 WORKDIR /src
 
-ARG COMMIT_REF=183dc9dcbb0f8a1833dad642c35faa385c71e58d
+# release/1.4.0
+ARG COMMIT_REF=92e4b618eb9ad17b19827b5a2b7ceab33e8cf534
 RUN wget -O- https://github.com/PRO-Robotech/openapi-ui-k8s-bff/archive/${COMMIT_REF}.tar.gz | tar xzf - --strip-components=1
 
 ENV PATH=/src/node_modules/.bin:$PATH

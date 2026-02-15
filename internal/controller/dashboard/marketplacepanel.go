@@ -74,7 +74,7 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 		"type":        "nonCrd",
 		"apiGroup":    "apps.cozystack.io",
 		"apiVersion":  "v1alpha1",
-		"typeName":    app.Plural, // e.g., "buckets"
+		"plural":      app.Plural, // e.g., "buckets"
 		"disabled":    false,
 		"hidden":      false,
 		"tags":        tags,
