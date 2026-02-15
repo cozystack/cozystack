@@ -8,7 +8,7 @@ spec:
     plural: virtualprivateclouds
     singular: virtualprivatecloud
     openAPISchema: |-
-      {"title":"Chart Values","type":"object","properties":{"subnets":{"description":"Subnets of a VPC","type":"object","default":{},"additionalProperties":{"type":"object","properties":{"cidr":{"description":"IP address range","type":"string"}}}}}}
+      {"title":"Chart Values","type":"object","properties":{"subnets":{"description":"Subnets of a VPC","type":"array","default":[],"items":{"type":"object","required":["name"],"properties":{"cidr":{"description":"IP address range","type":"string"},"name":{"description":"Subnet name","type":"string"}}}}}}
   release:
     prefix: "virtualprivatecloud-"
     labels:

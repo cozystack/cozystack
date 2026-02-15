@@ -3,13 +3,14 @@
 ##
 
 ## @typedef {struct} Subnet - Subnet of a VPC
+## @field {string} name - Subnet name
 ## @field {string} [cidr] - IP address range
 
-## @param {map[string]Subnet} subnets - Subnets of a VPC
-subnets: {}
+## @param {[]Subnet} subnets - Subnets of a VPC
+subnets: []
 ## Example:
 ## subnets:
-##   mysubnet0:
+##   - name: mysubnet0
 ##     cidr: "172.16.0.0/24"
-##   mysubnet1:
+##   - name: mysubnet1
 ##     cidr: "172.16.1.0/24"

@@ -16,8 +16,8 @@ spec:
   namespaces:
     - {{ .Release.Namespace }}
 
-{{- range $subnetName, $subnetConfig := .Values.subnets  }}
-{{- $subnetId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
+{{- range .Values.subnets }}
+{{- $subnetId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" .name | sha256sum | trunc 8) }}
 ---
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
@@ -25,7 +25,7 @@ metadata:
   name: {{ $subnetId }}
   namespace: {{ $.Release.Namespace }}
   labels:
-    cozystack.io/subnetName: {{ $subnetName }}
+    cozystack.io/subnetName: {{ .name }}
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/vpcName: {{ $.Release.Name }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
@@ -42,13 +42,13 @@ kind: Subnet
 metadata:
   name: {{ $subnetId }}
   labels:
-    cozystack.io/subnetName: {{ $subnetName }}
+    cozystack.io/subnetName: {{ .name }}
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/vpcName: {{ $.Release.Name }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
 spec:
   vpc: {{ $vpcId  }}
-  cidrBlock: {{ $subnetConfig.cidr }}
+  cidrBlock: {{ .cidr }}
   provider: "{{ $subnetId }}.{{ $.Release.Namespace }}.ovn"
   protocol: IPv4
   enableLb: false
@@ -66,9 +66,9 @@ metadata:
     cozystack.io/vpcId: {{ $vpcId }}
     cozystack.io/tenantName: {{ $.Release.Namespace }}
 data:
-  {{- range $subnetName, $subnetConfig := .Values.subnets }}
-  {{ $subnetName }}.ID: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" $subnetName | sha256sum | trunc 8) }}
-  {{ $subnetName }}.CIDR: {{ $subnetConfig.cidr }}
+  {{- range .Values.subnets }}
+  {{ .name }}.ID: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" .name | sha256sum | trunc 8) }}
+  {{ .name }}.CIDR: {{ .cidr }}
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
