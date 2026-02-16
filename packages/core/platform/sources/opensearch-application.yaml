@@ -10,19 +10,19 @@ spec:
     namespace: cozy-system
     path: /
   variants:
-    - name: default
-      dependsOn:
-        - cozystack.networking
-        - cozystack.opensearch-operator
-      libraries:
-        - name: cozy-lib
-          path: library/cozy-lib
-      components:
-        - name: opensearch
-          path: apps/opensearch
-          libraries: ["cozy-lib"]
-        - name: opensearch-rd
-          path: system/opensearch-rd
-          install:
-            namespace: cozy-system
-            releaseName: opensearch-rd
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.opensearch-operator
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
+    components:
+    - name: opensearch
+      path: apps/opensearch
+      libraries: ["cozy-lib"]
+    - name: opensearch-rd
+      path: system/opensearch-rd
+      install:
+        namespace: cozy-system
+        releaseName: opensearch-rd
