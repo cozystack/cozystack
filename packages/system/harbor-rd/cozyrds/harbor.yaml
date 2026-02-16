@@ -34,14 +34,14 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - {{ .name }}-credentials
+          - "{{ .name }}-credentials"
   services:
     exclude: []
     include:
       - resourceNames:
-          - {{ .name }}
+          - "{{ .name }}"
   ingresses:
     exclude: []
     include:
       - resourceNames:
-          - {{ .name }}-ingress
+          - "{{ .name }}-ingress"
