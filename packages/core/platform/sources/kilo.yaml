@@ -20,3 +20,16 @@ spec:
         privileged: true
         namespace: cozy-kilo
         releaseName: kilo
+  - name: cilium
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: kilo
+      path: system/kilo
+      valuesFiles:
+      - values.yaml
+      - values-cilium.yaml
+      install:
+        privileged: true
+        namespace: cozy-kilo
+        releaseName: kilo
