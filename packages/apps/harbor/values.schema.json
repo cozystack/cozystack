@@ -179,9 +179,6 @@
       "description": "Container image registry configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "size"
-      ],
       "properties": {
         "resources": {
           "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
@@ -229,20 +226,6 @@
             "xlarge",
             "2xlarge"
           ]
-        },
-        "size": {
-          "description": "Persistent Volume size for container image storage.",
-          "default": "50Gi",
-          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "x-kubernetes-int-or-string": true
         }
       }
     },

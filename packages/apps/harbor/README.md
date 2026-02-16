@@ -22,7 +22,6 @@ Harbor is an open source trusted cloud native registry project that stores, sign
 | `core.resources.memory`       | Amount of memory allocated.                                                                              | `quantity` | `""`    |
 | `core.resourcesPreset`        | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `small` |
 | `registry`                    | Container image registry configuration.                                                                  | `object`   | `{}`    |
-| `registry.size`               | Persistent Volume size for container image storage.                                                      | `quantity` | `50Gi`  |
 | `registry.resources`          | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
 | `registry.resources.cpu`      | Number of CPU cores allocated.                                                                           | `quantity` | `""`    |
 | `registry.resources.memory`   | Amount of memory allocated.                                                                              | `quantity` | `""`    |

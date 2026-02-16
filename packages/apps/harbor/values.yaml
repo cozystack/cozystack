@@ -35,13 +35,11 @@ core:
   resourcesPreset: "small"
 
 ## @typedef {struct} Registry - Container image registry configuration.
-## @field {quantity} size - Persistent Volume size for container image storage.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 
 ## @param {Registry} registry - Container image registry configuration.
 registry:
-  size: 50Gi
   resources: {}
   resourcesPreset: "small"
 

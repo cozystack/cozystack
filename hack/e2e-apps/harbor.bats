@@ -15,7 +15,6 @@ spec:
     resources: {}
     resourcesPreset: "nano"
   registry:
-    size: 5Gi
     resources: {}
     resourcesPreset: "nano"
   jobservice:

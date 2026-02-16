@@ -20,7 +20,7 @@ spec:
         - name: harbor-system
           path: system/harbor
         - name: harbor
-          path: extra/harbor
+          path: apps/harbor
           libraries: ["cozy-lib"]
         - name: harbor-rd
           path: system/harbor-rd

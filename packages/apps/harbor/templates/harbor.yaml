@@ -53,6 +53,18 @@ spec:
   valuesFrom:
   - kind: Secret
     name: cozystack-values
+  - kind: Secret
+    name: {{ .Release.Name }}-registry-bucket
+    valuesKey: accessKey
+    targetPath: harbor.persistence.imageChartStorage.s3.accesskey
+  - kind: Secret
+    name: {{ .Release.Name }}-registry-bucket
+    valuesKey: secretKey
+    targetPath: harbor.persistence.imageChartStorage.s3.secretkey
+  - kind: Secret
+    name: {{ .Release.Name }}-registry-bucket
+    valuesKey: endpoint
+    targetPath: harbor.persistence.imageChartStorage.s3.regionendpoint
   values:
     db:
       replicas: {{ .Values.database.replicas }}
@@ -79,19 +91,21 @@ spec:
       persistence:
         enabled: true
         resourcePolicy: "keep"
+        imageChartStorage:
+          type: s3
+          s3:
+            region: us-east-1
+            bucket: {{ .Release.Name }}-registry
+            secure: false
+            v4auth: true
+        {{- if .Values.trivy.enabled }}
         persistentVolumeClaim:
-          registry:
-            size: {{ .Values.registry.size }}
-            {{- with .Values.storageClass }}
-            storageClass: {{ . }}
-            {{- end }}
-          {{- if .Values.trivy.enabled }}
           trivy:
             size: {{ .Values.trivy.size }}
             {{- with .Values.storageClass }}
             storageClass: {{ . }}
             {{- end }}
-          {{- end }}
+        {{- end }}
       portal:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}
       core:
