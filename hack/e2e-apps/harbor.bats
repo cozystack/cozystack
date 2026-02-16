@@ -37,7 +37,7 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr $release --timeout=60s --for=condition=ready
-  kubectl -n tenant-test wait hr $release-system --timeout=300s --for=condition=ready
+  kubectl -n tenant-test wait hr $release-system --timeout=600s --for=condition=ready
   kubectl -n tenant-test wait deploy $release-core --timeout=120s --for=condition=available
   kubectl -n tenant-test wait deploy $release-registry --timeout=120s --for=condition=available
   kubectl -n tenant-test wait deploy $release-portal --timeout=120s --for=condition=available

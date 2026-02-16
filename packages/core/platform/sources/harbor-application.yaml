@@ -13,6 +13,8 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        - cozystack.postgres-operator
+        - cozystack.redis-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib

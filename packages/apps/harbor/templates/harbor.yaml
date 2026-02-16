@@ -102,6 +102,7 @@ spec:
             secure: false
             v4auth: true
         {{- end }}
+        {{- if or (eq .Values.registry.storageType "pvc") .Values.trivy.enabled }}
         persistentVolumeClaim:
           {{- if eq .Values.registry.storageType "pvc" }}
           registry:
@@ -117,6 +118,7 @@ spec:
             storageClass: {{ . }}
             {{- end }}
           {{- end }}
+        {{- end }}
       portal:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}
       core:
