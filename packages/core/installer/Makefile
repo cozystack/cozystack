@@ -15,7 +15,7 @@ apply:
 diff:
 	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl diff -f -
 
-image: pre-checks image-operator image-packages
+image: pre-checks image-operator image-packages chart
 
 image-operator:
 	docker buildx build -f images/cozystack-operator/Dockerfile ../../.. \
@@ -43,3 +43,9 @@ image-packages:
 		test -n "$$DIGEST" && \
 		yq -i '.cozystackOperator.platformSourceUrl = strenv(REPO)' values.yaml && \
 		yq -i '.cozystackOperator.platformSourceRef = "digest=" + strenv(DIGEST)' values.yaml
+
+chart:
+	set -e; \
+	PKG=$$(helm package . --version $(COZYSTACK_VERSION) | awk '{print $$NF}'); \
+	trap 'rm -f "$$PKG"' EXIT; \
+	if [ "$(PUSH)" = "1" ]; then helm push "$$PKG" oci://$(REGISTRY); fi
