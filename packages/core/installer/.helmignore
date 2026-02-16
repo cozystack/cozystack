@@ -1,0 +1,11 @@
+# VCS and IDE
+.git
+.gitignore
+
+# Build artifacts
+Makefile
+images/
+example/
+*.tgz
+
+# NOTE: definitions/ is intentionally NOT excluded — needed by crds.yaml via .Files.Glob

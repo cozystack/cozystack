@@ -1,3 +1,7 @@
+{{- $validVariants := list "talos" "generic" "hosted" -}}
+{{- if not (has .Values.cozystackOperator.variant $validVariants) -}}
+{{- fail (printf "Invalid cozystackOperator.variant %q: must be one of talos, generic, hosted" .Values.cozystackOperator.variant) -}}
+{{- end -}}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: PackageSource

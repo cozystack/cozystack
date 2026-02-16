@@ -4,3 +4,13 @@ cozystackOperator:
   image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.0.0-beta.4@sha256:322dd7358df369525f76e6e43512482e38caec5315d36a878399d2d60bf2f18d
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
   platformSourceRef: 'digest=sha256:b88502242b535a31ab33c06ffc0a96d1c67230d2db2c5e873fa23f6523592ff6'
+
+# Generic variant configuration (only used when cozystackOperator.variant=generic)
+cozystack:
+  # Kubernetes API server host (IP only, no protocol/port)
+  # Must be the INTERNAL IP of the control-plane node
+  # (the IP visible on the node's network interface, not a public/NAT IP)
+  # Used by the operator and networking components (cilium, kube-ovn)
+  apiServerHost: ""
+  # Kubernetes API server port
+  apiServerPort: "6443"
