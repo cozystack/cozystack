@@ -30,17 +30,13 @@ test: test-cluster test-openapi test-apps ## Run the end-to-end tests in existin
 copy-nocloud-image:
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
 
-copy-installer-manifest:
-	docker cp ../../../_out/assets/cozystack-crds.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-crds.yaml
-	docker cp ../../../_out/assets/cozystack-operator-talos.yaml "${SANDBOX_NAME}":/workspace/_out/assets/cozystack-operator-talos.yaml
-
 prepare-cluster: copy-nocloud-image
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-prepare-cluster.bats'
 
-install-cozystack: copy-installer-manifest
+install-cozystack:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
-test-cluster: copy-nocloud-image copy-installer-manifest ## Run the end-to-end for creating a cluster
+test-cluster: copy-nocloud-image ## Run the end-to-end for creating a cluster
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-cluster.bats'
 
 test-openapi:
