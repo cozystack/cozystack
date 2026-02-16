@@ -1,0 +1,22 @@
+{{- if .Values.metrics.enabled}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: "{{ template "harbor.exporter" . }}"
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+{{ include "harbor.labels" . | indent 4 }}
+spec:
+{{- if .Values.ipFamily.policy }}
+  ipFamilyPolicy: {{ .Values.ipFamily.policy }}
+{{- end }}
+{{- if .Values.ipFamily.families }}
+  ipFamilies: {{ toYaml .Values.ipFamily.families | nindent 4 }}
+{{- end }}
+  ports:
+    - name: {{ template "harbor.metricsPortName" . }}
+      port: {{ .Values.metrics.exporter.port }}
+  selector:
+{{ include "harbor.matchLabels" . | indent 4 }}
+    component: exporter
+{{ end }}

@@ -1,0 +1,414 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "core": {
+      "description": "Core API server configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "small",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        }
+      }
+    },
+    "database": {
+      "description": "Internal PostgreSQL database configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "nano",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        },
+        "size": {
+          "description": "Persistent Volume size for database storage.",
+          "default": "5Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "host": {
+      "description": "Hostname for external access to Harbor (defaults to 'harbor' subdomain for the tenant host).",
+      "type": "string",
+      "default": ""
+    },
+    "jobservice": {
+      "description": "Background job service configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "nano",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        }
+      }
+    },
+    "redis": {
+      "description": "Internal Redis cache configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "nano",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        },
+        "size": {
+          "description": "Persistent Volume size for cache storage.",
+          "default": "1Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "registry": {
+      "description": "Container image registry configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "small",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        },
+        "size": {
+          "description": "Persistent Volume size for container image storage.",
+          "default": "50Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "storageClass": {
+      "description": "StorageClass used to store the data.",
+      "type": "string",
+      "default": ""
+    },
+    "trivy": {
+      "description": "Trivy vulnerability scanner configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled",
+        "size"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Enable or disable the vulnerability scanner.",
+          "type": "boolean",
+          "default": true
+        },
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "nano",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        },
+        "size": {
+          "description": "Persistent Volume size for vulnerability database cache.",
+          "default": "5Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    }
+  }
+}

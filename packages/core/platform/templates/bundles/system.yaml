@@ -126,6 +126,7 @@
 {{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
 {{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.harbor-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
