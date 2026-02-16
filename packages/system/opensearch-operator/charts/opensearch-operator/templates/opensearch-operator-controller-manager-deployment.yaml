@@ -82,7 +82,7 @@ spec:
       tolerations:
 {{- toYaml .Values.tolerations | nindent 8 }}
       securityContext:
-{{- toYaml .Values.securityContext | nindent 8}}
+{{- toYaml .Values.securityContext | nindent 8 }}
       {{- if .Values.manager.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.manager.imagePullSecrets | nindent 8 }}
