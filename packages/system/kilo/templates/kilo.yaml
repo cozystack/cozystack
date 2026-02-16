@@ -29,6 +29,9 @@ spec:
         - --hostname=$(NODE_NAME)
         - --cni=false
         - --clean-up-interface={{ .Values.kilo.cleanUpInterface | default "false" }}
+        {{- with .Values.kilo.compatibility }}
+        - --compatibility={{ . }}
+        {{- end }}
         - --encapsulate=crosssubnet
         - --local=false
         - --mesh-granularity={{ .Values.kilo.meshGranularity | default "location" }}
