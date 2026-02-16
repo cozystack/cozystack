@@ -16,6 +16,8 @@ spec:
     resources: {}
     resourcesPreset: "nano"
   registry:
+    storageType: "pvc"
+    size: 5Gi
     resources: {}
     resourcesPreset: "nano"
   jobservice:
