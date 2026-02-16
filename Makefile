@@ -38,9 +38,7 @@ build: build-deps
 
 manifests:
 	mkdir -p _out/assets
-	helm template installer packages/core/installer -n cozy-system \
-		-s templates/crds.yaml \
-		> _out/assets/cozystack-crds.yaml
+	cat packages/core/installer/crds/*.yaml > _out/assets/cozystack-crds.yaml
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
 		-s templates/cozystack-operator.yaml \

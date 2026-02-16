@@ -8,13 +8,7 @@
 }
 
 @test "Install Cozystack" {
-  # Install CRDs first (PackageSource CR in the chart depends on them)
-  helm template installer packages/core/installer \
-    --namespace cozy-system \
-    --show-only templates/crds.yaml \
-    | kubectl apply --server-side -f -
-
-  # Install cozy-installer chart
+  # Install cozy-installer chart (CRDs from crds/ are applied automatically)
   helm upgrade installer packages/core/installer \
     --install \
     --namespace cozy-system \

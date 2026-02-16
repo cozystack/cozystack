@@ -7,5 +7,3 @@ Makefile
 images/
 example/
 *.tgz
-
-# NOTE: definitions/ is intentionally NOT excluded — needed by crds.yaml via .Files.Glob
