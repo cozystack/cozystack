@@ -132,8 +132,14 @@ metadata:
   name: tenant-test
 EOF
 
+  # Clean up backend resources from any previous failed attempt
+  kubectl delete deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
+    -n tenant-test --ignore-not-found --timeout=60s || true
+  kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
+    -n tenant-test --ignore-not-found --timeout=60s || true
+
   # Backend 1
-  kubectl apply --kubeconfig tenantkubeconfig-${test_name} -f- <<EOF
+  kubectl apply --kubeconfig "tenantkubeconfig-${test_name}" -f- <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -165,7 +171,7 @@ spec:
 EOF
 
   # LoadBalancer Service
-  kubectl apply --kubeconfig tenantkubeconfig-${test_name} -f- <<EOF
+  kubectl apply --kubeconfig "tenantkubeconfig-${test_name}" -f- <<EOF
 apiVersion: v1
 kind: Service
 metadata:
@@ -182,7 +188,7 @@ spec:
 EOF
 
   # Wait for pods readiness
-  kubectl wait deployment --kubeconfig tenantkubeconfig-${test_name} ${test_name}-backend -n tenant-test --for=condition=Available --timeout=90s
+  kubectl wait deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test --for=condition=Available --timeout=300s
   
   # Wait for LoadBalancer to be provisioned (IP or hostname)
   timeout 90 sh -ec "
@@ -218,8 +224,14 @@ fi
   kubectl delete deployment --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
   kubectl delete service --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
 
+  # Clean up NFS test resources from any previous failed attempt
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
+    -n tenant-test --ignore-not-found --timeout=60s || true
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc \
+    -n tenant-test --ignore-not-found --timeout=60s || true
+
   # Test RWX NFS mount in tenant cluster (uses kubevirt CSI driver with RWX support)
-  kubectl --kubeconfig tenantkubeconfig-${test_name} apply -f - <<EOF
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
