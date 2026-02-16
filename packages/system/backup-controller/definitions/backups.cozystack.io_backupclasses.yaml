@@ -60,7 +60,7 @@ spec:
                           type: string
                         kind:
                           description: Kind is the kind of the application (e.g.,
-                            VirtualMachine, MySQL).
+                            VirtualMachine, MariaDB).
                           type: string
                       required:
                       - kind
