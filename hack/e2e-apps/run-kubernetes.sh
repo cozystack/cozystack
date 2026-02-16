@@ -80,10 +80,10 @@ EOF
   # Wait for the machine deployment to scale to 2 replicas (timeout after 1 minute)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
-  kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > tenantkubeconfig-${test_name}
+  kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
   # Update the kubeconfig to use localhost for the API server
-  yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" tenantkubeconfig-${test_name}
+  yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" "tenantkubeconfig-${test_name}"
 
 
   # Set up port forwarding to the Kubernetes API server for a 200 second timeout
@@ -98,8 +98,8 @@ EOF
     done
   '
   # Verify the nodes are ready
-  kubectl --kubeconfig tenantkubeconfig-${test_name} wait node --all --timeout=2m --for=condition=Ready
-  kubectl --kubeconfig tenantkubeconfig-${test_name} get nodes -o wide
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=2m --for=condition=Ready
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
 
   # Verify the kubelet version matches what we expect
   versions=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" \
@@ -125,7 +125,7 @@ EOF
   fi
 
 
-  kubectl --kubeconfig tenantkubeconfig-${test_name} apply -f - <<EOF
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -199,7 +199,7 @@ EOF
   "
 
 LB_ADDR=$(
-  kubectl get svc --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" \
+  kubectl get svc --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
     -n tenant-test \
     -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'
 )
@@ -221,8 +221,8 @@ fi
   fi
 
   # Cleanup
-  kubectl delete deployment --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
-  kubectl delete service --kubeconfig tenantkubeconfig-${test_name} "${test_name}-backend" -n tenant-test
+  kubectl delete deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test
+  kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test
 
   # Clean up NFS test resources from any previous failed attempt
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
@@ -247,10 +247,10 @@ spec:
 EOF
 
   # Wait for PVC to be bound
-  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pvc nfs-test-pvc -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Bound
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pvc nfs-test-pvc -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Bound
 
   # Create Pod that writes and reads data from NFS volume
-  kubectl --kubeconfig tenantkubeconfig-${test_name} apply -f - <<EOF
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -272,20 +272,20 @@ spec:
 EOF
 
   # Wait for Pod to complete successfully
-  kubectl --kubeconfig tenantkubeconfig-${test_name} wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded
 
   # Verify NFS data integrity
-  nfs_result=$(kubectl --kubeconfig tenantkubeconfig-${test_name} logs nfs-test-pod -n tenant-test)
+  nfs_result=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" logs nfs-test-pod -n tenant-test)
   if [ "$nfs_result" != "nfs-mount-ok" ]; then
     echo "NFS mount test failed: expected 'nfs-mount-ok', got '$nfs_result'" >&2
-    kubectl --kubeconfig tenantkubeconfig-${test_name} delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null || true
-    kubectl --kubeconfig tenantkubeconfig-${test_name} delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null || true
     exit 1
   fi
 
   # Cleanup NFS test resources in tenant cluster
-  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pod nfs-test-pod -n tenant-test --wait
-  kubectl --kubeconfig tenantkubeconfig-${test_name} delete pvc nfs-test-pvc -n tenant-test
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test
 
   # Wait for all machine deployment replicas to be ready (timeout after 10 minutes)
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
