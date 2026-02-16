@@ -73,7 +73,7 @@ spec:
         - name: PPROF_ENDPOINTS_ENABLED
           value: "{{ .Values.manager.pprofEndpointsEnabled }}"
         {{- if .Values.manager.extraEnv }}
-        {{- toYaml .Values.manager.extraEnv | nindent 8 }}
+        {{- toYaml .Values.manager.extraEnv | nindent 10 }}
         {{- end }}
         securityContext:
 {{- toYaml .Values.manager.securityContext | nindent 10 }}
@@ -85,7 +85,7 @@ spec:
 {{- toYaml .Values.securityContext | nindent 8}}
       {{- if .Values.manager.imagePullSecrets }}
       imagePullSecrets:
-        {{- toYaml .Values.manager.imagePullSecrets | nindent 6 }}
+        {{- toYaml .Values.manager.imagePullSecrets | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "opensearch-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10
