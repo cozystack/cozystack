@@ -4,13 +4,20 @@
   "properties": {
     "subnets": {
       "description": "Subnets of a VPC",
-      "type": "object",
-      "default": {},
-      "additionalProperties": {
+      "type": "array",
+      "default": [],
+      "items": {
         "type": "object",
+        "required": [
+          "name"
+        ],
         "properties": {
           "cidr": {
             "description": "IP address range",
+            "type": "string"
+          },
+          "name": {
+            "description": "Subnet name",
             "type": "string"
           }
         }

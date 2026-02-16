@@ -132,11 +132,19 @@ func (m *Manager) EnsureForAppDef(ctx context.Context, crd *cozyv1alpha1.Applica
 		return reconcile.Result{}, err
 	}
 
+	if err := m.ensureCFOMapping(ctx, crd); err != nil {
+		return reconcile.Result{}, err
+	}
+
 	if err := m.ensureSidebar(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
 
 	if err := m.ensureFactory(ctx, crd); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	if err := m.ensureNavigation(ctx, crd); err != nil {
 		return reconcile.Result{}, err
 	}
 	return reconcile.Result{}, nil

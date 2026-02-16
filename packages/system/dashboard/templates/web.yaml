@@ -45,6 +45,24 @@ spec:
               value: v1alpha1
             - name: BASE_NAMESPACE_FULL_PATH
               value: "/apis/core.cozystack.io/v1alpha1/tenantnamespaces"
+            - name: BASE_NAVIGATION_RESOURCE_PLURAL
+              value: navigations
+            - name: BASE_NAVIGATION_RESOURCE_NAME
+              value: navigation
+            - name: BASE_FRONTEND_PREFIX
+              value: /openapi-ui
+            - name: BASE_FACTORY_NAMESPACED_API_KEY
+              value: base-factory-namespaced-api
+            - name: BASE_FACTORY_CLUSTERSCOPED_API_KEY
+              value: base-factory-clusterscoped-api
+            - name: BASE_FACTORY_NAMESPACED_BUILTIN_KEY
+              value: base-factory-namespaced-builtin
+            - name: BASE_FACTORY_CLUSTERSCOPED_BUILTIN_KEY
+              value: base-factory-clusterscoped-builtin
+            - name: BASE_NAMESPACE_FACTORY_KEY
+              value: base-factory-clusterscoped-builtin
+            - name: BASE_ALLOWED_AUTH_HEADERS
+              value: user-agent,accept,content-type,origin,referer,accept-encoding,cookie,authorization
             - name: LOGGER
               value: "true"
             - name: LOGGER_WITH_HEADERS
@@ -73,7 +91,7 @@ spec:
           name: bff
           ports:
             - containerPort: 64231
-              name: http
+              name: http-bff
               protocol: TCP
           resources:
             limits:
@@ -98,7 +116,6 @@ spec:
               type: RuntimeDefault
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
-          volumeMounts: null
         - env:
             - name: BASEPREFIX
               value: /openapi-ui
@@ -108,39 +125,59 @@ spec:
               value: dashboard.cozystack.io
             - name: CUSTOMIZATION_API_VERSION
               value: v1alpha1
-            - name: CUSTOMIZATION_NAVIGATION_RESOURCE
-              value: navigation
+            - name: CUSTOMIZATION_CFOMAPPING_RESOURCE_NAME
+              value: cfomapping
+            - name: CUSTOMIZATION_CFOMAPPING_RESOURCE_PLURAL
+              value: cfomappings
+            - name: CUSTOMIZATION_CFO_FALLBACK_ID
+              value: ""
             - name: CUSTOMIZATION_NAVIGATION_RESOURCE_NAME
+              value: navigation
+            - name: CUSTOMIZATION_NAVIGATION_RESOURCE_PLURAL
               value: navigations
+            - name: CUSTOMIZATION_SIDEBAR_FALLBACK_ID
+              value: stock-project-api-table
+            - name: CUSTOMIZATION_BREADCRUMBS_FALLBACK_ID
+              value: stock-project-api-table
             - name: INSTANCES_API_GROUP
               value: dashboard.cozystack.io
-            - name: INSTANCES_RESOURCE_NAME
-              value: instances
-            - name: INSTANCES_VERSION
+            - name: INSTANCES_API_VERSION
               value: v1alpha1
-            - name: MARKETPLACE_GROUP
-              value: dashboard.cozystack.io
+            - name: INSTANCES_PLURAL
+              value: instances
             - name: MARKETPLACE_KIND
               value: MarketplacePanel
-            - name: MARKETPLACE_RESOURCE_NAME
+            - name: MARKETPLACE_PLURAL
               value: marketplacepanels
-            - name: MARKETPLACE_VERSION
-              value: v1alpha1
             - name: NAVIGATE_FROM_CLUSTERLIST
               value: /openapi-ui/~recordValue~/api-table/core.cozystack.io/v1alpha1/tenantnamespaces
             - name: PROJECTS_API_GROUP
               value: core.cozystack.io
-            - name: PROJECTS_RESOURCE_NAME
-              value: tenantnamespaces
-            - name: PROJECTS_VERSION
+            - name: PROJECTS_API_VERSION
               value: v1alpha1
+            - name: PROJECTS_PLURAL
+              value: tenantnamespaces
             - name: CUSTOM_NAMESPACE_API_RESOURCE_API_GROUP
               value: core.cozystack.io
             - name: CUSTOM_NAMESPACE_API_RESOURCE_API_VERSION
               value: v1alpha1
-            - name: CUSTOM_NAMESPACE_API_RESOURCE_RESOURCE_NAME
+            - name: CUSTOM_NAMESPACE_API_RESOURCE_PLURAL
               value: tenantnamespaces
+            - name: BASE_FACTORY_NAMESPACED_API_KEY
+              value: base-factory-namespaced-api
+            - name: BASE_FACTORY_CLUSTERSCOPED_API_KEY
+              value: base-factory-clusterscoped-api
+            - name: BASE_FACTORY_NAMESPACED_BUILTIN_KEY
+              value: base-factory-namespaced-builtin
+            - name: BASE_FACTORY_CLUSTERSCOPED_BUILTIN_KEY
+              value: base-factory-clusterscoped-builtin
+            - name: BASE_NAMESPACE_FACTORY_KEY
+              value: base-factory-clusterscoped-builtin
             - name: USE_NAMESPACE_NAV
+              value: "true"
+            - name: USE_NEW_NAVIGATION
+              value: "true"
+            - name: HIDE_NAVIGATION
               value: "true"
             - name: LOGIN_URL
               value: "/oauth2/userinfo"
@@ -225,17 +262,13 @@ spec:
               type: RuntimeDefault
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
-          volumeMounts: null
       dnsPolicy: ClusterFirst
       enableServiceLinks: false
       hostIPC: false
       hostNetwork: false
       hostPID: false
-      preemptionPolicy: null
       priorityClassName: system-cluster-critical
       restartPolicy: Always
-      runtimeClassName: null
       schedulerName: default-scheduler
       serviceAccountName: incloud-web-web
       terminationGracePeriodSeconds: 30
-      volumes: null

@@ -253,3 +253,25 @@ type FactoryList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Factory `json:"items"`
 }
+
+// -----------------------------------------------------------------------------
+// CustomFormsOverrideMapping
+// -----------------------------------------------------------------------------
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:path=cfomappings,scope=Cluster
+// +kubebuilder:subresource:status
+type CFOMapping struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   ArbitrarySpec `json:"spec"`
+	Status CommonStatus  `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type CFOMappingList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []CFOMapping `json:"items"`
+}

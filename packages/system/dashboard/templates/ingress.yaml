@@ -18,6 +18,8 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
     nginx.ingress.kubernetes.io/proxy-buffer-size: 100m
     nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
   name: dashboard-web-ingress
 spec:
   ingressClassName: {{ $exposeIngress }}

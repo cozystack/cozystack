@@ -84,6 +84,53 @@ func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alph
 	return err
 }
 
+// ensureCFOMapping updates the CFOMapping resource to include a mapping for the given CRD
+func (m *Manager) ensureCFOMapping(ctx context.Context, crd *cozyv1alpha1.ApplicationDefinition) error {
+	g, v, kind := pickGVK(crd)
+	plural := pickPlural(kind, crd)
+
+	resourcePath := fmt.Sprintf("/%s/%s/%s", g, v, plural)
+	customizationID := fmt.Sprintf("default-%s", resourcePath)
+
+	obj := &dashv1alpha1.CFOMapping{}
+	obj.SetName("cfomapping")
+
+	_, err := controllerutil.CreateOrUpdate(ctx, m.Client, obj, func() error {
+		// Parse existing mappings
+		mappings := make(map[string]string)
+		if obj.Spec.JSON.Raw != nil {
+			var spec map[string]any
+			if err := json.Unmarshal(obj.Spec.JSON.Raw, &spec); err == nil {
+				if m, ok := spec["mappings"].(map[string]any); ok {
+					for k, val := range m {
+						if s, ok := val.(string); ok {
+							mappings[k] = s
+						}
+					}
+				}
+			}
+		}
+
+		// Add/update the mapping for this CRD
+		mappings[resourcePath] = customizationID
+
+		specData := map[string]any{
+			"mappings": mappings,
+		}
+		b, err := json.Marshal(specData)
+		if err != nil {
+			return err
+		}
+
+		newSpec := dashv1alpha1.ArbitrarySpec{JSON: apiextv1.JSON{Raw: b}}
+		if !compareArbitrarySpecs(obj.Spec, newSpec) {
+			obj.Spec = newSpec
+		}
+		return nil
+	})
+	return err
+}
+
 // buildMultilineStringSchema parses OpenAPI schema and creates schema with multilineString
 // for all string fields inside spec that don't have enum
 func buildMultilineStringSchema(openAPISchema string) (map[string]any, error) {
