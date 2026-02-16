@@ -41,11 +41,8 @@ annotations:
     namespace context.\n- kind: CiliumNodeConfig\n  version: v2\n  name: ciliumnodeconfigs.cilium.io\n
     \ displayName: Cilium Node Configuration\n  description: |\n    CiliumNodeConfig
     is a list of configuration key-value pairs. It is applied to\n    nodes indicated
-    by a label selector.\n- kind: CiliumBGPPeeringPolicy\n  version: v2alpha1\n  name:
-    ciliumbgppeeringpolicies.cilium.io\n  displayName: Cilium BGP Peering Policy\n
-    \ description: |\n    Cilium BGP Peering Policy instructs Cilium to create specific
-    BGP peering\n    configurations.\n- kind: CiliumBGPClusterConfig\n  version: v2alpha1\n
-    \ name: ciliumbgpclusterconfigs.cilium.io\n  displayName: Cilium BGP Cluster Config\n
+    by a label selector.\n- kind: CiliumBGPClusterConfig\n  version: v2alpha1\n  name:
+    ciliumbgpclusterconfigs.cilium.io\n  displayName: Cilium BGP Cluster Config\n
     \ description: |\n    Cilium BGP Cluster Config instructs Cilium operator to create
     specific BGP cluster\n    configurations.\n- kind: CiliumBGPPeerConfig\n  version:
     v2alpha1\n  name: ciliumbgppeerconfigs.cilium.io\n  displayName: Cilium BGP Peer
@@ -79,7 +76,7 @@ annotations:
     Cilium Gateway Class Config\n  description: |\n    CiliumGatewayClassConfig defines
     a configuration for Gateway API GatewayClass.\n"
 apiVersion: v2
-appVersion: 1.18.6
+appVersion: 1.19.0
 description: eBPF-based Networking, Security, and Observability
 home: https://cilium.io/
 icon: https://cdn.jsdelivr.net/gh/cilium/cilium@main/Documentation/images/logo-solo.svg
@@ -95,4 +92,4 @@ kubeVersion: '>= 1.21.0-0'
 name: cilium
 sources:
 - https://github.com/cilium/cilium
-version: 1.18.6
+version: 1.19.0
