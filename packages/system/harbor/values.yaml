@@ -1,1 +1,9 @@
 harbor: {}
+db:
+  replicas: 2
+  size: 5Gi
+  storageClass: ""
+redis:
+  replicas: 2
+  size: 1Gi
+  storageClass: ""

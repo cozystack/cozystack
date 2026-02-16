@@ -1,0 +1,24 @@
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.harbor.fullnameOverride }}-db
+spec:
+  instances: {{ .Values.db.replicas }}
+  storage:
+    size: {{ .Values.db.size }}
+    {{- with .Values.db.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  monitoring:
+    enablePodMonitor: true
+  resources:
+    limits:
+      cpu: "1"
+      memory: 2048Mi
+    requests:
+      cpu: 100m
+      memory: 512Mi
+  inheritedMetadata:
+    labels:
+      policy.cozystack.io/allow-to-apiserver: "true"

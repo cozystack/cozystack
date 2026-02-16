@@ -57,59 +57,18 @@
       }
     },
     "database": {
-      "description": "Internal PostgreSQL database configuration.",
+      "description": "PostgreSQL database configuration.",
       "type": "object",
       "default": {},
       "required": [
+        "replicas",
         "size"
       ],
       "properties": {
-        "resources": {
-          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "cpu": {
-              "description": "Number of CPU cores allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            },
-            "memory": {
-              "description": "Amount of memory allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            }
-          }
-        },
-        "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted.",
-          "type": "string",
-          "default": "nano",
-          "enum": [
-            "nano",
-            "micro",
-            "small",
-            "medium",
-            "large",
-            "xlarge",
-            "2xlarge"
-          ]
+        "replicas": {
+          "description": "Number of database instances.",
+          "type": "integer",
+          "default": 2
         },
         "size": {
           "description": "Persistent Volume size for database storage.",
@@ -187,59 +146,18 @@
       }
     },
     "redis": {
-      "description": "Internal Redis cache configuration.",
+      "description": "Redis cache configuration.",
       "type": "object",
       "default": {},
       "required": [
+        "replicas",
         "size"
       ],
       "properties": {
-        "resources": {
-          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "cpu": {
-              "description": "Number of CPU cores allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            },
-            "memory": {
-              "description": "Amount of memory allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            }
-          }
-        },
-        "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted.",
-          "type": "string",
-          "default": "nano",
-          "enum": [
-            "nano",
-            "micro",
-            "small",
-            "medium",
-            "large",
-            "xlarge",
-            "2xlarge"
-          ]
+        "replicas": {
+          "description": "Number of Redis replicas.",
+          "type": "integer",
+          "default": 2
         },
         "size": {
           "description": "Persistent Volume size for cache storage.",

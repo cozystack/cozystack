@@ -67,24 +67,20 @@ trivy:
   resources: {}
   resourcesPreset: "nano"
 
-## @typedef {struct} Database - Internal PostgreSQL database configuration.
+## @typedef {struct} Database - PostgreSQL database configuration (provisioned via CloudNativePG).
 ## @field {quantity} size - Persistent Volume size for database storage.
-## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
-## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {int} replicas - Number of database instances.
 
-## @param {Database} database - Internal PostgreSQL database configuration.
+## @param {Database} database - PostgreSQL database configuration.
 database:
   size: 5Gi
-  resources: {}
-  resourcesPreset: "nano"
+  replicas: 2
 
-## @typedef {struct} Redis - Internal Redis cache configuration.
+## @typedef {struct} Redis - Redis cache configuration (provisioned via redis-operator).
 ## @field {quantity} size - Persistent Volume size for cache storage.
-## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
-## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {int} replicas - Number of Redis replicas.
 
-## @param {Redis} redis - Internal Redis cache configuration.
+## @param {Redis} redis - Redis cache configuration.
 redis:
   size: 1Gi
-  resources: {}
-  resourcesPreset: "nano"
+  replicas: 2

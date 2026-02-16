@@ -8,6 +8,18 @@
   {{- $adminPassword = index $existingSecret.data "admin-password" | b64dec }}
 {{- end }}
 
+{{- $existingCoreSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-core" .Release.Name) }}
+{{- $tokenKey := "" }}
+{{- $tokenCert := "" }}
+{{- if $existingCoreSecret }}
+  {{- if hasKey $existingCoreSecret.data "tls.key" }}
+    {{- $tokenKey = index $existingCoreSecret.data "tls.key" | b64dec }}
+  {{- end }}
+  {{- if hasKey $existingCoreSecret.data "tls.crt" }}
+    {{- $tokenCert = index $existingCoreSecret.data "tls.crt" | b64dec }}
+  {{- end }}
+{{- end }}
+
 apiVersion: v1
 kind: Secret
 metadata:
@@ -42,6 +54,18 @@ spec:
   - kind: Secret
     name: cozystack-values
   values:
+    db:
+      replicas: {{ .Values.database.replicas }}
+      size: {{ .Values.database.size }}
+      {{- with .Values.storageClass }}
+      storageClass: {{ . }}
+      {{- end }}
+    redis:
+      replicas: {{ .Values.redis.replicas }}
+      size: {{ .Values.redis.size }}
+      {{- with .Values.storageClass }}
+      storageClass: {{ . }}
+      {{- end }}
     harbor:
       fullnameOverride: {{ .Release.Name }}
       harborAdminPassword: {{ $adminPassword | quote }}
@@ -61,16 +85,6 @@ spec:
             {{- with .Values.storageClass }}
             storageClass: {{ . }}
             {{- end }}
-          database:
-            size: {{ .Values.database.size }}
-            {{- with .Values.storageClass }}
-            storageClass: {{ . }}
-            {{- end }}
-          redis:
-            size: {{ .Values.redis.size }}
-            {{- with .Values.storageClass }}
-            storageClass: {{ . }}
-            {{- end }}
           {{- if .Values.trivy.enabled }}
           trivy:
             size: {{ .Values.trivy.size }}
@@ -81,9 +95,16 @@ spec:
       portal:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}
       core:
+        {{- if $tokenKey }}
+        tokenKey: {{ $tokenKey | quote }}
+        tokenCert: {{ $tokenCert | quote }}
+        {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.core.resourcesPreset .Values.core.resources $) | nindent 10 }}
       registry:
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 10 }}
+        registry:
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
+        controller:
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
       jobservice:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.jobservice.resourcesPreset .Values.jobservice.resources $) | nindent 10 }}
       trivy:
@@ -92,13 +113,24 @@ spec:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.trivy.resourcesPreset .Values.trivy.resources $) | nindent 10 }}
         {{- end }}
       database:
-        type: internal
-        internal:
-          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.database.resourcesPreset .Values.database.resources $) | nindent 12 }}
+        type: external
+        external:
+          host: "{{ .Release.Name }}-db-rw"
+          port: "5432"
+          username: app
+          coreDatabase: app
+          sslmode: disable
+          existingSecret: "{{ .Release.Name }}-db-app"
       redis:
-        type: internal
-        internal:
-          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.redis.resourcesPreset .Values.redis.resources $) | nindent 12 }}
+        type: external
+        external:
+          addr: "rfs-{{ .Release.Name }}-redis:26379"
+          sentinelMasterSet: "mymaster"
+          existingSecret: "{{ .Release.Name }}-redis-auth"
+          coreDatabaseIndex: "0"
+          jobserviceDatabaseIndex: "1"
+          registryDatabaseIndex: "2"
+          trivyAdapterIndex: "5"
       metrics:
         enabled: true
         serviceMonitor:

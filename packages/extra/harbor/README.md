@@ -39,16 +39,10 @@ Harbor is an open source trusted cloud native registry project that stores, sign
 | `trivy.resources.cpu`         | Number of CPU cores allocated.                                                                           | `quantity` | `""`    |
 | `trivy.resources.memory`      | Amount of memory allocated.                                                                              | `quantity` | `""`    |
 | `trivy.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `nano`  |
-| `database`                    | Internal PostgreSQL database configuration.                                                              | `object`   | `{}`    |
+| `database`                    | PostgreSQL database configuration.                                                                       | `object`   | `{}`    |
 | `database.size`               | Persistent Volume size for database storage.                                                             | `quantity` | `5Gi`   |
-| `database.resources`          | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `database.resources.cpu`      | Number of CPU cores allocated.                                                                           | `quantity` | `""`    |
-| `database.resources.memory`   | Amount of memory allocated.                                                                              | `quantity` | `""`    |
-| `database.resourcesPreset`    | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `nano`  |
-| `redis`                       | Internal Redis cache configuration.                                                                      | `object`   | `{}`    |
+| `database.replicas`           | Number of database instances.                                                                            | `int`      | `2`     |
+| `redis`                       | Redis cache configuration.                                                                               | `object`   | `{}`    |
 | `redis.size`                  | Persistent Volume size for cache storage.                                                                | `quantity` | `1Gi`   |
-| `redis.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `redis.resources.cpu`         | Number of CPU cores allocated.                                                                           | `quantity` | `""`    |
-| `redis.resources.memory`      | Amount of memory allocated.                                                                              | `quantity` | `""`    |
-| `redis.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `nano`  |
+| `redis.replicas`              | Number of Redis replicas.                                                                                | `int`      | `2`     |
 

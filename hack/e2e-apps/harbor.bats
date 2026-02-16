@@ -28,12 +28,10 @@ spec:
     resourcesPreset: "nano"
   database:
     size: 2Gi
-    resources: {}
-    resourcesPreset: "nano"
+    replicas: 1
   redis:
     size: 1Gi
-    resources: {}
-    resourcesPreset: "nano"
+    replicas: 1
 EOF
   sleep 5
   kubectl -n tenant-test wait hr $name --timeout=60s --for=condition=ready
