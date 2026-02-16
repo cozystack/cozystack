@@ -47,7 +47,7 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Applicati
 	if prefix, ok := vncTabPrefix(kind); ok {
 		tabs = append(tabs, vncTab(prefix))
 	}
-	tabs = append(tabs, yamlTab(plural))
+	tabs = append(tabs, yamlTab(g, v, plural))
 
 	// Use unified factory creation
 	config := UnifiedResourceConfig{
@@ -160,11 +160,11 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 				map[string]any{
 					"type": "EnrichedTable",
 					"data": map[string]any{
-						"id":                   "vpc-subnets-table",
-						"baseprefix":           "/openapi-ui",
-						"clusterNamePartOfUrl": "{2}",
-						"customizationId":      "virtualprivatecloud-subnets",
-						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/configmaps",
+						"id":              "vpc-subnets-table",
+						"baseprefix":      "/openapi-ui",
+						"cluster":         "{2}",
+						"customizationId": "virtualprivatecloud-subnets",
+						"fetchUrl":        "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/configmaps",
 						"fieldSelector": map[string]any{
 							"metadata.name": "virtualprivatecloud-{6}-subnets",
 						},
@@ -188,12 +188,12 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 				map[string]any{
 					"type": "EnrichedTable",
 					"data": map[string]any{
-						"id":                   "resource-quotas-table",
-						"baseprefix":           "/openapi-ui",
-						"clusterNamePartOfUrl": "{2}",
-						"customizationId":      "factory-resource-quotas",
-						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{reqsJsonPath[0]['.status.namespace']}/resourcequotas",
-						"pathToItems":          []any{`items`},
+						"id":              "resource-quotas-table",
+						"baseprefix":      "/openapi-ui",
+						"cluster":         "{2}",
+						"customizationId": "factory-resource-quotas",
+						"fetchUrl":        "/api/clusters/{2}/k8s/api/v1/namespaces/{reqsJsonPath[0]['.status.namespace']}/resourcequotas",
+						"pathToItems":     []any{`items`},
 					},
 				},
 			}),
@@ -242,13 +242,13 @@ func detailsTab(kind, endpoint, schemaJSON string, keysOrder [][]string) map[str
 				map[string]any{
 					"type": "EnrichedTable",
 					"data": map[string]any{
-						"id":                   "conditions-table",
-						"fetchUrl":             endpoint,
-						"clusterNamePartOfUrl": "{2}",
-						"customizationId":      "factory-status-conditions",
-						"baseprefix":           "/openapi-ui",
-						"withoutControls":      true,
-						"pathToItems":          []any{"status", "conditions"},
+						"id":              "conditions-table",
+						"fetchUrl":        endpoint,
+						"cluster":         "{2}",
+						"customizationId": "factory-status-conditions",
+						"baseprefix":      "/openapi-ui",
+						"withoutControls": true,
+						"pathToItems":     []any{"status", "conditions"},
 					},
 				},
 			}),
@@ -264,12 +264,12 @@ func workloadsTab(kind string) map[string]any {
 			map[string]any{
 				"type": "EnrichedTable",
 				"data": map[string]any{
-					"id":                   "workloads-table",
-					"fetchUrl":             "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors",
-					"clusterNamePartOfUrl": "{2}",
-					"baseprefix":           "/openapi-ui",
-					"customizationId":      "factory-details-v1alpha1.cozystack.io.workloadmonitors",
-					"pathToItems":          []any{"items"},
+					"id":              "workloads-table",
+					"fetchUrl":        "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloadmonitors",
+					"cluster":         "{2}",
+					"baseprefix":      "/openapi-ui",
+					"customizationId": "factory-details-v1alpha1.cozystack.io.workloadmonitors",
+					"pathToItems":     []any{"items"},
 					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":  kind,
@@ -289,12 +289,12 @@ func servicesTab(kind string) map[string]any {
 			map[string]any{
 				"type": "EnrichedTable",
 				"data": map[string]any{
-					"id":                   "services-table",
-					"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
-					"clusterNamePartOfUrl": "{2}",
-					"baseprefix":           "/openapi-ui",
-					"customizationId":      "factory-details-v1.services",
-					"pathToItems":          []any{"items"},
+					"id":              "services-table",
+					"fetchUrl":        "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
+					"cluster":         "{2}",
+					"baseprefix":      "/openapi-ui",
+					"customizationId": "factory-details-v1.services",
+					"pathToItems":     []any{"items"},
 					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group":  "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":   kind,
@@ -315,12 +315,12 @@ func ingressesTab(kind string) map[string]any {
 			map[string]any{
 				"type": "EnrichedTable",
 				"data": map[string]any{
-					"id":                   "ingresses-table",
-					"fetchUrl":             "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses",
-					"clusterNamePartOfUrl": "{2}",
-					"baseprefix":           "/openapi-ui",
-					"customizationId":      "factory-details-networking.k8s.io.v1.ingresses",
-					"pathToItems":          []any{"items"},
+					"id":              "ingresses-table",
+					"fetchUrl":        "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses",
+					"cluster":         "{2}",
+					"baseprefix":      "/openapi-ui",
+					"customizationId": "factory-details-networking.k8s.io.v1.ingresses",
+					"pathToItems":     []any{"items"},
 					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group":  "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":   kind,
@@ -341,12 +341,12 @@ func secretsTab(kind string) map[string]any {
 			map[string]any{
 				"type": "EnrichedTable",
 				"data": map[string]any{
-					"id":                   "secrets-table",
-					"fetchUrl":             "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecrets",
-					"clusterNamePartOfUrl": "{2}",
-					"baseprefix":           "/openapi-ui",
-					"customizationId":      "factory-details-v1alpha1.core.cozystack.io.tenantsecrets",
-					"pathToItems":          []any{"items"},
+					"id":              "secrets-table",
+					"fetchUrl":        "/api/clusters/{2}/k8s/apis/core.cozystack.io/v1alpha1/namespaces/{3}/tenantsecrets",
+					"cluster":         "{2}",
+					"baseprefix":      "/openapi-ui",
+					"customizationId": "factory-details-v1alpha1.core.cozystack.io.tenantsecrets",
+					"pathToItems":     []any{"items"},
 					"labelSelector": map[string]any{
 						"apps.cozystack.io/application.group": "apps.cozystack.io",
 						"apps.cozystack.io/application.kind":  kind,
@@ -358,7 +358,7 @@ func secretsTab(kind string) map[string]any {
 	}
 }
 
-func yamlTab(plural string) map[string]any {
+func yamlTab(group, version, plural string) map[string]any {
 	return map[string]any{
 		"key":   "yaml",
 		"label": "YAML",
@@ -369,8 +369,10 @@ func yamlTab(plural string) map[string]any {
 					"id":                        "yaml-editor",
 					"cluster":                   "{2}",
 					"isNameSpaced":              true,
-					"type":                      "builtin",
-					"typeName":                  plural,
+					"type":                      "apis",
+					"apiGroup":                  group,
+					"apiVersion":                version,
+					"plural":                    plural,
 					"prefillValuesRequestIndex": float64(0),
 					"readOnly":                  true,
 					"substractHeight":           float64(400),

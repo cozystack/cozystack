@@ -69,6 +69,9 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 
 		&Factory{},
 		&FactoryList{},
+
+		&CFOMapping{},
+		&CFOMappingList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil

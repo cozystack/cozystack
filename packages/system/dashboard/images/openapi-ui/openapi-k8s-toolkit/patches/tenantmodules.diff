@@ -33,18 +33,18 @@ index 8bcef4d..2551e92 100644
                    if (key === 'edit') {
 +                    // Special case: redirect tenantmodules from core.cozystack.io to apps.cozystack.io with plural form
 +                    let apiGroupAndVersion = value.apiGroupAndVersion
-+                    let typeName = value.typeName
-+                    if (apiGroupAndVersion?.startsWith('core.cozystack.io/') && typeName === 'tenantmodules') {
++                    let plural = value.plural
++                    if (apiGroupAndVersion?.startsWith('core.cozystack.io/') && plural === 'tenantmodules') {
 +                      const appsApiVersion = apiGroupAndVersion.replace('core.cozystack.io/', 'apps.cozystack.io/')
-+                      const pluralTypeName = getPluralForm(value.entryName)
++                      const pluralName = getPluralForm(value.name)
 +                      apiGroupAndVersion = appsApiVersion
-+                      typeName = pluralTypeName
++                      plural = pluralName
 +                    }
                      navigate(
                        `${baseprefix}/${value.cluster}${value.namespace ? `/${value.namespace}` : ''}${
                          value.syntheticProject ? `/${value.syntheticProject}` : ''
--                      }/${value.pathPrefix}/${value.apiGroupAndVersion}/${value.typeName}/${value.entryName}?backlink=${
-+                      }/${value.pathPrefix}/${apiGroupAndVersion}/${typeName}/${value.entryName}?backlink=${
+-                      }/${value.pathPrefix}/${value.apiGroupAndVersion}/${value.plural}/${value.name}?backlink=${
++                      }/${value.pathPrefix}/${apiGroupAndVersion}/${plural}/${value.name}?backlink=${
                          value.backlink
                        }`,
                      )

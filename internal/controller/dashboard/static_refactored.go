@@ -17,111 +17,111 @@ func CreateAllBreadcrumbs() []*dashboardv1alpha1.Breadcrumb {
 	return []*dashboardv1alpha1.Breadcrumb{
 		// Stock project factory configmap details
 		createBreadcrumb("stock-project-factory-configmap-details", []map[string]any{
-			createBreadcrumbItem("configmaps", "v1/configmaps", "/openapi-ui/{clusterName}/{namespace}/builtin-table/configmaps"),
+			createBreadcrumbItem("configmaps", "v1/configmaps", "/openapi-ui/{cluster}/{namespace}/builtin-table/configmaps"),
 			createBreadcrumbItem("configmap", "{6}"),
 		}),
 
 		// Stock cluster factory namespace details
 		createBreadcrumb("stock-cluster-factory-namespace-details", []map[string]any{
-			createBreadcrumbItem("namespaces", "v1/namespaces", "/openapi-ui/{clusterName}/builtin-table/namespaces"),
+			createBreadcrumbItem("namespaces", "v1/namespaces", "/openapi-ui/{cluster}/builtin-table/namespaces"),
 			createBreadcrumbItem("namespace", "{5}"),
 		}),
 
 		// Stock cluster factory node details
 		createBreadcrumb("stock-cluster-factory-node-details", []map[string]any{
-			createBreadcrumbItem("node", "v1/nodes", "/openapi-ui/{clusterName}/builtin-table/nodes"),
+			createBreadcrumbItem("node", "v1/nodes", "/openapi-ui/{cluster}/builtin-table/nodes"),
 			createBreadcrumbItem("node", "{5}"),
 		}),
 
 		// Stock project factory pod details
 		createBreadcrumb("stock-project-factory-pod-details", []map[string]any{
-			createBreadcrumbItem("pods", "v1/pods", "/openapi-ui/{clusterName}/{namespace}/builtin-table/pods"),
+			createBreadcrumbItem("pods", "v1/pods", "/openapi-ui/{cluster}/{namespace}/builtin-table/pods"),
 			createBreadcrumbItem("pod", "{6}"),
 		}),
 
 		// Stock project factory secret details
 		createBreadcrumb("stock-project-factory-kube-secret-details", []map[string]any{
-			createBreadcrumbItem("secrets", "v1/secrets", "/openapi-ui/{clusterName}/{namespace}/builtin-table/secrets"),
+			createBreadcrumbItem("secrets", "v1/secrets", "/openapi-ui/{cluster}/{namespace}/builtin-table/secrets"),
 			createBreadcrumbItem("secret", "{6}"),
 		}),
 
 		// Stock project factory service details
 		createBreadcrumb("stock-project-factory-kube-service-details", []map[string]any{
-			createBreadcrumbItem("services", "v1/services", "/openapi-ui/{clusterName}/{namespace}/builtin-table/services"),
+			createBreadcrumbItem("services", "v1/services", "/openapi-ui/{cluster}/{namespace}/builtin-table/services"),
 			createBreadcrumbItem("service", "{6}"),
 		}),
 
 		// Stock project factory ingress details
 		createBreadcrumb("stock-project-factory-kube-ingress-details", []map[string]any{
-			createBreadcrumbItem("ingresses", "networking.k8s.io/v1/ingresses", "/openapi-ui/{clusterName}/{namespace}/builtin-table/ingresses"),
+			createBreadcrumbItem("ingresses", "networking.k8s.io/v1/ingresses", "/openapi-ui/{cluster}/{namespace}/builtin-table/ingresses"),
 			createBreadcrumbItem("ingress", "{6}"),
 		}),
 
 		// Stock cluster api table
 		createBreadcrumb("stock-cluster-api-table", []map[string]any{
-			createBreadcrumbItem("api", "{apiGroup}/{apiVersion}/{typeName}"),
+			createBreadcrumbItem("api", "{apiGroup}/{apiVersion}/{plural}"),
 		}),
 
 		// Stock cluster api form
 		createBreadcrumb("stock-cluster-api-form", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{typeName}", "/openapi-ui/{clusterName}/api-table/{apiGroup}/{apiVersion}/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{plural}", "/openapi-ui/{cluster}/api-table/{apiGroup}/{apiVersion}/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Create"),
 		}),
 
 		// Stock cluster api form edit
 		createBreadcrumb("stock-cluster-api-form-edit", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{typeName}", "/openapi-ui/{clusterName}/api-table/{apiGroup}/{apiVersion}/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{plural}", "/openapi-ui/{cluster}/api-table/{apiGroup}/{apiVersion}/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Update"),
 		}),
 
 		// Stock cluster builtin table
 		createBreadcrumb("stock-cluster-builtin-table", []map[string]any{
-			createBreadcrumbItem("api", "v1/{typeName}"),
+			createBreadcrumbItem("api", "v1/{plural}"),
 		}),
 
 		// Stock cluster builtin form
 		createBreadcrumb("stock-cluster-builtin-form", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{typeName}", "/openapi-ui/{clusterName}/builtin-table/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{plural}", "/openapi-ui/{cluster}/builtin-table/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Create"),
 		}),
 
 		// Stock cluster builtin form edit
 		createBreadcrumb("stock-cluster-builtin-form-edit", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{typeName}", "/openapi-ui/{clusterName}/builtin-table/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{plural}", "/openapi-ui/{cluster}/builtin-table/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Update"),
 		}),
 
 		// Stock project api table
 		createBreadcrumb("stock-project-api-table", []map[string]any{
-			createBreadcrumbItem("api", "{apiGroup}/{apiVersion}/{typeName}"),
+			createBreadcrumbItem("api", "{apiGroup}/{apiVersion}/{plural}"),
 		}),
 
 		// Stock project api form
 		createBreadcrumb("stock-project-api-form", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{typeName}", "/openapi-ui/{clusterName}/{namespace}/api-table/{apiGroup}/{apiVersion}/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{plural}", "/openapi-ui/{cluster}/{namespace}/api-table/{apiGroup}/{apiVersion}/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Create"),
 		}),
 
 		// Stock project api form edit
 		createBreadcrumb("stock-project-api-form-edit", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{typeName}", "/openapi-ui/{clusterName}/{namespace}/api-table/{apiGroup}/{apiVersion}/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "{apiGroup}/{apiVersion}/{plural}", "/openapi-ui/{cluster}/{namespace}/api-table/{apiGroup}/{apiVersion}/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Update"),
 		}),
 
 		// Stock project builtin table
 		createBreadcrumb("stock-project-builtin-table", []map[string]any{
-			createBreadcrumbItem("api", "v1/{typeName}"),
+			createBreadcrumbItem("api", "v1/{plural}"),
 		}),
 
 		// Stock project builtin form
 		createBreadcrumb("stock-project-builtin-form", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{typeName}", "/openapi-ui/{clusterName}/{namespace}/builtin-table/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{plural}", "/openapi-ui/{cluster}/{namespace}/builtin-table/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Create"),
 		}),
 
 		// Stock project builtin form edit
 		createBreadcrumb("stock-project-builtin-form-edit", []map[string]any{
-			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{typeName}", "/openapi-ui/{clusterName}/{namespace}/builtin-table/{typeName}"),
+			createBreadcrumbItem("create-api-res-namespaced-table", "v1/{plural}", "/openapi-ui/{cluster}/{namespace}/builtin-table/{plural}"),
 			createBreadcrumbItem("create-api-res-namespaced-typename", "Update"),
 		}),
 	}
@@ -535,14 +535,14 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 			}, []any{
 				map[string]any{
 					"data": map[string]any{
-						"baseApiVersion":       "v1alpha1",
-						"baseprefix":           "openapi-ui",
-						"clusterNamePartOfUrl": "{2}",
-						"id":                   311,
-						"mpResourceKind":       "MarketplacePanel",
-						"mpResourceName":       "marketplacepanels",
-						"namespacePartOfUrl":   "{3}",
-						"baseApiGroup":         "dashboard.cozystack.io",
+						"baseApiVersion":    "v1alpha1",
+						"baseprefix":        "openapi-ui",
+						"cluster":           "{2}",
+						"id":                311,
+						"marketplaceKind":   "MarketplacePanel",
+						"marketplacePlural": "marketplacepanels",
+						"namespace":         "{3}",
+						"baseApiGroup":      "dashboard.cozystack.io",
 					},
 					"type": "MarketplaceCard",
 				},
@@ -855,7 +855,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"prefillValuesRequestIndex": 0,
 						"substractHeight":           float64(400),
 						"type":                      "builtin",
-						"typeName":                  "secrets",
+						"plural":                    "secrets",
 						"readOnly":                  true,
 					},
 				},
@@ -1085,13 +1085,13 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 									map[string]any{
 										"type": "EnrichedTable",
 										"data": map[string]any{
-											"id":                   "service-port-mapping-table",
-											"baseprefix":           "/openapi-ui",
-											"clusterNamePartOfUrl": "{2}",
-											"customizationId":      "factory-kube-service-details-port-mapping",
-											"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services/{6}",
-											"pathToItems":          ".spec.ports",
-											"withoutControls":      true,
+											"id":              "service-port-mapping-table",
+											"baseprefix":      "/openapi-ui",
+											"cluster":         "{2}",
+											"customizationId": "factory-kube-service-details-port-mapping",
+											"fetchUrl":        "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services/{6}",
+											"pathToItems":     ".spec.ports",
+											"withoutControls": true,
 										},
 									},
 								}),
@@ -1111,11 +1111,11 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 											map[string]any{
 												"type": "EnrichedTable",
 												"data": map[string]any{
-													"id":                   "service-pod-serving-table",
-													"baseprefix":           "/openapi-ui",
-													"clusterNamePartOfUrl": "{2}",
-													"customizationId":      "factory-kube-service-details-endpointslice",
-													"fetchUrl":             "/api/clusters/{2}/k8s/apis/discovery.k8s.io/v1/namespaces/{3}/endpointslices",
+													"id":              "service-pod-serving-table",
+													"baseprefix":      "/openapi-ui",
+													"cluster":         "{2}",
+													"customizationId": "factory-kube-service-details-endpointslice",
+													"fetchUrl":        "/api/clusters/{2}/k8s/apis/discovery.k8s.io/v1/namespaces/{3}/endpointslices",
 													"labelSelector": map[string]any{
 														"kubernetes.io/service-name": "{reqsJsonPath[0]['.metadata.name']['-']}",
 													},
@@ -1145,7 +1145,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"prefillValuesRequestIndex": 0,
 						"substractHeight":           float64(400),
 						"type":                      "builtin",
-						"typeName":                  "services",
+						"plural":                    "services",
 					},
 				},
 			},
@@ -1168,11 +1168,11 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						map[string]any{
 							"type": "EnrichedTable",
 							"data": map[string]any{
-								"id":                   "pods-table",
-								"baseprefix":           "/openapi-ui",
-								"clusterNamePartOfUrl": "{2}",
-								"customizationId":      "factory-node-details-/v1/pods",
-								"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/pods",
+								"id":              "pods-table",
+								"baseprefix":      "/openapi-ui",
+								"cluster":         "{2}",
+								"customizationId": "factory-node-details-/v1/pods",
+								"fetchUrl":        "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/pods",
 								"labelSelectorFull": map[string]any{
 									"pathToLabels": ".spec.selector",
 									"reqIndex":     0,
@@ -1300,13 +1300,13 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 					map[string]any{
 						"type": "EnrichedTable",
 						"data": map[string]any{
-							"id":                   "rules-table",
-							"fetchUrl":             "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses/{6}",
-							"clusterNamePartOfUrl": "{2}",
-							"customizationId":      "factory-kube-ingress-details-rules",
-							"baseprefix":           "/openapi-ui",
-							"withoutControls":      true,
-							"pathToItems":          []any{"spec", "rules"},
+							"id":              "rules-table",
+							"fetchUrl":        "/api/clusters/{2}/k8s/apis/networking.k8s.io/v1/namespaces/{3}/ingresses/{6}",
+							"cluster":         "{2}",
+							"customizationId": "factory-kube-ingress-details-rules",
+							"baseprefix":      "/openapi-ui",
+							"withoutControls": true,
+							"pathToItems":     []any{"spec", "rules"},
 						},
 					},
 				}),
@@ -1322,8 +1322,10 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"id":                        "yaml-editor",
 						"cluster":                   "{2}",
 						"isNameSpaced":              true,
-						"type":                      "builtin",
-						"typeName":                  "ingresses",
+						"type":                      "apis",
+						"apiGroup":                  "networking.k8s.io",
+						"apiVersion":                "v1",
+						"plural":                    "ingresses",
 						"prefillValuesRequestIndex": float64(0),
 						"substractHeight":           float64(400),
 					},
@@ -1452,11 +1454,11 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 				map[string]any{
 					"type": "EnrichedTable",
 					"data": map[string]any{
-						"id":                   "workloads-table",
-						"baseprefix":           "/openapi-ui",
-						"clusterNamePartOfUrl": "{2}",
-						"customizationId":      "factory-details-v1alpha1.cozystack.io.workloads",
-						"fetchUrl":             "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloads",
+						"id":              "workloads-table",
+						"baseprefix":      "/openapi-ui",
+						"cluster":         "{2}",
+						"customizationId": "factory-details-v1alpha1.cozystack.io.workloads",
+						"fetchUrl":        "/api/clusters/{2}/k8s/apis/cozystack.io/v1alpha1/namespaces/{3}/workloads",
 						"labelSelector": map[string]any{
 							"workloads.cozystack.io/monitor": "{reqs[0]['metadata','name']}",
 						},
@@ -1477,8 +1479,10 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 						"isNameSpaced":              true,
 						"prefillValuesRequestIndex": 0,
 						"substractHeight":           float64(400),
-						"type":                      "builtin",
-						"typeName":                  "workloadmonitors",
+						"type":                      "apis",
+						"apiGroup":                  "cozystack.io",
+						"apiVersion":                "v1alpha1",
+						"plural":                    "workloadmonitors",
 					},
 				},
 			},
@@ -1960,12 +1964,27 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 
 // CreateAllNavigations creates all navigation resources using helper functions
 func CreateAllNavigations() []*dashboardv1alpha1.Navigation {
+	// Build baseFactoriesMapping for static (built-in) factories
+	baseFactoriesMapping := map[string]string{
+		// Cluster-scoped builtin resources
+		"base-factory-clusterscoped-builtin-v1-namespaces": "namespace-details",
+		"base-factory-clusterscoped-builtin-v1-nodes":      "node-details",
+		// Namespaced builtin resources
+		"base-factory-namespaced-builtin-v1-pods":     "pod-details",
+		"base-factory-namespaced-builtin-v1-secrets":  "kube-secret-details",
+		"base-factory-namespaced-builtin-v1-services": "kube-service-details",
+		// Namespaced API resources
+		"base-factory-namespaced-api-networking.k8s.io-v1-ingresses":         "kube-ingress-details",
+		"base-factory-namespaced-api-cozystack.io-v1alpha1-workloadmonitors": "workloadmonitor-details",
+	}
+
 	return []*dashboardv1alpha1.Navigation{
 		createNavigation("navigation", map[string]any{
 			"namespaces": map[string]any{
 				"change": "/openapi-ui/{selectedCluster}/{value}/factory/marketplace",
 				"clear":  "/openapi-ui/{selectedCluster}/api-table/core.cozystack.io/v1alpha1/tenantnamespaces",
 			},
+			"baseFactoriesMapping": baseFactoriesMapping,
 		}),
 	}
 }
@@ -2342,6 +2361,51 @@ func createWorkloadmonitorHeader() map[string]any {
 	}
 }
 
+// CreateStaticCFOMapping creates the CFOMapping resource with mappings from static CustomFormsOverrides
+func CreateStaticCFOMapping() *dashboardv1alpha1.CFOMapping {
+	// Build mappings from static CustomFormsOverrides
+	customFormsOverrides := CreateAllCustomFormsOverrides()
+	mappings := make(map[string]string, len(customFormsOverrides))
+	for _, cfo := range customFormsOverrides {
+		var spec map[string]any
+		if err := json.Unmarshal(cfo.Spec.JSON.Raw, &spec); err != nil {
+			continue
+		}
+		customizationID, ok := spec["customizationId"].(string)
+		if !ok {
+			continue
+		}
+		// Extract the resource path from customizationId (remove "default-" prefix)
+		resourcePath := strings.TrimPrefix(customizationID, "default-")
+		mappings[resourcePath] = customizationID
+	}
+
+	return createCFOMapping("cfomapping", mappings)
+}
+
+// createCFOMapping creates a CFOMapping resource
+func createCFOMapping(name string, mappings map[string]string) *dashboardv1alpha1.CFOMapping {
+	spec := map[string]any{
+		"mappings": mappings,
+	}
+	jsonData, _ := json.Marshal(spec)
+
+	return &dashboardv1alpha1.CFOMapping{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "dashboard.cozystack.io/v1alpha1",
+			Kind:       "CFOMapping",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: dashboardv1alpha1.ArbitrarySpec{
+			JSON: v1.JSON{
+				Raw: jsonData,
+			},
+		},
+	}
+}
+
 // ---------------- Complete resource creation function ----------------
 
 // CreateAllStaticResources creates all static dashboard resources using helper functions
@@ -2377,6 +2441,9 @@ func CreateAllStaticResources() []client.Object {
 	for _, tableUriMapping := range CreateAllTableUriMappings() {
 		resources = append(resources, tableUriMapping)
 	}
+
+	// Add CFOMapping
+	resources = append(resources, CreateStaticCFOMapping())
 
 	return resources
 }
