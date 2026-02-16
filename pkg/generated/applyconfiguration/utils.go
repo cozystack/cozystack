@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Cozystack Authors.
+Copyright 2025 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,12 +19,12 @@ limitations under the License.
 package applyconfiguration
 
 import (
+	v1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/generated/applyconfiguration/apps/v1alpha1"
+	internal "github.com/cozystack/cozystack/pkg/generated/applyconfiguration/internal"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
-	testing "k8s.io/client-go/testing"
-	v1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
-	internal "github.com/cozystack/cozystack/pkg/generated/applyconfiguration/internal"
-	appsv1alpha1 "github.com/cozystack/cozystack/pkg/generated/applyconfiguration/apps/v1alpha1"
+	managedfields "k8s.io/apimachinery/pkg/util/managedfields"
 )
 
 // ForKind returns an apply configuration type for the given GroupVersionKind, or nil if no
@@ -34,13 +34,13 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 	// Group=apps.cozystack.io, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithKind("Application"):
 		return &appsv1alpha1.ApplicationApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("ApplicationSpec"):
-		return &appsv1alpha1.ApplicationSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ApplicationStatus"):
+		return &appsv1alpha1.ApplicationStatusApplyConfiguration{}
 
 	}
 	return nil
 }
 
-func NewTypeConverter(scheme *runtime.Scheme) *testing.TypeConverter {
-	return &testing.TypeConverter{Scheme: scheme, TypeResolver: internal.Parser()}
+func NewTypeConverter(scheme *runtime.Scheme) managedfields.TypeConverter {
+	return managedfields.NewSchemeTypeConverter(scheme, internal.Parser())
 }
