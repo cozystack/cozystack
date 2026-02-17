@@ -1,10 +1,8 @@
 kilo:
   image:
     pullPolicy: IfNotPresent
-    tag: v0.8.1@sha256:56602fa796eccea0d0e005c29e5c7094ae46d15bd5306b02b829672b178dcd5c
+    tag: v0.8.2@sha256:9f27000ffd0bbf9adf3aefd017b7835dfae57b6ea38bf7488fb636536c2467da
     repository: ghcr.io/cozystack/cozystack/kilo
-  podCIDR: 10.244.0.0/16
-  serviceCIDR: 10.96.0.0/16
   transitCIDR: 100.66.0.0/16
   meshGranularity: location
   cleanUpInterface: false

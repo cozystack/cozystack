@@ -35,12 +35,6 @@ spec:
         - --encapsulate=crosssubnet
         - --local=false
         - --mesh-granularity={{ .Values.kilo.meshGranularity | default "location" }}
-        {{- with .Values.kilo.podCIDR }}
-        - --service-cidr={{ . }}
-        {{- end }}
-        {{- with .Values.kilo.serviceCIDR }}
-        - --service-cidr={{ . }}
-        {{- end }}
         {{- with .Values.kilo.transitCIDR }}
         - --subnet={{ . }}
         {{- end }}
