@@ -32,6 +32,20 @@ if ! kubectl get namespace "$NAMESPACE" &> /dev/null; then
     exit 1
 fi
 
+# Preserve tenant-root HelmRelease during upgrade
+# In v0.41 the HelmRelease lacks helm.sh/resource-policy: keep, so it would be
+# deleted when the old platform chart is uninstalled. Adding the annotation here
+# ensures the resource (and its user-set values like ingress: true) survives the
+# transition to cozystack-basics, where a lookup merges them into the new template.
+echo "Preserving tenant-root HelmRelease..."
+if kubectl get helmrelease -n tenant-root tenant-root &> /dev/null; then
+    kubectl annotate helmrelease -n tenant-root tenant-root helm.sh/resource-policy=keep --overwrite
+    echo "  Added helm.sh/resource-policy: keep annotation"
+else
+    echo "  No tenant-root HelmRelease found (will be created during upgrade)"
+fi
+echo ""
+
 # Read ConfigMap cozystack
 echo "Reading ConfigMap cozystack..."
 COZYSTACK_CM=$(kubectl get configmap -n "$NAMESPACE" cozystack -o json 2>/dev/null || echo "{}")
