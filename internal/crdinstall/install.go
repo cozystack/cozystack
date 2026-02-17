@@ -83,9 +83,9 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 	// Validate all objects are CRDs — reject anything else to prevent
 	// accidental force-apply of arbitrary resources.
 	for _, obj := range objects {
-		if obj.GetKind() != "CustomResourceDefinition" {
-			return fmt.Errorf("unexpected object %s/%s in CRD manifests, only CustomResourceDefinition is allowed",
-				obj.GetKind(), obj.GetName())
+		if obj.GetAPIVersion() != "apiextensions.k8s.io/v1" || obj.GetKind() != "CustomResourceDefinition" {
+			return fmt.Errorf("unexpected object %s %s/%s in CRD manifests, only apiextensions.k8s.io/v1 CustomResourceDefinition is allowed",
+				obj.GetAPIVersion(), obj.GetKind(), obj.GetName())
 		}
 	}
 

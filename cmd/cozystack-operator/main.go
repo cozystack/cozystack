@@ -180,10 +180,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set up signal handler early so install phases respect SIGTERM
+	mgrCtx := ctrl.SetupSignalHandler()
+
 	// Install Cozystack CRDs before starting reconcile loop
 	if installCRDs {
 		setupLog.Info("Installing Cozystack CRDs before starting reconcile loop")
-		installCtx, installCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
 		defer installCancel()
 
 		if err := crdinstall.Install(installCtx, directClient, crdinstall.WriteEmbeddedManifests); err != nil {
@@ -196,7 +199,7 @@ func main() {
 	// Install Flux before starting reconcile loop
 	if installFlux {
 		setupLog.Info("Installing Flux components before starting reconcile loop")
-		installCtx, installCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		installCtx, installCancel := context.WithTimeout(mgrCtx, 5*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
@@ -210,7 +213,7 @@ func main() {
 	// Generate and install platform source resource if specified
 	if platformSourceURL != "" {
 		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef)
-		installCtx, installCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
@@ -292,7 +295,6 @@ func main() {
 	}
 
 	setupLog.Info("Starting controller manager")
-	mgrCtx := ctrl.SetupSignalHandler()
 	if err := mgr.Start(mgrCtx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
