@@ -25,8 +25,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -94,8 +96,74 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 		logger.Info("Applied CRD", "name", obj.GetName())
 	}
 
+	if err := waitForCRDsEstablished(ctx, k8sClient, objects, logger); err != nil {
+		return fmt.Errorf("CRDs not established after apply: %w", err)
+	}
+
 	logger.Info("CRD installation completed successfully")
 	return nil
+}
+
+// waitForCRDsEstablished polls applied CRDs until all have the Established condition.
+func waitForCRDsEstablished(ctx context.Context, k8sClient client.Client, objects []*unstructured.Unstructured, logger interface{ Info(string, ...interface{}) }) error {
+	var crdNames []string
+	for _, obj := range objects {
+		if obj.GetKind() == "CustomResourceDefinition" {
+			crdNames = append(crdNames, obj.GetName())
+		}
+	}
+
+	if len(crdNames) == 0 {
+		return nil
+	}
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		allEstablished := true
+		for _, name := range crdNames {
+			crd := &unstructured.Unstructured{}
+			crd.SetGroupVersionKind(objects[0].GroupVersionKind())
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, crd); err != nil {
+				allEstablished = false
+				break
+			}
+
+			conditions, found, err := unstructured.NestedSlice(crd.Object, "status", "conditions")
+			if err != nil || !found {
+				allEstablished = false
+				break
+			}
+
+			established := false
+			for _, c := range conditions {
+				cond, ok := c.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if cond["type"] == "Established" && cond["status"] == "True" {
+					established = true
+					break
+				}
+			}
+			if !established {
+				allEstablished = false
+				break
+			}
+		}
+
+		if allEstablished {
+			logger.Info("All CRDs established", "count", len(crdNames))
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for CRDs to be established: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func parseManifests(manifestPath string) ([]*unstructured.Unstructured, error) {

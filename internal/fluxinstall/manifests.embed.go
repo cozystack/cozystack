@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 )
 
 //go:embed manifests/*.yaml
@@ -40,8 +41,8 @@ func WriteEmbeddedManifests(dir string) error {
 			return fmt.Errorf("failed to read file %s: %w", manifest.Name(), err)
 		}
 
-		outputPath := path.Join(dir, manifest.Name())
-		if err := os.WriteFile(outputPath, data, 0666); err != nil {
+		outputPath := filepath.Join(dir, manifest.Name())
+		if err := os.WriteFile(outputPath, data, 0600); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", outputPath, err)
 		}
 	}
