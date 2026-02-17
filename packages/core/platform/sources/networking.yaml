@@ -33,6 +33,31 @@ spec:
         releaseName: cilium-networkpolicy
         dependsOn:
         - cilium
+  - name: cilium-kilo
+    dependsOn: []
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-kilo.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: kilo
+      path: system/kilo
+      valuesFiles:
+      - values.yaml
+      - values-cilium.yaml
+      install:
+        privileged: true
+        namespace: cozy-kilo
+        releaseName: kilo
+        dependsOn:
+        - cilium
   # Generic Cilium variant for non-Talos clusters (kubeadm, k3s, RKE2, etc.)
   - name: cilium-generic
     dependsOn: []

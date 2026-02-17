@@ -1,0 +1,5 @@
+cilium:
+  hostFirewall:
+    enabled: false
+  extraConfig:
+    enable-ipip-termination: "true"
