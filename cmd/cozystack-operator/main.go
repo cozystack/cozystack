@@ -50,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/cozystack/cozystack/internal/cozyvaluesreplicator"
+	"github.com/cozystack/cozystack/internal/crdinstall"
 	"github.com/cozystack/cozystack/internal/fluxinstall"
 	"github.com/cozystack/cozystack/internal/operator"
 	"github.com/cozystack/cozystack/internal/telemetry"
@@ -77,6 +78,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var installCRDs bool
 	var installFlux bool
 	var disableTelemetry bool
 	var telemetryEndpoint string
@@ -97,6 +99,7 @@ func main() {
 		"If set the metrics endpoint is served securely")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&installCRDs, "install-crds", false, "Install Cozystack CRDs before starting reconcile loop")
 	flag.BoolVar(&installFlux, "install-flux", false, "Install Flux components before starting reconcile loop")
 	flag.BoolVar(&disableTelemetry, "disable-telemetry", false,
 		"Disable telemetry collection")
@@ -175,6 +178,19 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
+	}
+
+	// Install Cozystack CRDs before starting reconcile loop
+	if installCRDs {
+		setupLog.Info("Installing Cozystack CRDs before starting reconcile loop")
+		installCtx, installCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer installCancel()
+
+		if err := crdinstall.Install(installCtx, directClient, crdinstall.WriteEmbeddedManifests); err != nil {
+			setupLog.Error(err, "failed to install CRDs")
+			os.Exit(1)
+		}
+		setupLog.Info("CRD installation completed successfully")
 	}
 
 	// Install Flux before starting reconcile loop
