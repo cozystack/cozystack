@@ -1,5 +1,5 @@
 {{- $host := .Values._namespace.host }}
-{{- $harborHost := .Values.host | default (printf "harbor.%s.%s" .Release.Name $host) }}
+{{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $adminPassword := randAlphaNum 16 }}
