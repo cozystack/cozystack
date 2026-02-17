@@ -179,9 +179,6 @@
       "description": "Container image registry configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "storageType"
-      ],
       "properties": {
         "resources": {
           "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
@@ -228,29 +225,6 @@
             "large",
             "xlarge",
             "2xlarge"
-          ]
-        },
-        "size": {
-          "description": "Persistent Volume size (only used when storageType is pvc).",
-          "default": "10Gi",
-          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "x-kubernetes-int-or-string": true
-        },
-        "storageType": {
-          "description": "Storage backend type for images.",
-          "type": "string",
-          "default": "pvc",
-          "enum": [
-            "s3",
-            "pvc"
           ]
         }
       }

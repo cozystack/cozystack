@@ -66,21 +66,9 @@ spec:
     name: {{ .Release.Name }}-credentials
     valuesKey: redis-password
     targetPath: harbor.redis.external.password
-  {{- if eq .Values.registry.storageType "s3" }}
-  - kind: Secret
-    name: {{ .Release.Name }}-registry-bucket
-    valuesKey: accessKey
-    targetPath: harbor.persistence.imageChartStorage.s3.accesskey
-  - kind: Secret
-    name: {{ .Release.Name }}-registry-bucket
-    valuesKey: secretKey
-    targetPath: harbor.persistence.imageChartStorage.s3.secretkey
-  - kind: Secret
-    name: {{ .Release.Name }}-registry-bucket
-    valuesKey: endpoint
-    targetPath: harbor.persistence.imageChartStorage.s3.regionendpoint
-  {{- end }}
   values:
+    bucket:
+      secretName: {{ .Release.Name }}-registry-bucket
     db:
       replicas: {{ .Values.database.replicas }}
       size: {{ .Values.database.size }}
@@ -106,31 +94,21 @@ spec:
       persistence:
         enabled: true
         resourcePolicy: "keep"
-        {{- if eq .Values.registry.storageType "s3" }}
         imageChartStorage:
           type: s3
           s3:
+            existingSecret: {{ .Release.Name }}-registry-s3
             region: us-east-1
             bucket: {{ .Release.Name }}-registry
             secure: false
             v4auth: true
-        {{- end }}
-        {{- if or (eq .Values.registry.storageType "pvc") .Values.trivy.enabled }}
+        {{- if .Values.trivy.enabled }}
         persistentVolumeClaim:
-          {{- if eq .Values.registry.storageType "pvc" }}
-          registry:
-            size: {{ .Values.registry.size }}
-            {{- with .Values.storageClass }}
-            storageClass: {{ . }}
-            {{- end }}
-          {{- end }}
-          {{- if .Values.trivy.enabled }}
           trivy:
             size: {{ .Values.trivy.size }}
             {{- with .Values.storageClass }}
             storageClass: {{ . }}
             {{- end }}
-          {{- end }}
         {{- end }}
       portal:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}

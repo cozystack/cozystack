@@ -1,4 +1,6 @@
 harbor: {}
+bucket:
+  secretName: ""
 db:
   replicas: 2
   size: 5Gi

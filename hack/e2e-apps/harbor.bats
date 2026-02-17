@@ -16,8 +16,6 @@ spec:
     resources: {}
     resourcesPreset: "nano"
   registry:
-    storageType: "pvc"
-    size: 5Gi
     resources: {}
     resourcesPreset: "nano"
   jobservice:
@@ -37,6 +35,13 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr $release --timeout=60s --for=condition=ready
+
+  # Wait for COSI to provision bucket
+  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io $release-registry \
+    --timeout=300s --for=jsonpath='{.status.bucketReady}'=true
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io $release-registry \
+    --timeout=60s --for=jsonpath='{.status.accessGranted}'=true
+
   kubectl -n tenant-test wait hr $release-system --timeout=600s --for=condition=ready || {
     echo "=== HelmRelease status ==="
     kubectl -n tenant-test get hr $release-system -o yaml 2>&1 || true
@@ -46,6 +51,12 @@ EOF
     kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
     echo "=== ExternalArtifact ==="
     kubectl -n cozy-system get externalartifact cozystack-harbor-application-default-harbor-system -o yaml 2>&1 || true
+    echo "=== BucketClaim status ==="
+    kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io $release-registry -o yaml 2>&1 || true
+    echo "=== BucketAccess status ==="
+    kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io $release-registry -o yaml 2>&1 || true
+    echo "=== BucketAccess Secret ==="
+    kubectl -n tenant-test get secret $release-registry-bucket -o jsonpath='{.data.BucketInfo}' 2>&1 | base64 -d 2>&1 || true
     false
   }
   kubectl -n tenant-test wait deploy $release-core --timeout=120s --for=condition=available

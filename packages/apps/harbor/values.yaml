@@ -34,20 +34,12 @@ core:
   resources: {}
   resourcesPreset: "small"
 
-## @enum {string} StorageType - Storage backend for container image registry.
-## @value s3 - S3-compatible object storage via COSI BucketClaim (requires SeaweedFS in tenant).
-## @value pvc - Persistent Volume Claim.
-
 ## @typedef {struct} Registry - Container image registry configuration.
-## @field {StorageType} storageType - Storage backend type for images.
-## @field {quantity} [size] - Persistent Volume size (only used when storageType is pvc).
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 
 ## @param {Registry} registry - Container image registry configuration.
 registry:
-  storageType: "pvc"
-  size: 10Gi
   resources: {}
   resourcesPreset: "small"
 

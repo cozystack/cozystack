@@ -15,6 +15,7 @@ spec:
         - cozystack.networking
         - cozystack.postgres-operator
         - cozystack.redis-operator
+        - cozystack.objectstorage-controller
       libraries:
         - name: cozy-lib
           path: library/cozy-lib

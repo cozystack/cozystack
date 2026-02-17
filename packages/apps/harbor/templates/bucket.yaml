@@ -1,4 +1,3 @@
-{{- if eq .Values.registry.storageType "s3" }}
 {{- $seaweedfs := .Values._namespace.seaweedfs }}
 apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketClaim
@@ -18,4 +17,3 @@ spec:
   bucketClaimName: {{ .Release.Name }}-registry
   credentialsSecretName: {{ .Release.Name }}-registry-bucket
   protocol: s3
-{{- end }}
