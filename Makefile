@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests
+.PHONY: manifests assets unit-tests helm-unit-tests verify-crds
 
 include hack/common-envs.mk
 
@@ -80,7 +80,11 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests
+verify-crds:
+	@diff packages/core/installer/crds/ internal/crdinstall/manifests/ --exclude=.gitattributes \
+		|| (echo "ERROR: CRD manifests out of sync. Run 'make generate' to fix." && exit 1)
+
+unit-tests: helm-unit-tests verify-crds
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
