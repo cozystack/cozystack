@@ -10,6 +10,10 @@ spec:
     {{- with .Values.db.storageClass }}
     storageClass: {{ . }}
     {{- end }}
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
   monitoring:
     enablePodMonitor: true
   resources:
