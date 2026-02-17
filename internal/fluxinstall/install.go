@@ -17,18 +17,15 @@ limitations under the License.
 package fluxinstall
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/cozystack/cozystack/internal/manifestutil"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -76,7 +73,7 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 	// Parse all manifest files
 	var objects []*unstructured.Unstructured
 	for _, manifestPath := range manifestFiles {
-		objs, err := parseManifests(manifestPath)
+		objs, err := manifestutil.ParseManifestFile(manifestPath)
 		if err != nil {
 			return fmt.Errorf("failed to parse manifests from %s: %w", manifestPath, err)
 		}
@@ -110,56 +107,6 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 	return nil
 }
 
-// parseManifests parses YAML manifests into unstructured objects.
-func parseManifests(manifestPath string) ([]*unstructured.Unstructured, error) {
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read manifest file: %w", err)
-	}
-
-	return readYAMLObjects(bytes.NewReader(data))
-}
-
-// readYAMLObjects parses multi-document YAML into unstructured objects.
-func readYAMLObjects(reader io.Reader) ([]*unstructured.Unstructured, error) {
-	var objects []*unstructured.Unstructured
-	yamlReader := k8syaml.NewYAMLReader(bufio.NewReader(reader))
-
-	for {
-		doc, err := yamlReader.Read()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("failed to read YAML document: %w", err)
-		}
-
-		// Skip empty documents
-		if len(bytes.TrimSpace(doc)) == 0 {
-			continue
-		}
-
-		obj := &unstructured.Unstructured{}
-		decoder := k8syaml.NewYAMLOrJSONDecoder(bytes.NewReader(doc), len(doc))
-		if err := decoder.Decode(obj); err != nil {
-			// Skip documents that can't be decoded (might be comments or empty)
-			if err == io.EOF {
-				continue
-			}
-			return nil, fmt.Errorf("failed to decode YAML document: %w", err)
-		}
-
-		// Skip empty objects (no kind)
-		if obj.GetKind() == "" {
-			continue
-		}
-
-		objects = append(objects, obj)
-	}
-
-	return objects, nil
-}
-
 // applyManifests applies Kubernetes objects using server-side apply.
 func applyManifests(ctx context.Context, k8sClient client.Client, objects []*unstructured.Unstructured) error {
 	logger := log.FromContext(ctx)
@@ -183,8 +130,11 @@ func applyManifests(ctx context.Context, k8sClient client.Client, objects []*uns
 			return fmt.Errorf("failed to apply cluster definitions: %w", err)
 		}
 
-		// Wait a bit for CRDs to be registered
-		time.Sleep(2 * time.Second)
+		// Wait for CRDs to be established before applying dependent resources
+		crdNames := manifestutil.CollectCRDNames(stageOne)
+		if err := manifestutil.WaitForCRDsEstablished(ctx, k8sClient, crdNames); err != nil {
+			return fmt.Errorf("CRDs not established after apply: %w", err)
+		}
 	}
 
 	// Apply stage two (everything else)
@@ -214,7 +164,6 @@ func applyObjects(ctx context.Context, k8sClient client.Client, objects []*unstr
 	}
 	return nil
 }
-
 
 // extractNamespace extracts the namespace name from the Namespace object in the manifests.
 func extractNamespace(objects []*unstructured.Unstructured) (string, error) {
@@ -386,4 +335,3 @@ func setEnvVar(env []interface{}, name, value string) []interface{} {
 
 	return env
 }
-
