@@ -3,6 +3,11 @@
 @test "Create Harbor" {
   name='test'
   release="harbor-$name"
+
+  # Clean up stale resources from previous failed runs
+  kubectl -n tenant-test delete harbor.apps.cozystack.io $name 2>/dev/null || true
+  kubectl -n tenant-test wait hr $release --timeout=60s --for=delete 2>/dev/null || true
+
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Harbor
