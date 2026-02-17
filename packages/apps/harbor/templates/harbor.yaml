@@ -112,7 +112,7 @@ spec:
       portal:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}
       core:
-        {{- if $tokenKey }}
+        {{- if and $tokenKey $tokenCert }}
         tokenKey: {{ $tokenKey | quote }}
         tokenCert: {{ $tokenCert | quote }}
         {{- end }}
@@ -136,7 +136,7 @@ spec:
           port: "5432"
           username: app
           coreDatabase: app
-          sslmode: disable
+          sslmode: require
           existingSecret: "{{ .Release.Name }}-db-app"
       redis:
         type: external
