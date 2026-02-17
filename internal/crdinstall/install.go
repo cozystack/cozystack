@@ -80,6 +80,15 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 		return fmt.Errorf("no objects found in manifests")
 	}
 
+	// Validate all objects are CRDs — reject anything else to prevent
+	// accidental force-apply of arbitrary resources.
+	for _, obj := range objects {
+		if obj.GetKind() != "CustomResourceDefinition" {
+			return fmt.Errorf("unexpected object %s/%s in CRD manifests, only CustomResourceDefinition is allowed",
+				obj.GetKind(), obj.GetName())
+		}
+	}
+
 	logger.Info("Applying Cozystack CRDs", "count", len(objects))
 	for _, obj := range objects {
 		patchOptions := &client.PatchOptions{

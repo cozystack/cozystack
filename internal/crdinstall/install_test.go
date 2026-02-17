@@ -249,6 +249,34 @@ func TestInstall_writeManifestsFails(t *testing.T) {
 	}
 }
 
+func TestInstall_rejectsNonCRDObjects(t *testing.T) {
+	log.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	scheme := runtime.NewScheme()
+	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add apiextensions to scheme: %v", err)
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	nonCRD := `apiVersion: v1
+kind: Namespace
+metadata:
+  name: should-not-be-applied
+`
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx = log.IntoContext(ctx, log.FromContext(context.Background()))
+
+	err := Install(ctx, fakeClient, newCRDManifestWriter(nonCRD))
+	if err == nil {
+		t.Fatal("Install() expected error for non-CRD object, got nil")
+	}
+	if !strings.Contains(err.Error(), "unexpected object") {
+		t.Errorf("Install() error = %v, want error containing 'unexpected object'", err)
+	}
+}
+
 func TestInstall_crdNotEstablished(t *testing.T) {
 	log.SetLogger(zap.New(zap.UseDevMode(true)))
 
