@@ -37,7 +37,17 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr $release --timeout=60s --for=condition=ready
-  kubectl -n tenant-test wait hr $release-system --timeout=600s --for=condition=ready
+  kubectl -n tenant-test wait hr $release-system --timeout=600s --for=condition=ready || {
+    echo "=== HelmRelease status ==="
+    kubectl -n tenant-test get hr $release-system -o yaml 2>&1 || true
+    echo "=== Pods ==="
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ==="
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    echo "=== ExternalArtifact ==="
+    kubectl -n cozy-system get externalartifact cozystack-harbor-application-default-harbor-system -o yaml 2>&1 || true
+    false
+  }
   kubectl -n tenant-test wait deploy $release-core --timeout=120s --for=condition=available
   kubectl -n tenant-test wait deploy $release-registry --timeout=120s --for=condition=available
   kubectl -n tenant-test wait deploy $release-portal --timeout=120s --for=condition=available
