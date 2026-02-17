@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -124,7 +125,11 @@ func waitForCRDsEstablished(ctx context.Context, k8sClient client.Client, object
 		allEstablished := true
 		for _, name := range crdNames {
 			crd := &unstructured.Unstructured{}
-			crd.SetGroupVersionKind(objects[0].GroupVersionKind())
+			crd.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   "apiextensions.k8s.io",
+				Version: "v1",
+				Kind:    "CustomResourceDefinition",
+			})
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, crd); err != nil {
 				allEstablished = false
 				break

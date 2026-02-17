@@ -354,6 +354,52 @@ func TestInstall_writeManifestsFails(t *testing.T) {
 	}
 }
 
+func TestInstall_crdNotEstablished(t *testing.T) {
+	log.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	scheme := runtime.NewScheme()
+	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add apiextensions to scheme: %v", err)
+	}
+
+	// No interceptor: CRDs will never get Established condition
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	writeManifests := func(dir string) error {
+		crd := `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: packages.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: Package
+    plural: packages
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+`
+		return os.WriteFile(filepath.Join(dir, "crd.yaml"), []byte(crd), 0600)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ctx = log.IntoContext(ctx, log.FromContext(context.Background()))
+
+	err := Install(ctx, fakeClient, writeManifests)
+	if err == nil {
+		t.Fatal("Install() expected error when CRDs never become established, got nil")
+	}
+	if !strings.Contains(err.Error(), "CRDs not established") {
+		t.Errorf("Install() error = %v, want error containing 'CRDs not established'", err)
+	}
+}
+
 func TestWriteEmbeddedManifests_filePermissions(t *testing.T) {
 	tmpDir := t.TempDir()
 
