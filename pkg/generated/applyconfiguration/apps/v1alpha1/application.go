@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Cozystack Authors.
+Copyright 2025 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,10 +19,10 @@ limitations under the License.
 package v1alpha1
 
 import (
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
-	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 )
 
 // ApplicationApplyConfiguration represents a declarative configuration of the Application type for use
@@ -30,8 +30,9 @@ import (
 type ApplicationApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
-	Spec                             *ApplicationSpecApplyConfiguration `json:"spec,omitempty"`
-	Status                           *appsv1alpha1.ApplicationStatus  `json:"status,omitempty"`
+	AppVersion                       *string                              `json:"appVersion,omitempty"`
+	Spec                             *apiextensionsv1.JSON                `json:"spec,omitempty"`
+	Status                           *ApplicationStatusApplyConfiguration `json:"status,omitempty"`
 }
 
 // Application constructs a declarative configuration of the Application type for use with
@@ -44,6 +45,7 @@ func Application(name, namespace string) *ApplicationApplyConfiguration {
 	b.WithAPIVersion("apps.cozystack.io/v1alpha1")
 	return b
 }
+func (b ApplicationApplyConfiguration) IsApplyConfiguration() {}
 
 // WithKind sets the Kind field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
@@ -203,24 +205,48 @@ func (b *ApplicationApplyConfiguration) ensureObjectMetaApplyConfigurationExists
 	}
 }
 
+// WithAppVersion sets the AppVersion field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AppVersion field is set to the value of the last call.
+func (b *ApplicationApplyConfiguration) WithAppVersion(value string) *ApplicationApplyConfiguration {
+	b.AppVersion = &value
+	return b
+}
+
 // WithSpec sets the Spec field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Spec field is set to the value of the last call.
-func (b *ApplicationApplyConfiguration) WithSpec(value *ApplicationSpecApplyConfiguration) *ApplicationApplyConfiguration {
-	b.Spec = value
+func (b *ApplicationApplyConfiguration) WithSpec(value apiextensionsv1.JSON) *ApplicationApplyConfiguration {
+	b.Spec = &value
 	return b
 }
 
 // WithStatus sets the Status field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Status field is set to the value of the last call.
-func (b *ApplicationApplyConfiguration) WithStatus(value appsv1alpha1.ApplicationStatus) *ApplicationApplyConfiguration {
-	b.Status = &value
+func (b *ApplicationApplyConfiguration) WithStatus(value *ApplicationStatusApplyConfiguration) *ApplicationApplyConfiguration {
+	b.Status = value
 	return b
+}
+
+// GetKind retrieves the value of the Kind field in the declarative configuration.
+func (b *ApplicationApplyConfiguration) GetKind() *string {
+	return b.TypeMetaApplyConfiguration.Kind
+}
+
+// GetAPIVersion retrieves the value of the APIVersion field in the declarative configuration.
+func (b *ApplicationApplyConfiguration) GetAPIVersion() *string {
+	return b.TypeMetaApplyConfiguration.APIVersion
 }
 
 // GetName retrieves the value of the Name field in the declarative configuration.
 func (b *ApplicationApplyConfiguration) GetName() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Name
+}
+
+// GetNamespace retrieves the value of the Namespace field in the declarative configuration.
+func (b *ApplicationApplyConfiguration) GetNamespace() *string {
+	b.ensureObjectMetaApplyConfigurationExists()
+	return b.ObjectMetaApplyConfiguration.Namespace
 }
