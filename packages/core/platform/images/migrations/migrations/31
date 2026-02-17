@@ -1,0 +1,45 @@
+#!/bin/sh
+# Migration 31 --> 32
+# Adopt tenant-root resources into cozystack-basics Helm release.
+#
+# In v0.41.x tenant-root Namespace and HelmRelease were applied via
+# kubectl apply (no Helm tracking). In v1.0 they are managed by the
+# cozystack-basics Helm release. Without Helm ownership annotations
+# the install of cozystack-basics fails because the resources already
+# exist. This migration adds the required annotations and labels so
+# Helm can adopt them.
+
+set -euo pipefail
+
+RELEASE_NAME="cozystack-basics"
+RELEASE_NS="cozy-system"
+
+# Adopt Namespace tenant-root
+if kubectl get namespace tenant-root >/dev/null 2>&1; then
+  echo "Adopting Namespace tenant-root into $RELEASE_NAME"
+  kubectl annotate namespace tenant-root \
+    meta.helm.sh/release-name="$RELEASE_NAME" \
+    meta.helm.sh/release-namespace="$RELEASE_NS" \
+    --overwrite
+  kubectl label namespace tenant-root \
+    app.kubernetes.io/managed-by=Helm \
+    --overwrite
+fi
+
+# Adopt HelmRelease tenant-root
+if kubectl get helmrelease -n tenant-root tenant-root >/dev/null 2>&1; then
+  echo "Adopting HelmRelease tenant-root into $RELEASE_NAME"
+  kubectl annotate helmrelease -n tenant-root tenant-root \
+    meta.helm.sh/release-name="$RELEASE_NAME" \
+    meta.helm.sh/release-namespace="$RELEASE_NS" \
+    helm.sh/resource-policy=keep \
+    --overwrite
+  kubectl label helmrelease -n tenant-root tenant-root \
+    app.kubernetes.io/managed-by=Helm \
+    sharding.fluxcd.io/key=tenants \
+    --overwrite
+fi
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=32 --dry-run=client -o yaml | kubectl apply -f-
