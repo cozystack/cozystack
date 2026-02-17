@@ -43,7 +43,7 @@ func TestWorkloadReconciler_DeletesOnMissingMonitor(t *testing.T) {
 			Name:      "pod-foo",
 			Namespace: "default",
 			Labels: map[string]string{
-				"workloadmonitor.cozystack.io/name": "missing-monitor",
+				"workloads.cozystack.io/monitor": "missing-monitor",
 			},
 		},
 	}
@@ -89,7 +89,7 @@ func TestWorkloadReconciler_KeepsWhenAllExist(t *testing.T) {
 			Name:      "pod-foo",
 			Namespace: "default",
 			Labels: map[string]string{
-				"workloadmonitor.cozystack.io/name": "mon",
+				"workloads.cozystack.io/monitor": "mon",
 			},
 		},
 	}
