@@ -4,8 +4,12 @@
 
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $adminPassword := randAlphaNum 16 }}
+{{- $redisPassword := randAlphaNum 32 }}
 {{- if $existingSecret }}
   {{- $adminPassword = index $existingSecret.data "admin-password" | b64dec }}
+  {{- if hasKey $existingSecret.data "redis-password" }}
+    {{- $redisPassword = index $existingSecret.data "redis-password" | b64dec }}
+  {{- end }}
 {{- end }}
 
 {{- $existingCoreSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-core" .Release.Name) }}
@@ -26,6 +30,7 @@ metadata:
   name: {{ .Release.Name }}-credentials
 stringData:
   admin-password: {{ $adminPassword | quote }}
+  redis-password: {{ $redisPassword | quote }}
   url: https://{{ $harborHost }}
 
 ---
@@ -53,6 +58,14 @@ spec:
   valuesFrom:
   - kind: Secret
     name: cozystack-values
+  - kind: Secret
+    name: {{ .Release.Name }}-credentials
+    valuesKey: redis-password
+    targetPath: redis.password
+  - kind: Secret
+    name: {{ .Release.Name }}-credentials
+    valuesKey: redis-password
+    targetPath: harbor.redis.external.password
   {{- if eq .Values.registry.storageType "s3" }}
   - kind: Secret
     name: {{ .Release.Name }}-registry-bucket
@@ -153,7 +166,6 @@ spec:
         external:
           addr: "rfs-{{ .Release.Name }}-redis:26379"
           sentinelMasterSet: "mymaster"
-          existingSecret: "{{ .Release.Name }}-redis-auth"
           coreDatabaseIndex: "0"
           jobserviceDatabaseIndex: "1"
           registryDatabaseIndex: "2"

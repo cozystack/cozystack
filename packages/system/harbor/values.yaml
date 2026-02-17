@@ -4,6 +4,7 @@ db:
   size: 5Gi
   storageClass: ""
 redis:
+  password: ""
   replicas: 2
   size: 1Gi
   storageClass: ""

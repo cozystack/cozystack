@@ -1,15 +1,10 @@
-{{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-redis-auth" .Values.harbor.fullnameOverride) }}
-{{- $password := randAlphaNum 32 | b64enc }}
-{{- if $existingPassword }}
-  {{- $password = index $existingPassword.data "password" }}
-{{- end }}
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Values.harbor.fullnameOverride }}-redis-auth
-data:
-  password: {{ $password }}
+stringData:
+  password: {{ .Values.redis.password | quote }}
 ---
 apiVersion: databases.spotahome.com/v1
 kind: RedisFailover
