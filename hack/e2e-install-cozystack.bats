@@ -1,25 +1,22 @@
 #!/usr/bin/env bats
 
-@test "Required installer assets exist" {
-  if [ ! -f _out/assets/cozystack-crds.yaml ]; then
-    echo "Missing: _out/assets/cozystack-crds.yaml" >&2
-    exit 1
-  fi
-  if [ ! -f _out/assets/cozystack-operator-talos.yaml ]; then
-    echo "Missing: _out/assets/cozystack-operator-talos.yaml" >&2
+@test "Required installer chart exists" {
+  if [ ! -f packages/core/installer/Chart.yaml ]; then
+    echo "Missing: packages/core/installer/Chart.yaml" >&2
     exit 1
   fi
 }
 
 @test "Install Cozystack" {
-  # Create namespace
-  kubectl create namespace cozy-system --dry-run=client -o yaml | kubectl apply -f -
+  # Install cozy-installer chart (CRDs from crds/ are applied automatically)
+  helm upgrade installer packages/core/installer \
+    --install \
+    --namespace cozy-system \
+    --create-namespace \
+    --wait \
+    --timeout 2m
 
-  # Apply installer manifests (CRDs + operator)
-  kubectl apply -f _out/assets/cozystack-crds.yaml
-  kubectl apply -f _out/assets/cozystack-operator-talos.yaml
-
-  # Wait for the operator deployment to become available
+  # Verify the operator deployment is available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
 
   # Create platform Package with isp-full variant

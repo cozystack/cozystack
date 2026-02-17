@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package fluxinstall
+package crdinstall
 
 import (
 	"embed"
@@ -26,17 +26,17 @@ import (
 )
 
 //go:embed manifests/*.yaml
-var embeddedFluxManifests embed.FS
+var embeddedCRDManifests embed.FS
 
-// WriteEmbeddedManifests extracts embedded Flux manifests to a temporary directory.
+// WriteEmbeddedManifests extracts embedded CRD manifests to a directory.
 func WriteEmbeddedManifests(dir string) error {
-	manifests, err := fs.ReadDir(embeddedFluxManifests, "manifests")
+	manifests, err := fs.ReadDir(embeddedCRDManifests, "manifests")
 	if err != nil {
 		return fmt.Errorf("failed to read embedded manifests: %w", err)
 	}
 
 	for _, manifest := range manifests {
-		data, err := fs.ReadFile(embeddedFluxManifests, path.Join("manifests", manifest.Name()))
+		data, err := fs.ReadFile(embeddedCRDManifests, path.Join("manifests", manifest.Name()))
 		if err != nil {
 			return fmt.Errorf("failed to read file %s: %w", manifest.Name(), err)
 		}
@@ -49,4 +49,3 @@ func WriteEmbeddedManifests(dir string) error {
 
 	return nil
 }
-

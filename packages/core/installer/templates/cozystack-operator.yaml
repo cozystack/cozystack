@@ -53,8 +53,13 @@ spec:
         args:
         - --leader-elect=true
         - --install-flux=true
+        # CRDs are also in crds/ for initial helm install, but Helm never updates
+        # them on upgrade and never deletes them on uninstall. The operator applies
+        # embedded CRDs via server-side apply on every startup, ensuring they stay
+        # up to date. To fully remove CRDs, delete them manually after helm uninstall.
+        - --install-crds=true
         - --metrics-bind-address=0
-        - --health-probe-bind-address=
+        - --health-probe-bind-address=0
         {{- if .Values.cozystackOperator.disableTelemetry }}
         - --disable-telemetry
         {{- end }}

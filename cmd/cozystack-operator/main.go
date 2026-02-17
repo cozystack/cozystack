@@ -50,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/cozystack/cozystack/internal/cozyvaluesreplicator"
+	"github.com/cozystack/cozystack/internal/crdinstall"
 	"github.com/cozystack/cozystack/internal/fluxinstall"
 	"github.com/cozystack/cozystack/internal/operator"
 	"github.com/cozystack/cozystack/internal/telemetry"
@@ -77,6 +78,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var installCRDs bool
 	var installFlux bool
 	var disableTelemetry bool
 	var telemetryEndpoint string
@@ -97,6 +99,7 @@ func main() {
 		"If set the metrics endpoint is served securely")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&installCRDs, "install-crds", false, "Install Cozystack CRDs before starting reconcile loop")
 	flag.BoolVar(&installFlux, "install-flux", false, "Install Flux components before starting reconcile loop")
 	flag.BoolVar(&disableTelemetry, "disable-telemetry", false,
 		"Disable telemetry collection")
@@ -134,8 +137,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start the controller manager
-	setupLog.Info("Starting controller manager")
+	// Initialize the controller manager
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme: scheme,
 		Cache: cache.Options{
@@ -177,10 +179,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set up signal handler early so install phases respect SIGTERM
+	mgrCtx := ctrl.SetupSignalHandler()
+
+	// Install Cozystack CRDs before starting reconcile loop
+	if installCRDs {
+		setupLog.Info("Installing Cozystack CRDs before starting reconcile loop")
+		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
+		defer installCancel()
+
+		if err := crdinstall.Install(installCtx, directClient, crdinstall.WriteEmbeddedManifests); err != nil {
+			setupLog.Error(err, "failed to install CRDs")
+			os.Exit(1)
+		}
+		setupLog.Info("CRD installation completed successfully")
+	}
+
 	// Install Flux before starting reconcile loop
 	if installFlux {
 		setupLog.Info("Installing Flux components before starting reconcile loop")
-		installCtx, installCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		installCtx, installCancel := context.WithTimeout(mgrCtx, 5*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
@@ -194,7 +212,7 @@ func main() {
 	// Generate and install platform source resource if specified
 	if platformSourceURL != "" {
 		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef)
-		installCtx, installCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
@@ -276,7 +294,6 @@ func main() {
 	}
 
 	setupLog.Info("Starting controller manager")
-	mgrCtx := ctrl.SetupSignalHandler()
 	if err := mgr.Start(mgrCtx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)

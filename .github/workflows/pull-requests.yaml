@@ -71,18 +71,6 @@ jobs:
           name: pr-patch
           path: _out/assets/pr.patch
      
-      - name: Upload CRDs
-        uses: actions/upload-artifact@v4
-        with:
-          name: cozystack-crds
-          path: _out/assets/cozystack-crds.yaml
-
-      - name: Upload operator
-        uses: actions/upload-artifact@v4
-        with:
-          name: cozystack-operator
-          path: _out/assets/cozystack-operator-talos.yaml
-
       - name: Upload Talos image
         uses: actions/upload-artifact@v4
         with:
@@ -94,8 +82,6 @@ jobs:
     runs-on: ubuntu-latest
     if: contains(github.event.pull_request.labels.*.name, 'release')
     outputs:
-      crds_id:      ${{ steps.fetch_assets.outputs.crds_id }}
-      operator_id:  ${{ steps.fetch_assets.outputs.operator_id }}
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
     steps:
@@ -139,15 +125,11 @@ jobs:
               return;
             }
             const find = (n) => draft.assets.find(a => a.name === n)?.id;
-            const crdsId     = find('cozystack-crds.yaml');
-            const operatorId = find('cozystack-operator-talos.yaml');
             const diskId     = find('nocloud-amd64.raw.xz');
-            if (!crdsId || !operatorId || !diskId) {
+            if (!diskId) {
               core.setFailed('Required assets missing in draft release');
               return;
             }
-            core.setOutput('crds_id',     crdsId);
-            core.setOutput('operator_id', operatorId);
             core.setOutput('disk_id',     diskId);
 
 
@@ -174,20 +156,6 @@ jobs:
           name: talos-image
           path: _out/assets
 
-      - name: "Download CRDs (regular PR)"
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@v4
-        with:
-          name: cozystack-crds
-          path: _out/assets
-
-      - name: "Download operator (regular PR)"
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@v4
-        with:
-          name: cozystack-operator
-          path: _out/assets
-
       - name: Download PR patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
         uses: actions/download-artifact@v4
@@ -208,12 +176,6 @@ jobs:
           curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
             -o _out/assets/nocloud-amd64.raw.xz \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.disk_id }}"
-          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
-            -o _out/assets/cozystack-crds.yaml \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.crds_id }}"
-          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
-            -o _out/assets/cozystack-operator-talos.yaml \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.operator_id }}"
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
 

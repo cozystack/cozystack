@@ -24,7 +24,8 @@ API_KNOWN_VIOLATIONS_DIR="${API_KNOWN_VIOLATIONS_DIR:-"${SCRIPT_ROOT}/api/api-ru
 UPDATE_API_KNOWN_VIOLATIONS="${UPDATE_API_KNOWN_VIOLATIONS:-true}"
 CONTROLLER_GEN="go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4"
 TMPDIR=$(mktemp -d)
-OPERATOR_CRDDIR=packages/core/installer/definitions
+OPERATOR_CRDDIR=packages/core/installer/crds
+OPERATOR_EMBEDDIR=internal/crdinstall/manifests
 COZY_CONTROLLER_CRDDIR=packages/system/cozystack-controller/definitions
 COZY_RD_CRDDIR=packages/system/application-definition-crd/definition
 BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
@@ -72,6 +73,9 @@ $CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/..." output:crd:arti
 
 mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
 mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml
+
+cp ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml ${OPERATOR_EMBEDDIR}/cozystack.io_packages.yaml
+cp ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml ${OPERATOR_EMBEDDIR}/cozystack.io_packagesources.yaml
 
 mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
         ${COZY_RD_CRDDIR}/cozystack.io_applicationdefinitions.yaml
