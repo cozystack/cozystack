@@ -68,6 +68,29 @@ func TestCollectCRDNames(t *testing.T) {
 	}
 }
 
+func TestCollectCRDNames_ignoresWrongAPIVersion(t *testing.T) {
+	objects := []*unstructured.Unstructured{
+		{Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]interface{}{"name": "real.crd.io"},
+		}},
+		{Object: map[string]interface{}{
+			"apiVersion": "apiextensions.k8s.io/v1beta1",
+			"kind":       "CustomResourceDefinition",
+			"metadata":   map[string]interface{}{"name": "legacy.crd.io"},
+		}},
+	}
+
+	names := CollectCRDNames(objects)
+	if len(names) != 1 {
+		t.Fatalf("CollectCRDNames() returned %d names, want 1", len(names))
+	}
+	if names[0] != "real.crd.io" {
+		t.Errorf("names[0] = %q, want %q", names[0], "real.crd.io")
+	}
+}
+
 func TestCollectCRDNames_noCRDs(t *testing.T) {
 	objects := []*unstructured.Unstructured{
 		{Object: map[string]interface{}{

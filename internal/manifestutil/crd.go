@@ -104,11 +104,13 @@ func WaitForCRDsEstablished(ctx context.Context, k8sClient client.Client, crdNam
 }
 
 // CollectCRDNames returns the names of all CustomResourceDefinition objects
-// from the given list of unstructured objects.
+// from the given list of unstructured objects. Only objects with
+// apiVersion "apiextensions.k8s.io/v1" and kind "CustomResourceDefinition"
+// are matched.
 func CollectCRDNames(objects []*unstructured.Unstructured) []string {
 	var names []string
 	for _, obj := range objects {
-		if obj.GetKind() == "CustomResourceDefinition" {
+		if obj.GetAPIVersion() == "apiextensions.k8s.io/v1" && obj.GetKind() == "CustomResourceDefinition" {
 			names = append(names, obj.GetName())
 		}
 	}
