@@ -1,8 +1,8 @@
 kilo:
   image:
     pullPolicy: IfNotPresent
-    tag: kilo-require-cilium-tunl
-    repository: ghcr.io/kvaps/test
+    tag: v0.8.2@sha256:9f27000ffd0bbf9adf3aefd017b7835dfae57b6ea38bf7488fb636536c2467da
+    repository: ghcr.io/cozystack/cozystack/kilo
   transitCIDR: 100.66.0.0/16
   meshGranularity: location
   cleanUpInterface: false
