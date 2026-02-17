@@ -95,10 +95,6 @@ spec:
               {{- with .Values.storageClass }}
               storageClassName: {{ . }}
               {{- end }}
-      promExporter:
-        enabled: true
-        podMonitor:
-          enabled: true
       {{- if .Values.external }}
       service:
         merge:

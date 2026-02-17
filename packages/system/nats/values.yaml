@@ -9,3 +9,7 @@ nats:
     cluster:
       routeURLs:
         k8sClusterDomain: cozy.local
+  promExporter:
+    enabled: true
+    podMonitor:
+      enabled: true
