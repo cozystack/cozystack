@@ -1,0 +1,31 @@
+
+---
+{{- if .Values.snapshotAgent.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "openbao.fullname" . }}-snapshot
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  S3_HOST: {{ .Values.snapshotAgent.config.s3Host }}
+  S3_BUCKET: {{ .Values.snapshotAgent.config.s3Bucket }}
+  {{- if .Values.snapshotAgent.config.s3cmdExtraFlag }}
+  S3CMD_EXTRA_FLAG: {{ .Values.snapshotAgent.config.s3cmdExtraFlag }}
+  {{- end }}
+  S3_URI: {{ .Values.snapshotAgent.config.s3Uri }}
+  S3_EXPIRE_DAYS: {{ .Values.snapshotAgent.config.s3ExpireDays | quote }}
+  BAO_AUTH_PATH: {{ .Values.snapshotAgent.config.baoAuthPath }}
+  BAO_ROLE: {{ .Values.snapshotAgent.config.baoRole }}
+  {{- if include "openbao.externalAddr" . }}
+  BAO_ADDR: "{{ include "openbao.externalAddr" . }}"
+  {{- else if and (eq .mode "ha") (eq (.Values.server.service.active.enabled | toString) "true")}}
+  BAO_ADDR: {{ include "openbao.scheme" . }}://{{ template "openbao.fullname" . }}-active.{{ include "openbao.namespace" . }}.svc:{{ .Values.server.service.port }}
+  {{- else }}
+  BAO_ADDR: {{ include "openbao.scheme" . }}://{{ template "openbao.fullname" . }}.{{ include "openbao.namespace" . }}.svc:{{ .Values.server.service.port }}
+  {{- end }}
+{{ end }}

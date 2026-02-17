@@ -1,0 +1,26 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{ template "openbao.mode" . }}
+{{- if .serverEnabled -}}
+{{- if eq .mode "ha" }}
+{{- if eq (.Values.server.serviceAccount.serviceDiscovery.enabled | toString) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: {{ include "openbao.namespace" . }}
+  name: {{ template "openbao.fullname" . }}-discovery-role
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list", "update", "patch"]
+{{ end }}
+{{ end }}
+{{ end }}

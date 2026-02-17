@@ -1,0 +1,34 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{- template "openbao.csiEnabled" . -}}
+{{- if and (.csiEnabled) (eq (.Values.csi.agent.enabled | toString) "true") -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "openbao.fullname" . }}-csi-provider-agent-config
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}-csi-provider
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  config.hcl: |
+    vault {
+        {{- if include "openbao.externalAddr" . }}
+        "address" = "{{ include "openbao.externalAddr" . }}"
+        {{- else }}
+        "address" = "{{ include "openbao.scheme" . }}://{{ template "openbao.fullname" . }}.{{ include "openbao.namespace" . }}.svc:{{ .Values.server.service.port }}"
+        {{- end }}
+    }
+
+    cache {}
+
+    listener "unix" {
+        address = "/var/run/vault/agent.sock"
+        tls_disable = true
+    }
+{{- end }}

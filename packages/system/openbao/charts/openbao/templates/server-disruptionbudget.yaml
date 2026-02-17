@@ -1,0 +1,31 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{ template "openbao.mode" . }}
+{{- if ne .mode "external" -}}
+{{- if .serverEnabled -}}
+{{- if and (eq .mode "ha") (eq (.Values.server.ha.disruptionBudget.enabled | toString) "true") -}}
+# PodDisruptionBudget to prevent degrading the server cluster through
+# voluntary cluster changes.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ template "openbao.fullname" . }}
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  maxUnavailable: {{ template "openbao.pdb.maxUnavailable" . }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "openbao.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      component: server
+{{- end -}}
+{{- end -}}
+{{- end -}}

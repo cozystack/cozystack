@@ -1,0 +1,62 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{ template "openbao.mode" . }}
+{{ if or (.Values.global.serverTelemetry.prometheusOperator) (.Values.serverTelemetry.serviceMonitor.enabled) }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ template "openbao.fullname" . }}
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- /* update the selectors docs in values.yaml whenever the defaults below change. */ -}}
+    {{- $selectors := .Values.serverTelemetry.serviceMonitor.selectors }}
+    {{- if $selectors }}
+    {{- toYaml $selectors | nindent 4 }}
+    {{- else }}
+    release: prometheus
+    {{- end }}
+spec:
+  {{- if .Values.serverTelemetry.serviceMonitor.scrapeClass }}
+  scrapeClass: {{ .Values.serverTelemetry.serviceMonitor.scrapeClass }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ template "openbao.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- if eq .mode "ha" }}
+      openbao-active: "true"
+      {{- else }}
+      openbao-internal: "true"
+      {{- end }}
+  endpoints:
+  - port: {{ .Values.serverTelemetry.serviceMonitor.port | default (include "openbao.scheme" .) }}
+    interval: {{ .Values.serverTelemetry.serviceMonitor.interval }}
+    scrapeTimeout: {{ .Values.serverTelemetry.serviceMonitor.scrapeTimeout }}
+    scheme: {{ .Values.serverTelemetry.serviceMonitor.scheme | default (include "openbao.scheme" .) | lower }}
+    path: /v1/sys/metrics
+    params:
+      format:
+      - prometheus
+    {{- with .Values.serverTelemetry.serviceMonitor.tlsConfig }}
+    tlsConfig:
+    {{- toYaml . | nindent 6 }}
+    {{- else }}
+    tlsConfig:
+      insecureSkipVerify: true
+    {{- end }}
+    {{- with .Values.serverTelemetry.serviceMonitor.authorization }}
+    authorization:
+    {{- toYaml . | nindent 6 }}
+    {{- end }}
+  namespaceSelector:
+    matchNames:
+      - {{ include "openbao.namespace" . }}
+{{ end }}
