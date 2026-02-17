@@ -53,6 +53,7 @@ spec:
         args:
         - --leader-elect=true
         - --install-flux=true
+        - --install-crds=true
         - --metrics-bind-address=0
         - --health-probe-bind-address=
         {{- if .Values.cozystackOperator.disableTelemetry }}
