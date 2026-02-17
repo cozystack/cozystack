@@ -137,8 +137,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start the controller manager
-	setupLog.Info("Starting controller manager")
+	// Initialize the controller manager
 	mgr, err := ctrl.NewManager(config, ctrl.Options{
 		Scheme: scheme,
 		Cache: cache.Options{

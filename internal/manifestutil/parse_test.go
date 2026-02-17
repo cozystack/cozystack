@@ -59,7 +59,7 @@ metadata:
 			wantCount: 0,
 		},
 		{
-			name: "document without kind returns error",
+			name: "decoder rejects document without kind",
 			input: `apiVersion: v1
 metadata:
   name: test

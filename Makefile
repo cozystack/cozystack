@@ -81,7 +81,7 @@ test:
 	make -C packages/core/testing test
 
 verify-crds:
-	@diff --recursive packages/core/installer/crds/ internal/crdinstall/manifests/ --exclude=.gitattributes \
+	@diff --recursive packages/core/installer/crds/ internal/crdinstall/manifests/ --exclude='.*' \
 		|| (echo "ERROR: CRD manifests out of sync. Run 'make generate' to fix." && exit 1)
 
 unit-tests: helm-unit-tests verify-crds
