@@ -3,7 +3,6 @@ kilo:
     pullPolicy: IfNotPresent
     tag: kilo-require-cilium-tunl
     repository: ghcr.io/kvaps/test
-  podCIDR: 10.244.0.0/16
   transitCIDR: 100.66.0.0/16
   meshGranularity: location
   cleanUpInterface: false
