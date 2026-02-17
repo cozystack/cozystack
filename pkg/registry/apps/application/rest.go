@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/duration"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -43,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
 	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
@@ -150,6 +152,16 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	app, ok := obj.(*appsv1alpha1.Application)
 	if !ok {
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
+	}
+
+	// Validate Application name conforms to DNS-1035
+	if errs := validation.ValidateApplicationName(app.Name, field.NewPath("metadata").Child("name")); len(errs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+
+	// Validate name length against Helm release and label limits
+	if nameLenErrs := r.validateNameLength(app.Name); len(nameLenErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nameLenErrs)
 	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
@@ -469,6 +481,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		klog.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 	}
+
+	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
+	// Update because Kubernetes names are immutable. Validating here would block
+	// updates to pre-existing resources whose names don't conform to the new rules.
 
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
@@ -996,7 +1012,7 @@ func filterInternalKeys(values *apiextv1.JSON) *apiextv1.JSON {
 	if values == nil || len(values.Raw) == 0 {
 		return values
 	}
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(values.Raw, &data); err != nil {
 		return values
 	}
@@ -1017,7 +1033,7 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 	if values == nil || len(values.Raw) == 0 {
 		return nil
 	}
-	var data map[string]interface{}
+	var data map[string]any
 	if err := json.Unmarshal(values.Raw, &data); err != nil {
 		return err
 	}
@@ -1027,6 +1043,31 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 		}
 	}
 	return nil
+}
+
+// maxHelmReleaseName is the Helm release name limit. Helm reserves room for
+// chart-generated resource suffixes within the 63-char DNS-1035 label limit.
+const maxHelmReleaseName = 53
+
+// validateNameLength checks that the application name won't exceed Kubernetes limits.
+// prefix + name must fit within the Helm release name limit (53 chars).
+func (r *REST) validateNameLength(name string) field.ErrorList {
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	maxLen := maxHelmReleaseName - len(r.releaseConfig.Prefix)
+
+	if maxLen <= 0 {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("configuration error: no valid name length possible (release prefix %q)", r.releaseConfig.Prefix)))
+		return allErrs
+	}
+
+	if len(name) > maxLen {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must be no more than %d characters (release prefix %q)", maxLen, r.releaseConfig.Prefix)))
+	}
+	return allErrs
 }
 
 // convertHelmReleaseToApplication implements the actual conversion logic
@@ -1182,7 +1223,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 	for i := range apps {
 		app := &apps[i]
 		row := metav1.TableRow{
-			Cells:  []interface{}{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+			Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 			Object: runtime.RawExtension{Object: app},
 		}
 		table.Rows = append(table.Rows, row)
@@ -1206,7 +1247,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 
 	a := app
 	row := metav1.TableRow{
-		Cells:  []interface{}{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+		Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 		Object: runtime.RawExtension{Object: &a},
 	}
 	table.Rows = append(table.Rows, row)

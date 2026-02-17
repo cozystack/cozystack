@@ -33,6 +33,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/endpoints/openapi"
@@ -112,6 +113,9 @@ func (o *CozyServerOptions) Complete() error {
 	scheme := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("failed to register types: %w", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return fmt.Errorf("failed to register core types: %w", err)
 	}
 
 	cfg, err := k8sconfig.GetConfig()

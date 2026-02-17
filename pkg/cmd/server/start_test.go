@@ -1,5 +1,5 @@
 /*
-Copyright 2024 The Cozystack Authors.
+Copyright 2026 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,6 +15,3 @@ limitations under the License.
 */
 
 package server
-
-// Note: Tests for KEP-4330 component versioning functionality have been removed
-// as the functionality is not available in Kubernetes v0.34.1.
