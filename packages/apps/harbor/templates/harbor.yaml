@@ -1,0 +1,201 @@
+{{- $host := .Values._namespace.host }}
+{{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
+
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
+{{- $adminPassword := randAlphaNum 16 }}
+{{- $redisPassword := randAlphaNum 32 }}
+{{- if $existingSecret }}
+  {{- $adminPassword = index $existingSecret.data "admin-password" | b64dec }}
+  {{- if hasKey $existingSecret.data "redis-password" }}
+    {{- $redisPassword = index $existingSecret.data "redis-password" | b64dec }}
+  {{- end }}
+{{- end }}
+
+{{- $existingCoreSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-core" .Release.Name) }}
+{{- $tokenKey := "" }}
+{{- $tokenCert := "" }}
+{{- if $existingCoreSecret }}
+  {{- if hasKey $existingCoreSecret.data "tls.key" }}
+    {{- $tokenKey = index $existingCoreSecret.data "tls.key" | b64dec }}
+  {{- end }}
+  {{- if hasKey $existingCoreSecret.data "tls.crt" }}
+    {{- $tokenCert = index $existingCoreSecret.data "tls.crt" | b64dec }}
+  {{- end }}
+{{- end }}
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-credentials
+stringData:
+  admin-password: {{ $adminPassword | quote }}
+  redis-password: {{ $redisPassword | quote }}
+  url: https://{{ $harborHost }}
+
+---
+
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-harbor-application-default-harbor-system
+    namespace: cozy-system
+  interval: 5m
+  timeout: 15m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+  - kind: Secret
+    name: {{ .Release.Name }}-credentials
+    valuesKey: redis-password
+    targetPath: redis.password
+  - kind: Secret
+    name: {{ .Release.Name }}-credentials
+    valuesKey: redis-password
+    targetPath: harbor.redis.external.password
+  values:
+    bucket:
+      secretName: {{ .Release.Name }}-registry-bucket
+    db:
+      replicas: {{ .Values.database.replicas }}
+      size: {{ .Values.database.size }}
+      {{- with .Values.storageClass }}
+      storageClass: {{ . }}
+      {{- end }}
+    redis:
+      replicas: {{ .Values.redis.replicas }}
+      size: {{ .Values.redis.size }}
+      {{- with .Values.storageClass }}
+      storageClass: {{ . }}
+      {{- end }}
+    harbor:
+      fullnameOverride: {{ .Release.Name }}
+      harborAdminPassword: {{ $adminPassword | quote }}
+      externalURL: https://{{ $harborHost }}
+      expose:
+        type: clusterIP
+        clusterIP:
+          name: {{ .Release.Name }}
+        tls:
+          enabled: false
+      persistence:
+        enabled: true
+        resourcePolicy: "keep"
+        imageChartStorage:
+          type: s3
+          s3:
+            existingSecret: {{ .Release.Name }}-registry-s3
+            region: us-east-1
+            bucket: {{ .Release.Name }}-registry
+            secure: false
+            v4auth: true
+        {{- if .Values.trivy.enabled }}
+        persistentVolumeClaim:
+          trivy:
+            size: {{ .Values.trivy.size }}
+            {{- with .Values.storageClass }}
+            storageClass: {{ . }}
+            {{- end }}
+        {{- end }}
+      portal:
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}
+      core:
+        {{- if and $tokenKey $tokenCert }}
+        tokenKey: {{ $tokenKey | quote }}
+        tokenCert: {{ $tokenCert | quote }}
+        {{- end }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.core.resourcesPreset .Values.core.resources $) | nindent 10 }}
+      registry:
+        registry:
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
+        controller:
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
+      jobservice:
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.jobservice.resourcesPreset .Values.jobservice.resources $) | nindent 10 }}
+      trivy:
+        enabled: {{ .Values.trivy.enabled }}
+        {{- if .Values.trivy.enabled }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.trivy.resourcesPreset .Values.trivy.resources $) | nindent 10 }}
+        {{- end }}
+      database:
+        type: external
+        external:
+          host: "{{ .Release.Name }}-db-rw"
+          port: "5432"
+          username: app
+          coreDatabase: app
+          sslmode: require
+          existingSecret: "{{ .Release.Name }}-db-app"
+      redis:
+        type: external
+        external:
+          addr: "rfs-{{ .Release.Name }}-redis:26379"
+          sentinelMasterSet: "mymaster"
+          coreDatabaseIndex: "0"
+          jobserviceDatabaseIndex: "1"
+          registryDatabaseIndex: "2"
+          trivyAdapterIndex: "5"
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+
+---
+
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-core
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: harbor
+  type: core
+  selector:
+    release: {{ $.Release.Name }}-system
+    component: core
+  version: {{ $.Chart.Version }}
+
+---
+
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-registry
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: harbor
+  type: registry
+  selector:
+    release: {{ $.Release.Name }}-system
+    component: registry
+  version: {{ $.Chart.Version }}
+
+---
+
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-portal
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: harbor
+  type: portal
+  selector:
+    release: {{ $.Release.Name }}-system
+    component: portal
+  version: {{ $.Chart.Version }}

@@ -1,0 +1,61 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.harbor.fullnameOverride }}-redis-auth
+stringData:
+  password: {{ .Values.redis.password | quote }}
+---
+apiVersion: databases.spotahome.com/v1
+kind: RedisFailover
+metadata:
+  name: {{ .Values.harbor.fullnameOverride }}-redis
+  labels:
+    app.kubernetes.io/instance: {{ .Values.harbor.fullnameOverride }}-redis
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  sentinel:
+    replicas: 3
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+  redis:
+    replicas: {{ .Values.redis.replicas }}
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1024Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    storage:
+      persistentVolumeClaim:
+        metadata:
+          name: redisfailover-persistent-data
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .Values.redis.size }}
+          {{- with .Values.redis.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+    exporter:
+      enabled: true
+      image: oliver006/redis_exporter:v1.55.0-alpine
+      args:
+        - --web.telemetry-path
+        - /metrics
+      env:
+        - name: REDIS_EXPORTER_LOG_FORMAT
+          value: txt
+    customConfig:
+      - tcp-keepalive 0
+      - loglevel notice
+  auth:
+    secretPath: {{ .Values.harbor.fullnameOverride }}-redis-auth

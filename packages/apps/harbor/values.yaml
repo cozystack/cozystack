@@ -1,0 +1,84 @@
+##
+## @section Common parameters
+##
+
+## @param {string} [host] - Hostname for external access to Harbor (defaults to 'harbor' subdomain for the tenant host).
+host: ""
+
+## @param {string} storageClass - StorageClass used to store the data.
+storageClass: ""
+
+##
+## @section Component configuration
+##
+
+## @typedef {struct} Resources - Resource configuration.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @typedef {struct} Core - Core API server configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Core} core - Core API server configuration.
+core:
+  resources: {}
+  resourcesPreset: "small"
+
+## @typedef {struct} Registry - Container image registry configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Registry} registry - Container image registry configuration.
+registry:
+  resources: {}
+  resourcesPreset: "small"
+
+## @typedef {struct} Jobservice - Background job service configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Jobservice} jobservice - Background job service configuration.
+jobservice:
+  resources: {}
+  resourcesPreset: "nano"
+
+## @typedef {struct} Trivy - Trivy vulnerability scanner configuration.
+## @field {bool} enabled - Enable or disable the vulnerability scanner.
+## @field {quantity} size - Persistent Volume size for vulnerability database cache.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Trivy} trivy - Trivy vulnerability scanner configuration.
+trivy:
+  enabled: true
+  size: 5Gi
+  resources: {}
+  resourcesPreset: "nano"
+
+## @typedef {struct} Database - PostgreSQL database configuration (provisioned via CloudNativePG).
+## @field {quantity} size - Persistent Volume size for database storage.
+## @field {int} replicas - Number of database instances.
+
+## @param {Database} database - PostgreSQL database configuration.
+database:
+  size: 5Gi
+  replicas: 2
+
+## @typedef {struct} Redis - Redis cache configuration (provisioned via redis-operator).
+## @field {quantity} size - Persistent Volume size for cache storage.
+## @field {int} replicas - Number of Redis replicas.
+
+## @param {Redis} redis - Redis cache configuration.
+redis:
+  size: 1Gi
+  replicas: 2

@@ -1,0 +1,32 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.harbor-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.postgres-operator
+        - cozystack.redis-operator
+        - cozystack.objectstorage-controller
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: harbor-system
+          path: system/harbor
+        - name: harbor
+          path: apps/harbor
+          libraries: ["cozy-lib"]
+        - name: harbor-rd
+          path: system/harbor-rd
+          install:
+            namespace: cozy-system
+            releaseName: harbor-rd

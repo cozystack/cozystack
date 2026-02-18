@@ -1,0 +1,46 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - services
+  resourceNames:
+  - {{ .Release.Name }}
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  resourceNames:
+  - {{ .Release.Name }}-credentials
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  resourceNames:
+  - {{ .Release.Name }}-ingress
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - cozystack.io
+  resources:
+  - workloadmonitors
+  resourceNames:
+  - {{ .Release.Name }}-core
+  - {{ .Release.Name }}-registry
+  - {{ .Release.Name }}-portal
+  verbs: ["get", "list", "watch"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+subjects:
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "super-admin" .Release.Namespace) }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-dashboard-resources
+  apiGroup: rbac.authorization.k8s.io
