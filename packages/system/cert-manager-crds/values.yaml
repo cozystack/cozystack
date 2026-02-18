@@ -1,2 +1,6 @@
-cert-manager:
-  installCRDs: true
+global:
+  commonLabels: {}
+
+crds:
+  enabled: true
+  keep: true
