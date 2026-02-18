@@ -14,6 +14,9 @@ spec:
     initdb:
       database: app
       owner: app
+      encoding: UTF8
+      localeCollate: en_US.UTF-8
+      localeCType: en_US.UTF-8
   monitoring:
     enablePodMonitor: true
   resources:
