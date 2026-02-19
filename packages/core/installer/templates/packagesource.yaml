@@ -8,6 +8,8 @@ kind: PackageSource
 metadata:
   name: cozystack.cozystack-platform
   annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
     operator.cozystack.io/skip-cozystack-values: "true"
 spec:
   sourceRef:
