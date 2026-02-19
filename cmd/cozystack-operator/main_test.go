@@ -96,6 +96,9 @@ func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "cozystack.cozystack-platform",
 			ResourceVersion: "1",
+			Labels: map[string]string{
+				"custom-label": "should-be-preserved",
+			},
 		},
 		Spec: cozyv1alpha1.PackageSourceSpec{
 			SourceRef: &cozyv1alpha1.PackageSourceRef{
@@ -126,6 +129,11 @@ func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 	// Verify all 4 variants are present after update
 	if len(ps.Spec.Variants) != 4 {
 		t.Errorf("expected 4 variants after update, got %d", len(ps.Spec.Variants))
+	}
+
+	// Verify that labels set by other controllers are preserved (SSA does not overwrite unmanaged fields)
+	if ps.Labels["custom-label"] != "should-be-preserved" {
+		t.Errorf("expected custom-label to be preserved, got %q", ps.Labels["custom-label"])
 	}
 }
 

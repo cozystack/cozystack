@@ -222,24 +222,28 @@ func main() {
 		} else {
 			setupLog.Info("Platform source resource installation completed successfully")
 		}
+	}
 
-		// Create platform PackageSource that references the source resource
-		setupLog.Info("Creating platform PackageSource", "platformSourceName", platformSourceName)
-		sourceType, _, err := parsePlatformSourceURL(platformSourceURL)
-		if err != nil {
-			setupLog.Error(err, "failed to parse platform source URL for PackageSource creation")
-			os.Exit(1)
-		}
+	// Create platform PackageSource unconditionally (it was previously created
+	// by a Helm template regardless of platformSourceURL). Derive sourceRefKind
+	// from URL when available, default to OCIRepository otherwise.
+	{
 		sourceRefKind := "OCIRepository"
-		if sourceType == "git" {
-			sourceRefKind = "GitRepository"
+		if platformSourceURL != "" {
+			sourceType, _, _ := parsePlatformSourceURL(platformSourceURL)
+			// Error already checked by installPlatformSourceResource above
+			if sourceType == "git" {
+				sourceRefKind = "GitRepository"
+			}
 		}
-		if err := installPlatformPackageSource(installCtx, directClient, platformSourceName, sourceRefKind); err != nil {
+		setupLog.Info("Creating platform PackageSource", "platformSourceName", platformSourceName)
+		psCtx, psCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
+		defer psCancel()
+		if err := installPlatformPackageSource(psCtx, directClient, platformSourceName, sourceRefKind); err != nil {
 			setupLog.Error(err, "failed to create platform PackageSource")
 			os.Exit(1)
-		} else {
-			setupLog.Info("Platform PackageSource creation completed successfully")
 		}
+		setupLog.Info("Platform PackageSource creation completed successfully")
 	}
 
 	// Setup PackageSource reconciler
@@ -663,26 +667,15 @@ func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, 
 
 	logger.Info("Applying platform PackageSource", "name", packageSourceName)
 
-	existing := &cozyv1alpha1.PackageSource{}
-	key := client.ObjectKeyFromObject(ps)
-
-	err := k8sClient.Get(ctx, key, existing)
-	if err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			if err := k8sClient.Create(ctx, ps); err != nil {
-				return fmt.Errorf("failed to create PackageSource %s: %w", packageSourceName, err)
-			}
-			logger.Info("Created platform PackageSource", "name", packageSourceName)
-		} else {
-			return fmt.Errorf("failed to check if PackageSource exists: %w", err)
-		}
-	} else {
-		ps.SetResourceVersion(existing.GetResourceVersion())
-		if err := k8sClient.Update(ctx, ps); err != nil {
-			return fmt.Errorf("failed to update PackageSource %s: %w", packageSourceName, err)
-		}
-		logger.Info("Updated platform PackageSource", "name", packageSourceName)
+	patchOptions := &client.PatchOptions{
+		FieldManager: "cozystack-operator",
+		Force:        func() *bool { b := true; return &b }(),
 	}
 
+	if err := k8sClient.Patch(ctx, ps, client.Apply, patchOptions); err != nil {
+		return fmt.Errorf("failed to apply PackageSource %s: %w", packageSourceName, err)
+	}
+
+	logger.Info("Applied platform PackageSource", "name", packageSourceName)
 	return nil
 }
