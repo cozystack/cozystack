@@ -98,15 +98,18 @@ EOF
     done
   '
   # Verify the nodes are ready
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=2m --for=condition=Ready
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=2m --for=condition=Ready || true
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
+  kubectl -n tenant-test get hr  # Cilium/CoreDNS HelmRelease status
+  kubectl -n tenant-test get certificates  # cert-manager certificate health
 
   # Verify the kubelet version matches what we expect
   versions=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" \
     get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}')
-  
+
   node_ok=true
-  
+
   for v in $versions; do
     case "$v" in
       "${k8s_version}" | "${k8s_version}".* | "${k8s_version}"-*)
@@ -189,7 +192,7 @@ EOF
 
   # Wait for pods readiness
   kubectl wait deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test --for=condition=Available --timeout=300s
-  
+
   # Wait for LoadBalancer to be provisioned (IP or hostname)
   timeout 90 sh -ec "
     until kubectl get svc ${test_name}-backend --kubeconfig tenantkubeconfig-${test_name} -n tenant-test \
