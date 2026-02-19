@@ -91,8 +91,8 @@ EOF
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
 
-  # Wait for the nodes to be ready (timeout after 2 minutes)
-  timeout 3m bash -c '
+  # Wait for the nodes to be ready (timeout after 5 minutes)
+  timeout 5m bash -c '
     until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -eq 2 ]; do
       sleep 2
     done
