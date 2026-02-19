@@ -1,0 +1,49 @@
+diff --git a/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx b/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx
+index d5e5230..9038dbb 100644
+--- a/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx
++++ b/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx
+@@ -259,14 +259,15 @@ export const FormListInput: FC<TFormListInputProps> = ({
+           <PersistedCheckbox formName={persistName || name} persistedControls={persistedControls} type="arr" />
+         </Flex>
+       </Flex>
+-      <ResetedFormItem
+-        key={arrKey !== undefined ? arrKey : Array.isArray(name) ? name.slice(-1)[0] : name}
+-        name={arrName || fixedName}
+-        rules={[getRequiredRule(forceNonRequired === false && !!required?.includes(getStringByName(name)), name)]}
+-        validateTrigger="onBlur"
+-        hasFeedback={designNewLayout ? { icons: feedbackIcons } : true}
+-      >
+-        <Flex gap={8} align="center">
++      <Flex gap={8} align="center">
++        <ResetedFormItem
++          key={arrKey !== undefined ? arrKey : Array.isArray(name) ? name.slice(-1)[0] : name}
++          name={arrName || fixedName}
++          rules={[getRequiredRule(forceNonRequired === false && !!required?.includes(getStringByName(name)), name)]}
++          validateTrigger="onBlur"
++          hasFeedback={designNewLayout ? { icons: feedbackIcons } : true}
++          style={{ flex: 1 }}
++        >
+           <Select
+             mode={customProps.mode}
+             placeholder="Select"
+@@ -277,13 +278,13 @@ export const FormListInput: FC<TFormListInputProps> = ({
+             showSearch
+             style={{ width: '100%' }}
+           />
+-          {relatedValueTooltip && (
+-            <Tooltip title={relatedValueTooltip}>
+-              <QuestionCircleOutlined />
+-            </Tooltip>
+-          )}
+-        </Flex>
+-      </ResetedFormItem>
++        </ResetedFormItem>
++        {relatedValueTooltip && (
++          <Tooltip title={relatedValueTooltip}>
++            <QuestionCircleOutlined />
++          </Tooltip>
++        )}
++      </Flex>
+     </HiddenContainer>
+   )
+ }
