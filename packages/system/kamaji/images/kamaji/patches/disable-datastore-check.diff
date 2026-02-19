@@ -1,8 +1,15 @@
 diff --git a/cmd/manager/cmd.go b/cmd/manager/cmd.go
-index 0b77322..4c40e8d 100644
 --- a/cmd/manager/cmd.go
 +++ b/cmd/manager/cmd.go
-@@ -34,7 +34,6 @@ import (
+@@ -4,7 +4,6 @@
+ package manager
+
+ import (
+-	"context"
+ 	"flag"
+ 	"fmt"
+ 	"io"
+@@ -34,7 +33,6 @@
  	"github.com/clastix/kamaji/controllers/soot"
  	"github.com/clastix/kamaji/internal"
  	"github.com/clastix/kamaji/internal/builders/controlplane"
@@ -10,15 +17,14 @@ index 0b77322..4c40e8d 100644
  	"github.com/clastix/kamaji/internal/utilities"
  	"github.com/clastix/kamaji/internal/webhook"
  	"github.com/clastix/kamaji/internal/webhook/handlers"
-@@ -86,11 +85,6 @@ func NewCmd(scheme *runtime.Scheme) *cobra.Command {
+@@ -85,10 +83,6 @@
+
  			if webhookCABundle, err = os.ReadFile(webhookCAPath); err != nil {
  				return fmt.Errorf("unable to read webhook CA: %w", err)
- 			}
+-			}
 -
 -			if err = datastoreutils.CheckExists(context.Background(), scheme, datastore); err != nil {
 -				return err
--			}
--
- 			if controllerReconcileTimeout.Seconds() == 0 {
- 				return fmt.Errorf("the controller reconcile timeout must be greater than zero")
  			}
+
+ 			if controllerReconcileTimeout.Seconds() == 0 {
