@@ -4,7 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: kamaji-system/kamaji-serving-cert
-    controller-gen.kubebuilder.io/version: v0.16.1
+    controller-gen.kubebuilder.io/version: v0.20.0
   name: datastores.kamaji.clastix.io
 spec:
   group: kamaji.clastix.io
@@ -284,6 +284,10 @@ spec:
             status:
               description: DataStoreStatus defines the observed state of DataStore.
               properties:
+                observedGeneration:
+                  description: ObservedGeneration represents the .metadata.generation that was last reconciled.
+                  format: int64
+                  type: integer
                 usedBy:
                   description: List of the Tenant Control Planes, namespaced named, using this data store.
                   items:

@@ -1,0 +1,2 @@
+Kamaji Custom Resource Definitions have been installed properly:
+you can proceed to upgrade your Kamaji operator instance.

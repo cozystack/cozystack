@@ -98,9 +98,12 @@ loggingDevel:
 # -- If specified, all the Kamaji instances with an unassigned DataStore will inherit this default value.
 defaultDatastoreName: default
 
+# -- Subchart: See https://github.com/clastix/kamaji-etcd/blob/master/charts/kamaji-etcd/values.yaml
 kamaji-etcd:
   deploy: true
   fullnameOverride: kamaji-etcd
+  ## -- Important, this must match your management cluster's clusterDomain, otherwise the init jobs will fail
+  clusterDomain: "cluster.local"
   datastore:
     enabled: true
     name: default
@@ -108,4 +111,48 @@ kamaji-etcd:
 # -- Disable the analytics traces collection
 telemetry:
   disabled: false
-  
+
+kubeconfigGenerator:
+  # -- Toggle to deploy the Kubeconfig Generator Deployment.
+  enabled: false
+  fullnameOverride: ""
+  # -- The number of the pod replicas for the Kubeconfig Generator controller.
+  replicaCount: 2
+  # -- The annotations to apply to the Kubeconfig Generator controller pods.
+  podAnnotations: {}
+  # -- The securityContext to apply to the Kubeconfig Generator controller pods.
+  podSecurityContext:
+    runAsNonRoot: true
+  # -- The name of the service account to use. If not set, the root Kamaji one will be used.
+  serviceAccountOverride: ""
+  # -- The address the probe endpoint binds to.
+  healthProbeBindAddress: ":8081"
+  # -- Enables the leader election.
+  enableLeaderElect: true
+  loggingDevel:
+    # -- Development Mode defaults(encoder=consoleEncoder,logLevel=Debug,stackTraceLevel=Warn). Production Mode defaults(encoder=jsonEncoder,logLevel=Info,stackTraceLevel=Error)
+    enable: false
+  # -- A list of extra arguments to add to the Kubeconfig Generator controller default ones.
+  extraArgs: []
+  resources:
+    limits:
+      cpu: 200m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+  # -- The securityContext to apply to the Kubeconfig Generator controller container only.
+  securityContext:
+    allowPrivilegeEscalation: false
+    # capabilities:
+    #   drop:
+    #   - ALL
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+    # runAsUser: 1000
+  # -- Kubernetes node selector rules to schedule Kubeconfig Generator controller
+  nodeSelector: {}
+  # -- Kubernetes node taints that the Kubeconfig Generator controller pods would tolerate
+  tolerations: []
+  # -- Kubernetes affinity rules to apply to Kubeconfig Generator controller pods
+  affinity: {}

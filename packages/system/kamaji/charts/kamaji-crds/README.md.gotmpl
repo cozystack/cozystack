@@ -1,0 +1,54 @@
+{{ template "chart.header" . }}
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+[Kamaji](https://github.com/clastix/kamaji) Custom Resource Definitions packaged as Helm Charts.
+
+## How to use this chart
+
+Add `clastix` Helm repository:
+
+    helm repo add clastix https://clastix.github.io/charts
+
+Install the Chart with the release name `kamaji-crds`:
+
+    helm upgrade --install --namespace kamaji-system --create-namespace kamaji-crds clastix/kamaji-crds
+
+Show the status:
+
+    helm status kamaji-crds -n kamaji-system
+
+Upgrade the Chart
+
+    helm upgrade kamaji-crds -n kamaji-system clastix/kamaji-crds
+
+Uninstall the Chart
+
+    helm uninstall kamaji-crds -n kamaji-system
+
+## Customize the installation
+
+There are two methods for specifying overrides of values during Chart installation: `--values` and `--set`.
+
+The `--values` option is the preferred method because it allows you to keep your overrides in a YAML file, rather than specifying them all on the command line. Create a copy of the YAML file `values.yaml` and add your overrides to it.
+
+Specify your overrides file when you install the Chart:
+
+    helm upgrade kamaji-crds --install --namespace kamaji-system --create-namespace clastix/kamaji-crds --values myvalues.yaml
+
+The values in your overrides file `myvalues.yaml` will override their counterparts in the Chart's values.yaml file. Any values in `values.yaml` that weren’t overridden will keep their defaults.
+
+If you only need to make minor customizations, you can specify them on the command line by using the `--set` option. For example:
+
+    helm upgrade kamaji-crds --install --namespace kamaji-system --create-namespace clastix/kamaji-crds --set kamajiCertificateName=kamaji
+
+{{ template "chart.valuesSection" . }}

@@ -1,0 +1,292 @@
+group: kamaji.clastix.io
+names:
+  kind: DataStore
+  listKind: DataStoreList
+  plural: datastores
+  singular: datastore
+scope: Cluster
+versions:
+  - additionalPrinterColumns:
+      - description: Kamaji data store driver
+        jsonPath: .spec.driver
+        name: Driver
+        type: string
+      - description: Age
+        jsonPath: .metadata.creationTimestamp
+        name: Age
+        type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DataStore is the Schema for the datastores API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DataStoreSpec defines the desired state of DataStore.
+            properties:
+              basicAuth:
+                description: |-
+                  In case of authentication enabled for the given data store, specifies the username and password pair.
+                  This value is optional.
+                properties:
+                  password:
+                    properties:
+                      content:
+                        description: |-
+                          Bare content of the file, base64 encoded.
+                          It has precedence over the SecretReference value.
+                        format: byte
+                        type: string
+                      secretReference:
+                        properties:
+                          keyPath:
+                            description: |-
+                              Name of the key for the given Secret reference where the content is stored.
+                              This value is mandatory.
+                            minLength: 1
+                            type: string
+                          name:
+                            description: name is unique within a namespace to reference a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which the secret name must be unique.
+                            type: string
+                        required:
+                          - keyPath
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                  username:
+                    properties:
+                      content:
+                        description: |-
+                          Bare content of the file, base64 encoded.
+                          It has precedence over the SecretReference value.
+                        format: byte
+                        type: string
+                      secretReference:
+                        properties:
+                          keyPath:
+                            description: |-
+                              Name of the key for the given Secret reference where the content is stored.
+                              This value is mandatory.
+                            minLength: 1
+                            type: string
+                          name:
+                            description: name is unique within a namespace to reference a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which the secret name must be unique.
+                            type: string
+                        required:
+                          - keyPath
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                required:
+                  - password
+                  - username
+                type: object
+              driver:
+                description: The driver to use to connect to the shared datastore.
+                enum:
+                  - etcd
+                  - MySQL
+                  - PostgreSQL
+                  - NATS
+                type: string
+                x-kubernetes-validations:
+                  - message: Datastore driver is immutable
+                    rule: self == oldSelf
+              endpoints:
+                description: |-
+                  List of the endpoints to connect to the shared datastore.
+                  No need for protocol, just bare IP/FQDN and port.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+              tlsConfig:
+                description: |-
+                  Defines the TLS/SSL configuration required to connect to the data store in a secure way.
+                  This value is optional.
+                properties:
+                  certificateAuthority:
+                    description: |-
+                      Retrieve the Certificate Authority certificate and private key, such as bare content of the file, or a SecretReference.
+                      The key reference is required since etcd authentication is based on certificates, and Kamaji is responsible in creating this.
+                    properties:
+                      certificate:
+                        properties:
+                          content:
+                            description: |-
+                              Bare content of the file, base64 encoded.
+                              It has precedence over the SecretReference value.
+                            format: byte
+                            type: string
+                          secretReference:
+                            properties:
+                              keyPath:
+                                description: |-
+                                  Name of the key for the given Secret reference where the content is stored.
+                                  This value is mandatory.
+                                minLength: 1
+                                type: string
+                              name:
+                                description: name is unique within a namespace to reference a secret resource.
+                                type: string
+                              namespace:
+                                description: namespace defines the space within which the secret name must be unique.
+                                type: string
+                            required:
+                              - keyPath
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        type: object
+                      privateKey:
+                        properties:
+                          content:
+                            description: |-
+                              Bare content of the file, base64 encoded.
+                              It has precedence over the SecretReference value.
+                            format: byte
+                            type: string
+                          secretReference:
+                            properties:
+                              keyPath:
+                                description: |-
+                                  Name of the key for the given Secret reference where the content is stored.
+                                  This value is mandatory.
+                                minLength: 1
+                                type: string
+                              name:
+                                description: name is unique within a namespace to reference a secret resource.
+                                type: string
+                              namespace:
+                                description: namespace defines the space within which the secret name must be unique.
+                                type: string
+                            required:
+                              - keyPath
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        type: object
+                    required:
+                      - certificate
+                    type: object
+                  clientCertificate:
+                    description: Specifies the SSL/TLS key and private key pair used to connect to the data store.
+                    properties:
+                      certificate:
+                        properties:
+                          content:
+                            description: |-
+                              Bare content of the file, base64 encoded.
+                              It has precedence over the SecretReference value.
+                            format: byte
+                            type: string
+                          secretReference:
+                            properties:
+                              keyPath:
+                                description: |-
+                                  Name of the key for the given Secret reference where the content is stored.
+                                  This value is mandatory.
+                                minLength: 1
+                                type: string
+                              name:
+                                description: name is unique within a namespace to reference a secret resource.
+                                type: string
+                              namespace:
+                                description: namespace defines the space within which the secret name must be unique.
+                                type: string
+                            required:
+                              - keyPath
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        type: object
+                      privateKey:
+                        properties:
+                          content:
+                            description: |-
+                              Bare content of the file, base64 encoded.
+                              It has precedence over the SecretReference value.
+                            format: byte
+                            type: string
+                          secretReference:
+                            properties:
+                              keyPath:
+                                description: |-
+                                  Name of the key for the given Secret reference where the content is stored.
+                                  This value is mandatory.
+                                minLength: 1
+                                type: string
+                              name:
+                                description: name is unique within a namespace to reference a secret resource.
+                                type: string
+                              namespace:
+                                description: namespace defines the space within which the secret name must be unique.
+                                type: string
+                            required:
+                              - keyPath
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        type: object
+                    required:
+                      - certificate
+                      - privateKey
+                    type: object
+                required:
+                  - certificateAuthority
+                type: object
+            required:
+              - driver
+              - endpoints
+            type: object
+            x-kubernetes-validations:
+              - message: certificateAuthority privateKey must have secretReference or content when driver is etcd
+                rule: '(self.driver == "etcd") ? (self.tlsConfig != null && (has(self.tlsConfig.certificateAuthority.privateKey.secretReference) || has(self.tlsConfig.certificateAuthority.privateKey.content))) : true'
+              - message: clientCertificate must have secretReference or content when driver is etcd
+                rule: '(self.driver == "etcd") ? (self.tlsConfig != null && (has(self.tlsConfig.clientCertificate.certificate.secretReference) || has(self.tlsConfig.clientCertificate.certificate.content))) : true'
+              - message: clientCertificate privateKey must have secretReference or content when driver is etcd
+                rule: '(self.driver == "etcd") ? (self.tlsConfig != null && (has(self.tlsConfig.clientCertificate.privateKey.secretReference) || has(self.tlsConfig.clientCertificate.privateKey.content))) : true'
+              - message: When driver is not etcd and tlsConfig exists, clientCertificate must be null or contain valid content
+                rule: '(self.driver != "etcd" && has(self.tlsConfig) && has(self.tlsConfig.clientCertificate)) ? (((has(self.tlsConfig.clientCertificate.certificate.secretReference) || has(self.tlsConfig.clientCertificate.certificate.content)))) : true'
+              - message: When driver is not etcd and basicAuth exists, username must have secretReference or content
+                rule: '(self.driver != "etcd" && has(self.basicAuth)) ? ((has(self.basicAuth.username.secretReference) || has(self.basicAuth.username.content))) : true'
+              - message: When driver is not etcd and basicAuth exists, password must have secretReference or content
+                rule: '(self.driver != "etcd" && has(self.basicAuth)) ? ((has(self.basicAuth.password.secretReference) || has(self.basicAuth.password.content))) : true'
+              - message: When driver is not etcd, either tlsConfig or basicAuth must be provided
+                rule: '(self.driver != "etcd") ? (has(self.tlsConfig) || has(self.basicAuth)) : true'
+          status:
+            description: DataStoreStatus defines the observed state of DataStore.
+            properties:
+              observedGeneration:
+                description: ObservedGeneration represents the .metadata.generation that was last reconciled.
+                format: int64
+                type: integer
+              usedBy:
+                description: List of the Tenant Control Planes, namespaced named, using this data store.
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -89,3 +89,15 @@ Create the name of the cert-manager Certificate
 {{- define "kamaji.certificateName" -}}
 {{- printf "%s-serving-cert" (include "kamaji.fullname" .) }}
 {{- end }}
+
+
+{{/*
+Kubeconfig Generator Deployment name.
+*/}}
+{{- define "kamaji.kubeconfigGeneratorName" -}}
+{{- if .Values.kubeconfigGenerator.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name "kubeconfig-generator" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
