@@ -42,20 +42,17 @@ manifests:
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
 		--show-only templates/cozystack-operator.yaml \
-		--show-only templates/packagesource.yaml \
 		> _out/assets/cozystack-operator-talos.yaml
 	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
 	helm template installer packages/core/installer -n cozy-system \
 		--set cozystackOperator.variant=generic \
 		--set cozystack.apiServerHost=REPLACE_ME \
 		--show-only templates/cozystack-operator.yaml \
-		--show-only templates/packagesource.yaml \
 		> _out/assets/cozystack-operator-generic.yaml
 	# Hosted variant (managed Kubernetes)
 	helm template installer packages/core/installer -n cozy-system \
 		--set cozystackOperator.variant=hosted \
 		--show-only templates/cozystack-operator.yaml \
-		--show-only templates/packagesource.yaml \
 		> _out/assets/cozystack-operator-hosted.yaml
 
 cozypkg:

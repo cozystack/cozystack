@@ -8,7 +8,7 @@
 }
 
 @test "Install Cozystack" {
-  # Install cozy-installer chart (CRDs from crds/ are applied automatically)
+  # Install cozy-installer chart (operator installs CRDs on startup via --install-crds)
   helm upgrade installer packages/core/installer \
     --install \
     --namespace cozy-system \

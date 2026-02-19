@@ -222,6 +222,20 @@ func main() {
 		} else {
 			setupLog.Info("Platform source resource installation completed successfully")
 		}
+
+		// Create platform PackageSource that references the source resource
+		setupLog.Info("Creating platform PackageSource", "platformSourceName", platformSourceName)
+		sourceType, _, _ := parsePlatformSourceURL(platformSourceURL)
+		sourceRefKind := "OCIRepository"
+		if sourceType == "git" {
+			sourceRefKind = "GitRepository"
+		}
+		if err := installPlatformPackageSource(installCtx, directClient, platformSourceName, sourceRefKind); err != nil {
+			setupLog.Error(err, "failed to create platform PackageSource")
+			os.Exit(1)
+		} else {
+			setupLog.Info("Platform PackageSource creation completed successfully")
+		}
 	}
 
 	// Setup PackageSource reconciler
@@ -551,4 +565,116 @@ func generateGitRepository(name, repoURL string, refMap map[string]string) (*sou
 	}
 
 	return obj, nil
+}
+
+// installPlatformPackageSource creates the platform PackageSource resource
+// that references the Flux source resource (OCIRepository or GitRepository).
+func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, platformSourceName, sourceRefKind string) error {
+	logger := log.FromContext(ctx)
+
+	packageSourceName := "cozystack." + platformSourceName
+
+	ps := &cozyv1alpha1.PackageSource{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: cozyv1alpha1.GroupVersion.String(),
+			Kind:       "PackageSource",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: packageSourceName,
+			Annotations: map[string]string{
+				"operator.cozystack.io/skip-cozystack-values": "true",
+			},
+		},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{
+				Kind:      sourceRefKind,
+				Name:      platformSourceName,
+				Namespace: "cozy-system",
+				Path:      "/",
+			},
+			Variants: []cozyv1alpha1.Variant{
+				{
+					Name: "default",
+					Components: []cozyv1alpha1.Component{
+						{
+							Name: "platform",
+							Path: "core/platform",
+							Install: &cozyv1alpha1.ComponentInstall{
+								Namespace:   "cozy-system",
+								ReleaseName: "cozystack-platform",
+							},
+							ValuesFiles: []string{"values.yaml"},
+						},
+					},
+				},
+				{
+					Name: "isp-full",
+					Components: []cozyv1alpha1.Component{
+						{
+							Name: "platform",
+							Path: "core/platform",
+							Install: &cozyv1alpha1.ComponentInstall{
+								Namespace:   "cozy-system",
+								ReleaseName: "cozystack-platform",
+							},
+							ValuesFiles: []string{"values.yaml", "values-isp-full.yaml"},
+						},
+					},
+				},
+				{
+					Name: "isp-hosted",
+					Components: []cozyv1alpha1.Component{
+						{
+							Name: "platform",
+							Path: "core/platform",
+							Install: &cozyv1alpha1.ComponentInstall{
+								Namespace:   "cozy-system",
+								ReleaseName: "cozystack-platform",
+							},
+							ValuesFiles: []string{"values.yaml", "values-isp-hosted.yaml"},
+						},
+					},
+				},
+				{
+					Name: "isp-full-generic",
+					Components: []cozyv1alpha1.Component{
+						{
+							Name: "platform",
+							Path: "core/platform",
+							Install: &cozyv1alpha1.ComponentInstall{
+								Namespace:   "cozy-system",
+								ReleaseName: "cozystack-platform",
+							},
+							ValuesFiles: []string{"values.yaml", "values-isp-full-generic.yaml"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	logger.Info("Applying platform PackageSource", "name", packageSourceName)
+
+	existing := &cozyv1alpha1.PackageSource{}
+	key := client.ObjectKeyFromObject(ps)
+
+	err := k8sClient.Get(ctx, key, existing)
+	if err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			if err := k8sClient.Create(ctx, ps); err != nil {
+				return fmt.Errorf("failed to create PackageSource %s: %w", packageSourceName, err)
+			}
+			logger.Info("Created platform PackageSource", "name", packageSourceName)
+		} else {
+			return fmt.Errorf("failed to check if PackageSource exists: %w", err)
+		}
+	} else {
+		ps.SetResourceVersion(existing.GetResourceVersion())
+		if err := k8sClient.Update(ctx, ps); err != nil {
+			return fmt.Errorf("failed to update PackageSource %s: %w", packageSourceName, err)
+		}
+		logger.Info("Updated platform PackageSource", "name", packageSourceName)
+	}
+
+	return nil
 }
