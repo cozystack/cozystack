@@ -126,8 +126,16 @@ spec:
   dataStoreName: "{{ $etcd }}"
   addons:
     konnectivity:
+      {{- $konnVersion := include "kubernetes.konnectivityVersion" $ | trim }}
+      {{- if $konnVersion }}
+      agent:
+        version: {{ $konnVersion }}
+      {{- end }}
       server:
         port: 8132
+        {{- if $konnVersion }}
+        version: {{ $konnVersion }}
+        {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.konnectivity.server.resourcesPreset .Values.controlPlane.konnectivity.server.resources $) | nindent 10 }}
   kubelet:
     cgroupfs: systemd
