@@ -46,14 +46,20 @@ func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alph
 		}
 	}
 
-	// Build schema with multilineString for string fields without enum
+	// Parse OpenAPI schema once for reuse
 	l := log.FromContext(ctx)
+	openAPIProps := parseOpenAPIProperties(crd.Spec.Application.OpenAPISchema)
+
+	// Build schema with multilineString for string fields without enum
 	schema, err := buildMultilineStringSchema(crd.Spec.Application.OpenAPISchema)
 	if err != nil {
 		// If schema parsing fails, log the error and use an empty schema
 		l.Error(err, "failed to build multiline string schema, using empty schema", "crd", crd.Name)
 		schema = map[string]any{}
 	}
+
+	// Override specific fields with API-backed dropdowns (listInput type)
+	applyListInputOverrides(schema, kind, openAPIProps)
 
 	spec := map[string]any{
 		"customizationId": customizationID,
@@ -174,6 +180,69 @@ func buildMultilineStringSchema(openAPISchema string) (map[string]any, error) {
 	processSpecProperties(specProps, specSchema["properties"].(map[string]any))
 
 	return schema, nil
+}
+
+// applyListInputOverrides injects listInput type overrides into the schema
+// for fields that should be rendered as API-backed dropdowns in the dashboard.
+// openAPIProps are the parsed top-level properties from the OpenAPI schema.
+func applyListInputOverrides(schema map[string]any, kind string, openAPIProps map[string]any) {
+	switch kind {
+	case "VMInstance":
+		specProps := ensureSchemaPath(schema, "spec")
+		field := map[string]any{
+			"type": "listInput",
+			"customProps": map[string]any{
+				"valueUri":    "/api/clusters/{cluster}/k8s/apis/instancetype.kubevirt.io/v1beta1/virtualmachineclusterinstancetypes",
+				"keysToValue": []any{"metadata", "name"},
+				"keysToLabel": []any{"metadata", "name"},
+			},
+		}
+		if prop, _ := openAPIProps["instanceType"].(map[string]any); prop != nil {
+			if def := prop["default"]; def != nil {
+				field["default"] = def
+			}
+		}
+		specProps["instanceType"] = field
+	}
+}
+
+// parseOpenAPIProperties parses the top-level properties from an OpenAPI schema JSON string.
+func parseOpenAPIProperties(openAPISchema string) map[string]any {
+	if openAPISchema == "" {
+		return nil
+	}
+	var root map[string]any
+	if err := json.Unmarshal([]byte(openAPISchema), &root); err != nil {
+		return nil
+	}
+	props, _ := root["properties"].(map[string]any)
+	return props
+}
+
+// ensureSchemaPath ensures the nested properties structure exists in a schema
+// and returns the innermost properties map.
+// e.g. ensureSchemaPath(schema, "spec") returns schema["properties"]["spec"]["properties"]
+func ensureSchemaPath(schema map[string]any, segments ...string) map[string]any {
+	current := schema
+	for _, seg := range segments {
+		props, ok := current["properties"].(map[string]any)
+		if !ok {
+			props = map[string]any{}
+			current["properties"] = props
+		}
+		child, ok := props[seg].(map[string]any)
+		if !ok {
+			child = map[string]any{}
+			props[seg] = child
+		}
+		current = child
+	}
+	props, ok := current["properties"].(map[string]any)
+	if !ok {
+		props = map[string]any{}
+		current["properties"] = props
+	}
+	return props
 }
 
 // processSpecProperties recursively processes spec properties and adds multilineString type
