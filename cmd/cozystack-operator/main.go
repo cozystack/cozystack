@@ -573,6 +573,10 @@ func generateGitRepository(name, repoURL string, refMap map[string]string) (*sou
 
 // installPlatformPackageSource creates the platform PackageSource resource
 // that references the Flux source resource (OCIRepository or GitRepository).
+//
+// The variant list is intentionally hardcoded here. These are platform-defined
+// deployment profiles (not user-extensible), matching what was previously in
+// the Helm template. Changes require a new operator build and release.
 func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, platformSourceName, sourceRefKind string) error {
 	logger := log.FromContext(ctx)
 

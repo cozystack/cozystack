@@ -19,6 +19,10 @@
   # Verify the operator deployment is available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
 
+  # Wait for operator to install CRDs (happens at startup before reconcile loop)
+  kubectl wait crd/packages.cozystack.io --for=condition=Established --timeout=2m
+  kubectl wait crd/packagesources.cozystack.io --for=condition=Established --timeout=2m
+
   # Create platform Package with isp-full variant
   kubectl apply -f - <<EOF
 apiVersion: cozystack.io/v1alpha1
