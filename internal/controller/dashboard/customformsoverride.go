@@ -203,7 +203,39 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 			}
 		}
 		specProps["instanceType"] = field
+
+		// Override disks[].name to be an API-backed dropdown listing VMDisk resources
+		disksItemProps := ensureArrayItemProps(specProps, "disks")
+		disksItemProps["name"] = map[string]any{
+			"type": "listInput",
+			"customProps": map[string]any{
+				"valueUri":    "/api/clusters/{cluster}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{namespace}/vmdisks",
+				"keysToValue": []any{"metadata", "name"},
+				"keysToLabel": []any{"metadata", "name"},
+			},
+		}
 	}
+}
+
+// ensureArrayItemProps ensures that parentProps[fieldName].items.properties exists
+// and returns the items properties map. Used for overriding fields inside array items.
+func ensureArrayItemProps(parentProps map[string]any, fieldName string) map[string]any {
+	field, ok := parentProps[fieldName].(map[string]any)
+	if !ok {
+		field = map[string]any{}
+		parentProps[fieldName] = field
+	}
+	items, ok := field["items"].(map[string]any)
+	if !ok {
+		items = map[string]any{}
+		field["items"] = items
+	}
+	props, ok := items["properties"].(map[string]any)
+	if !ok {
+		props = map[string]any{}
+		items["properties"] = props
+	}
+	return props
 }
 
 // parseOpenAPIProperties parses the top-level properties from an OpenAPI schema JSON string.

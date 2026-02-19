@@ -201,6 +201,35 @@ func TestApplyListInputOverrides_VMInstance(t *testing.T) {
 	if customProps["valueUri"] != expectedURI {
 		t.Errorf("expected valueUri %s, got %v", expectedURI, customProps["valueUri"])
 	}
+
+	// Check disks[].name is a listInput
+	disks, ok := specProps["disks"].(map[string]any)
+	if !ok {
+		t.Fatal("disks not found in schema.properties.spec.properties")
+	}
+	items, ok := disks["items"].(map[string]any)
+	if !ok {
+		t.Fatal("disks.items not found")
+	}
+	itemProps, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("disks.items.properties not found")
+	}
+	diskName, ok := itemProps["name"].(map[string]any)
+	if !ok {
+		t.Fatal("disks.items.properties.name not found")
+	}
+	if diskName["type"] != "listInput" {
+		t.Errorf("expected disks name type listInput, got %v", diskName["type"])
+	}
+	diskCustomProps, ok := diskName["customProps"].(map[string]any)
+	if !ok {
+		t.Fatal("disks name customProps not found")
+	}
+	expectedDiskURI := "/api/clusters/{cluster}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{namespace}/vmdisks"
+	if diskCustomProps["valueUri"] != expectedDiskURI {
+		t.Errorf("expected disks valueUri %s, got %v", expectedDiskURI, diskCustomProps["valueUri"])
+	}
 }
 
 func TestApplyListInputOverrides_UnknownKind(t *testing.T) {
@@ -330,6 +359,41 @@ func TestEnsureSchemaPath(t *testing.T) {
 		got := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["nested"].(map[string]any)["properties"].(map[string]any)["deep"]
 		if got != true {
 			t.Errorf("expected true, got %v", got)
+		}
+	})
+}
+
+func TestEnsureArrayItemProps(t *testing.T) {
+	t.Run("creates from empty parent", func(t *testing.T) {
+		parent := map[string]any{}
+		props := ensureArrayItemProps(parent, "disks")
+
+		props["name"] = map[string]any{"type": "listInput"}
+
+		got := parent["disks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["name"].(map[string]any)["type"]
+		if got != "listInput" {
+			t.Errorf("expected listInput, got %v", got)
+		}
+	})
+
+	t.Run("preserves existing item properties", func(t *testing.T) {
+		parent := map[string]any{
+			"disks": map[string]any{
+				"items": map[string]any{
+					"properties": map[string]any{
+						"bus": map[string]any{"type": "string"},
+					},
+				},
+			},
+		}
+		props := ensureArrayItemProps(parent, "disks")
+		props["name"] = map[string]any{"type": "listInput"}
+
+		if props["bus"].(map[string]any)["type"] != "string" {
+			t.Error("existing bus property was lost")
+		}
+		if props["name"].(map[string]any)["type"] != "listInput" {
+			t.Error("name property was not added")
 		}
 	})
 }
