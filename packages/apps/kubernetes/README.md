@@ -104,7 +104,7 @@ See the reference for components utilized in this service:
 | `nodeGroups[name].resources.memory` | Memory (RAM) available.                                                                        | `quantity`          | `""`        |
 | `nodeGroups[name].gpus`             | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                            | `[]object`          | `[]`        |
 | `nodeGroups[name].gpus[i].name`     | Name of GPU, such as "nvidia.com/AD102GL_L40S".                                                | `string`            | `""`        |
-| `version`                           | Kubernetes major.minor version to deploy                                                       | `string`            | `v1.33`     |
+| `version`                           | Kubernetes major.minor version to deploy                                                       | `string`            | `v1.35`     |
 | `host`                              | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty. | `string`            | `""`        |
 
 
