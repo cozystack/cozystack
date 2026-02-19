@@ -1,0 +1,149 @@
+##
+## @section Common parameters
+##
+
+## @enum {string} Provider - DNS provider.
+## @value cloudflare
+## @value aws
+## @value azure
+## @value google
+## @value digitalocean
+## @value linode
+## @value ovh
+## @value exoscale
+## @value godaddy
+## @value inmemory
+
+## @param {Provider} provider - DNS provider name.
+# provider:
+
+## @param {[]string} domainFilters - List of domains this external-dns instance can manage.
+domainFilters: []
+
+## @enum {string} Policy - How DNS records are synchronized.
+## @value create-only
+## @value sync
+## @value upsert-only
+
+## @param {Policy} policy="upsert-only" - How DNS records are synchronized.
+policy: "upsert-only"
+
+## @param {[]string} extraArgs - Extra arguments for external-dns.
+extraArgs: []
+
+## @param {bool} gatewayAPI=false - Enable Gateway API HTTPRoute as a source for DNS records.
+gatewayAPI: false
+
+## @param {string} [annotationPrefix] - Custom annotation prefix for external-dns (useful for running multiple instances).
+annotationPrefix: ""
+
+##
+## @section Cloudflare
+##
+
+## @param {object} cloudflare - Cloudflare provider credentials.
+cloudflare:
+  apiToken: ""
+  apiKey: ""
+  apiEmail: ""
+  proxied: false
+
+##
+## @section AWS
+##
+
+## @param {object} aws - AWS Route53 provider credentials.
+aws:
+  accessKeyId: ""
+  secretAccessKey: ""
+  region: ""
+  zoneType: ""
+
+##
+## @section Azure
+##
+
+## @param {object} azure - Azure DNS provider credentials.
+azure:
+  tenantId: ""
+  subscriptionId: ""
+  resourceGroup: ""
+  aadClientId: ""
+  aadClientSecret: ""
+
+##
+## @section Google
+##
+
+## @param {object} google - Google Cloud DNS provider credentials.
+google:
+  project: ""
+  serviceAccountKey: ""
+
+##
+## @section DigitalOcean
+##
+
+## @param {object} digitalocean - DigitalOcean DNS provider credentials.
+digitalocean:
+  token: ""
+
+##
+## @section Linode
+##
+
+## @param {object} linode - Linode DNS provider credentials.
+linode:
+  token: ""
+
+##
+## @section OVH
+##
+
+## @param {object} ovh - OVH DNS provider credentials.
+ovh:
+  endpoint: ""
+  applicationKey: ""
+  applicationSecret: ""
+  consumerKey: ""
+
+##
+## @section Exoscale
+##
+
+## @param {object} exoscale - Exoscale DNS provider credentials.
+exoscale:
+  apiKey: ""
+  apiSecret: ""
+
+##
+## @section GoDaddy
+##
+
+## @param {object} godaddy - GoDaddy DNS provider credentials.
+godaddy:
+  apiKey: ""
+  apiSecret: ""
+
+##
+## @section Resources
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="nano" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "nano"

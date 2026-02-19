@@ -148,6 +148,7 @@
 {{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.bootbox" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}

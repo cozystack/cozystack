@@ -1,3 +1,4 @@
+{{- $defaultSelector := (include "external-dns.labelSelector" $ ) | fromYaml -}}
 {{- $providerName := tpl (include "external-dns.providerName" .) $ }}
 apiVersion: apps/v1
 kind: Deployment
@@ -40,7 +41,7 @@ spec:
     {{- if not (quote .Values.automountServiceAccountToken | empty) }}
       automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
     {{- end }}
-      {{- with .Values.imagePullSecrets }}
+      {{- with (default .Values.global.imagePullSecrets .Values.imagePullSecrets) }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -99,14 +100,19 @@ spec:
             {{- if .Values.txtOwnerId }}
             - --txt-owner-id={{ .Values.txtOwnerId }}
             {{- end }}
+            {{- if and .Values.txtPrefix .Values.txtSuffix }}
+            {{- fail (printf "'txtPrefix' and 'txtSuffix' are mutually exclusive") }}
+            {{- end }}
             {{- if .Values.txtPrefix }}
             - --txt-prefix={{ .Values.txtPrefix }}
-            {{- end }}
-            {{- if and (eq .Values.txtPrefix "") (ne .Values.txtSuffix "") }}
+            {{- else if .Values.txtSuffix }}
             - --txt-suffix={{ .Values.txtSuffix }}
             {{- end }}
             {{- if .Values.namespaced }}
             - --namespace={{ .Release.Namespace }}
+            {{- end }}
+            {{- if .Values.gatewayNamespace }}
+            - --gateway-namespace={{ .Values.gatewayNamespace }}
             {{- end }}
             {{- range .Values.domainFilters }}
             - --domain-filter={{ . }}
@@ -114,10 +120,39 @@ spec:
             {{- range .Values.excludeDomains }}
             - --exclude-domains={{ . }}
             {{- end }}
+            {{- if .Values.labelFilter }}
+            - --label-filter={{ .Values.labelFilter }}
+            {{- end }}
+            {{- if .Values.annotationFilter }}
+            - --annotation-filter={{ .Values.annotationFilter }}
+            {{- end }}
+            {{- if .Values.annotationPrefix }}
+            - --annotation-prefix={{ .Values.annotationPrefix }}
+            {{- end }}
+            {{- range .Values.managedRecordTypes }}
+            - --managed-record-types={{ . }}
+            {{- end }}
             - --provider={{ $providerName }}
-          {{- range .Values.extraArgs }}
+            {{- if kindIs "map" .Values.extraArgs }}
+            {{- range $key, $value := .Values.extraArgs }}
+            {{- if not (kindIs "invalid" $value) }}
+            {{- if kindIs "slice" $value }}
+            {{- range $value }}
+            - --{{ $key }}={{ tpl (. | toString) $ }}
+            {{- end }}
+            {{- else }}
+            - --{{ $key }}={{ tpl ($value | toString) $ }}
+            {{- end }}
+            {{- else }}
+            - --{{ $key }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if kindIs "slice" .Values.extraArgs }}
+            {{- range .Values.extraArgs }}
             - {{ tpl . $ }}
-          {{- end }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               protocol: TCP
@@ -197,11 +232,71 @@ spec:
       {{- end }}
       {{- with .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+      {{- with .nodeAffinity }}
+        nodeAffinity:
+          {{- toYaml . | nindent 10 }}
+      {{- end }}
+      {{- with .podAffinity }}
+        podAffinity:
+          {{- with .preferredDuringSchedulingIgnoredDuringExecution }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+          {{- range . }}
+            - podAffinityTerm:
+              {{- if dig "podAffinityTerm" "labelSelector" nil . }}
+                {{- toYaml .podAffinityTerm | nindent 16 }}
+              {{- else }}
+                {{- (merge $defaultSelector .podAffinityTerm) | toYaml | nindent 16 }}
+              {{- end }}
+              weight: {{ .weight  }}
+          {{- end }}
+          {{- end }}
+          {{- with .requiredDuringSchedulingIgnoredDuringExecution }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+          {{- range . }}
+            {{- if dig "labelSelector" nil . }}
+              - {{ toYaml . | indent 16 | trim }}
+            {{- else }}
+              - {{ (merge $defaultSelector .) | toYaml | indent 16 | trim }}
+            {{- end }}
+          {{- end }}
+          {{- end }}
+      {{- end }}
+      {{- with .podAntiAffinity }}
+        podAntiAffinity:
+          {{- with .preferredDuringSchedulingIgnoredDuringExecution }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+          {{- range . }}
+            - podAffinityTerm:
+              {{- if dig "podAffinityTerm" "labelSelector" nil . }}
+                {{- toYaml .podAffinityTerm | nindent 16 }}
+              {{- else }}
+                {{- (merge $defaultSelector .podAffinityTerm) | toYaml | nindent 16 }}
+              {{- end }}
+              weight: {{ .weight  }}
+          {{- end }}
+          {{- end }}
+          {{- with .requiredDuringSchedulingIgnoredDuringExecution }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+          {{- range . }}
+            {{- if dig "labelSelector" nil . }}
+              - {{ toYaml . | indent 16 | trim }}
+            {{- else }}
+              - {{ (merge $defaultSelector .) | toYaml | indent 16 | trim }}
+            {{- end }}
+          {{- end }}
+          {{- end }}
+      {{- end }}
       {{- end }}
       {{- with .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
-        {{- toYaml . | nindent 8 }}
+        {{- range . }}
+        - {{ toYaml . | nindent 10 | trim }}
+          {{- if not (hasKey . "labelSelector") }}
+          labelSelector:
+            matchLabels:
+              {{- include "external-dns.selectorLabels" $ | nindent 14 }}
+          {{- end }}
+        {{- end }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

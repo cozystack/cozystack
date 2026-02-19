@@ -1,0 +1,169 @@
+{{- if not .Values.provider }}
+{{- fail "provider is required: set it to one of cloudflare, aws, azure, google, digitalocean, linode, ovh, exoscale, godaddy, inmemory" }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-system
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}-system
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-external-dns-application-default-external-dns-system
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  values:
+    external-dns:
+      namespaced: true
+      txtOwnerId: {{ .Release.Namespace | quote }}
+      policy: {{ .Values.policy | quote }}
+      {{- if .Values.annotationPrefix }}
+      annotationPrefix: {{ .Values.annotationPrefix | quote }}
+      {{- end }}
+      provider:
+        name: {{ .Values.provider | quote }}
+      sources:
+        - ingress
+        - service
+        {{- if .Values.gatewayAPI }}
+        - gateway-httproute
+        {{- end }}
+      {{- with .Values.domainFilters }}
+      domainFilters:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- /* Provider-specific credentials and config */}}
+
+      {{- if eq .Values.provider "cloudflare" }}
+      {{- if or .Values.cloudflare.apiToken (and .Values.cloudflare.apiKey .Values.cloudflare.apiEmail) }}
+      env:
+        {{- if .Values.cloudflare.apiToken }}
+        - name: CF_API_TOKEN
+          value: {{ .Values.cloudflare.apiToken | quote }}
+        {{- else }}
+        - name: CF_API_KEY
+          value: {{ .Values.cloudflare.apiKey | quote }}
+        - name: CF_API_EMAIL
+          value: {{ .Values.cloudflare.apiEmail | quote }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.cloudflare.proxied }}
+      cloudflare:
+        proxied: true
+      {{- end }}
+      {{- end }}
+
+      {{- if eq .Values.provider "aws" }}
+      {{- if or .Values.aws.accessKeyId .Values.aws.secretAccessKey .Values.aws.region }}
+      env:
+        {{- if .Values.aws.accessKeyId }}
+        - name: AWS_ACCESS_KEY_ID
+          value: {{ .Values.aws.accessKeyId | quote }}
+        {{- end }}
+        {{- if .Values.aws.secretAccessKey }}
+        - name: AWS_SECRET_ACCESS_KEY
+          value: {{ .Values.aws.secretAccessKey | quote }}
+        {{- end }}
+        {{- if .Values.aws.region }}
+        - name: AWS_DEFAULT_REGION
+          value: {{ .Values.aws.region | quote }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.aws.zoneType }}
+      aws:
+        zoneType: {{ .Values.aws.zoneType | quote }}
+      {{- end }}
+      {{- end }}
+
+      {{- if eq .Values.provider "azure" }}
+      {{- if or .Values.azure.tenantId .Values.azure.subscriptionId .Values.azure.resourceGroup .Values.azure.aadClientId .Values.azure.aadClientSecret }}
+      azure:
+        tenantId: {{ .Values.azure.tenantId | quote }}
+        subscriptionId: {{ .Values.azure.subscriptionId | quote }}
+        resourceGroup: {{ .Values.azure.resourceGroup | quote }}
+        aadClientId: {{ .Values.azure.aadClientId | quote }}
+        aadClientSecret: {{ .Values.azure.aadClientSecret | quote }}
+      {{- end }}
+      {{- end }}
+
+      {{- if eq .Values.provider "digitalocean" }}
+      {{- if .Values.digitalocean.token }}
+      env:
+        - name: DO_TOKEN
+          value: {{ .Values.digitalocean.token | quote }}
+      {{- end }}
+      {{- end }}
+
+      {{- if eq .Values.provider "google" }}
+      {{- if or .Values.google.project .Values.google.serviceAccountKey }}
+      google:
+        project: {{ .Values.google.project | quote }}
+        {{- if .Values.google.serviceAccountKey }}
+        serviceAccountKey: {{ .Values.google.serviceAccountKey | quote }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+
+      {{- if eq .Values.provider "linode" }}
+      {{- if .Values.linode.token }}
+      env:
+        - name: LINODE_TOKEN
+          value: {{ .Values.linode.token | quote }}
+      {{- end }}
+      {{- end }}
+
+      {{- if eq .Values.provider "ovh" }}
+      {{- if or .Values.ovh.endpoint .Values.ovh.applicationKey .Values.ovh.applicationSecret .Values.ovh.consumerKey }}
+      env:
+        - name: OVH_ENDPOINT
+          value: {{ .Values.ovh.endpoint | quote }}
+        - name: OVH_APPLICATION_KEY
+          value: {{ .Values.ovh.applicationKey | quote }}
+        - name: OVH_APPLICATION_SECRET
+          value: {{ .Values.ovh.applicationSecret | quote }}
+        - name: OVH_CONSUMER_KEY
+          value: {{ .Values.ovh.consumerKey | quote }}
+      {{- end }}
+      {{- end }}
+
+      {{- if eq .Values.provider "exoscale" }}
+      {{- if or .Values.exoscale.apiKey .Values.exoscale.apiSecret }}
+      env:
+        - name: EXOSCALE_API_KEY
+          value: {{ .Values.exoscale.apiKey | quote }}
+        - name: EXOSCALE_API_SECRET
+          value: {{ .Values.exoscale.apiSecret | quote }}
+      {{- end }}
+      {{- end }}
+
+      {{- /* extraArgs: merge user-supplied args with provider-specific args (godaddy) */}}
+      {{- $godaddyArgs := list }}
+      {{- if eq .Values.provider "godaddy" }}
+        {{- if .Values.godaddy.apiKey }}
+          {{- $godaddyArgs = append $godaddyArgs (printf "--godaddy-api-key=%s" .Values.godaddy.apiKey) }}
+        {{- end }}
+        {{- if .Values.godaddy.apiSecret }}
+          {{- $godaddyArgs = append $godaddyArgs (printf "--godaddy-api-secret=%s" .Values.godaddy.apiSecret) }}
+        {{- end }}
+      {{- end }}
+      {{- $allArgs := concat (.Values.extraArgs | default list) $godaddyArgs }}
+      {{- with $allArgs }}
+      extraArgs:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with (include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $)) }}
+      resources:
+        {{- . | nindent 8 }}
+      {{- end }}
