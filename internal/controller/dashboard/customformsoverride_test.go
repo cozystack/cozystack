@@ -169,3 +169,231 @@ func TestBuildMultilineStringSchemaInvalidJSON(t *testing.T) {
 		t.Errorf("Expected nil schema for invalid JSON, got %v", schema)
 	}
 }
+
+func TestApplyListInputOverrides_VMInstance(t *testing.T) {
+	openAPIProps := map[string]any{
+		"instanceType": map[string]any{"type": "string", "default": "u1.medium"},
+	}
+
+	schema := map[string]any{}
+	applyListInputOverrides(schema, "VMInstance", openAPIProps)
+
+	specProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
+	instanceType, ok := specProps["instanceType"].(map[string]any)
+	if !ok {
+		t.Fatal("instanceType not found in schema.properties.spec.properties")
+	}
+
+	if instanceType["type"] != "listInput" {
+		t.Errorf("expected type listInput, got %v", instanceType["type"])
+	}
+
+	if instanceType["default"] != "u1.medium" {
+		t.Errorf("expected default u1.medium, got %v", instanceType["default"])
+	}
+
+	customProps, ok := instanceType["customProps"].(map[string]any)
+	if !ok {
+		t.Fatal("customProps not found")
+	}
+
+	expectedURI := "/api/clusters/{cluster}/k8s/apis/instancetype.kubevirt.io/v1beta1/virtualmachineclusterinstancetypes"
+	if customProps["valueUri"] != expectedURI {
+		t.Errorf("expected valueUri %s, got %v", expectedURI, customProps["valueUri"])
+	}
+
+	// Check disks[].name is a listInput
+	disks, ok := specProps["disks"].(map[string]any)
+	if !ok {
+		t.Fatal("disks not found in schema.properties.spec.properties")
+	}
+	items, ok := disks["items"].(map[string]any)
+	if !ok {
+		t.Fatal("disks.items not found")
+	}
+	itemProps, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("disks.items.properties not found")
+	}
+	diskName, ok := itemProps["name"].(map[string]any)
+	if !ok {
+		t.Fatal("disks.items.properties.name not found")
+	}
+	if diskName["type"] != "listInput" {
+		t.Errorf("expected disks name type listInput, got %v", diskName["type"])
+	}
+	diskCustomProps, ok := diskName["customProps"].(map[string]any)
+	if !ok {
+		t.Fatal("disks name customProps not found")
+	}
+	expectedDiskURI := "/api/clusters/{cluster}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{namespace}/vmdisks"
+	if diskCustomProps["valueUri"] != expectedDiskURI {
+		t.Errorf("expected disks valueUri %s, got %v", expectedDiskURI, diskCustomProps["valueUri"])
+	}
+}
+
+func TestApplyListInputOverrides_UnknownKind(t *testing.T) {
+	schema := map[string]any{}
+	applyListInputOverrides(schema, "SomeOtherKind", map[string]any{})
+
+	if len(schema) != 0 {
+		t.Errorf("expected empty schema for unknown kind, got %v", schema)
+	}
+}
+
+func TestApplyListInputOverrides_NoDefault(t *testing.T) {
+	openAPIProps := map[string]any{
+		"instanceType": map[string]any{"type": "string"},
+	}
+
+	schema := map[string]any{}
+	applyListInputOverrides(schema, "VMInstance", openAPIProps)
+
+	specProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
+	instanceType := specProps["instanceType"].(map[string]any)
+
+	if _, exists := instanceType["default"]; exists {
+		t.Errorf("expected no default key, got %v", instanceType["default"])
+	}
+}
+
+func TestApplyListInputOverrides_MergesWithExistingSchema(t *testing.T) {
+	openAPIProps := map[string]any{
+		"instanceType": map[string]any{"type": "string", "default": "u1.medium"},
+	}
+
+	// Simulate schema that already has spec.properties from buildMultilineStringSchema
+	schema := map[string]any{
+		"properties": map[string]any{
+			"spec": map[string]any{
+				"properties": map[string]any{
+					"otherField": map[string]any{"type": "multilineString"},
+				},
+			},
+		},
+	}
+	applyListInputOverrides(schema, "VMInstance", openAPIProps)
+
+	specProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
+
+	// instanceType should be added
+	if _, ok := specProps["instanceType"].(map[string]any); !ok {
+		t.Fatal("instanceType not found after override")
+	}
+
+	// otherField should be preserved
+	otherField, ok := specProps["otherField"].(map[string]any)
+	if !ok {
+		t.Fatal("otherField was lost after override")
+	}
+	if otherField["type"] != "multilineString" {
+		t.Errorf("otherField type changed, got %v", otherField["type"])
+	}
+}
+
+func TestParseOpenAPIProperties(t *testing.T) {
+	t.Run("extracts properties", func(t *testing.T) {
+		props := parseOpenAPIProperties(`{"type":"object","properties":{"instanceType":{"type":"string","default":"u1.medium"}}}`)
+		field, _ := props["instanceType"].(map[string]any)
+		if field["default"] != "u1.medium" {
+			t.Errorf("expected default u1.medium, got %v", field["default"])
+		}
+	})
+
+	t.Run("empty string", func(t *testing.T) {
+		if props := parseOpenAPIProperties(""); props != nil {
+			t.Errorf("expected nil, got %v", props)
+		}
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		if props := parseOpenAPIProperties("{bad"); props != nil {
+			t.Errorf("expected nil, got %v", props)
+		}
+	})
+
+	t.Run("no properties key", func(t *testing.T) {
+		if props := parseOpenAPIProperties(`{"type":"object"}`); props != nil {
+			t.Errorf("expected nil, got %v", props)
+		}
+	})
+}
+
+func TestEnsureSchemaPath(t *testing.T) {
+	t.Run("creates path from empty schema", func(t *testing.T) {
+		schema := map[string]any{}
+		props := ensureSchemaPath(schema, "spec")
+
+		props["field"] = "value"
+
+		// Verify structure: schema.properties.spec.properties.field
+		got := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["field"]
+		if got != "value" {
+			t.Errorf("expected value, got %v", got)
+		}
+	})
+
+	t.Run("preserves existing nested properties", func(t *testing.T) {
+		schema := map[string]any{
+			"properties": map[string]any{
+				"spec": map[string]any{
+					"properties": map[string]any{
+						"existing": "keep",
+					},
+				},
+			},
+		}
+		props := ensureSchemaPath(schema, "spec")
+
+		if props["existing"] != "keep" {
+			t.Errorf("existing property lost, got %v", props["existing"])
+		}
+	})
+
+	t.Run("multi-level path", func(t *testing.T) {
+		schema := map[string]any{}
+		props := ensureSchemaPath(schema, "spec", "nested")
+
+		props["deep"] = true
+
+		got := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["nested"].(map[string]any)["properties"].(map[string]any)["deep"]
+		if got != true {
+			t.Errorf("expected true, got %v", got)
+		}
+	})
+}
+
+func TestEnsureArrayItemProps(t *testing.T) {
+	t.Run("creates from empty parent", func(t *testing.T) {
+		parent := map[string]any{}
+		props := ensureArrayItemProps(parent, "disks")
+
+		props["name"] = map[string]any{"type": "listInput"}
+
+		got := parent["disks"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["name"].(map[string]any)["type"]
+		if got != "listInput" {
+			t.Errorf("expected listInput, got %v", got)
+		}
+	})
+
+	t.Run("preserves existing item properties", func(t *testing.T) {
+		parent := map[string]any{
+			"disks": map[string]any{
+				"items": map[string]any{
+					"properties": map[string]any{
+						"bus": map[string]any{"type": "string"},
+					},
+				},
+			},
+		}
+		props := ensureArrayItemProps(parent, "disks")
+		props["name"] = map[string]any{"type": "listInput"}
+
+		if props["bus"].(map[string]any)["type"] != "string" {
+			t.Error("existing bus property was lost")
+		}
+		if props["name"].(map[string]any)["type"] != "listInput" {
+			t.Error("name property was not added")
+		}
+	})
+}
