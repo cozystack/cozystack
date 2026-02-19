@@ -607,66 +607,37 @@ func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, 
 				Namespace: "cozy-system",
 				Path:      "/",
 			},
-			Variants: []cozyv1alpha1.Variant{
-				{
-					Name: "default",
-					Components: []cozyv1alpha1.Component{
-						{
-							Name: "platform",
-							Path: "core/platform",
-							Install: &cozyv1alpha1.ComponentInstall{
-								Namespace:   "cozy-system",
-								ReleaseName: "cozystack-platform",
-							},
-							ValuesFiles: []string{"values.yaml"},
-						},
-					},
-				},
-				{
-					Name: "isp-full",
-					Components: []cozyv1alpha1.Component{
-						{
-							Name: "platform",
-							Path: "core/platform",
-							Install: &cozyv1alpha1.ComponentInstall{
-								Namespace:   "cozy-system",
-								ReleaseName: "cozystack-platform",
-							},
-							ValuesFiles: []string{"values.yaml", "values-isp-full.yaml"},
-						},
-					},
-				},
-				{
-					Name: "isp-hosted",
-					Components: []cozyv1alpha1.Component{
-						{
-							Name: "platform",
-							Path: "core/platform",
-							Install: &cozyv1alpha1.ComponentInstall{
-								Namespace:   "cozy-system",
-								ReleaseName: "cozystack-platform",
-							},
-							ValuesFiles: []string{"values.yaml", "values-isp-hosted.yaml"},
-						},
-					},
-				},
-				{
-					Name: "isp-full-generic",
-					Components: []cozyv1alpha1.Component{
-						{
-							Name: "platform",
-							Path: "core/platform",
-							Install: &cozyv1alpha1.ComponentInstall{
-								Namespace:   "cozy-system",
-								ReleaseName: "cozystack-platform",
-							},
-							ValuesFiles: []string{"values.yaml", "values-isp-full-generic.yaml"},
-						},
-					},
-				},
-			},
 		},
 	}
+
+	variantData := []struct {
+		name        string
+		valuesFiles []string
+	}{
+		{"default", []string{"values.yaml"}},
+		{"isp-full", []string{"values.yaml", "values-isp-full.yaml"}},
+		{"isp-hosted", []string{"values.yaml", "values-isp-hosted.yaml"}},
+		{"isp-full-generic", []string{"values.yaml", "values-isp-full-generic.yaml"}},
+	}
+
+	variants := make([]cozyv1alpha1.Variant, len(variantData))
+	for i, v := range variantData {
+		variants[i] = cozyv1alpha1.Variant{
+			Name: v.name,
+			Components: []cozyv1alpha1.Component{
+				{
+					Name: "platform",
+					Path: "core/platform",
+					Install: &cozyv1alpha1.ComponentInstall{
+						Namespace:   "cozy-system",
+						ReleaseName: "cozystack-platform",
+					},
+					ValuesFiles: v.valuesFiles,
+				},
+			},
+		}
+	}
+	ps.Spec.Variants = variants
 
 	logger.Info("Applying platform PackageSource", "name", packageSourceName)
 
