@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: v0.15.1-cp
+  name: v0.16.0-cp
   labels:
     cp-components: cozy
   annotations:
