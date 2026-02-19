@@ -225,7 +225,11 @@ func main() {
 
 		// Create platform PackageSource that references the source resource
 		setupLog.Info("Creating platform PackageSource", "platformSourceName", platformSourceName)
-		sourceType, _, _ := parsePlatformSourceURL(platformSourceURL)
+		sourceType, _, err := parsePlatformSourceURL(platformSourceURL)
+		if err != nil {
+			setupLog.Error(err, "failed to parse platform source URL for PackageSource creation")
+			os.Exit(1)
+		}
 		sourceRefKind := "OCIRepository"
 		if sourceType == "git" {
 			sourceRefKind = "GitRepository"
