@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.external-dns-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: external-dns-system
+          path: system/external-dns
+        - name: external-dns
+          path: extra/external-dns
+          libraries: ["cozy-lib"]
+        - name: external-dns-rd
+          path: system/external-dns-rd
+          install:
+            namespace: cozy-system
+            releaseName: external-dns-rd
