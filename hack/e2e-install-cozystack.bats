@@ -23,6 +23,9 @@
   kubectl wait crd/packages.cozystack.io --for=condition=Established --timeout=2m
   kubectl wait crd/packagesources.cozystack.io --for=condition=Established --timeout=2m
 
+  # Wait for operator to create the platform PackageSource
+  timeout 120 sh -ec 'until kubectl get packagesource cozystack.cozystack-platform >/dev/null 2>&1; do sleep 2; done'
+
   # Create platform Package with isp-full variant
   kubectl apply -f - <<EOF
 apiVersion: cozystack.io/v1alpha1

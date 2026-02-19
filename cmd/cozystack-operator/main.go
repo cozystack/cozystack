@@ -230,8 +230,11 @@ func main() {
 	{
 		sourceRefKind := "OCIRepository"
 		if platformSourceURL != "" {
-			sourceType, _, _ := parsePlatformSourceURL(platformSourceURL)
-			// Error already checked by installPlatformSourceResource above
+			sourceType, _, err := parsePlatformSourceURL(platformSourceURL)
+			if err != nil {
+				setupLog.Error(err, "failed to parse platform source URL for PackageSource")
+				os.Exit(1)
+			}
 			if sourceType == "git" {
 				sourceRefKind = "GitRepository"
 			}
