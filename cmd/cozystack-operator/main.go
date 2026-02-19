@@ -224,20 +224,18 @@ func main() {
 		}
 	}
 
-	// Create platform PackageSource when CRDs are managed by the operator.
-	// When --install-crds=false the PackageSource CRD may not exist yet,
-	// so we skip creation and let an external process handle it.
-	if installCRDs {
+	// Create platform PackageSource when CRDs are managed by the operator and
+	// a platform source URL is configured. Without a URL there is no Flux source
+	// resource to reference, so creating a PackageSource would leave a dangling SourceRef.
+	if installCRDs && platformSourceURL != "" {
 		sourceRefKind := "OCIRepository"
-		if platformSourceURL != "" {
-			sourceType, _, err := parsePlatformSourceURL(platformSourceURL)
-			if err != nil {
-				setupLog.Error(err, "failed to parse platform source URL for PackageSource")
-				os.Exit(1)
-			}
-			if sourceType == "git" {
-				sourceRefKind = "GitRepository"
-			}
+		sourceType, _, err := parsePlatformSourceURL(platformSourceURL)
+		if err != nil {
+			setupLog.Error(err, "failed to parse platform source URL for PackageSource")
+			os.Exit(1)
+		}
+		if sourceType == "git" {
+			sourceRefKind = "GitRepository"
 		}
 		setupLog.Info("Creating platform PackageSource", "platformSourceName", platformSourceName)
 		psCtx, psCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
