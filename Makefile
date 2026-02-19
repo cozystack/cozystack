@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests verify-crds
+.PHONY: manifests assets unit-tests helm-unit-tests
 
 include hack/common-envs.mk
 
@@ -38,24 +38,21 @@ build: build-deps
 
 manifests:
 	mkdir -p _out/assets
-	cat packages/core/installer/crds/*.yaml > _out/assets/cozystack-crds.yaml
+	cat internal/crdinstall/manifests/*.yaml > _out/assets/cozystack-crds.yaml
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
-		-s templates/cozystack-operator.yaml \
-		-s templates/packagesource.yaml \
+		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-talos.yaml
 	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
 	helm template installer packages/core/installer -n cozy-system \
 		--set cozystackOperator.variant=generic \
 		--set cozystack.apiServerHost=REPLACE_ME \
-		-s templates/cozystack-operator.yaml \
-		-s templates/packagesource.yaml \
+		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-generic.yaml
 	# Hosted variant (managed Kubernetes)
 	helm template installer packages/core/installer -n cozy-system \
 		--set cozystackOperator.variant=hosted \
-		-s templates/cozystack-operator.yaml \
-		-s templates/packagesource.yaml \
+		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-hosted.yaml
 
 cozypkg:
@@ -80,11 +77,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-verify-crds:
-	@diff --recursive packages/core/installer/crds/ internal/crdinstall/manifests/ --exclude='.*' \
-		|| (echo "ERROR: CRD manifests out of sync. Run 'make generate' to fix." && exit 1)
-
-unit-tests: helm-unit-tests verify-crds
+unit-tests: helm-unit-tests
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh

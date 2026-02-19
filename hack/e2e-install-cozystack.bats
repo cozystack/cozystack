@@ -8,7 +8,7 @@
 }
 
 @test "Install Cozystack" {
-  # Install cozy-installer chart (CRDs from crds/ are applied automatically)
+  # Install cozy-installer chart (operator installs CRDs on startup via --install-crds)
   helm upgrade installer packages/core/installer \
     --install \
     --namespace cozy-system \
@@ -18,6 +18,14 @@
 
   # Verify the operator deployment is available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
+
+  # Wait for operator to install CRDs (happens at startup before reconcile loop).
+  # kubectl wait fails immediately if the CRD does not exist yet, so poll until it appears first.
+  timeout 120 sh -ec 'until kubectl wait crd/packages.cozystack.io --for=condition=Established --timeout=10s 2>/dev/null; do sleep 2; done'
+  timeout 120 sh -ec 'until kubectl wait crd/packagesources.cozystack.io --for=condition=Established --timeout=10s 2>/dev/null; do sleep 2; done'
+
+  # Wait for operator to create the platform PackageSource
+  timeout 120 sh -ec 'until kubectl get packagesource cozystack.cozystack-platform >/dev/null 2>&1; do sleep 2; done'
 
   # Create platform Package with isp-full variant
   kubectl apply -f - <<EOF

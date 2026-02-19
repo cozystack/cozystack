@@ -108,7 +108,7 @@ func main() {
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
-	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-packages", "Name for the generated platform source resource (default: cozystack-packages)")
+	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
@@ -222,6 +222,29 @@ func main() {
 		} else {
 			setupLog.Info("Platform source resource installation completed successfully")
 		}
+	}
+
+	// Create platform PackageSource when CRDs are managed by the operator and
+	// a platform source URL is configured. Without a URL there is no Flux source
+	// resource to reference, so creating a PackageSource would leave a dangling SourceRef.
+	if installCRDs && platformSourceURL != "" {
+		sourceRefKind := "OCIRepository"
+		sourceType, _, err := parsePlatformSourceURL(platformSourceURL)
+		if err != nil {
+			setupLog.Error(err, "failed to parse platform source URL for PackageSource")
+			os.Exit(1)
+		}
+		if sourceType == "git" {
+			sourceRefKind = "GitRepository"
+		}
+		setupLog.Info("Creating platform PackageSource", "platformSourceName", platformSourceName)
+		psCtx, psCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
+		defer psCancel()
+		if err := installPlatformPackageSource(psCtx, directClient, platformSourceName, sourceRefKind); err != nil {
+			setupLog.Error(err, "failed to create platform PackageSource")
+			os.Exit(1)
+		}
+		setupLog.Info("Platform PackageSource creation completed successfully")
 	}
 
 	// Setup PackageSource reconciler
@@ -551,4 +574,80 @@ func generateGitRepository(name, repoURL string, refMap map[string]string) (*sou
 	}
 
 	return obj, nil
+}
+
+// installPlatformPackageSource creates the platform PackageSource resource
+// that references the Flux source resource (OCIRepository or GitRepository).
+//
+// The variant list is intentionally hardcoded here. These are platform-defined
+// deployment profiles (not user-extensible), matching what was previously in
+// the Helm template. Changes require a new operator build and release.
+func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, platformSourceName, sourceRefKind string) error {
+	logger := log.FromContext(ctx)
+
+	packageSourceName := "cozystack." + platformSourceName
+
+	ps := &cozyv1alpha1.PackageSource{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: cozyv1alpha1.GroupVersion.String(),
+			Kind:       "PackageSource",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: packageSourceName,
+			Annotations: map[string]string{
+				"operator.cozystack.io/skip-cozystack-values": "true",
+			},
+		},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{
+				Kind:      sourceRefKind,
+				Name:      platformSourceName,
+				Namespace: "cozy-system",
+				Path:      "/",
+			},
+		},
+	}
+
+	variantData := []struct {
+		name        string
+		valuesFiles []string
+	}{
+		{"default", []string{"values.yaml"}},
+		{"isp-full", []string{"values.yaml", "values-isp-full.yaml"}},
+		{"isp-hosted", []string{"values.yaml", "values-isp-hosted.yaml"}},
+		{"isp-full-generic", []string{"values.yaml", "values-isp-full-generic.yaml"}},
+	}
+
+	variants := make([]cozyv1alpha1.Variant, len(variantData))
+	for i, v := range variantData {
+		variants[i] = cozyv1alpha1.Variant{
+			Name: v.name,
+			Components: []cozyv1alpha1.Component{
+				{
+					Name: "platform",
+					Path: "core/platform",
+					Install: &cozyv1alpha1.ComponentInstall{
+						Namespace:   "cozy-system",
+						ReleaseName: "cozystack-platform",
+					},
+					ValuesFiles: v.valuesFiles,
+				},
+			},
+		}
+	}
+	ps.Spec.Variants = variants
+
+	logger.Info("Applying platform PackageSource", "name", packageSourceName)
+
+	patchOptions := &client.PatchOptions{
+		FieldManager: "cozystack-operator",
+		Force:        func() *bool { b := true; return &b }(),
+	}
+
+	if err := k8sClient.Patch(ctx, ps, client.Apply, patchOptions); err != nil {
+		return fmt.Errorf("failed to apply PackageSource %s: %w", packageSourceName, err)
+	}
+
+	logger.Info("Applied platform PackageSource", "name", packageSourceName)
+	return nil
 }
