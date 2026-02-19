@@ -108,7 +108,7 @@ func main() {
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
-	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-packages", "Name for the generated platform source resource (default: cozystack-packages)")
+	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
@@ -224,10 +224,10 @@ func main() {
 		}
 	}
 
-	// Create platform PackageSource unconditionally (it was previously created
-	// by a Helm template regardless of platformSourceURL). Derive sourceRefKind
-	// from URL when available, default to OCIRepository otherwise.
-	{
+	// Create platform PackageSource when CRDs are managed by the operator.
+	// When --install-crds=false the PackageSource CRD may not exist yet,
+	// so we skip creation and let an external process handle it.
+	if installCRDs {
 		sourceRefKind := "OCIRepository"
 		if platformSourceURL != "" {
 			sourceType, _, err := parsePlatformSourceURL(platformSourceURL)
