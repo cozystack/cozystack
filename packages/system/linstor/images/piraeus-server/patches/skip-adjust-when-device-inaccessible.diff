@@ -1,0 +1,155 @@
+diff --git a/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java b/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java
+index 49138a8fd..2f768ca0d 100644
+--- a/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java
++++ b/satellite/src/main/java/com/linbit/linstor/core/devmgr/DeviceHandlerImpl.java
+@@ -83,6 +83,8 @@ import java.util.TreeMap;
+ import java.util.TreeSet;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.function.Function;
++import java.nio.file.Files;
++import java.nio.file.Paths;
+ 
+ @Singleton
+ public class DeviceHandlerImpl implements DeviceHandler
+@@ -1646,7 +1648,10 @@ public class DeviceHandlerImpl implements DeviceHandler
+     private void updateDiscGran(VlmProviderObject<Resource> vlmData) throws DatabaseException, StorageException
+     {
+         String devicePath = vlmData.getDevicePath();
+-        if (devicePath != null && vlmData.exists())
++        // Check if device path physically exists before calling lsblk
++        // This is important for DRBD devices which might be temporarily unavailable during adjust
++        // (drbdadm adjust brings devices down/up, and kernel might not have created the device node yet)
++        if (devicePath != null && vlmData.exists() && Files.exists(Paths.get(devicePath)))
+         {
+             if (vlmData.getDiscGran() == VlmProviderObject.UNINITIALIZED_SIZE)
+             {
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java b/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java
+index 01967a31f..78b8195a4 100644
+--- a/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java
+@@ -592,7 +592,29 @@ public class DrbdLayer implements DeviceLayer
+             // The .res file might not have been generated in the prepare method since it was
+             // missing information from the child-layers. Now that we have processed them, we
+             // need to make sure the .res file exists in all circumstances.
+-            regenerateResFile(drbdRscData);
++            // However, if the underlying devices are not accessible (e.g., LUKS device is closed
++            // during resource deletion), we skip regenerating the res file to avoid errors
++            boolean canRegenerateResFile = true;
++            if (!skipDisk && !drbdRscData.getAbsResource().isDrbdDiskless(workerCtx))
++            {
++                AbsRscLayerObject<Resource> dataChild = drbdRscData.getChildBySuffix(RscLayerSuffixes.SUFFIX_DATA);
++                if (dataChild != null)
++                {
++                    for (DrbdVlmData<Resource> drbdVlmData : drbdRscData.getVlmLayerObjects().values())
++                    {
++                        VlmProviderObject<Resource> childVlm = dataChild.getVlmProviderObject(drbdVlmData.getVlmNr());
++                        if (childVlm == null || !childVlm.exists() || childVlm.getDevicePath() == null)
++                        {
++                            canRegenerateResFile = false;
++                            break;
++                        }
++                    }
++                }
++            }
++            if (canRegenerateResFile)
++            {
++                regenerateResFile(drbdRscData);
++            }
+ 
+             // createMetaData needs rendered resFile
+             for (DrbdVlmData<Resource> drbdVlmData : createMetaData)
+@@ -766,19 +788,72 @@ public class DrbdLayer implements DeviceLayer
+ 
+                 if (drbdRscData.isAdjustRequired())
+                 {
+-                    try
++                    // Check if underlying devices are accessible before adjusting
++                    // This is important for encrypted resources (LUKS) where the device
++                    // might be closed during deletion
++                    boolean canAdjust = true;
++
++                    // IMPORTANT: Check child volumes only when disk access is actually needed.
++                    // For network reconnect (StandAlone -> Connected), disk access is not required.
++                    boolean needsDiskAccess = false;
++
++                    // Check if there are pending operations that require disk access
++                    for (DrbdVlmData<Resource> drbdVlmData : drbdRscData.getVlmLayerObjects().values())
+                     {
+-                        drbdUtils.adjust(
+-                            drbdRscData,
+-                            false,
+-                            skipDisk,
+-                            false
+-                        );
++                        Volume vlm = (Volume) drbdVlmData.getVolume();
++                        StateFlags<Volume.Flags> vlmFlags = vlm.getFlags();
++
++                        // Disk access is needed if:
++                        // - creating a new volume
++                        // - resizing
++                        // - checking/creating metadata
++                        if (!drbdVlmData.exists() ||
++                            drbdVlmData.checkMetaData() ||
++                            vlmFlags.isSomeSet(workerCtx, Volume.Flags.RESIZE, Volume.Flags.DRBD_RESIZE))
++                        {
++                            needsDiskAccess = true;
++                            break;
++                        }
++                    }
++
++                    // Check child volumes only if disk access is actually needed
++                    if (needsDiskAccess && !skipDisk && !drbdRscData.getAbsResource().isDrbdDiskless(workerCtx))
++                    {
++                        AbsRscLayerObject<Resource> dataChild = drbdRscData.getChildBySuffix(RscLayerSuffixes.SUFFIX_DATA);
++                        if (dataChild != null)
++                        {
++                            for (DrbdVlmData<Resource> drbdVlmData : drbdRscData.getVlmLayerObjects().values())
++                            {
++                                VlmProviderObject<Resource> childVlm = dataChild.getVlmProviderObject(drbdVlmData.getVlmNr());
++                                if (childVlm == null || !childVlm.exists() || childVlm.getDevicePath() == null)
++                                {
++                                    canAdjust = false;
++                                    break;
++                                }
++                            }
++                        }
+                     }
+-                    catch (ExtCmdFailedException extCmdExc)
++
++                    if (canAdjust)
++                    {
++                        try
++                        {
++                            drbdUtils.adjust(
++                                drbdRscData,
++                                false,
++                                skipDisk,
++                                false
++                            );
++                        }
++                        catch (ExtCmdFailedException extCmdExc)
++                        {
++                            restoreBackupResFile(drbdRscData);
++                            throw extCmdExc;
++                        }
++                    }
++                    else
+                     {
+-                        restoreBackupResFile(drbdRscData);
+-                        throw extCmdExc;
++                        drbdRscData.setAdjustRequired(false);
+                     }
+                 }
+ 
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/luks/LuksLayer.java b/satellite/src/main/java/com/linbit/linstor/layer/luks/LuksLayer.java
+index cdca0b6d2..89c8be9da 100644
+--- a/satellite/src/main/java/com/linbit/linstor/layer/luks/LuksLayer.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/luks/LuksLayer.java
+@@ -383,6 +383,7 @@ public class LuksLayer implements DeviceLayer
+                 vlmData.setSizeState(Size.AS_EXPECTED);
+ 
+                 vlmData.setOpened(true);
++                vlmData.setExists(true);
+                 vlmData.setFailed(false);
+             }
+         }
