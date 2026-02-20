@@ -53,6 +53,39 @@ KEYCLOAK_REDIRECTS=$(echo "$COZYSTACK_CM" | jq -r '.data["extra-keycloak-redirec
 TELEMETRY_ENABLED=$(echo "$COZYSTACK_CM" | jq -r '.data["telemetry-enabled"] // "true"')
 BUNDLE_NAME=$(echo "$COZYSTACK_CM" | jq -r '.data["bundle-name"] // "paas-full"')
 
+# Certificate issuer configuration (old undocumented field: clusterissuer)
+OLD_CLUSTER_ISSUER=$(echo "$COZYSTACK_CM" | jq -r '.data["clusterissuer"] // ""')
+
+# Convert old clusterissuer value to new solver/issuerName fields
+SOLVER=""
+ISSUER_NAME=""
+case "$OLD_CLUSTER_ISSUER" in
+    cloudflare)
+        SOLVER="dns01"
+        ISSUER_NAME="letsencrypt-prod"
+        ;;
+    http01)
+        SOLVER="http01"
+        ISSUER_NAME="letsencrypt-prod"
+        ;;
+    "")
+        # Field not set; omit from Package so chart defaults apply
+        ;;
+    *)
+        # Unrecognised value — treat as custom ClusterIssuer name with no solver override
+        ISSUER_NAME="$OLD_CLUSTER_ISSUER"
+        ;;
+esac
+
+# Build certificates YAML block (empty string when no override needed)
+if [ -n "$SOLVER" ] || [ -n "$ISSUER_NAME" ]; then
+    CERTIFICATES_SECTION="          certificates:
+            solver: \"${SOLVER}\"
+            issuerName: \"${ISSUER_NAME}\""
+else
+    CERTIFICATES_SECTION=""
+fi
+
 # Network configuration
 POD_CIDR=$(echo "$COZYSTACK_CM" | jq -r '.data["ipv4-pod-cidr"] // "10.244.0.0/16"')
 POD_GATEWAY=$(echo "$COZYSTACK_CM" | jq -r '.data["ipv4-pod-gateway"] // "10.244.0.1"')
@@ -110,6 +143,8 @@ echo "  OIDC Enabled: $OIDC_ENABLED"
 echo "  Bundle Name: $BUNDLE_NAME"
 echo "  System Enabled: $SYSTEM_ENABLED"
 echo "  System Type: $SYSTEM_TYPE"
+echo "  Certificate Solver: ${SOLVER:-http01 (default)}"
+echo "  Issuer Name: ${ISSUER_NAME:-letsencrypt-prod (default)}"
 echo ""
 
 # Generate Package YAML
@@ -144,6 +179,7 @@ spec:
           host: "$ROOT_HOST"
           apiServerEndpoint: "$API_SERVER_ENDPOINT"
           externalIPs: $EXTERNAL_IPS
+${CERTIFICATES_SECTION}
         authentication:
           oidc:
             enabled: $OIDC_ENABLED
