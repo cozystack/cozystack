@@ -1,0 +1,92 @@
+#!/bin/sh
+# Migration 32 --> 33
+# Convert publishing.certificates.issuerType to solver + issuerName in
+# the cozystack-platform Package resource.
+#
+# Old field (pre-refactor schema):
+#   publishing.certificates.issuerType: "http01" | "cloudflare"
+# New fields:
+#   publishing.certificates.solver: "http01" | "dns01"
+#   publishing.certificates.issuerName: "letsencrypt-prod" (or custom)
+#
+# Conversion table:
+#   cloudflare  -> solver: dns01,  issuerName: letsencrypt-prod
+#   http01      -> solver: http01, issuerName: letsencrypt-prod
+#   <custom>    -> issuerName: <custom>  (solver left at chart default)
+#   <absent>    -> no-op
+
+set -euo pipefail
+
+PACKAGE_NAME="cozystack.cozystack-platform"
+
+# Check if Package exists
+if ! kubectl get package "$PACKAGE_NAME" >/dev/null 2>&1; then
+  echo "Package $PACKAGE_NAME not found, skipping migration"
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=33 --dry-run=client -o yaml | kubectl apply -f -
+  exit 0
+fi
+
+# Read current issuerType value
+ISSUER_TYPE=$(kubectl get package "$PACKAGE_NAME" -o json | \
+  jq -r '.spec.components.platform.values.publishing.certificates.issuerType // ""')
+
+if [ -z "$ISSUER_TYPE" ]; then
+  echo "No issuerType found in Package $PACKAGE_NAME, nothing to migrate"
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=33 --dry-run=client -o yaml | kubectl apply -f -
+  exit 0
+fi
+
+echo "Found issuerType: $ISSUER_TYPE"
+
+# Convert old issuerType to new solver/issuerName
+SOLVER=""
+ISSUER_NAME=""
+case "$ISSUER_TYPE" in
+  cloudflare)
+    SOLVER="dns01"
+    ISSUER_NAME="letsencrypt-prod"
+    ;;
+  http01)
+    SOLVER="http01"
+    ISSUER_NAME="letsencrypt-prod"
+    ;;
+  *)
+    # Unrecognised value — treat as custom ClusterIssuer name, no solver override
+    ISSUER_NAME="$ISSUER_TYPE"
+    ;;
+esac
+
+echo "Converting to: solver=${SOLVER:-<chart default>}, issuerName=${ISSUER_NAME:-<chart default>}"
+
+# Build the certificates patch:
+#   - null removes issuerType (JSON merge patch semantics)
+#   - solver and issuerName are included only when non-empty
+CERTS_PATCH=$(jq -n --arg solver "$SOLVER" --arg issuerName "$ISSUER_NAME" '
+  {"issuerType": null}
+  + (if $solver != "" then {"solver": $solver} else {} end)
+  + (if $issuerName != "" then {"issuerName": $issuerName} else {} end)
+')
+
+PATCH_JSON=$(jq -n --argjson certs "$CERTS_PATCH" '{
+  "spec": {
+    "components": {
+      "platform": {
+        "values": {
+          "publishing": {
+            "certificates": $certs
+          }
+        }
+      }
+    }
+  }
+}')
+
+kubectl patch package "$PACKAGE_NAME" --type=merge --patch "$PATCH_JSON"
+
+echo "Migration complete: issuerType=$ISSUER_TYPE -> solver=${SOLVER:-<unset>} issuerName=${ISSUER_NAME:-<unset>}"
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=33 --dry-run=client -o yaml | kubectl apply -f -
