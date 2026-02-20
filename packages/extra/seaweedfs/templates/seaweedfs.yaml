@@ -36,6 +36,8 @@
 {{- if not (eq .Values.topology "Client") }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -134,8 +136,10 @@ spec:
           annotations:
             nginx.ingress.kubernetes.io/proxy-body-size: "0"
             nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+            {{- if ne $solver "dns01" }}
             acme.cert-manager.io/http01-ingress-class: {{ $ingress }}
-            cert-manager.io/cluster-issuer: letsencrypt-prod
+            {{- end }}
+            cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
           tls:
             - hosts:
               - {{ .Values.host | default (printf "s3.%s" $host) }}

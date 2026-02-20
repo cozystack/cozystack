@@ -1,4 +1,5 @@
-{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 ---
@@ -72,10 +73,10 @@ spec:
   ingress:
     metadata:
       annotations:
-        {{- if ne $issuerType "cloudflare" }}
+        {{- if ne $solver "dns01" }}
         acme.cert-manager.io/http01-ingress-class: "{{ $ingress }}"
         {{- end }}
-        cert-manager.io/cluster-issuer: letsencrypt-prod
+        cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
     spec:
       ingressClassName: "{{ $ingress }}"
       rules:

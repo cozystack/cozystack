@@ -46,7 +46,8 @@ publishing:
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
   certificates:
-    issuerType: http01 # "http01" or "cloudflare"
+    solver: http01      # "http01" or "dns01"
+    issuerName: letsencrypt-prod
 # Authentication configuration
 authentication:
   oidc:

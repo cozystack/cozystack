@@ -1,4 +1,4 @@
-{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}  
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
 
 apiVersion: cert-manager.io/v1 
 kind: ClusterIssuer  
@@ -10,7 +10,7 @@ spec:
       name: letsencrypt-prod  
     server: https://acme-v02.api.letsencrypt.org/directory  
     solvers:  
-    - {{- if eq $issuerType "cloudflare" }}  
+    - {{- if eq $solver "dns01" }}  
         dns01:  
           cloudflare:  
             apiTokenSecretRef:  
@@ -34,7 +34,7 @@ spec:
       name: letsencrypt-stage
     server: https://acme-staging-v02.api.letsencrypt.org/directory  
     solvers:  
-    - {{- if eq $issuerType "cloudflare" }}  
+    - {{- if eq $solver "dns01" }}  
         dns01:  
           cloudflare:  
             apiTokenSecretRef:  

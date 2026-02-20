@@ -1,7 +1,8 @@
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
-{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -13,10 +14,10 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
-    {{- if ne $issuerType "cloudflare" }}
+    {{- if ne $solver "dns01" }}
     acme.cert-manager.io/http01-ingress-class: {{ $ingress }}
     {{- end }}
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
 spec:
   ingressClassName: {{ $ingress }}
   tls:

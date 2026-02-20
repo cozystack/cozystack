@@ -1,5 +1,6 @@
 {{- $host := index .Values._cluster "root-host" }}
-{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 
 apiVersion: networking.k8s.io/v1
@@ -8,10 +9,10 @@ metadata:
   name: keycloak-ingress
   {{- with .Values.ingress.annotations }}
   annotations:
-    {{- if ne $issuerType "cloudflare" }}
+    {{- if ne $solver "dns01" }}
     acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
     {{- end }}
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
