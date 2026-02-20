@@ -10,7 +10,7 @@ kind: Ingress
 metadata:
   annotations:
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
-    {{- if ne $solver "dns01" }}
+    {{- if eq $solver "http01" }}
     acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
     {{- end }}
     nginx.ingress.kubernetes.io/rewrite-target: /
