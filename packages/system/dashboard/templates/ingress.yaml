@@ -1,4 +1,5 @@
-{{- $issuerType := (index .Values._cluster "clusterissuer") | default "http01" }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $host := index .Values._cluster "root-host" }}
 {{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
@@ -8,9 +9,8 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    {{- if eq $issuerType "cloudflare" }}
-    {{- else }}
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- if eq $solver "http01" }}
     acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
     {{- end }}
     nginx.ingress.kubernetes.io/rewrite-target: /

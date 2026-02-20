@@ -6,7 +6,7 @@ sourceRef:
 migrations:
   enabled: false
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.0.0-beta.6@sha256:37c78dafcedbdad94acd9912550db0b4875897150666b8a06edfa894de99064e
-  targetVersion: 32
+  targetVersion: 33
 # Bundle deployment configuration
 bundles:
   system:
@@ -46,7 +46,8 @@ publishing:
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
   certificates:
-    issuerType: http01 # "http01" or "cloudflare"
+    solver: http01      # "http01" or "dns01"
+    issuerName: letsencrypt-prod
 # Authentication configuration
 authentication:
   oidc:
