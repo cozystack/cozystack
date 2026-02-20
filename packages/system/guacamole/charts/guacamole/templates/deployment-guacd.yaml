@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "guacamole.fullname" . }}-guacd
+  labels:
+{{ include "guacamole.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "guacamole.name" . }}-guacd
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "guacamole.name" . }}-guacd
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+    {{- with .Values.guacd.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      serviceAccountName: {{ template "guacamole.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.guacd.image.repository }}:{{ tpl .Values.guacd.image.tag . }}"
+          imagePullPolicy: {{ .Values.guacd.image.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ include "guacamole.fullname" . }}
+          ports:
+            - name: guacd
+              containerPort: 4822
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+
