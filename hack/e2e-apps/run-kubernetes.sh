@@ -98,11 +98,12 @@ EOF
     done
   '
   # Verify the nodes are ready
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=2m --for=condition=Ready || true
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=2m --for=condition=Ready; then
+    # Additional debug messages
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
+    kubectl -n tenant-test get hr
+  fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
-  kubectl -n tenant-test get hr  # Cilium/CoreDNS HelmRelease status
-  kubectl -n tenant-test get certificates  # cert-manager certificate health
 
   # Verify the kubelet version matches what we expect
   versions=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" \
