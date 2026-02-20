@@ -231,7 +231,6 @@ rules:
     - get
     - list
     - watch
-    - delete
   - apiGroups: ["kubevirt.io"]
     resources:
     - virtualmachines
@@ -330,7 +329,6 @@ rules:
     - get
     - list
     - watch
-    - delete
   - apiGroups: ["kubevirt.io"]
     resources:
     - virtualmachines
