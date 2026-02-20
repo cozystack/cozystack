@@ -73,6 +73,7 @@ The image to use
 
 {{/*
 Provider name, Keeps backward compatibility on provider
+TODO: line eq (typeOf .Values.provider) "string" to be removed in future releases
 */}}
 {{- define "external-dns.providerName" -}}
 {{- if eq (typeOf .Values.provider) "string" }}
@@ -92,4 +93,22 @@ The image to use for optional webhook sidecar
 {{- end }}
 {{- printf "%s:%s" .repository .tag }}
 {{- end }}
+{{- end }}
+
+{{/*
+The pod affinity default label Selector
+*/}}
+{{- define "external-dns.labelSelector" -}}
+labelSelector:
+  matchLabels:
+    {{ include "external-dns.selectorLabels" . | nindent 4 }}
+{{- end }}
+
+{{/*
+Check if any Gateway API sources are enabled
+*/}}
+{{- define "external-dns.hasGatewaySources" -}}
+{{- if or (has "gateway-httproute" .Values.sources) (has "gateway-grpcroute" .Values.sources) (has "gateway-tlsroute" .Values.sources) (has "gateway-tcproute" .Values.sources) (has "gateway-udproute" .Values.sources) -}}
+true
+{{- end -}}
 {{- end }}

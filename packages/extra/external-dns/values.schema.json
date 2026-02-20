@@ -1,0 +1,193 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "annotationPrefix": {
+      "description": "Custom annotation prefix for external-dns (useful for running multiple instances).",
+      "type": "string",
+      "default": ""
+    },
+    "aws": {
+      "description": "AWS Route53 provider credentials.",
+      "type": "object",
+      "default": {
+        "accessKeyId": "",
+        "region": "",
+        "secretAccessKey": "",
+        "zoneType": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "azure": {
+      "description": "Azure DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "aadClientId": "",
+        "aadClientSecret": "",
+        "resourceGroup": "",
+        "subscriptionId": "",
+        "tenantId": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "cloudflare": {
+      "description": "Cloudflare provider credentials.",
+      "type": "object",
+      "default": {
+        "apiEmail": "",
+        "apiKey": "",
+        "apiToken": "",
+        "proxied": false
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "digitalocean": {
+      "description": "DigitalOcean DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "token": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "domainFilters": {
+      "description": "List of domains this external-dns instance can manage.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "exoscale": {
+      "description": "Exoscale DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "apiKey": "",
+        "apiSecret": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "extraArgs": {
+      "description": "Extra arguments for external-dns.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "gatewayAPI": {
+      "description": "Enable Gateway API HTTPRoute as a source for DNS records.",
+      "type": "boolean",
+      "default": false
+    },
+    "godaddy": {
+      "description": "GoDaddy DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "apiKey": "",
+        "apiSecret": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "google": {
+      "description": "Google Cloud DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "project": "",
+        "serviceAccountKey": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "linode": {
+      "description": "Linode DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "token": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "ovh": {
+      "description": "OVH DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "applicationKey": "",
+        "applicationSecret": "",
+        "consumerKey": "",
+        "endpoint": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    },
+    "policy": {
+      "description": "How DNS records are synchronized.",
+      "type": "string",
+      "default": "upsert-only",
+      "enum": [
+        "create-only",
+        "sync",
+        "upsert-only"
+      ]
+    },
+    "provider": {
+      "description": "DNS provider name.",
+      "type": "string",
+      "enum": [
+        "cloudflare",
+        "aws",
+        "azure",
+        "google",
+        "digitalocean",
+        "linode",
+        "ovh",
+        "exoscale",
+        "godaddy",
+        "inmemory"
+      ]
+    },
+    "resources": {
+      "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU available to each replica.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory (RAM) available to each replica.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "resourcesPreset": {
+      "description": "Default sizing preset used when `resources` is omitted.",
+      "type": "string",
+      "default": "nano",
+      "enum": [
+        "nano",
+        "micro",
+        "small",
+        "medium",
+        "large",
+        "xlarge",
+        "2xlarge"
+      ]
+    }
+  }
+}
