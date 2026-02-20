@@ -86,14 +86,18 @@ EOF
   yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" "tenantkubeconfig-${test_name}"
 
 
-  # Set up port forwarding to the Kubernetes API server for a 200 second timeout
+  # Kill any stale port-forward on this port from a previous retry
+  pkill -f "port-forward.*${port}:" 2>/dev/null || true
+  sleep 1
+
+  # Set up port forwarding to the Kubernetes API server
   bash -c 'timeout 500s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
 
-  # Wait for the nodes to be ready (timeout after 2 minutes)
-  timeout 3m bash -c '
-    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -eq 2 ]; do
+  # Wait for at least 2 nodes to join (timeout after 8 minutes)
+  timeout 8m bash -c '
+    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -ge 2 ]; do
       sleep 2
     done
   '

@@ -3,30 +3,19 @@ appVersion: latest
 description: Kamaji is the Hosted Control Plane Manager for Kubernetes.
 home: https://github.com/clastix/kamaji
 icon: https://github.com/clastix/kamaji/raw/master/assets/logo-colored.png
-kubeVersion: ">=1.21.0-0"
 maintainers:
-- email: dario@tranchitella.eu
-  name: Dario Tranchitella
-  url: https://clastix.io
-- email: me@maxgio.it
-  name: Massimiliano Giovagnoli
-- email: me@bsctl.io
-  name: Adriano Pezzuto
-  url: https://clastix.io
-name: kamaji
+  - email: dario@tranchitella.eu
+    name: Dario Tranchitella
+    url: https://clastix.io
+  - email: me@bsctl.io
+    name: Adriano Pezzuto
+    url: https://clastix.io
+name: kamaji-crds
 sources:
-- https://github.com/clastix/kamaji
+  - https://github.com/clastix/kamaji
 type: application
 version: 0.0.0+latest
-dependencies:
-- name: kamaji-etcd
-  repository: https://clastix.github.io/charts
-  version: ">=0.11.0"
-  condition: kamaji-etcd.deploy
 annotations:
-  catalog.cattle.io/certified: partner
-  catalog.cattle.io/release-name: kamaji
-  catalog.cattle.io/display-name: Kamaji
   artifacthub.io/crds: |
     - kind: TenantControlPlane
       version: v1alpha1
@@ -43,8 +32,8 @@ annotations:
       url: https://clastix.io
     - name: support
       url: https://clastix.io/support
-  artifacthub.io/operator: "true"
-  artifacthub.io/operatorCapabilities: "full lifecycle"
   artifacthub.io/changes: |
+    - kind: changed
+      description: Upgrading support to Kubernetes v1.35
     - kind: added
-      description: Releasing latest chart at every push
+      description: Supporting multiple Datastore via etcd overrides

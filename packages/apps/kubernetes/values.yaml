@@ -48,15 +48,15 @@ nodeGroups:
 
 ##
 ## @enum {string} Version
+## @value v1.35
+## @value v1.34
 ## @value v1.33
 ## @value v1.32
 ## @value v1.31
 ## @value v1.30
-## @value v1.29
-## @value v1.28
 
 ## @param {Version} version - Kubernetes major.minor version to deploy
-version: "v1.33"
+version: "v1.35"
 
 
 ## @param {string} host - External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.

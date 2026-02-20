@@ -1,0 +1,49 @@
+diff --git a/internal/kubeadm/uploadconfig.go b/internal/kubeadm/uploadconfig.go
+index 89c9b54..1ee38cd 100644
+--- a/internal/kubeadm/uploadconfig.go
++++ b/internal/kubeadm/uploadconfig.go
+@@ -41,7 +41,7 @@ func UploadKubeletConfig(client kubernetes.Interface, config *Configuration, pat
+ 		TenantControlPlaneCgroupDriver:  config.Parameters.TenantControlPlaneCGroupDriver,
+ 	}
+ 
+-	content, err := getKubeletConfigmapContent(kubeletConfiguration, patches)
++	content, err := getKubeletConfigmapContent(kubeletConfiguration, patches, config.Parameters.TenantControlPlaneVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -72,7 +72,13 @@ func UploadKubeletConfig(client kubernetes.Interface, config *Configuration, pat
+ 	return nil, nil
+ }
+ 
+-func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch jsonpatchv5.Patch) ([]byte, error) {
++// minVerKubeletNewDefaults is the minimum Kubernetes version that supports the
++// CrashLoopBackOff and ImagePullCredentialsVerificationPolicy kubelet
++// configuration fields (gated by KubeletCrashLoopBackOffMax and
++// KubeletEnsureSecretPulledImages feature gates respectively).
++var minVerKubeletNewDefaults = semver.MustParse("1.35.0")
++
++func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch jsonpatchv5.Patch, version string) ([]byte, error) {
+ 	var kc kubelettypes.KubeletConfiguration
+ 
+ 	kubeletv1beta1.SetDefaults_KubeletConfiguration(&kc)
+@@ -94,6 +100,20 @@ func getKubeletConfigmapContent(kubeletConfiguration KubeletConfiguration, patch
+ 	// determine the resolvConf location, as reported in clastix/kamaji#581.
+ 	kc.ResolverConfig = nil
+ 
++	// Clear fields set by SetDefaults_KubeletConfiguration from Kubernetes >= 1.35.
++	// Older kubelets reject these fields because the corresponding feature gates
++	// (KubeletCrashLoopBackOffMax, KubeletEnsureSecretPulledImages) are not enabled.
++	// See: https://github.com/clastix/kamaji/issues/1062
++	parsedVer, parseErr := semver.ParseTolerant(version)
++	if parseErr != nil {
++		return nil, fmt.Errorf("failed to parse kubernetes version %q for kubelet config: %w", version, parseErr)
++	}
++
++	if parsedVer.LT(minVerKubeletNewDefaults) {
++		kc.CrashLoopBackOff = kubelettypes.CrashLoopBackOffConfig{}
++		kc.ImagePullCredentialsVerificationPolicy = ""
++	}
++
+ 	if len(patch) > 0 {
+ 		kubeletConfig, patchErr := utilities.EncodeToJSON(&kc)
+ 		if patchErr != nil {

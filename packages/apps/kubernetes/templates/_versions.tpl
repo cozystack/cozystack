@@ -5,3 +5,10 @@
 {{- end }}
 {{- index $versionMap .Values.version }}
 {{- end }}
+
+{{- define "kubernetes.konnectivityVersion" }}
+{{- $konnVersionMap := .Files.Get "files/konnectivity-versions.yaml" | fromYaml }}
+{{- if hasKey $konnVersionMap .Values.version }}
+{{- index $konnVersionMap .Values.version }}
+{{- end }}
+{{- end }}

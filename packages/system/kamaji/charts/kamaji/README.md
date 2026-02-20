@@ -1,6 +1,6 @@
 # kamaji
 
-![Version: 0.0.0](https://img.shields.io/badge/Version-0.0.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.0.0](https://img.shields.io/badge/AppVersion-v0.0.0-informational?style=flat-square)
+![Version: 0.0.0+latest](https://img.shields.io/badge/Version-0.0.0+latest-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: latest](https://img.shields.io/badge/AppVersion-latest-informational?style=flat-square)
 
 Kamaji is the Hosted Control Plane Manager for Kubernetes.
 
@@ -22,7 +22,7 @@ Kubernetes: `>=1.21.0-0`
 
 | Repository | Name | Version |
 |------------|------|---------|
-| https://clastix.github.io/charts | kamaji-etcd | >=0.9.2 |
+| https://clastix.github.io/charts | kamaji-etcd | >=0.11.0 |
 
 [Kamaji](https://github.com/clastix/kamaji) requires a [multi-tenant `etcd`](https://github.com/clastix/kamaji-internal/blob/master/deploy/getting-started-with-kamaji.md#setup-internal-multi-tenant-etcd) cluster.
 This Helm Chart starting from v0.1.1 provides the installation of an internal `etcd` in order to streamline the local test. If you'd like to use an externally managed etcd instance, you can specify the overrides and by setting the value `etcd.deploy=false`.
@@ -82,10 +82,25 @@ Here the values you can override:
 | image.repository | string | `"clastix/kamaji"` | The container image of the Kamaji controller. |
 | image.tag | string | `nil` | Overrides the image tag whose default is the chart appVersion. |
 | imagePullSecrets | list | `[]` |  |
-| kamaji-etcd.datastore.enabled | bool | `true` |  |
-| kamaji-etcd.datastore.name | string | `"default"` |  |
-| kamaji-etcd.deploy | bool | `true` |  |
-| kamaji-etcd.fullnameOverride | string | `"kamaji-etcd"` |  |
+| kamaji-etcd | object | `{"clusterDomain":"cluster.local","datastore":{"enabled":true,"name":"default"},"deploy":true,"fullnameOverride":"kamaji-etcd"}` | Subchart: See https://github.com/clastix/kamaji-etcd/blob/master/charts/kamaji-etcd/values.yaml |
+| kubeconfigGenerator.affinity | object | `{}` | Kubernetes affinity rules to apply to Kubeconfig Generator controller pods |
+| kubeconfigGenerator.enableLeaderElect | bool | `true` | Enables the leader election. |
+| kubeconfigGenerator.enabled | bool | `false` | Toggle to deploy the Kubeconfig Generator Deployment. |
+| kubeconfigGenerator.extraArgs | list | `[]` | A list of extra arguments to add to the Kubeconfig Generator controller default ones. |
+| kubeconfigGenerator.fullnameOverride | string | `""` |  |
+| kubeconfigGenerator.healthProbeBindAddress | string | `":8081"` | The address the probe endpoint binds to. |
+| kubeconfigGenerator.loggingDevel.enable | bool | `false` | Development Mode defaults(encoder=consoleEncoder,logLevel=Debug,stackTraceLevel=Warn). Production Mode defaults(encoder=jsonEncoder,logLevel=Info,stackTraceLevel=Error) |
+| kubeconfigGenerator.nodeSelector | object | `{}` | Kubernetes node selector rules to schedule Kubeconfig Generator controller |
+| kubeconfigGenerator.podAnnotations | object | `{}` | The annotations to apply to the Kubeconfig Generator controller pods. |
+| kubeconfigGenerator.podSecurityContext | object | `{"runAsNonRoot":true}` | The securityContext to apply to the Kubeconfig Generator controller pods. |
+| kubeconfigGenerator.replicaCount | int | `2` | The number of the pod replicas for the Kubeconfig Generator controller. |
+| kubeconfigGenerator.resources.limits.cpu | string | `"200m"` |  |
+| kubeconfigGenerator.resources.limits.memory | string | `"512Mi"` |  |
+| kubeconfigGenerator.resources.requests.cpu | string | `"200m"` |  |
+| kubeconfigGenerator.resources.requests.memory | string | `"512Mi"` |  |
+| kubeconfigGenerator.securityContext | object | `{"allowPrivilegeEscalation":false}` | The securityContext to apply to the Kubeconfig Generator controller container only. |
+| kubeconfigGenerator.serviceAccountOverride | string | `""` | The name of the service account to use. If not set, the root Kamaji one will be used. |
+| kubeconfigGenerator.tolerations | list | `[]` | Kubernetes node taints that the Kubeconfig Generator controller pods would tolerate |
 | livenessProbe | object | `{"httpGet":{"path":"/healthz","port":"healthcheck"},"initialDelaySeconds":15,"periodSeconds":20}` | The livenessProbe for the controller container |
 | loggingDevel.enable | bool | `false` | Development Mode defaults(encoder=consoleEncoder,logLevel=Debug,stackTraceLevel=Warn). Production Mode defaults(encoder=jsonEncoder,logLevel=Info,stackTraceLevel=Error) (default false) |
 | metricsBindAddress | string | `":8080"` | The address the metric endpoint binds to. (default ":8080") |
