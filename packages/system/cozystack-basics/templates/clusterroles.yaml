@@ -181,7 +181,6 @@ rules:
   - persistentvolumes
   - endpoints
   - events
-  - resourcequotas
   verbs:
   - delete
 - apiGroups: ["kubevirt.io"]
