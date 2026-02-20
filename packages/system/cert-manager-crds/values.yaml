@@ -1,6 +1,8 @@
 global:
   commonLabels: {}
 
+creator: helm
+
 crds:
   enabled: true
   keep: true
