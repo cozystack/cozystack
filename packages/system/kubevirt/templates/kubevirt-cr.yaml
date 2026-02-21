@@ -22,6 +22,8 @@ spec:
       - GPU
       - VMExport
     evictionStrategy: LiveMigrate
+    virtualMachineOptions:
+      disableSerialConsoleLog: {}
     vmRolloutStrategy: LiveUpdate
   workloadUpdateStrategy:
     workloadUpdateMethods:
