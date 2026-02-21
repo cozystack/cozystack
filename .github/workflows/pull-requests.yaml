@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     name: Build
-    runs-on: [self-hosted]
+    runs-on: [oracle-4cpu-16gb-x86-64]
     permissions:
       contents: read
       packages: write
@@ -51,6 +51,20 @@ jobs:
           registry: iad.ocir.io
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Install dependencies
+        run: |
+          set -e
+          sudo mkdir -p -m 755 /etc/apt/keyrings
+          sudo wget -O /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg
+          sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install -y jq skopeo gh gawk
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sudo bash
+          sudo modprobe loop
 
       - name: Build
         run: make build
