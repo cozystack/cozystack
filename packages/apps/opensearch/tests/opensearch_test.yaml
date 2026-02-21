@@ -1,0 +1,516 @@
+suite: opensearch CR tests
+
+templates:
+  - templates/opensearch.yaml
+
+tests:
+  ###################
+  # Basic rendering #
+  ###################
+
+  - it: renders OpenSearchCluster and WorkloadMonitor
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: OpenSearchCluster
+        documentIndex: 0
+      - isKind:
+          of: WorkloadMonitor
+        documentIndex: 1
+
+  - it: sets correct CR name
+    release:
+      name: my-opensearch
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-opensearch
+        documentIndex: 0
+
+  ##################
+  # Version        #
+  ##################
+
+  - it: defaults to version 2.11.1
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.general.version
+          value: "2.11.1"
+        documentIndex: 0
+
+  - it: sets version 3.0.0 when v3 selected
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v3
+    asserts:
+      - equal:
+          path: spec.general.version
+          value: "3.0.0"
+        documentIndex: 0
+
+  - it: sets version 1.3.20 when v1 selected
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v1
+    asserts:
+      - equal:
+          path: spec.general.version
+          value: "1.3.20"
+        documentIndex: 0
+
+  #####################
+  # General           #
+  #####################
+
+  - it: sets drainDataNodes to true
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.general.drainDataNodes
+          value: true
+        documentIndex: 0
+
+  - it: sets httpPort to 9200
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.general.httpPort
+          value: 9200
+        documentIndex: 0
+
+  #####################
+  # Security          #
+  #####################
+
+  - it: always includes security section with TLS
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.security.tls.transport.generate
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.transport.perNode
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        documentIndex: 0
+
+  - it: references security config secret
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.security.config.securityConfigSecret.name
+          value: test-os-security-config
+        documentIndex: 0
+
+  - it: references admin credentials secret
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.security.config.adminCredentialsSecret.name
+          value: test-os-admin-credentials
+        documentIndex: 0
+
+  - it: does not disable security plugin
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - notExists:
+          path: spec.general.additionalConfig
+        documentIndex: 0
+
+  #####################
+  # Node Pools        #
+  #####################
+
+  - it: sets default replica count to 3
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.nodePools[0].replicas
+          value: 3
+        documentIndex: 0
+
+  - it: sets replica count from values
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 5
+    asserts:
+      - equal:
+          path: spec.nodePools[0].replicas
+          value: 5
+        documentIndex: 0
+
+  #####################
+  # Node Roles        #
+  #####################
+
+  - it: enables default node roles
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.nodePools[0].roles
+          content: cluster_manager
+        documentIndex: 0
+      - contains:
+          path: spec.nodePools[0].roles
+          content: data
+        documentIndex: 0
+      - contains:
+          path: spec.nodePools[0].roles
+          content: ingest
+        documentIndex: 0
+
+  - it: disables master role when configured
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      nodeRoles:
+        master: false
+        data: true
+        ingest: true
+        ml: false
+    asserts:
+      - notContains:
+          path: spec.nodePools[0].roles
+          content: cluster_manager
+        documentIndex: 0
+
+  - it: enables ml role when configured
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      nodeRoles:
+        master: true
+        data: true
+        ingest: true
+        ml: true
+    asserts:
+      - contains:
+          path: spec.nodePools[0].roles
+          content: ml
+        documentIndex: 0
+
+  ###########################
+  # Topology Spread Policy  #
+  ###########################
+
+  - it: uses soft topology spread by default (ScheduleAnyway)
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.nodePools[0].topologySpreadConstraints[0].whenUnsatisfiable
+          value: ScheduleAnyway
+        documentIndex: 0
+      - equal:
+          path: spec.nodePools[0].topologySpreadConstraints[1].whenUnsatisfiable
+          value: ScheduleAnyway
+        documentIndex: 0
+
+  - it: uses hard topology spread when configured (DoNotSchedule)
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      topologySpreadPolicy: hard
+    asserts:
+      - equal:
+          path: spec.nodePools[0].topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+        documentIndex: 0
+      - equal:
+          path: spec.nodePools[0].topologySpreadConstraints[1].whenUnsatisfiable
+          value: DoNotSchedule
+        documentIndex: 0
+
+  - it: sets correct topology keys
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.nodePools[0].topologySpreadConstraints[0].topologyKey
+          value: kubernetes.io/hostname
+        documentIndex: 0
+      - equal:
+          path: spec.nodePools[0].topologySpreadConstraints[1].topologyKey
+          value: topology.kubernetes.io/zone
+        documentIndex: 0
+
+  #####################
+  # Storage           #
+  #####################
+
+  - it: sets accessModes to ReadWriteOnce
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.nodePools[0].persistence.pvc.accessModes
+          content: ReadWriteOnce
+        documentIndex: 0
+
+  - it: sets storage size from values
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      size: 50Gi
+    asserts:
+      - equal:
+          path: spec.nodePools[0].diskSize
+          value: 50Gi
+        documentIndex: 0
+
+  - it: uses local storageClass when replicas > 1 and no storageClass
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      storageClass: ""
+      replicas: 3
+    asserts:
+      - equal:
+          path: spec.nodePools[0].persistence.pvc.storageClass
+          value: local
+        documentIndex: 0
+
+  - it: uses replicated storageClass when single replica and no storageClass
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      storageClass: ""
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.nodePools[0].persistence.pvc.storageClass
+          value: replicated
+        documentIndex: 0
+
+  - it: uses custom storageClass when provided
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      storageClass: fast-ssd
+    asserts:
+      - equal:
+          path: spec.nodePools[0].persistence.pvc.storageClass
+          value: fast-ssd
+        documentIndex: 0
+
+  #####################
+  # Dashboards        #
+  #####################
+
+  - it: does not render dashboards when disabled
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      dashboards:
+        enabled: false
+        replicas: 1
+        resourcesPreset: "medium"
+        resources: {}
+    asserts:
+      - notExists:
+          path: spec.dashboards
+        documentIndex: 0
+
+  - it: renders dashboards when enabled
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "medium"
+        resources: {}
+    asserts:
+      - equal:
+          path: spec.dashboards.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.replicas
+          value: 1
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.generate
+          value: true
+        documentIndex: 0
+
+  ###########################
+  # WorkloadMonitor         #
+  ###########################
+
+  - it: creates WorkloadMonitor with correct metadata
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-os
+        documentIndex: 1
+      - equal:
+          path: spec.kind
+          value: opensearch
+        documentIndex: 1
+      - equal:
+          path: spec.type
+          value: opensearch
+        documentIndex: 1
+
+  - it: sets replicas in WorkloadMonitor
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+        documentIndex: 1
+
+  - it: sets minReplicas to 1
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.minReplicas
+          value: 1
+        documentIndex: 1
+
+  - it: sets correct selector labels
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.selector["opster.io/opensearch-cluster"]
+          value: mydb
+        documentIndex: 1
