@@ -1,0 +1,99 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-openbao-application-default-openbao-system
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+  values:
+    openbao:
+      fullnameOverride: {{ .Release.Name }}
+      global:
+        tlsDisable: true
+      server:
+        podManagementPolicy: Parallel
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
+        dataStorage:
+          enabled: true
+          size: {{ .Values.size }}
+          {{- with .Values.storageClass }}
+          storageClass: {{ . }}
+          {{- end }}
+        {{- if gt (int .Values.replicas) 1 }}
+        standalone:
+          enabled: false
+        ha:
+          enabled: true
+          replicas: {{ .Values.replicas }}
+          raft:
+            enabled: true
+            setNodeId: true
+            config: |
+              ui = {{ .Values.ui }}
+
+              listener "tcp" {
+                address = "[::]:8200"
+                cluster_address = "[::]:8201"
+                tls_disable = true
+              }
+
+              storage "raft" {
+                path = "/openbao/data"
+              {{- range $i := until (int $.Values.replicas) }}
+                retry_join {
+                  leader_api_addr = "http://{{ $.Release.Name }}-{{ $i }}.{{ $.Release.Name }}-internal:8200"
+                }
+              {{- end }}
+              }
+
+              service_registration "kubernetes" {}
+        {{- else }}
+        standalone:
+          enabled: true
+          config: |
+            ui = {{ .Values.ui }}
+
+            listener "tcp" {
+              address = "[::]:8200"
+              cluster_address = "[::]:8201"
+              tls_disable = true
+            }
+
+            storage "file" {
+              path = "/openbao/data"
+            }
+            # Note: service_registration "kubernetes" {} is intentionally omitted
+            # in standalone mode — it requires an HA-capable storage backend and
+            # causes a fatal error with storage "file".
+        ha:
+          enabled: false
+        {{- end }}
+        {{- if .Values.external }}
+        service:
+          type: LoadBalancer
+        {{- end }}
+      ui:
+        enabled: {{ .Values.ui }}
+        {{- if .Values.external }}
+        serviceType: LoadBalancer
+        {{- end }}
+      injector:
+        enabled: false
+      csi:
+        enabled: false

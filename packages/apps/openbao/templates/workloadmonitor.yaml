@@ -1,0 +1,13 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+spec:
+  replicas: {{ .Values.replicas }}
+  minReplicas: 1
+  kind: openbao
+  type: openbao
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}-system
+  version: {{ $.Chart.Version }}

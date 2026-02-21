@@ -1,0 +1,7 @@
+apiVersion: v2
+name: openbao
+description: Managed OpenBAO secrets management service
+icon: /logos/openbao.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+appVersion: "2.5.0"

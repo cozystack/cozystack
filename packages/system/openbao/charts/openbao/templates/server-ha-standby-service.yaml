@@ -1,0 +1,67 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{ template "openbao.mode" . }}
+{{- if ne .mode "external" }}
+{{- template "openbao.serverServiceEnabled" . -}}
+{{- if .serverServiceEnabled -}}
+{{- if eq .mode "ha" }}
+{{- if eq (.Values.server.service.standby.enabled | toString) "true" }}
+# Service for standby OpenBao pod
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "openbao.fullname" . }}-standby
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- if  .Values.server.service.standby.extraLabels -}}
+      {{- toYaml .Values.server.service.standby.extraLabels | nindent 4 -}}
+    {{- end -}}
+{{- template "openbao.service.standby.annotations" . }}
+spec:
+  {{- if .Values.server.service.type}}
+  type: {{ .Values.server.service.type }}
+  {{- end}}
+  {{- if (semverCompare ">= 1.23-0" .Capabilities.KubeVersion.Version) }}
+  {{- if .Values.server.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.server.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if .Values.server.service.ipFamilies }}
+  ipFamilies: {{ .Values.server.service.ipFamilies | toYaml | nindent 2 }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.server.service.clusterIP }}
+  clusterIP: {{ .Values.server.service.clusterIP }}
+  {{- end }}
+  {{- include "service.externalTrafficPolicy" .Values.server.service }}
+  publishNotReadyAddresses: {{ .Values.server.service.publishNotReadyAddresses }}
+  ports:
+    - name: {{ include "openbao.scheme" . }}
+      port: {{ .Values.server.service.port }}
+      targetPort: {{ .Values.server.service.targetPort }}
+      {{- if and (.Values.server.service.standbyNodePort) (eq (.Values.server.service.type | toString) "NodePort") }}
+      nodePort: {{ .Values.server.service.standbyNodePort }}
+      {{- end }}
+    - name: https-internal
+      port: 8201
+      targetPort: 8201
+  {{- if .Values.server.service.extraPorts -}}
+  {{ toYaml .Values.server.service.extraPorts | nindent 4}}
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    {{- if eq (.Values.server.service.instanceSelector.enabled | toString) "true" }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- end }}
+    component: server
+    openbao-active: "false"
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

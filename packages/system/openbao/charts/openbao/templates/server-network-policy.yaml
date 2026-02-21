@@ -1,0 +1,24 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{- if eq (.Values.server.networkPolicy.enabled | toString) "true"  }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ template "openbao.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ template "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ template "openbao.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  ingress: {{- toYaml .Values.server.networkPolicy.ingress | nindent 4 }}
+  {{- if .Values.server.networkPolicy.egress }}
+  egress:
+  {{- toYaml .Values.server.networkPolicy.egress | nindent 4 }}
+  {{ end }}
+{{ end }}

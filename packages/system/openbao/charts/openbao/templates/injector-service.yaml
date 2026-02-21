@@ -1,0 +1,30 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{- template "openbao.injectorEnabled" . -}}
+{{- if .injectorEnabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "openbao.fullname" . }}-agent-injector-svc
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "openbao.name" . }}-agent-injector
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- if  .Values.injector.service.extraLabels -}}
+      {{- toYaml .Values.injector.service.extraLabels | nindent 4 -}}
+    {{- end -}}
+  {{ template "injector.service.annotations" . }}
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: {{ .Values.injector.port }}
+  selector:
+    app.kubernetes.io/name: {{ include "openbao.name" . }}-agent-injector
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    component: webhook
+{{- end }}

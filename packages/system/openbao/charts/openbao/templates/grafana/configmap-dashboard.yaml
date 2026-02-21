@@ -1,0 +1,30 @@
+{{- if .Values.serverTelemetry.grafanaDashboard.enabled }}
+{{- $files := .Files.Glob "grafana/dashboards/*.json" }}
+{{- if $files }}
+{{- range $path, $fileContents := $files }}
+{{- $dashboardName := regexReplaceAll "(^.*/)(.*)\\.json$" $path "${2}" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-%s" (include "openbao.fullname" $) $dashboardName | trunc 63 | trimSuffix "-" }}
+  namespace: {{ include "openbao.namespace" $ }}
+  labels:
+    app.kubernetes.io/name: {{ include "openbao.name" $ }}-grafana-dashboard
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    {{- if $.Values.serverTelemetry.grafanaDashboard.defaultLabel }}
+    grafana_dashboard: "1"
+    {{- end }}
+    {{- if $.Values.serverTelemetry.grafanaDashboard.extraLabels }}
+    {{- $.Values.serverTelemetry.grafanaDashboard.extraLabels | toYaml | nindent 4 }}
+    {{- end }}
+  {{- if $.Values.serverTelemetry.grafanaDashboard.extraAnnotations }}
+  annotations:
+    {{- $.Values.serverTelemetry.grafanaDashboard.extraAnnotations | toYaml | nindent 4 }}
+  {{- end }}
+data:
+  {{ $dashboardName }}.json: {{ $.Files.Get $path | toJson }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,30 @@
+annotations:
+  artifacthub.io/changes: |
+    - kind: changed
+      description: |
+        fix: Add extraPorts to server Service in ha
+  artifacthub.io/containsSecurityUpdates: "false"
+  charts.openshift.io/name: Openbao
+apiVersion: v2
+appVersion: v2.5.0
+description: Official OpenBao Chart
+home: https://github.com/openbao/openbao-helm
+icon: https://raw.githubusercontent.com/openbao/artwork/refs/heads/main/color/openbao-color.svg
+keywords:
+- vault
+- openbao
+- security
+- encryption
+- secrets
+- management
+- automation
+- infrastructure
+kubeVersion: '>= 1.30.0-0'
+maintainers:
+- email: openbao-security@lists.openssf.org
+  name: OpenBao
+  url: https://openbao.org
+name: openbao
+sources:
+- https://github.com/openbao/openbao-helm
+version: 0.25.3
