@@ -1,13 +1,13 @@
 # Build the manager binary
 FROM golang:1.26 AS builder
 
-ARG VERSION=edge-26.2.4
+ARG VERSION=309d9889e8eefe40b4c6c6843ad9683959f02e5e
 ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
 
-RUN curl -sSL https://github.com/clastix/kamaji/archive/refs/tags/${VERSION}.tar.gz | tar -xzvf- --strip=1
+RUN curl -sSL https://github.com/clastix/kamaji/archive/${VERSION}.tar.gz | tar -xzvf- --strip=1
 
 COPY patches /patches
 RUN git apply /patches/*.diff

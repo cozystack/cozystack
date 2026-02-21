@@ -6896,9 +6896,6 @@ versions:
                           type: object
                         type: array
                     type: object
-                    x-kubernetes-validations:
-                      - message: parentRefs must not specify port or sectionName, these are set automatically by Kamaji
-                        rule: '!has(self.parentRefs) || size(self.parentRefs) == 0 || self.parentRefs.all(ref, !has(ref.port) && !has(ref.sectionName))'
                   ingress:
                     description: Defining the options for an Optional Ingress which will expose API Server of the Tenant Control Plane
                     properties:
