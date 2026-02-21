@@ -1,0 +1,33 @@
+{{- if .Values.networkMap }}
+apiVersion: forklift.konveyor.io/v1beta1
+kind: NetworkMap
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  map:
+    {{- range .Values.networkMap }}
+    - source:
+        id: {{ .sourceId | quote }}
+      destination:
+        {{- if eq .destinationType "pod" }}
+        type: pod
+        {{- else if eq .destinationType "multus" }}
+        type: multus
+        name: {{ required "networkMap.destinationName is required when destinationType=multus" .destinationName | quote }}
+        {{- with .destinationNamespace }}
+        namespace: {{ . | quote }}
+        {{- end }}
+        {{- else }}
+        {{- fail (printf "networkMap.destinationType must be 'pod' or 'multus', got %q" .destinationType) }}
+        {{- end }}
+    {{- end }}
+  provider:
+    source:
+      name: {{ .Release.Name }}-source
+      namespace: {{ .Release.Namespace }}
+    destination:
+      name: {{ .Release.Name }}-destination
+      namespace: {{ .Release.Namespace }}
+{{- end }}

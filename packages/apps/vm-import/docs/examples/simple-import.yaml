@@ -1,0 +1,50 @@
+# Example: Simple VMware VM Import
+#
+# This example shows how to import 2 VMs from VMware vSphere
+# with basic network and storage mapping.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vcenter-credentials
+  namespace: default
+type: Opaque
+stringData:
+  user: administrator@vsphere.local
+  password: MySecurePassword123!
+  # Get thumbprint with:
+  # openssl s_client -connect vcenter.example.com:443 < /dev/null 2>/dev/null | openssl x509 -fingerprint -noout -sha1
+  thumbprint: "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD"
+
+---
+apiVersion: apps.cozystack.io/v1
+kind: VMImport
+metadata:
+  name: my-first-import
+  namespace: default
+spec:
+  # VMware source configuration
+  sourceUrl: "https://vcenter.example.com/sdk"
+  sourceSecretName: "vcenter-credentials"
+
+  # VMs to import (get IDs from vSphere client or API)
+  vms:
+    - id: "vm-42"
+      name: "web-server"  # Target name in KubeVirt
+    - id: "vm-43"
+      name: "db-server"
+
+  # Migration type
+  warm: false  # Cold migration (VM must be powered off)
+
+  # Network mapping
+  networkMap:
+    # Map VMware "VM Network" to pod network
+    - sourceId: "network-1"
+      destinationType: "pod"
+
+  # Storage mapping
+  storageMap:
+    # Map VMware datastore to Kubernetes StorageClass
+    - sourceId: "datastore-10"
+      storageClass: "replicated"

@@ -1,0 +1,42 @@
+{{- if .Values.vms }}
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Plan
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    vm-import.cozystack.io/adoption-enabled: {{ if hasKey .Values "enableAdoption" }}{{ .Values.enableAdoption | quote }}{{ else }}"true"{{ end }}
+    vm-import.cozystack.io/target-namespace: {{ .Release.Namespace | quote }}
+    vm-import.cozystack.io/import-name: {{ .Release.Name | quote }}
+spec:
+  warm: {{ default false .Values.warm }}
+  provider:
+    source:
+      name: {{ .Release.Name }}-source
+      namespace: {{ .Release.Namespace }}
+    destination:
+      name: {{ .Release.Name }}-destination
+      namespace: {{ .Release.Namespace }}
+  {{- if or .Values.networkMap .Values.storageMap }}
+  map:
+    {{- if .Values.networkMap }}
+    network:
+      name: {{ .Release.Name }}
+      namespace: {{ .Release.Namespace }}
+    {{- end }}
+    {{- if .Values.storageMap }}
+    storage:
+      name: {{ .Release.Name }}
+      namespace: {{ .Release.Namespace }}
+    {{- end }}
+  {{- end }}
+  targetNamespace: {{ .Release.Namespace }}
+  vms:
+    {{- range .Values.vms }}
+    - id: {{ .id | quote }}
+      {{- with .name }}
+      name: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+{{- end }}
