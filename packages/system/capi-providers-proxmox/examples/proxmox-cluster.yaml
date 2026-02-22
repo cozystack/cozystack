@@ -1,0 +1,132 @@
+# Example Proxmox Cluster Configuration
+# This example shows how to create a Proxmox cluster using Cluster API
+
+---
+# 1. Create a secret for Proxmox credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: proxmox-credentials
+  namespace: default
+type: Opaque
+stringData:
+  username: root@pam
+  password: your-secure-password
+  url: https://proxmox.example.com:8006/api2/json
+
+---
+# 2. Create the cluster
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: proxmox-cluster
+spec:
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: ProxmoxCluster
+    name: proxmox-cluster
+
+---
+# 3. Define Proxmox cluster infrastructure
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ProxmoxCluster
+metadata:
+  name: proxmox-cluster
+spec:
+  server: proxmox.example.com
+  insecure: false
+  controlPlaneEndpoint:
+    host: load-balancer.example.com
+    port: 6443
+
+---
+# 4. Create control plane machine
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Machine
+metadata:
+  name: proxmox-control-plane
+  labels:
+    cluster.x-k8s.io/control-plane: "true"
+spec:
+  version: v1.28.0
+  bootstrap:
+    configRef:
+      apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+      kind: KubeadmConfig
+      name: proxmox-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: ProxmoxMachine
+    name: proxmox-control-plane
+
+---
+# 5. Define Proxmox machine infrastructure for control plane
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ProxmoxMachine
+metadata:
+  name: proxmox-control-plane
+spec:
+  nodeName: proxmox-node-1
+  template: ubuntu-2004-template
+  cores: 2
+  memory: 4096
+  diskSize: 20
+
+---
+# 6. Define Kubeadm configuration for control plane
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfig
+metadata:
+  name: proxmox-control-plane
+spec:
+  clusterConfiguration:
+    apiServer:
+      extraArgs:
+        cloud-provider: external
+  initConfiguration:
+    nodeRegistration:
+      kubeletExtraArgs:
+        cloud-provider: external
+
+---
+# 7. Create worker machine
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Machine
+metadata:
+  name: proxmox-worker
+spec:
+  version: v1.28.0
+  bootstrap:
+    configRef:
+      apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+      kind: KubeadmConfig
+      name: proxmox-worker
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: ProxmoxMachine
+    name: proxmox-worker
+
+---
+# 8. Define Proxmox machine infrastructure for worker
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: ProxmoxMachine
+metadata:
+  name: proxmox-worker
+spec:
+  nodeName: proxmox-node-1
+  template: ubuntu-2004-template
+  cores: 2
+  memory: 4096
+  diskSize: 20
+
+---
+# 9. Define Kubeadm configuration for worker
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfig
+metadata:
+  name: proxmox-worker
+spec:
+  joinConfiguration:
+    nodeRegistration:
+      kubeletExtraArgs:
+        cloud-provider: external
