@@ -583,17 +583,13 @@ type factoryFlags struct {
 }
 
 // factoryFeatureFlags determines which tabs to show based on whether the
-// ApplicationDefinition has non-empty resource selectors (Include or Exclude).
+// ApplicationDefinition has non-empty Include resource selectors.
 // Workloads tab is always shown.
 func factoryFeatureFlags(crd *cozyv1alpha1.ApplicationDefinition) factoryFlags {
 	return factoryFlags{
 		Workloads: true,
-		Ingresses: hasSelectors(crd.Spec.Ingresses),
-		Services:  hasSelectors(crd.Spec.Services),
-		Secrets:   hasSelectors(crd.Spec.Secrets),
+		Ingresses: len(crd.Spec.Ingresses.Include) > 0,
+		Services:  len(crd.Spec.Services.Include) > 0,
+		Secrets:   len(crd.Spec.Secrets.Include) > 0,
 	}
-}
-
-func hasSelectors(res cozyv1alpha1.ApplicationDefinitionResources) bool {
-	return len(res.Include) > 0 || len(res.Exclude) > 0
 }
