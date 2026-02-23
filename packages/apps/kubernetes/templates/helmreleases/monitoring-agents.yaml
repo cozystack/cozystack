@@ -1,4 +1,5 @@
 {{- $targetTenant := .Values._namespace.monitoring }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 {{- if .Values.addons.monitoringAgents.enabled }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -49,7 +50,7 @@ spec:
         cluster: {{ .Release.Name }}
         tenant: {{ .Release.Namespace }}
       remoteWrite:
-        url: http://vminsert-shortterm.{{ $targetTenant }}.svc:8480/insert/0/prometheus
+        url: http://vminsert-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8480/insert/0/prometheus
     fluent-bit:
       readinessProbe:
         httpGet:
@@ -72,7 +73,7 @@ spec:
           [OUTPUT]
               Name http
               Match kube.*
-              Host vlogs-generic.{{ $targetTenant }}.svc
+              Host vlogs-generic.{{ $targetTenant }}.svc.{{ $clusterDomain }}
               port 9428
               compress gzip
               uri /insert/jsonline?_stream_fields=stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
