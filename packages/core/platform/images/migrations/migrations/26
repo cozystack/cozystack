@@ -2,6 +2,7 @@
 # Migration 26 --> 27
 # Migrate monitoring resources from extra/monitoring to system/monitoring
 # This migration re-labels resources so they become owned by monitoring-system HelmRelease
+# and deletes old helm release secrets so that helm does not diff old vs new chart manifests.
 
 set -euo pipefail
 
@@ -35,10 +36,39 @@ relabel_resources() {
   done
 }
 
+# Delete all helm release secrets for a given release name in a namespace.
+# Uses both label selector and name-pattern matching to ensure complete cleanup.
+delete_helm_secrets() {
+  local ns="$1"
+  local release="$2"
+
+  # Primary: delete by label selector
+  kubectl delete secrets -n "$ns" -l "name=${release},owner=helm" --ignore-not-found
+
+  # Fallback: find and delete by name pattern (in case labels were modified)
+  local remaining
+  remaining=$(kubectl get secrets -n "$ns" -o name | { grep "^secret/sh\.helm\.release\.v1\.${release}\." || true; })
+  if [ -n "$remaining" ]; then
+    echo "  Found secrets not matched by label selector, deleting by name..."
+    echo "$remaining" | while IFS= read -r secret; do
+      echo "    Deleting $secret"
+      kubectl delete -n "$ns" "$secret" --ignore-not-found
+    done
+  fi
+
+  # Verify all secrets are gone
+  remaining=$(kubectl get secrets -n "$ns" -o name | { grep "^secret/sh\.helm\.release\.v1\.${release}\." || true; })
+  if [ -n "$remaining" ]; then
+    echo "  ERROR: Failed to delete helm release secrets:"
+    echo "$remaining"
+    return 1
+  fi
+}
+
 # Find all tenant namespaces with monitoring HelmRelease
 echo "Finding tenant namespaces with monitoring HelmRelease..."
 NAMESPACES=$(kubectl get hr --all-namespaces -l apps.cozystack.io/application.kind=Monitoring \
-  -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u || true)
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' | sort -u)
 
 if [ -z "$NAMESPACES" ]; then
   echo "No monitoring HelmReleases found in tenant namespaces, skipping migration"
@@ -66,7 +96,7 @@ for ns in $NAMESPACES; do
   # Step 1: Suspend the HelmRelease
   echo ""
   echo "Step 1: Suspending HelmRelease monitoring..."
-  kubectl patch hr -n "$ns" monitoring --type=merge -p '{"spec":{"suspend":true}}' 2>/dev/null || true
+  kubectl patch hr -n "$ns" monitoring --type=merge -p '{"spec":{"suspend":true}}'
 
   # Wait a moment for reconciliation to stop
   sleep 2
@@ -74,7 +104,7 @@ for ns in $NAMESPACES; do
   # Step 2: Delete helm secrets for the monitoring release
   echo ""
   echo "Step 2: Deleting helm secrets for monitoring release..."
-  kubectl delete secrets -n "$ns" -l name=monitoring,owner=helm --ignore-not-found
+  delete_helm_secrets "$ns" "monitoring"
 
   # Step 3: Relabel resources to be owned by monitoring-system
   echo ""
@@ -121,7 +151,9 @@ for ns in $NAMESPACES; do
   echo "Processing Cozystack resources..."
   relabel_resources "$ns" "workloadmonitors.cozystack.io"
 
-  # Step 4: Delete the suspended HelmRelease (Flux won't delete resources when HR is suspended)
+  # Step 4: Delete the suspended HelmRelease
+  # Helm secrets are already gone, so flux finalizer will find no release to uninstall
+  # and will simply remove the finalizer without deleting any resources.
   echo ""
   echo "Step 4: Deleting suspended HelmRelease monitoring..."
   kubectl delete hr -n "$ns" monitoring --ignore-not-found
