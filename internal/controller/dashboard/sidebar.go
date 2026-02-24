@@ -182,17 +182,17 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 			map[string]any{
 				"key":   "plans",
 				"label": "Plans",
-				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/backups.cozystack.io/v1alpha1/plans",
+				"link":  "/openapi-ui/{cluster}/{namespace}/api-table/backups.cozystack.io/v1alpha1/plans",
 			},
 			map[string]any{
 				"key":   "backupjobs",
 				"label": "BackupJobs",
-				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/backups.cozystack.io/v1alpha1/backupjobs",
+				"link":  "/openapi-ui/{cluster}/{namespace}/api-table/backups.cozystack.io/v1alpha1/backupjobs",
 			},
 			map[string]any{
 				"key":   "backups",
 				"label": "Backups",
-				"link":  "/openapi-ui/{clusterName}/{namespace}/api-table/backups.cozystack.io/v1alpha1/backups",
+				"link":  "/openapi-ui/{cluster}/{namespace}/api-table/backups.cozystack.io/v1alpha1/backups",
 			},
 		},
 	})
@@ -215,7 +215,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 			map[string]any{
 				"key":   "loadbalancer-services",
 				"label": "External IPs",
-				"link":  "/openapi-ui/{clusterName}/{namespace}/factory/external-ips",
+				"link":  "/openapi-ui/{cluster}/{namespace}/factory/external-ips",
 			},
 			map[string]any{
 				"key":   "tenants",

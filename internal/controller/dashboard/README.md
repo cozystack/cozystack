@@ -156,7 +156,7 @@ menuItems = append(menuItems, map[string]any{
         map[string]any{
             "key":   "{plural}",
             "label": "{ResourceLabel}",
-            "link":  "/openapi-ui/{clusterName}/{namespace}/api-table/{group}/{version}/{plural}",
+            "link":  "/openapi-ui/{cluster}/{namespace}/api-table/{group}/{version}/{plural}",
         },
     },
 }),
@@ -174,7 +174,7 @@ menuItems = append(menuItems, map[string]any{
 
 **Important Notes**:
 - The sidebar tag (`{lowercase-kind}-sidebar`) must match what the Factory uses
-- The link format: `/openapi-ui/{clusterName}/{namespace}/api-table/{group}/{version}/{plural}`
+- The link format: `/openapi-ui/{cluster}/{namespace}/api-table/{group}/{version}/{plural}`
 - All sidebars share the same `keysAndTags` and `menuItems`, so changes affect all sidebar instances
 
 ### Step 4: Verify Integration
