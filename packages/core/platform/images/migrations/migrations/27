@@ -5,10 +5,24 @@ set -euo pipefail
 
 # Migrate Piraeus CRDs to piraeus-operator-crds Helm release
 for crd in linstorclusters.piraeus.io linstornodeconnections.piraeus.io linstorsatelliteconfigurations.piraeus.io linstorsatellites.piraeus.io; do
-  kubectl annotate crd "$crd" meta.helm.sh/release-namespace=cozy-linstor meta.helm.sh/release-name=piraeus-operator-crds --overwrite
-  kubectl label crd "$crd" app.kubernetes.io/managed-by=Helm helm.toolkit.fluxcd.io/namespace=cozy-linstor helm.toolkit.fluxcd.io/name=piraeus-operator-crds --overwrite
+  if kubectl get crd "$crd" >/dev/null 2>&1; then
+    echo "  Relabeling CRD $crd"
+    kubectl annotate crd "$crd" meta.helm.sh/release-namespace=cozy-linstor meta.helm.sh/release-name=piraeus-operator-crds --overwrite
+    kubectl label crd "$crd" app.kubernetes.io/managed-by=Helm helm.toolkit.fluxcd.io/namespace=cozy-linstor helm.toolkit.fluxcd.io/name=piraeus-operator-crds --overwrite
+  else
+    echo "  CRD $crd not found, skipping"
+  fi
 done
+
+# Delete old piraeus-operator helm secrets (by label and by name pattern)
 kubectl delete secret -n cozy-linstor -l name=piraeus-operator,owner=helm --ignore-not-found
+remaining=$(kubectl get secrets -n cozy-linstor -o name 2>/dev/null | { grep "^secret/sh\.helm\.release\.v1\.piraeus-operator\." || true; })
+if [ -n "$remaining" ]; then
+  echo "  Deleting remaining piraeus-operator helm secrets by name..."
+  echo "$remaining" | while IFS= read -r secret; do
+    kubectl delete -n cozy-linstor "$secret" --ignore-not-found
+  done
+fi
 
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
