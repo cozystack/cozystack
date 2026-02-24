@@ -1,11 +1,4 @@
 ##
-## @section Common Parameters
-##
-
-## @param {string} storageClass - StorageClass used to store the data.
-storageClass: replicated
-
-##
 ## @section Application-specific Parameters
 ##
 
