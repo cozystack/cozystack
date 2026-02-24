@@ -34,6 +34,15 @@ storageClass: ""
 external: false
 
 ##
+## @enum {string} Version
+## @value v4.2
+## @value v4.1
+## @value v4.0
+## @value v3.13
+
+## @param {Version} version - RabbitMQ major.minor version to deploy
+version: v4.2
+
 ## @section Application-specific parameters
 ##
 
