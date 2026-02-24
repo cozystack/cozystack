@@ -315,7 +315,7 @@ PVCEOF
   # --- 2i: Clone Secrets ---
   echo "  --- Clone Secrets ---"
   kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | { grep "secret/${OLD_NAME}" || true; } | { grep -v "sh.helm.release" || true; } | { grep -v "values" || true; } \
     | while IFS= read -r secret; do
     old_secret_name="${secret#secret/}"
     suffix="${old_secret_name#${OLD_NAME}}"
@@ -542,7 +542,7 @@ SVCEOF
   # --- 2q: Delete old resources ---
   echo "  --- Delete old resources ---"
   kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | { grep "secret/${OLD_NAME}" || true; } | { grep -v "sh.helm.release" || true; } | { grep -v "values" || true; } \
     | while IFS= read -r secret; do
     old_secret_name="${secret#secret/}"
     delete_resource "$NAMESPACE" "secret" "$old_secret_name"
@@ -705,7 +705,7 @@ for entry in "${INSTANCES[@]}"; do
     # Force immediate reconciliation
     echo "  [TRIGGER] Reconcile ${ns}/hr/${disk_name}"
     kubectl -n "$ns" annotate hr "$disk_name" --overwrite \
-      "reconcile.fluxcd.io/requestedAt=$(date +%s)" 2>/dev/null || true
+      "reconcile.fluxcd.io/requestedAt=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" 2>/dev/null || true
   fi
 done
 
