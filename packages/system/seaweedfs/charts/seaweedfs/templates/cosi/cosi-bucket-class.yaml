@@ -15,7 +15,7 @@ driverName: {{ .Values.cosi.driverName }}
 deletionPolicy: Retain
 parameters:
   objectLockEnabled: "true"
-  objectLockRetentionMode: COMPLIANCE
+  objectLockRetentionMode: "COMPLIANCE"
   objectLockRetentionDays: "365"
 ---
 kind: BucketAccessClass
