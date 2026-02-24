@@ -67,7 +67,7 @@ delete_helm_secrets() {
 
 # Find all tenant namespaces with monitoring HelmRelease
 echo "Finding tenant namespaces with monitoring HelmRelease..."
-NAMESPACES=$(kubectl get hr --all-namespaces -l apps.cozystack.io/application.kind=Monitoring \
+NAMESPACES=$(kubectl get hr --all-namespaces -l cozystack.io/ui=true --field-selector=metadata.name=monitoring \
   -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' | sort -u)
 
 if [ -z "$NAMESPACES" ]; then

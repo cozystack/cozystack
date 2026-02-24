@@ -122,19 +122,6 @@ else
     EXPOSED_SERVICES_YAML=$(echo "$EXPOSE_SERVICES" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "            - "$0}')
 fi
 
-# Determine bundle type
-case "$BUNDLE_NAME" in
-    paas-full|distro-full)
-        SYSTEM_ENABLED="true"
-        ;;
-    paas-hosted|distro-hosted)
-        SYSTEM_ENABLED="false"
-        ;;
-    *)
-        SYSTEM_ENABLED="false"
-        ;;
-esac
-
 # Update bundle naming
 BUNDLE_NAME=$(echo "$BUNDLE_NAME" | sed 's/paas/isp/')
 
@@ -161,7 +148,6 @@ echo "  Root Host: $ROOT_HOST"
 echo "  API Server Endpoint: $API_SERVER_ENDPOINT"
 echo "  OIDC Enabled: $OIDC_ENABLED"
 echo "  Bundle Name: $BUNDLE_NAME"
-echo "  System Enabled: $SYSTEM_ENABLED"
 echo "  Certificate Solver: ${SOLVER:-http01 (default)}"
 echo "  Issuer Name: ${ISSUER_NAME:-letsencrypt-prod (default)}"
 echo ""
@@ -179,14 +165,6 @@ spec:
     platform:
       values:
         bundles:
-          system:
-            enabled: $SYSTEM_ENABLED
-          iaas:
-            enabled: true
-          paas:
-            enabled: true
-          naas:
-            enabled: true
           disabledPackages: $DISABLED_PACKAGES
           enabledPackages: $ENABLED_PACKAGES
         networking:
