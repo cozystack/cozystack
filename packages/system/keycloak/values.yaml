@@ -1,6 +1,10 @@
 image: quay.io/keycloak/keycloak:26.0.4
 
 ingress:
+  # Custom hostname for the Keycloak Ingress.
+  # If set, this value will be used as the Ingress hostname (e.g., "auth.example.com").
+  # If left empty, defaults to "keycloak.<root-host>" based on the cluster root-host setting.
+  host: ""
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
