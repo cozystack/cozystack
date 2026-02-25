@@ -516,6 +516,27 @@ func CreateAllCustomFormsOverrides() []*dashboardv1alpha1.CustomFormsOverride {
 				createFormItem("spec.schedule.cron", "Schedule Cron", "text"),
 			},
 		}),
+
+		// BackupJobs form override - backups.cozystack.io/v1alpha1
+		createCustomFormsOverride("default-/backups.cozystack.io/v1alpha1/backupjobs", map[string]any{
+			"formItems": []any{
+				createFormItem("metadata.name", "Name", "text"),
+				createFormItem("metadata.namespace", "Namespace", "text"),
+				createFormItem("spec.planRef.name", "Plan Name (optional)", "text"),
+				createFormItem("spec.applicationRef.apiGroup", "Application API Group", "text"),
+				createFormItem("spec.applicationRef.kind", "Application Kind", "text"),
+				createFormItem("spec.applicationRef.name", "Application Name", "text"),
+				createFormItemWithAPI("spec.backupClassName", "Backup Class", "select", map[string]any{
+					"api": map[string]any{
+						"fetchUrl":       "/api/clusters/{cluster}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
+						"pathToItems":    []any{"items"},
+						"pathToValue":    []any{"metadata", "name"},
+						"pathToLabel":    []any{"metadata", "name"},
+						"clusterNameVar": "clusterName",
+					},
+				}),
+			},
+		}),
 	}
 }
 
