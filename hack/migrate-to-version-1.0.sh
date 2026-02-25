@@ -52,6 +52,10 @@ OIDC_ENABLED=$(echo "$COZYSTACK_CM" | jq -r '.data["oidc-enabled"] // "false"')
 KEYCLOAK_REDIRECTS=$(echo "$COZYSTACK_CM" | jq -r '.data["extra-keycloak-redirect-uri-for-dashboard"] // ""' )
 TELEMETRY_ENABLED=$(echo "$COZYSTACK_CM" | jq -r '.data["telemetry-enabled"] // "true"')
 BUNDLE_NAME=$(echo "$COZYSTACK_CM" | jq -r '.data["bundle-name"] // "paas-full"')
+BUNDLE_DISABLE=$(echo "$COZYSTACK_CM" | jq -r '.data["bundle-disable"] // ""')
+BUNDLE_ENABLE=$(echo "$COZYSTACK_CM" | jq -r '.data["bundle-enable"] // ""')
+EXPOSE_INGRESS=$(echo "$COZYSTACK_CM" | jq -r '.data["expose-ingress"] // "tenant-root"')
+EXPOSE_SERVICES=$(echo "$COZYSTACK_CM" | jq -r '.data["expose-services"] // ""')
 
 # Certificate issuer configuration (old undocumented field: clusterissuer)
 OLD_CLUSTER_ISSUER=$(echo "$COZYSTACK_CM" | jq -r '.data["clusterissuer"] // ""')
@@ -99,21 +103,24 @@ else
     EXTERNAL_IPS=$(echo "$EXTERNAL_IPS" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - "$0}')
 fi
 
-# Determine bundle type
-case "$BUNDLE_NAME" in
-    paas-full|distro-full)
-        SYSTEM_ENABLED="true"
-        SYSTEM_TYPE="full"
-        ;;
-    paas-hosted|distro-hosted)
-        SYSTEM_ENABLED="false"
-        SYSTEM_TYPE="hosted"
-        ;;
-    *)
-        SYSTEM_ENABLED="false"
-        SYSTEM_TYPE="hosted"
-        ;;
-esac
+# Convert comma-separated lists to YAML arrays
+if [ -z "$BUNDLE_DISABLE" ]; then
+    DISABLED_PACKAGES="[]"
+else
+    DISABLED_PACKAGES=$(echo "$BUNDLE_DISABLE" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - "$0}')
+fi
+
+if [ -z "$BUNDLE_ENABLE" ]; then
+    ENABLED_PACKAGES="[]"
+else
+    ENABLED_PACKAGES=$(echo "$BUNDLE_ENABLE" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - "$0}')
+fi
+
+if [ -z "$EXPOSE_SERVICES" ]; then
+    EXPOSED_SERVICES_YAML="[]"
+else
+    EXPOSED_SERVICES_YAML=$(echo "$EXPOSE_SERVICES" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "            - "$0}')
+fi
 
 # Update bundle naming
 BUNDLE_NAME=$(echo "$BUNDLE_NAME" | sed 's/paas/isp/')
@@ -141,8 +148,6 @@ echo "  Root Host: $ROOT_HOST"
 echo "  API Server Endpoint: $API_SERVER_ENDPOINT"
 echo "  OIDC Enabled: $OIDC_ENABLED"
 echo "  Bundle Name: $BUNDLE_NAME"
-echo "  System Enabled: $SYSTEM_ENABLED"
-echo "  System Type: $SYSTEM_TYPE"
 echo "  Certificate Solver: ${SOLVER:-http01 (default)}"
 echo "  Issuer Name: ${ISSUER_NAME:-letsencrypt-prod (default)}"
 echo ""
@@ -160,15 +165,8 @@ spec:
     platform:
       values:
         bundles:
-          system:
-            enabled: $SYSTEM_ENABLED
-            type: "$SYSTEM_TYPE"
-          iaas:
-            enabled: true
-          paas:
-            enabled: true
-          naas:
-            enabled: true
+          disabledPackages: $DISABLED_PACKAGES
+          enabledPackages: $ENABLED_PACKAGES
         networking:
           clusterDomain: "$CLUSTER_DOMAIN"
           podCIDR: "$POD_CIDR"
@@ -177,6 +175,8 @@ spec:
           joinCIDR: "$JOIN_CIDR"
         publishing:
           host: "$ROOT_HOST"
+          ingressName: "$EXPOSE_INGRESS"
+          exposedServices: $EXPOSED_SERVICES_YAML
           apiServerEndpoint: "$API_SERVER_ENDPOINT"
           externalIPs: $EXTERNAL_IPS
 ${CERTIFICATES_SECTION}

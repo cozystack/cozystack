@@ -348,7 +348,7 @@ PVCEOF
   # --- 3g: Clone Secrets ---
   echo "  --- Clone Secrets ---"
   for secret in $(kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release"); do
+    | { grep "secret/${OLD_NAME}" || true; } | { grep -v "sh.helm.release" || true; }); do
     old_secret_name="${secret#secret/}"
     new_secret_name="${NEW_NAME}${old_secret_name#${OLD_NAME}}"
     clone_resource "$NAMESPACE" "secret" "$old_secret_name" "$new_secret_name" "$OLD_NAME" "$NEW_NAME"
@@ -357,7 +357,7 @@ PVCEOF
   # --- 3h: Clone ConfigMaps ---
   echo "  --- Clone ConfigMaps ---"
   for cm in $(kubectl -n "$NAMESPACE" get configmap -o name 2>/dev/null \
-    | grep "configmap/${OLD_NAME}"); do
+    | { grep "configmap/${OLD_NAME}" || true; }); do
     old_cm_name="${cm#configmap/}"
     new_cm_name="${NEW_NAME}${old_cm_name#${OLD_NAME}}"
     clone_resource "$NAMESPACE" "configmap" "$old_cm_name" "$new_cm_name" "$OLD_NAME" "$NEW_NAME"
@@ -468,13 +468,13 @@ PVCEOF
   fi
 
   for secret in $(kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release"); do
+    | { grep "secret/${OLD_NAME}" || true; } | { grep -v "sh.helm.release" || true; }); do
     old_secret_name="${secret#secret/}"
     delete_resource "$NAMESPACE" "secret" "$old_secret_name"
   done
 
   for cm in $(kubectl -n "$NAMESPACE" get configmap -o name 2>/dev/null \
-    | grep "configmap/${OLD_NAME}"); do
+    | { grep "configmap/${OLD_NAME}" || true; }); do
     old_cm_name="${cm#configmap/}"
     delete_resource "$NAMESPACE" "configmap" "$old_cm_name"
   done

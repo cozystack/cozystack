@@ -9,8 +9,6 @@ set -euo pipefail
 OLD_PREFIX="virtual-machine"
 NEW_DISK_PREFIX="vm-disk"
 NEW_INSTANCE_PREFIX="vm-instance"
-PROTECTION_WEBHOOK_NAME="protection-webhook"
-PROTECTION_WEBHOOK_NS="protection-webhook"
 CDI_APISERVER_NS="cozy-kubevirt-cdi"
 CDI_APISERVER_DEPLOY="cdi-apiserver"
 CDI_VALIDATING_WEBHOOKS="cdi-api-datavolume-validate cdi-api-dataimportcron-validate cdi-api-populator-validate cdi-api-validate"
@@ -88,7 +86,6 @@ echo "  Total: ${#INSTANCES[@]} instance(s)"
 # STEP 2: Migrate each instance
 # ============================================================
 ALL_PV_NAMES=()
-ALL_PROTECTED_RESOURCES=()
 
 for entry in "${INSTANCES[@]}"; do
   NAMESPACE="${entry%%/*}"
@@ -315,7 +312,7 @@ PVCEOF
   # --- 2i: Clone Secrets ---
   echo "  --- Clone Secrets ---"
   kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | { grep "secret/${OLD_NAME}" || true; } | { grep -v "sh.helm.release" || true; } | { grep -v "values" || true; } \
     | while IFS= read -r secret; do
     old_secret_name="${secret#secret/}"
     suffix="${old_secret_name#${OLD_NAME}}"
@@ -542,7 +539,7 @@ SVCEOF
   # --- 2q: Delete old resources ---
   echo "  --- Delete old resources ---"
   kubectl -n "$NAMESPACE" get secret -o name 2>/dev/null \
-    | grep "secret/${OLD_NAME}" | grep -v "sh.helm.release" | grep -v "values" \
+    | { grep "secret/${OLD_NAME}" || true; } | { grep -v "sh.helm.release" || true; } | { grep -v "values" || true; } \
     | while IFS= read -r secret; do
     old_secret_name="${secret#secret/}"
     delete_resource "$NAMESPACE" "secret" "$old_secret_name"
@@ -564,71 +561,17 @@ SVCEOF
     delete_resource "$NAMESPACE" "secret" "$VALUES_SECRET"
   fi
 
-  # Collect protected resources for batch deletion
+  # Delete old service (if exists)
   if resource_exists "$NAMESPACE" "svc" "$OLD_NAME"; then
-    ALL_PROTECTED_RESOURCES+=("${NAMESPACE}:svc/${OLD_NAME}")
+    delete_resource "$NAMESPACE" "svc" "$OLD_NAME"
   fi
 done
 
 # ============================================================
-# STEP 3: Delete protected resources (Services)
+# STEP 3: Restore PV reclaim policies
 # ============================================================
 echo ""
-echo "--- Step 3: Delete protected resources ---"
-
-if [ ${#ALL_PROTECTED_RESOURCES[@]} -gt 0 ]; then
-  WEBHOOK_EXISTS=false
-  if kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" --no-headers 2>/dev/null | grep -q .; then
-    WEBHOOK_EXISTS=true
-  fi
-
-  if [ "$WEBHOOK_EXISTS" = "true" ]; then
-    echo "  --- Temporarily disabling protection-webhook ---"
-
-    WEBHOOK_REPLICAS=$(kubectl -n "$PROTECTION_WEBHOOK_NS" get deploy "$PROTECTION_WEBHOOK_NAME" \
-      -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
-
-    echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> 0 (was ${WEBHOOK_REPLICAS})"
-    kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" --replicas=0
-
-    echo "  [PATCH] Set failurePolicy=Ignore on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
-    kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
-      jq '.webhooks[].failurePolicy = "Ignore"' | \
-      kubectl apply -f - 2>/dev/null || true
-
-    echo "  Waiting for webhook pods to terminate..."
-    kubectl -n "$PROTECTION_WEBHOOK_NS" wait --for=delete pod \
-      -l app.kubernetes.io/name=protection-webhook --timeout=60s 2>/dev/null || true
-    sleep 3
-  fi
-
-  for entry in "${ALL_PROTECTED_RESOURCES[@]}"; do
-    ns="${entry%%:*}"
-    res="${entry#*:}"
-    echo "  [DELETE] ${ns}/${res}"
-    kubectl -n "$ns" delete "$res" --wait=false 2>/dev/null || true
-  done
-
-  if [ "$WEBHOOK_EXISTS" = "true" ]; then
-    echo "  [PATCH] Set failurePolicy=Fail on ValidatingWebhookConfiguration/${PROTECTION_WEBHOOK_NAME}"
-    kubectl get validatingwebhookconfiguration "$PROTECTION_WEBHOOK_NAME" -o json | \
-      jq '.webhooks[].failurePolicy = "Fail"' | \
-      kubectl apply -f - 2>/dev/null || true
-
-    echo "  [SCALE] ${PROTECTION_WEBHOOK_NAME} -> ${WEBHOOK_REPLICAS}"
-    kubectl -n "$PROTECTION_WEBHOOK_NS" scale deploy "$PROTECTION_WEBHOOK_NAME" \
-      --replicas="$WEBHOOK_REPLICAS"
-    echo "  --- protection-webhook restored ---"
-  fi
-else
-  echo "  [SKIP] No protected resources to delete"
-fi
-
-# ============================================================
-# STEP 4: Restore PV reclaim policies
-# ============================================================
-echo ""
-echo "--- Step 4: Restore PV reclaim policies ---"
+echo "--- Step 3: Restore PV reclaim policies ---"
 for pv_name in "${ALL_PV_NAMES[@]}"; do
   if [ -n "$pv_name" ]; then
     current_policy=$(kubectl get pv "$pv_name" \
@@ -643,7 +586,7 @@ for pv_name in "${ALL_PV_NAMES[@]}"; do
 done
 
 # ============================================================
-# STEP 5: Temporarily disable CDI datavolume webhooks
+# STEP 4: Temporarily disable CDI datavolume webhooks
 # ============================================================
 # CDI's datavolume-validate webhook rejects DataVolume creation when a PVC
 # with the same name already exists. We must disable it so that vm-disk
@@ -652,7 +595,7 @@ done
 # cdi-apiserver (which serves the webhooks), then delete webhook configs.
 # Both are restored after vm-disk HRs reconcile.
 echo ""
-echo "--- Step 5: Temporarily disable CDI webhooks ---"
+echo "--- Step 4: Temporarily disable CDI webhooks ---"
 
 CDI_OPERATOR_REPLICAS=$(kubectl -n "$CDI_APISERVER_NS" get deploy cdi-operator \
   -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
@@ -685,10 +628,10 @@ done
 sleep 2
 
 # ============================================================
-# STEP 6: Unsuspend vm-disk HelmReleases first
+# STEP 5: Unsuspend vm-disk HelmReleases first
 # ============================================================
 echo ""
-echo "--- Step 6: Unsuspend vm-disk HelmReleases ---"
+echo "--- Step 5: Unsuspend vm-disk HelmReleases ---"
 for entry in "${INSTANCES[@]}"; do
   ns="${entry%%/*}"
   instance="${entry#*/}"
@@ -705,7 +648,7 @@ for entry in "${INSTANCES[@]}"; do
     # Force immediate reconciliation
     echo "  [TRIGGER] Reconcile ${ns}/hr/${disk_name}"
     kubectl -n "$ns" annotate hr "$disk_name" --overwrite \
-      "reconcile.fluxcd.io/requestedAt=$(date +%s)" 2>/dev/null || true
+      "reconcile.fluxcd.io/requestedAt=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" 2>/dev/null || true
   fi
 done
 
@@ -729,12 +672,12 @@ for entry in "${INSTANCES[@]}"; do
 done
 
 # ============================================================
-# STEP 7: Restore CDI webhooks
+# STEP 6: Restore CDI webhooks
 # ============================================================
 # Scale cdi-operator and cdi-apiserver back up.
 # cdi-apiserver will recreate webhook configurations automatically on start.
 echo ""
-echo "--- Step 7: Restore CDI webhooks ---"
+echo "--- Step 6: Restore CDI webhooks ---"
 
 echo "  [SCALE] cdi-operator -> ${CDI_OPERATOR_REPLICAS}"
 kubectl -n "$CDI_APISERVER_NS" scale deploy cdi-operator \
@@ -749,10 +692,10 @@ kubectl -n "$CDI_APISERVER_NS" rollout status deploy "$CDI_APISERVER_DEPLOY" --t
 echo "  --- CDI webhooks restored ---"
 
 # ============================================================
-# STEP 8: Unsuspend vm-instance HelmReleases
+# STEP 7: Unsuspend vm-instance HelmReleases
 # ============================================================
 echo ""
-echo "--- Step 8: Unsuspend vm-instance HelmReleases ---"
+echo "--- Step 7: Unsuspend vm-instance HelmReleases ---"
 for entry in "${INSTANCES[@]}"; do
   ns="${entry%%/*}"
   instance="${entry#*/}"

@@ -18,7 +18,7 @@ spec:
     name: cozystack-etcd-application-default-etcd
     namespace: cozy-system
   interval: 5m
-  timeout: 10m
+  timeout: 30m
   install:
     remediation:
       retries: -1
