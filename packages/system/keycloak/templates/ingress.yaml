@@ -1,4 +1,5 @@
 {{- $host := index .Values._cluster "root-host" }}
+{{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
@@ -19,10 +20,10 @@ spec:
   ingressClassName: {{ $exposeIngress }}
   tls:
   - hosts:
-      - keycloak.{{ $host }}
+      - {{ $ingressHost }}
     secretName: web-tls
   rules:
-  - host: keycloak.{{ $host }}
+  - host: {{ $ingressHost }}
     http:
       paths:
       - path: /

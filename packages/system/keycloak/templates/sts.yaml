@@ -1,4 +1,5 @@
 {{- $host := index .Values._cluster "root-host" }}
+{{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 
 {{- $existingPassword := lookup "v1" "Secret" "cozy-keycloak" (printf "%s-credentials" .Release.Name) }}
@@ -120,7 +121,7 @@ spec:
             - name: KC_FEATURES
               value: "docker"
             - name: KC_HOSTNAME
-              value: https://keycloak.{{ $host }}
+              value: https://{{ $ingressHost }}
             - name: JAVA_OPTS_APPEND
               value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
           ports:
