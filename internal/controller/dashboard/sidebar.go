@@ -176,7 +176,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 
 	// Add hardcoded Backups section
 	menuItems = append(menuItems, map[string]any{
-		"key":   "backups",
+		"key":   "backups-category",
 		"label": "Backups",
 		"children": []any{
 			map[string]any{
