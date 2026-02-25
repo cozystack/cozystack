@@ -10,6 +10,7 @@ rules:
   resourceNames:
   - {{ .Release.Name }}
   - {{ .Release.Name }}-credentials
+  - {{ .Release.Name }}-readonly
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - networking.k8s.io
