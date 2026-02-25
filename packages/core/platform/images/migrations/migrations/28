@@ -611,6 +611,19 @@ done
 echo ""
 echo "=== Migration complete (${#INSTANCES[@]} instance(s)) ==="
 
+# ============================================================
+# STEP 8: Clean up orphaned mysql-rd system HelmRelease
+# ============================================================
+echo ""
+echo "--- Step 8: Clean up orphaned mysql-rd HelmRelease ---"
+if kubectl -n cozy-system get hr mysql-rd --no-headers 2>/dev/null | grep -q .; then
+  echo "  [DELETE] hr/mysql-rd"
+  kubectl -n cozy-system delete hr mysql-rd --wait=false
+else
+  echo "  [SKIP] hr/mysql-rd already gone"
+fi
+kubectl -n cozy-system delete secret -l "owner=helm,name=mysql-rd" --ignore-not-found
+
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
   --from-literal=version=29 --dry-run=client -o yaml | kubectl apply -f-

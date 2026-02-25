@@ -715,6 +715,19 @@ done
 echo ""
 echo "=== Migration complete (${#INSTANCES[@]} instance(s)) ==="
 
+# ============================================================
+# STEP 8: Clean up orphaned virtual-machine-rd system HelmRelease
+# ============================================================
+echo ""
+echo "--- Step 8: Clean up orphaned virtual-machine-rd HelmRelease ---"
+if kubectl -n cozy-system get hr virtual-machine-rd --no-headers 2>/dev/null | grep -q .; then
+  echo "  [DELETE] hr/virtual-machine-rd"
+  kubectl -n cozy-system delete hr virtual-machine-rd --wait=false
+else
+  echo "  [SKIP] hr/virtual-machine-rd already gone"
+fi
+kubectl -n cozy-system delete secret -l "owner=helm,name=virtual-machine-rd" --ignore-not-found
+
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
   --from-literal=version=30 --dry-run=client -o yaml | kubectl apply -f-
