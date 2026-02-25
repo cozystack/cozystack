@@ -505,7 +505,7 @@ func CreateAllCustomFormsOverrides() []*dashboardv1alpha1.CustomFormsOverride {
 				createFormItem("spec.applicationRef.name", "Application Name", "text"),
 				createFormItemWithAPI("spec.backupClassName", "Backup Class", "select", map[string]any{
 					"api": map[string]any{
-						"fetchUrl":       "/api/clusters/{clusterName}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
+						"fetchUrl":       "/api/clusters/{cluster}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
 						"pathToItems":    []any{"items"},
 						"pathToValue":    []any{"metadata", "name"},
 						"pathToLabel":    []any{"metadata", "name"},
