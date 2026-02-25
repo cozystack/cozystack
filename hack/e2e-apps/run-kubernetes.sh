@@ -59,7 +59,6 @@ spec:
       minReplicas: 2
       roles:
       - ingress-nginx
-  storageClass: replicated
   version: "${k8s_version}"
 EOF
   # Wait for the tenant-test namespace to be active
@@ -128,6 +127,41 @@ EOF
     exit 1
   fi
 
+  # Verify StorageClass propagation from infra to tenant cluster
+  echo "Verifying StorageClass propagation..."
+
+  # Wait for at least one StorageClass to appear in the tenant cluster
+  timeout 2m bash -c '
+    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get sc -o jsonpath="{.items[*].metadata.name}" 2>/dev/null | wc -w)" -ge 1 ]; do
+      sleep 5
+    done
+  '
+
+  sc_names=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc -o jsonpath='{.items[*].metadata.name}')
+  if [ -z "$sc_names" ]; then
+    echo "No StorageClasses found in tenant cluster" >&2
+    exit 1
+  fi
+  echo "StorageClasses in tenant: ${sc_names}"
+
+  # Verify each propagated StorageClass uses the kubevirt CSI provisioner
+  for sc in $sc_names; do
+    provisioner=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc "$sc" -o jsonpath='{.provisioner}')
+    if [ "$provisioner" != "csi.kubevirt.io" ]; then
+      echo "StorageClass $sc has unexpected provisioner: $provisioner (expected csi.kubevirt.io)" >&2
+      exit 1
+    fi
+  done
+  echo "All StorageClasses use csi.kubevirt.io provisioner"
+
+  # Verify exactly one default StorageClass is set
+  default_count=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc \
+    -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' | grep -c .)
+  if [ "$default_count" -ne 1 ]; then
+    echo "Expected exactly 1 default StorageClass, found $default_count" >&2
+    exit 1
+  fi
+  echo "Default StorageClass is correctly set"
 
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
 apiVersion: v1
@@ -244,7 +278,7 @@ metadata:
 spec:
   accessModes:
   - ReadWriteMany
-  storageClassName: kubevirt
+  storageClassName: replicated
   resources:
     requests:
       storage: 1Gi

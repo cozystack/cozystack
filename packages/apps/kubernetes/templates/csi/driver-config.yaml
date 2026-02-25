@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: driver-config
+data:
+  infraStorageClassEnforcement: |
+    allowAll: false
+    allowDefault: false
+    allowList:
+    {{- $storageClasses := (lookup "storage.k8s.io/v1" "StorageClass" "" "").items }}
+    {{- if $storageClasses }}
+    {{- range $storageClasses }}
+    - {{ .metadata.name | quote }}
+    {{- end }}
+    {{- else }}
+    - "replicated"
+    {{- end }}
