@@ -1,0 +1,20 @@
+{{- if and (ne .Values.topology "Client") .Values.storagePools }}
+{{- range $poolName, $pool := .Values.storagePools }}
+---
+kind: BucketClass
+apiVersion: objectstorage.k8s.io/v1alpha1
+metadata:
+  name: {{ $.Release.Namespace }}-{{ $poolName }}
+driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
+deletionPolicy: Delete
+parameters:
+  diskType: {{ $pool.diskType }}
+---
+kind: BucketAccessClass
+apiVersion: objectstorage.k8s.io/v1alpha1
+metadata:
+  name: {{ $.Release.Namespace }}-{{ $poolName }}
+driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
+authenticationType: KEY
+{{- end }}
+{{- end }}

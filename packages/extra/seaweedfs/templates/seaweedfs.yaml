@@ -16,6 +16,26 @@
 {{-     fail "replicationFactor must be less than or equal to the number of zones defined in .Values.volume.zones." }}
 {{-   end }}
 {{- end }}
+{{- if and (eq .Values.topology "Client") (gt (len .Values.storagePools) 0) }}
+{{-   fail "storagePools is not supported with Client topology." }}
+{{- end }}
+{{- range $poolName, $pool := .Values.storagePools }}
+{{-   if not $pool.diskType }}
+{{-     fail (printf "storagePools.%s.diskType is required." $poolName) }}
+{{-   end }}
+{{-   if not (regexMatch "^[a-z0-9]+$" $pool.diskType) }}
+{{-     fail (printf "storagePools.%s.diskType must be lowercase alphanumeric (got: %s)." $poolName $pool.diskType) }}
+{{-   end }}
+{{-   if not $pool.storageClass }}
+{{-     fail (printf "storagePools.%s.storageClass is required." $poolName) }}
+{{-   end }}
+{{-   if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $poolName) }}
+{{-     fail (printf "storagePools key '%s' must be a valid DNS label (lowercase alphanumeric and hyphens)." $poolName) }}
+{{-   end }}
+{{- end }}
+{{- if and .Values.volume.diskType (not (regexMatch "^[a-z0-9]+$" .Values.volume.diskType)) }}
+{{-   fail (printf "volume.diskType must be lowercase alphanumeric (got: %s)." .Values.volume.diskType) }}
+{{- end }}
 
 {{- $detectedTopology := "Unknown" }}
 {{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-deployed-topology" .Release.Name) }}
@@ -94,6 +114,10 @@ spec:
           storageClass: {{ . }}
           {{- end }}
           maxVolumes: 0
+        {{- if .Values.volume.diskType }}
+        extraArgs:
+        - "-disk={{ .Values.volume.diskType }}"
+        {{- end }}
       {{ if eq .Values.topology "MultiZone" }}
       volumes:
         {{- range $zoneName, $zone := .Values.volume.zones }}
@@ -101,6 +125,7 @@ spec:
           {{ with $zone.replicas }}
           replicas: {{ . }}
           {{- end }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $.Values.volume.resourcesPreset $.Values.volume.resources $) | nindent 12 }}
           dataDirs:
           - name: data1
             type: "persistentVolumeClaim"
@@ -118,6 +143,44 @@ spec:
           nodeSelector: |
             topology.kubernetes.io/zone: {{ $zoneName }}
           dataCenter: {{ $zone.dataCenter | default $zoneName }}
+          {{- if $.Values.volume.diskType }}
+          extraArgs:
+          - "-disk={{ $.Values.volume.diskType }}"
+          {{- end }}
+        {{- end }}
+        {{- range $poolName, $pool := $.Values.storagePools }}
+        {{- range $zoneName, $zone := $.Values.volume.zones }}
+        {{ $zoneName }}-{{ $poolName }}:
+          replicas: {{ $pool.replicas | default $zone.replicas | default $.Values.volume.replicas }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list ($pool.resourcesPreset | default $.Values.volume.resourcesPreset) (default dict $pool.resources) $) | nindent 12 }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            size: "{{ $pool.size | default $zone.size | default $.Values.volume.size }}"
+            storageClass: "{{ $pool.storageClass }}"
+            maxVolumes: 0
+          nodeSelector: |
+            topology.kubernetes.io/zone: {{ $zoneName }}
+          dataCenter: {{ $zone.dataCenter | default $zoneName }}
+          extraArgs:
+          - "-disk={{ $pool.diskType }}"
+        {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- if and (eq .Values.topology "Simple") (gt (len .Values.storagePools) 0) }}
+      volumes:
+        {{- range $poolName, $pool := .Values.storagePools }}
+        {{ $poolName }}:
+          replicas: {{ $pool.replicas | default $.Values.volume.replicas }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list ($pool.resourcesPreset | default $.Values.volume.resourcesPreset) (default dict $pool.resources) $) | nindent 12 }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            size: "{{ $pool.size | default $.Values.volume.size }}"
+            storageClass: "{{ $pool.storageClass }}"
+            maxVolumes: 0
+          extraArgs:
+          - "-disk={{ $pool.diskType }}"
         {{- end }}
       {{- end }}
       filer:
@@ -199,6 +262,22 @@ spec:
     app.kubernetes.io/component: volume
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+{{- range $poolName, $pool := .Values.storagePools }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $poolName }}
+spec:
+  replicas: {{ default $.Values.volume.replicas $pool.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $poolName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
 {{- else if eq .Values.topology "MultiZone" }}
 {{- range $zoneName, $zoneSpec := .Values.volume.zones }}
 ---
@@ -215,6 +294,24 @@ spec:
     app.kubernetes.io/component: volume-{{ $zoneName }}
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+{{- end }}
+{{- range $poolName, $pool := .Values.storagePools }}
+{{- range $zoneName, $zone := $.Values.volume.zones }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $zoneName }}-{{ $poolName }}
+spec:
+  replicas: {{ $pool.replicas | default $zone.replicas | default $.Values.volume.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $zoneName }}-{{ $poolName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
 {{- end }}
 {{- end }}
 ---

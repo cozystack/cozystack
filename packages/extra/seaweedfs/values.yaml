@@ -84,6 +84,7 @@ filer:
 ## @field {int} [replicas] - Number of volume replicas.
 ## @field {quantity} [size] - Persistent Volume size.
 ## @field {string} [storageClass] - StorageClass used to store the data.
+## @field {string} [diskType] - SeaweedFS disk type tag for the default volume servers (e.g., "hdd", "ssd").
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 ## @field {map[string]Zone} [zones] - A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
@@ -93,9 +94,38 @@ volume:
   replicas: 2
   size: 10Gi
   storageClass: ""
+  diskType: ""
   resources: {}
   resourcesPreset: "small"
   zones: {}
+
+## @typedef {struct} StoragePool - Storage pool configuration for separating buckets by disk type.
+## @field {string} diskType - SeaweedFS disk type tag (e.g., "ssd", "hdd", "nvme").
+## @field {int} [replicas] - Number of volume replicas. Defaults to volume.replicas.
+## @field {quantity} [size] - Persistent Volume size. Defaults to volume.size.
+## @field {string} storageClass - Kubernetes StorageClass for the pool.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.
+
+## @param {map[string]StoragePool} [storagePools] - A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.
+## In Simple topology, one StatefulSet is created per pool. Pods from different pools may run on the same node.
+## In MultiZone topology, a StatefulSet is created for each zone×pool combination (e.g., zone1-fast, zone2-fast),
+## with each pinned to its zone via nodeSelector.
+## NOTE: Pool and zone names must be valid DNS labels (lowercase alphanumeric and hyphens).
+## In MultiZone, ensure that "{zoneName}-{poolName}" does not collide with any existing zone name.
+storagePools: {}
+#storagePools:
+#  fast:
+#    diskType: ssd
+#    replicas: 2
+#    size: 50Gi
+#    storageClass: "local-nvme"
+#    resourcesPreset: "small"
+#  archive:
+#    diskType: hdd
+#    replicas: 3
+#    size: 500Gi
+#    storageClass: "ceph-hdd"
 
 ## @typedef {struct} S3 - S3 service configuration.
 ## @field {int} [replicas] - Number of S3 replicas.

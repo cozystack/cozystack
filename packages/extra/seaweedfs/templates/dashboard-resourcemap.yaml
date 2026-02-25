@@ -27,6 +27,21 @@ rules:
   - {{ $.Release.Name }}-filer
   - {{ $.Release.Name }}-volume
   - {{ $.Release.Name }}-db
+  - {{ $.Release.Name }}-s3
+  {{- if eq .Values.topology "Simple" }}
+  {{- range $poolName, $pool := .Values.storagePools }}
+  - {{ $.Release.Name }}-volume-{{ $poolName }}
+  {{- end }}
+  {{- else if eq .Values.topology "MultiZone" }}
+  {{- range $zoneName, $zone := .Values.volume.zones }}
+  - {{ $.Release.Name }}-volume-{{ $zoneName }}
+  {{- end }}
+  {{- range $poolName, $pool := .Values.storagePools }}
+  {{- range $zoneName, $zone := $.Values.volume.zones }}
+  - {{ $.Release.Name }}-volume-{{ $zoneName }}-{{ $poolName }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
   verbs: ["get", "list", "watch"]
 {{- end }}
 

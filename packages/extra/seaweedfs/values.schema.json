@@ -285,6 +285,90 @@
         }
       }
     },
+    "storagePools": {
+      "description": "A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "diskType",
+          "storageClass"
+        ],
+        "properties": {
+          "diskType": {
+            "description": "SeaweedFS disk type tag (e.g., \"ssd\", \"hdd\", \"nvme\").",
+            "type": "string"
+          },
+          "replicas": {
+            "description": "Number of volume replicas. Defaults to volume.replicas.",
+            "type": "integer"
+          },
+          "resources": {
+            "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+            "type": "object",
+            "properties": {
+              "cpu": {
+                "description": "Number of CPU cores allocated.",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              },
+              "memory": {
+                "description": "Amount of memory allocated.",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              }
+            }
+          },
+          "resourcesPreset": {
+            "description": "Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.",
+            "type": "string",
+            "enum": [
+              "nano",
+              "micro",
+              "small",
+              "medium",
+              "large",
+              "xlarge",
+              "2xlarge"
+            ]
+          },
+          "size": {
+            "description": "Persistent Volume size. Defaults to volume.size.",
+            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "x-kubernetes-int-or-string": true
+          },
+          "storageClass": {
+            "description": "Kubernetes StorageClass for the pool.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "topology": {
       "description": "The topology of the SeaweedFS cluster.",
       "type": "string",
@@ -300,6 +384,11 @@
       "type": "object",
       "default": {},
       "properties": {
+        "diskType": {
+          "description": "SeaweedFS disk type tag for the default volume servers (e.g., \"hdd\", \"ssd\").",
+          "type": "string",
+          "default": ""
+        },
         "replicas": {
           "description": "Number of volume replicas.",
           "type": "integer",
