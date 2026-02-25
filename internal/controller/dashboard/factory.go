@@ -582,15 +582,14 @@ type factoryFlags struct {
 	Secrets   bool
 }
 
-// factoryFeatureFlags tries several conventional locations so you can evolve the API
-// without breaking the controller. Defaults are false (hidden).
+// factoryFeatureFlags determines which tabs to show based on whether the
+// ApplicationDefinition has non-empty Include resource selectors.
+// Workloads tab is always shown.
 func factoryFeatureFlags(crd *cozyv1alpha1.ApplicationDefinition) factoryFlags {
-	var f factoryFlags
-
-	f.Workloads = true
-	f.Ingresses = true
-	f.Services = true
-	f.Secrets = true
-
-	return f
+	return factoryFlags{
+		Workloads: true,
+		Ingresses: len(crd.Spec.Ingresses.Include) > 0,
+		Services:  len(crd.Spec.Services.Include) > 0,
+		Secrets:   len(crd.Spec.Secrets.Include) > 0,
+	}
 }
