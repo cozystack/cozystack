@@ -17,8 +17,7 @@ import (
 
 // ensureSidebar creates/updates multiple Sidebar resources that share the same menu:
 //   - The "details" sidebar tied to the current kind (stock-project-factory-<kind>-details)
-//   - The stock-instance sidebars: api-form, api-table, builtin-form, builtin-table
-//   - The stock-project sidebars:  api-form, api-table, builtin-form, builtin-table, crd-form, crd-table
+//   - The stock-project sidebars: api-form, api-table, builtin-form, builtin-table, crd-form, crd-table
 //
 // Menu rules:
 //   - The first section is "Marketplace" with two hardcoded entries:
@@ -228,13 +227,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 	// 6) Prepare the list of Sidebar IDs to upsert with the SAME content
 	// Create sidebars for ALL CRDs with dashboard config
 	targetIDs := []string{
-		// stock-instance sidebars
-		"stock-instance-api-form",
-		"stock-instance-api-table",
-		"stock-instance-builtin-form",
-		"stock-instance-builtin-table",
-
-		// stock-project sidebars
+		// stock-project sidebars (namespace-level, full menu)
 		"stock-project-factory-marketplace",
 		"stock-project-factory-workloadmonitor-details",
 		"stock-project-factory-kube-service-details",

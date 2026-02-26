@@ -299,10 +299,6 @@ func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.ApplicationDefini
 
 		// Add other stock sidebars that are created for each CRD
 		stockSidebars := []string{
-			"stock-instance-api-form",
-			"stock-instance-api-table",
-			"stock-instance-builtin-form",
-			"stock-instance-builtin-table",
 			"stock-project-factory-marketplace",
 			"stock-project-factory-workloadmonitor-details",
 			"stock-project-api-form",

@@ -136,7 +136,7 @@ spec:
             - name: CUSTOMIZATION_NAVIGATION_RESOURCE_PLURAL
               value: navigations
             - name: CUSTOMIZATION_SIDEBAR_FALLBACK_ID
-              value: stock-project-api-table
+              value: ""
             - name: CUSTOMIZATION_BREADCRUMBS_FALLBACK_ID
               value: stock-project-api-table
             - name: INSTANCES_API_GROUP
