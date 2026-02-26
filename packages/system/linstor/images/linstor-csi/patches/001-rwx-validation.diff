@@ -104,7 +104,7 @@ new file mode 100644
 index 00000000..9fe82768
 --- /dev/null
 +++ b/pkg/utils/rwx_validation.go
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,298 @@
 +/*
 +CSI Driver for Linstor
 +Copyright © 2018 LINBIT USA, LLC
@@ -142,9 +142,17 @@ index 00000000..9fe82768
 +// KubeVirtHotplugDiskLabel is the label that KubeVirt adds to hotplug disk pods.
 +const KubeVirtHotplugDiskLabel = "kubevirt.io"
 +
++// CDIAppLabelKey is the standard Kubernetes app label key.
++const CDIAppLabelKey = "app"
++
 +// CDIAppLabelValue is the value of the "app" label on CDI (Containerized Data Importer) worker pods.
-+// CDI creates source pods during host-assisted PVC cloning that need to mount the source PVC.
 +const CDIAppLabelValue = "containerized-data-importer"
++
++// CDIManagedByKey is the standard Kubernetes managed-by label key.
++const CDIManagedByKey = "app.kubernetes.io/managed-by"
++
++// CDIManagedByValue is the value of the managed-by label set by the CDI operator.
++const CDIManagedByValue = "cdi-operator"
 +
 +// PodGVR is the GroupVersionResource for pods.
 +var PodGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
@@ -392,14 +400,15 @@ index 00000000..9fe82768
 +		return false
 +	}
 +
-+	return labels["app"] == CDIAppLabelValue
++	return labels[CDIAppLabelKey] == CDIAppLabelValue &&
++		labels[CDIManagedByKey] == CDIManagedByValue
 +}
 diff --git a/pkg/utils/rwx_validation_test.go b/pkg/utils/rwx_validation_test.go
 new file mode 100644
 index 00000000..d75690f9
 --- /dev/null
 +++ b/pkg/utils/rwx_validation_test.go
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,401 @@
 +/*
 +CSI Driver for Linstor
 +Copyright © 2018 LINBIT USA, LLC
@@ -738,7 +747,8 @@ index 00000000..d75690f9
 +				"name":      name,
 +				"namespace": namespace,
 +				"labels": map[string]interface{}{
-+					"app": CDIAppLabelValue,
++					CDIAppLabelKey:  CDIAppLabelValue,
++					CDIManagedByKey: CDIManagedByValue,
 +				},
 +			},
 +			"spec": map[string]interface{}{
