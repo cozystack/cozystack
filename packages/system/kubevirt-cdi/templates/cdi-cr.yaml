@@ -3,7 +3,7 @@ kind: CDI
 metadata:
   name: cdi
 spec:
-  cloneStrategyOverride: copy
+  cloneStrategyOverride: snapshot
   config:
     {{- with .Values.uploadProxyURL }}
     uploadProxyURLOverride: {{ quote . }}
