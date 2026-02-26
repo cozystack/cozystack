@@ -1,0 +1,76 @@
+#!/bin/sh
+# Migration 34 --> 35
+# Backfill spec.version on rabbitmq.apps.cozystack.io resources.
+#
+# Before this migration RabbitMQ had no user-selectable version; the
+# operator always used its built-in default image.  A version field was
+# added in this release.  Without this migration every existing cluster
+# would be upgraded to the new default (v4.2) on the next reconcile.
+#
+# For each RabbitmqCluster we read the image that is currently running
+# (spec.image, which the operator always populates), extract the
+# major.minor version, and write it into spec.version on the
+# corresponding rabbitmq.apps.cozystack.io resource — but only if
+# spec.version is not already set.
+
+set -euo pipefail
+
+# Map a full version string like "3.13.2" or "4.0.9" to "v3.13" / "v4.0"
+to_major_minor() {
+  echo "$1" | awk -F. '{printf "v%s.%s", $1, $2}'
+}
+
+for cluster in $(kubectl get rabbitmqclusters.rabbitmq.com -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+  NS="${cluster%%/*}"
+  CLUSTER_NAME="${cluster##*/}"
+
+  # RabbitmqCluster names are prefixed with "rabbitmq-"; derive app name
+  APP_NAME="${CLUSTER_NAME#rabbitmq-}"
+  if [ "$APP_NAME" = "$CLUSTER_NAME" ]; then
+    echo "SKIP $NS/$CLUSTER_NAME: name does not start with 'rabbitmq-'"
+    continue
+  fi
+
+  # Check the rabbitmq app resource exists
+  if ! kubectl get rabbitmqs.apps.cozystack.io -n "$NS" "$APP_NAME" >/dev/null 2>&1; then
+    echo "SKIP $NS/$CLUSTER_NAME: no rabbitmq app resource '$APP_NAME' found in $NS"
+    continue
+  fi
+
+  # Skip if spec.version is already set
+  CURRENT_VER=$(kubectl get rabbitmqs.apps.cozystack.io -n "$NS" "$APP_NAME" \
+    -o jsonpath='{.spec.version}' 2>/dev/null || true)
+  if [ -n "$CURRENT_VER" ]; then
+    echo "SKIP $NS/$APP_NAME: spec.version already set to '$CURRENT_VER'"
+    continue
+  fi
+
+  # Get running image from RabbitmqCluster spec.image
+  IMAGE=$(kubectl get rabbitmqclusters.rabbitmq.com -n "$NS" "$CLUSTER_NAME" \
+    -o jsonpath='{.spec.image}' 2>/dev/null || true)
+
+  if [ -z "$IMAGE" ]; then
+    echo "ERROR $NS/$CLUSTER_NAME: could not determine running image" >&2
+    continue
+  fi
+
+  # Extract version from image tag, e.g. "rabbitmq:3.13.2-management" -> "3.13.2"
+  TAG="${IMAGE##*:}"           # strip repository prefix
+  VERSION="${TAG%%-*}"         # strip suffix like "-management"
+
+  if [ -z "$VERSION" ]; then
+    echo "ERROR $NS/$CLUSTER_NAME: could not parse version from image '$IMAGE'" >&2
+    continue
+  fi
+
+  MAJOR_MINOR="$(to_major_minor "$VERSION")"
+
+  echo "Patching rabbitmq/$APP_NAME in $NS: image=$IMAGE -> version=$MAJOR_MINOR"
+
+  kubectl patch rabbitmqs.apps.cozystack.io -n "$NS" "$APP_NAME" --type=merge \
+    --patch "{\"spec\":{\"version\":\"${MAJOR_MINOR}\"}}"
+done
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=35 --dry-run=client -o yaml | kubectl apply -f-
