@@ -103,11 +103,12 @@ volume:
 ## @field {string} diskType - SeaweedFS disk type tag (e.g., "ssd", "hdd", "nvme").
 ## @field {int} [replicas] - Number of volume replicas. Defaults to volume.replicas.
 ## @field {quantity} [size] - Persistent Volume size. Defaults to volume.size.
-## @field {string} storageClass - Kubernetes StorageClass for the pool.
+## @field {string} [storageClass] - Kubernetes StorageClass for the pool. Defaults to volume.storageClass.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.
 
-## @param {map[string]StoragePool} [storagePools] - A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.
+## @param {map[string]StoragePool} [storagePools] - A map of storage pools. Each pool creates a separate Volume StatefulSet
+## with its own disk type. Unset fields inherit from volume.* settings.
 ## In Simple topology, one StatefulSet is created per pool. Pods from different pools may run on the same node.
 ## In MultiZone topology, a StatefulSet is created for each zone×pool combination (e.g., zone1-fast, zone2-fast),
 ## with each pinned to its zone via nodeSelector.

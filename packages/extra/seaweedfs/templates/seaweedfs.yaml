@@ -26,9 +26,6 @@
 {{-   if not (regexMatch "^[a-z0-9]+$" $pool.diskType) }}
 {{-     fail (printf "storagePools.%s.diskType must be lowercase alphanumeric (got: %s)." $poolName $pool.diskType) }}
 {{-   end }}
-{{-   if not $pool.storageClass }}
-{{-     fail (printf "storagePools.%s.storageClass is required." $poolName) }}
-{{-   end }}
 {{-   if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $poolName) }}
 {{-     fail (printf "storagePools key '%s' must be a valid DNS label (lowercase alphanumeric and hyphens)." $poolName) }}
 {{-   end }}
@@ -157,7 +154,7 @@ spec:
           - name: data1
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $zone.size | default $.Values.volume.size }}"
-            storageClass: "{{ $pool.storageClass }}"
+            storageClass: "{{ $pool.storageClass | default $.Values.volume.storageClass }}"
             maxVolumes: 0
           nodeSelector: |
             topology.kubernetes.io/zone: {{ $zoneName }}
@@ -177,7 +174,7 @@ spec:
           - name: data1
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $.Values.volume.size }}"
-            storageClass: "{{ $pool.storageClass }}"
+            storageClass: "{{ $pool.storageClass | default $.Values.volume.storageClass }}"
             maxVolumes: 0
           extraArgs:
           - "-disk={{ $pool.diskType }}"

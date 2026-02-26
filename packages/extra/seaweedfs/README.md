@@ -50,11 +50,11 @@
 | `volume.zones`                        | A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.           | `map[string]object` | `{}`    |
 | `volume.zones[name].replicas`         | Number of replicas in the zone.                                                                          | `int`               | `0`     |
 | `volume.zones[name].size`             | Zone storage size.                                                                                       | `quantity`          | `""`    |
-| `storagePools`                        | A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.          | `map[string]object` | `{}`    |
-| `storagePools[name].diskType`         | SeaweedFS disk type tag (e.g., "ssd", "hdd", "nvme").                                                    | `string`            | `""`    |
+| `storagePools`                        | A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type. Unset fields inherit from volume.* settings. | `map[string]object` | `{}`    |
+| `storagePools[name].diskType`         | SeaweedFS disk type tag (e.g., "ssd", "hdd", "nvme"). Required.                                         | `string`            | `""`    |
 | `storagePools[name].replicas`         | Number of volume replicas. Defaults to volume.replicas.                                                  | `int`               | `0`     |
 | `storagePools[name].size`             | Persistent Volume size. Defaults to volume.size.                                                         | `quantity`          | `""`    |
-| `storagePools[name].storageClass`     | Kubernetes StorageClass for the pool.                                                                    | `string`            | `""`    |
+| `storagePools[name].storageClass`     | Kubernetes StorageClass for the pool. Defaults to volume.storageClass.                                   | `string`            | `""`    |
 | `storagePools[name].resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`            | `{}`    |
 | `storagePools[name].resources.cpu`    | Number of CPU cores allocated.                                                                           | `quantity`          | `""`    |
 | `storagePools[name].resources.memory` | Amount of memory allocated.                                                                              | `quantity`          | `""`    |

@@ -291,10 +291,6 @@
       "default": {},
       "additionalProperties": {
         "type": "object",
-        "required": [
-          "diskType",
-          "storageClass"
-        ],
         "properties": {
           "diskType": {
             "description": "SeaweedFS disk type tag (e.g., \"ssd\", \"hdd\", \"nvme\").",

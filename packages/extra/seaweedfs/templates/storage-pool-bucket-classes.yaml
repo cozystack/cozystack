@@ -10,11 +10,34 @@ deletionPolicy: Delete
 parameters:
   diskType: {{ $pool.diskType }}
 ---
+kind: BucketClass
+apiVersion: objectstorage.k8s.io/v1alpha1
+metadata:
+  name: {{ $.Release.Namespace }}-{{ $poolName }}-worm
+driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
+deletionPolicy: Retain
+parameters:
+  diskType: {{ $pool.diskType }}
+  objectLockEnabled: "true"
+  objectLockRetentionMode: COMPLIANCE
+  objectLockRetentionDays: "36500"
+---
 kind: BucketAccessClass
 apiVersion: objectstorage.k8s.io/v1alpha1
 metadata:
   name: {{ $.Release.Namespace }}-{{ $poolName }}
 driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
 authenticationType: KEY
+parameters:
+  accessPolicy: readwrite
+---
+kind: BucketAccessClass
+apiVersion: objectstorage.k8s.io/v1alpha1
+metadata:
+  name: {{ $.Release.Namespace }}-{{ $poolName }}-readonly
+driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
+authenticationType: KEY
+parameters:
+  accessPolicy: readonly
 {{- end }}
 {{- end }}
