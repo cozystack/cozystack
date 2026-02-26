@@ -1,9 +1,9 @@
 cozystackOperator:
   # Deployment variant: talos, generic, hosted
   variant: talos
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.0.0-rc.2@sha256:e3fc5fc87761c31ee522f36420aa69683815d4057146be5d0fd4b5104ede8eae
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.0.0@sha256:9e5229764b6077809a1c16566881a524c33e8986e36597e6833f8857a7e6a335
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
-  platformSourceRef: 'digest=sha256:5a03183c490e0d932207b010b94c0e38350652d75e13ef5a582fa818077043bb'
+  platformSourceRef: 'digest=sha256:ef3e4ba7d21572a61794d8be594805f063aa04f4a8c3753351fc89c7804d337e'
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)
