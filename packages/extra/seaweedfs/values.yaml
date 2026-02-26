@@ -101,8 +101,8 @@ volume:
 
 ## @typedef {struct} StoragePool - Storage pool configuration for separating buckets by disk type.
 ## @field {string} diskType - SeaweedFS disk type tag (e.g., "ssd", "hdd", "nvme").
-## @field {int} [replicas] - Number of volume replicas. Defaults to volume.replicas.
-## @field {quantity} [size] - Persistent Volume size. Defaults to volume.size.
+## @field {int} [replicas] - Number of volume replicas. In MultiZone, defaults to volume.zones.<zoneName>.replicas, then volume.replicas. In Simple topology, defaults to volume.replicas.
+## @field {quantity} [size] - Persistent Volume size. In MultiZone, defaults to volume.zones.<zoneName>.size, then volume.size. In Simple topology, defaults to volume.size.
 ## @field {string} [storageClass] - Kubernetes StorageClass for the pool. Defaults to volume.storageClass.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.

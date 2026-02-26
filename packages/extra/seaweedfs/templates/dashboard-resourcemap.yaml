@@ -25,10 +25,10 @@ rules:
   resourceNames:
   - {{ $.Release.Name }}-master
   - {{ $.Release.Name }}-filer
-  - {{ $.Release.Name }}-volume
   - {{ $.Release.Name }}-db
   - {{ $.Release.Name }}-s3
   {{- if eq .Values.topology "Simple" }}
+  - {{ $.Release.Name }}-volume
   {{- range $poolName, $pool := .Values.storagePools }}
   - {{ $.Release.Name }}-volume-{{ $poolName }}
   {{- end }}

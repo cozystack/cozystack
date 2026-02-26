@@ -286,18 +286,21 @@
       }
     },
     "storagePools": {
-      "description": "A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.",
+      "description": "A map of storage pools. Each pool creates a separate Volume StatefulSet",
       "type": "object",
       "default": {},
       "additionalProperties": {
         "type": "object",
+        "required": [
+          "diskType"
+        ],
         "properties": {
           "diskType": {
             "description": "SeaweedFS disk type tag (e.g., \"ssd\", \"hdd\", \"nvme\").",
             "type": "string"
           },
           "replicas": {
-            "description": "Number of volume replicas. Defaults to volume.replicas.",
+            "description": "Number of volume replicas. In MultiZone, defaults to volume.zones.\u003czoneName\u003e.replicas, then volume.replicas. In Simple topology, defaults to volume.replicas.",
             "type": "integer"
           },
           "resources": {
@@ -346,7 +349,7 @@
             ]
           },
           "size": {
-            "description": "Persistent Volume size. Defaults to volume.size.",
+            "description": "Persistent Volume size. In MultiZone, defaults to volume.zones.\u003czoneName\u003e.size, then volume.size. In Simple topology, defaults to volume.size.",
             "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
             "anyOf": [
               {
@@ -359,7 +362,7 @@
             "x-kubernetes-int-or-string": true
           },
           "storageClass": {
-            "description": "Kubernetes StorageClass for the pool.",
+            "description": "Kubernetes StorageClass for the pool. Defaults to volume.storageClass.",
             "type": "string"
           }
         }
