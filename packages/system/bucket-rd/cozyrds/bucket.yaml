@@ -8,7 +8,7 @@ spec:
     plural: buckets
     singular: bucket
     openAPISchema: |-
-      {"title":"Chart Values","type":"object","properties":{}}
+      {"title":"Chart Values","type":"object","properties":{"locking":{"description":"Provisions bucket from the -lock BucketClass (with object lock enabled).","type":"boolean","default":false},"storagePool":{"description":"Selects a specific BucketClass by storage pool name.","type":"string","default":""},"users":{"description":"Users configuration map. Each entry creates a BucketAccess.","type":"object","default":{},"additionalProperties":{"type":"object","properties":{"readonly":{"description":"Whether the user has read-only access.","type":"boolean","default":false}}}}}}
   release:
     prefix: bucket-
     labels:
@@ -31,9 +31,7 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - bucket-{{ .name }}
           - bucket-{{ .name }}-credentials
-          - bucket-{{ .name }}-readonly
   ingresses:
     exclude: []
     include:

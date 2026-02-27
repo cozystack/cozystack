@@ -8,9 +8,10 @@ rules:
   resources:
   - secrets
   resourceNames:
-  - {{ .Release.Name }}
   - {{ .Release.Name }}-credentials
-  - {{ .Release.Name }}-readonly
+  {{- range $name, $user := .Values.users }}
+  - {{ $.Release.Name }}-{{ $name }}
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - networking.k8s.io
