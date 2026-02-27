@@ -13,6 +13,8 @@ spec:
   secretName: {{ template "seaweedfs.name" . }}-ca-cert
   commonName: "{{ template "seaweedfs.name" . }}-root-ca"
   isCA: true
+  privateKey:
+    rotationPolicy: Never
   {{- if .Values.certificates.ca.duration }}
   duration: {{ .Values.certificates.ca.duration }}
   {{- end }}

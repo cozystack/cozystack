@@ -78,6 +78,8 @@ spec:
     name: {{ $fullname }}-root
   commonName: {{ $certManager.ca.commonName }}
   isCA: true
+  privateKey:
+    rotationPolicy: Never
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
