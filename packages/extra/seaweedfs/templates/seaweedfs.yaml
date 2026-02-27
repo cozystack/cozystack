@@ -26,12 +26,22 @@
 {{-   if not (regexMatch "^[a-z0-9]+$" $pool.diskType) }}
 {{-     fail (printf "storagePools.%s.diskType must be lowercase alphanumeric (got: %s)." $poolName $pool.diskType) }}
 {{-   end }}
-{{-   if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $poolName) }}
+{{-   if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
 {{-     fail (printf "storagePools key '%s' must be a valid DNS label (lowercase alphanumeric and hyphens)." $poolName) }}
 {{-   end }}
 {{- end }}
 {{- if and .Values.volume.diskType (not (regexMatch "^[a-z0-9]+$" .Values.volume.diskType)) }}
 {{-   fail (printf "volume.diskType must be lowercase alphanumeric (got: %s)." .Values.volume.diskType) }}
+{{- end }}
+{{- if eq .Values.topology "MultiZone" }}
+{{-   range $poolName, $pool := .Values.storagePools }}
+{{-     range $zoneName, $zone := $.Values.volume.zones }}
+{{-       $composedName := printf "%s-%s" $zoneName $poolName }}
+{{-       if hasKey $.Values.volume.zones $composedName }}
+{{-         fail (printf "storagePools: composed volume name '%s' (from zone '%s' and pool '%s') collides with an existing zone name." $composedName $zoneName $poolName) }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
 {{- end }}
 
 {{- $detectedTopology := "Unknown" }}
@@ -154,7 +164,9 @@ spec:
           - name: data1
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $zone.size | default $.Values.volume.size }}"
-            storageClass: "{{ $pool.storageClass | default $.Values.volume.storageClass }}"
+            {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: "{{ . }}"
+            {{- end }}
             maxVolumes: 0
           nodeSelector: |
             topology.kubernetes.io/zone: {{ $zoneName }}
@@ -174,7 +186,9 @@ spec:
           - name: data1
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $.Values.volume.size }}"
-            storageClass: "{{ $pool.storageClass | default $.Values.volume.storageClass }}"
+            {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: "{{ . }}"
+            {{- end }}
             maxVolumes: 0
           extraArgs:
           - "-disk={{ $pool.diskType }}"
