@@ -33,6 +33,7 @@ spec:
       - resourceNames:
           - bucket-{{ .name }}
           - bucket-{{ .name }}-credentials
+          - bucket-{{ .name }}-readonly
   ingresses:
     exclude: []
     include:
