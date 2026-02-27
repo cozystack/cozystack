@@ -76,26 +76,49 @@ filer:
   grpcPort: 443
   whitelist: []
 
+## @typedef {struct} StoragePool - Storage pool configuration for separating buckets by disk type.
+## @field {string} diskType - SeaweedFS disk type tag (e.g., "ssd", "hdd", "nvme").
+## @field {int} [replicas] - Number of volume replicas. Defaults to volume.replicas (Simple) or zone.replicas/volume.replicas (MultiZone).
+## @field {quantity} [size] - Persistent Volume size. Defaults to volume.size (Simple) or zone.size/volume.size (MultiZone).
+## @field {string} [storageClass] - Kubernetes StorageClass for the pool. Defaults to volume.storageClass.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.
+
 ## @typedef {struct} Zone - Zone configuration.
 ## @field {int} [replicas] - Number of replicas in the zone.
 ## @field {quantity} [size] - Zone storage size.
+## @field {string} [dataCenter] - SeaweedFS data center name for this zone. Defaults to the zone name.
+## @field {string} [nodeSelector] - YAML nodeSelector for this zone (default: topology.kubernetes.io/zone: <zoneName>).
+## @field {string} [storageClass] - StorageClass used to store zone data. Defaults to volume.storageClass.
+## @field {map[string]StoragePool} [pools] - A map of storage pools for this zone. Each pool creates a separate Volume StatefulSet per zone.
+## NOTE: Zone-level resources/resourcesPreset are inherited from volume.* settings. Pools within a zone can define their own resources.
 
 ## @typedef {struct} Volume - Volume service configuration.
 ## @field {int} [replicas] - Number of volume replicas.
 ## @field {quantity} [size] - Persistent Volume size.
 ## @field {string} [storageClass] - StorageClass used to store the data.
+## @field {string} [diskType] - SeaweedFS disk type tag for the default volume servers (e.g., "hdd", "ssd").
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
 ## @field {map[string]Zone} [zones] - A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
+## @field {map[string]StoragePool} [pools] - A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.
 
 ## @param {Volume} [volume] - Volume service configuration.
 volume:
   replicas: 2
   size: 10Gi
   storageClass: ""
+  diskType: ""
   resources: {}
   resourcesPreset: "small"
   zones: {}
+  pools: {}
+  #pools:
+  #  fast:
+  #    diskType: ssd
+  #    replicas: 2
+  #    size: 50Gi
+  #    storageClass: "local-nvme"
 
 ## @typedef {struct} S3 - S3 service configuration.
 ## @field {int} [replicas] - Number of S3 replicas.

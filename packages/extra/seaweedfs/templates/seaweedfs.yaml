@@ -16,6 +16,65 @@
 {{-     fail "replicationFactor must be less than or equal to the number of zones defined in .Values.volume.zones." }}
 {{-   end }}
 {{- end }}
+{{- if and (eq .Values.topology "Client") (gt (len .Values.volume.pools) 0) }}
+{{-   fail "volume.pools is not supported with Client topology." }}
+{{- end }}
+{{- if and (eq .Values.topology "MultiZone") (gt (len .Values.volume.pools) 0) }}
+{{-   fail "volume.pools is not supported with MultiZone topology. Use volume.zones[name].pools instead." }}
+{{- end }}
+{{- if and .Values.volume.diskType (not (regexMatch "^[a-z0-9]+$" .Values.volume.diskType)) }}
+{{-   fail (printf "volume.diskType must be lowercase alphanumeric (got: %s)." .Values.volume.diskType) }}
+{{- end }}
+
+{{- /* Collect and validate all pools from volume.pools and zones[].pools */ -}}
+{{- $allPools := dict }}
+{{- range $poolName, $pool := .Values.volume.pools }}
+{{-   if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
+{{-     fail (printf "volume.pools key '%s' must be a valid DNS label (lowercase alphanumeric and hyphens, no dots)." $poolName) }}
+{{-   end }}
+{{-   if or (hasSuffix "-worm" $poolName) (hasSuffix "-readonly" $poolName) }}
+{{-     fail (printf "volume.pools key '%s' must not end with '-worm' or '-readonly' (reserved suffixes for COSI resources)." $poolName) }}
+{{-   end }}
+{{-   if not $pool.diskType }}
+{{-     fail (printf "volume.pools.%s.diskType is required." $poolName) }}
+{{-   end }}
+{{-   if not (regexMatch "^[a-z0-9]+$" $pool.diskType) }}
+{{-     fail (printf "volume.pools.%s.diskType must be lowercase alphanumeric (got: %s)." $poolName $pool.diskType) }}
+{{-   end }}
+{{-   if and $.Values.volume.diskType (eq $pool.diskType $.Values.volume.diskType) }}
+{{-     fail (printf "volume.pools.%s.diskType '%s' must differ from volume.diskType." $poolName $pool.diskType) }}
+{{-   end }}
+{{-   $_ := set $allPools $poolName $pool.diskType }}
+{{- end }}
+{{- if eq .Values.topology "MultiZone" }}
+{{-   range $zoneName, $zone := .Values.volume.zones }}
+{{-     range $poolName, $pool := (dig "pools" dict $zone) }}
+{{-       if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
+{{-         fail (printf "volume.zones.%s.pools key '%s' must be a valid DNS label." $zoneName $poolName) }}
+{{-       end }}
+{{-       if or (hasSuffix "-worm" $poolName) (hasSuffix "-readonly" $poolName) }}
+{{-         fail (printf "volume.zones.%s.pools key '%s' must not end with '-worm' or '-readonly' (reserved suffixes for COSI resources)." $zoneName $poolName) }}
+{{-       end }}
+{{-       if not $pool.diskType }}
+{{-         fail (printf "volume.zones.%s.pools.%s.diskType is required." $zoneName $poolName) }}
+{{-       end }}
+{{-       if not (regexMatch "^[a-z0-9]+$" $pool.diskType) }}
+{{-         fail (printf "volume.zones.%s.pools.%s.diskType must be lowercase alphanumeric (got: %s)." $zoneName $poolName $pool.diskType) }}
+{{-       end }}
+{{-       if and $.Values.volume.diskType (eq $pool.diskType $.Values.volume.diskType) }}
+{{-         fail (printf "volume.zones.%s.pools.%s.diskType '%s' must differ from volume.diskType." $zoneName $poolName $pool.diskType) }}
+{{-       end }}
+{{-       if and (hasKey $allPools $poolName) (ne (get $allPools $poolName) $pool.diskType) }}
+{{-         fail (printf "Pool '%s' has inconsistent diskType across zones (expected '%s', got '%s' in zone '%s')." $poolName (get $allPools $poolName) $pool.diskType $zoneName) }}
+{{-       end }}
+{{-       $_ := set $allPools $poolName $pool.diskType }}
+{{-       $composedName := printf "%s-%s" $zoneName $poolName }}
+{{-       if hasKey $.Values.volume.zones $composedName }}
+{{-         fail (printf "Composed volume name '%s' (from zone '%s' and pool '%s') collides with an existing zone name." $composedName $zoneName $poolName) }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- end }}
 
 {{- $detectedTopology := "Unknown" }}
 {{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-deployed-topology" .Release.Name) }}
@@ -94,30 +153,77 @@ spec:
           storageClass: {{ . }}
           {{- end }}
           maxVolumes: 0
-      {{ if eq .Values.topology "MultiZone" }}
+        {{- if .Values.volume.diskType }}
+        extraArgs:
+        - "-disk={{ .Values.volume.diskType }}"
+        {{- end }}
+      {{- if or (and (eq .Values.topology "Simple") (gt (len .Values.volume.pools) 0)) (eq .Values.topology "MultiZone") }}
       volumes:
-        {{- range $zoneName, $zone := .Values.volume.zones }}
-        {{ $zoneName }}:
-          {{ with $zone.replicas }}
-          replicas: {{ . }}
-          {{- end }}
+        {{- if eq .Values.topology "Simple" }}
+        {{- range $poolName, $pool := .Values.volume.pools }}
+        {{ $poolName }}:
+          replicas: {{ ternary $pool.replicas $.Values.volume.replicas (hasKey $pool "replicas") }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list ($pool.resourcesPreset | default $.Values.volume.resourcesPreset) (default dict $pool.resources) $) | nindent 12 }}
           dataDirs:
           - name: data1
             type: "persistentVolumeClaim"
-            {{- if $zone.size }}
-            size: "{{ $zone.size }}"
-            {{- else }}
-            size: "{{ $.Values.volume.size }}"
+            size: "{{ $pool.size | default $.Values.volume.size }}"
+            {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: "{{ . }}"
             {{- end }}
-            {{- if $zone.storageClass }}
-            storageClass: {{ $zone.storageClass }}
-            {{- else if $.Values.volume.storageClass }}
-            storageClass: {{ $.Values.volume.storageClass }}
+            maxVolumes: 0
+          extraArgs:
+          - "-disk={{ $pool.diskType }}"
+        {{- end }}
+        {{- else if eq .Values.topology "MultiZone" }}
+        {{- range $zoneName, $zone := .Values.volume.zones }}
+        {{ $zoneName }}:
+          replicas: {{ ternary $zone.replicas $.Values.volume.replicas (hasKey $zone "replicas") }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $.Values.volume.resourcesPreset $.Values.volume.resources $) | nindent 12 }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            size: "{{ $zone.size | default $.Values.volume.size }}"
+            {{- with ($zone.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: "{{ . }}"
             {{- end }}
             maxVolumes: 0
           nodeSelector: |
+            {{- with $zone.nodeSelector }}
+{{ . | indent 12 }}
+            {{- else }}
             topology.kubernetes.io/zone: {{ $zoneName }}
+            {{- end }}
           dataCenter: {{ $zone.dataCenter | default $zoneName }}
+          {{- if $.Values.volume.diskType }}
+          extraArgs:
+          - "-disk={{ $.Values.volume.diskType }}"
+          {{- end }}
+        {{- end }}
+        {{- range $zoneName, $zone := .Values.volume.zones }}
+        {{- range $poolName, $pool := (dig "pools" dict $zone) }}
+        {{ $zoneName }}-{{ $poolName }}:
+          replicas: {{ ternary $pool.replicas (ternary $zone.replicas $.Values.volume.replicas (hasKey $zone "replicas")) (hasKey $pool "replicas") }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list ($pool.resourcesPreset | default $.Values.volume.resourcesPreset) (default dict $pool.resources) $) | nindent 12 }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            size: "{{ $pool.size | default $zone.size | default $.Values.volume.size }}"
+            {{- with ($pool.storageClass | default $zone.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: "{{ . }}"
+            {{- end }}
+            maxVolumes: 0
+          nodeSelector: |
+            {{- with $zone.nodeSelector }}
+{{ . | indent 12 }}
+            {{- else }}
+            topology.kubernetes.io/zone: {{ $zoneName }}
+            {{- end }}
+          dataCenter: {{ $zone.dataCenter | default $zoneName }}
+          extraArgs:
+          - "-disk={{ $pool.diskType }}"
+        {{- end }}
+        {{- end }}
         {{- end }}
       {{- end }}
       filer:
@@ -199,6 +305,22 @@ spec:
     app.kubernetes.io/component: volume
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+{{- range $poolName, $pool := .Values.volume.pools }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $poolName }}
+spec:
+  replicas: {{ ternary $pool.replicas $.Values.volume.replicas (hasKey $pool "replicas") }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $poolName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
 {{- else if eq .Values.topology "MultiZone" }}
 {{- range $zoneName, $zoneSpec := .Values.volume.zones }}
 ---
@@ -207,7 +329,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-volume-{{ $zoneName }}
 spec:
-  replicas: {{ default $.Values.volume.replicas $zoneSpec.replicas }}
+  replicas: {{ ternary $zoneSpec.replicas $.Values.volume.replicas (hasKey $zoneSpec "replicas") }}
   minReplicas: 1
   kind: seaweedfs
   type: volume
@@ -215,6 +337,22 @@ spec:
     app.kubernetes.io/component: volume-{{ $zoneName }}
     app.kubernetes.io/name: seaweedfs
   version: {{ $.Chart.Version }}
+{{- range $poolName, $pool := (dig "pools" dict $zoneSpec) }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $zoneName }}-{{ $poolName }}
+spec:
+  replicas: {{ ternary $pool.replicas (ternary $zoneSpec.replicas $.Values.volume.replicas (hasKey $zoneSpec "replicas")) (hasKey $pool "replicas") }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $zoneName }}-{{ $poolName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
 {{- end }}
 {{- end }}
 ---

@@ -25,8 +25,21 @@ rules:
   resourceNames:
   - {{ $.Release.Name }}-master
   - {{ $.Release.Name }}-filer
-  - {{ $.Release.Name }}-volume
   - {{ $.Release.Name }}-db
+  - {{ $.Release.Name }}-s3
+  {{- if eq .Values.topology "Simple" }}
+  - {{ $.Release.Name }}-volume
+  {{- range $poolName, $pool := .Values.volume.pools }}
+  - {{ $.Release.Name }}-volume-{{ $poolName }}
+  {{- end }}
+  {{- else if eq .Values.topology "MultiZone" }}
+  {{- range $zoneName, $zone := .Values.volume.zones }}
+  - {{ $.Release.Name }}-volume-{{ $zoneName }}
+  {{- range $poolName, $pool := (dig "pools" dict $zone) }}
+  - {{ $.Release.Name }}-volume-{{ $zoneName }}-{{ $poolName }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
   verbs: ["get", "list", "watch"]
 {{- end }}
 

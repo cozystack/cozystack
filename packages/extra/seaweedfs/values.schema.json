@@ -300,6 +300,94 @@
       "type": "object",
       "default": {},
       "properties": {
+        "diskType": {
+          "description": "SeaweedFS disk type tag for the default volume servers (e.g., \"hdd\", \"ssd\").",
+          "type": "string",
+          "default": ""
+        },
+        "pools": {
+          "description": "A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.",
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "diskType"
+            ],
+            "properties": {
+              "diskType": {
+                "description": "SeaweedFS disk type tag (e.g., \"ssd\", \"hdd\", \"nvme\").",
+                "type": "string"
+              },
+              "replicas": {
+                "description": "Number of volume replicas. Defaults to volume.replicas (Simple) or zone.replicas/volume.replicas (MultiZone).",
+                "type": "integer"
+              },
+              "resources": {
+                "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+                "type": "object",
+                "properties": {
+                  "cpu": {
+                    "description": "Number of CPU cores allocated.",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  },
+                  "memory": {
+                    "description": "Amount of memory allocated.",
+                    "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "x-kubernetes-int-or-string": true
+                  }
+                }
+              },
+              "resourcesPreset": {
+                "description": "Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.",
+                "type": "string",
+                "enum": [
+                  "nano",
+                  "micro",
+                  "small",
+                  "medium",
+                  "large",
+                  "xlarge",
+                  "2xlarge"
+                ]
+              },
+              "size": {
+                "description": "Persistent Volume size. Defaults to volume.size (Simple) or zone.size/volume.size (MultiZone).",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              },
+              "storageClass": {
+                "description": "Kubernetes StorageClass for the pool. Defaults to volume.storageClass.",
+                "type": "string"
+              }
+            }
+          }
+        },
         "replicas": {
           "description": "Number of volume replicas.",
           "type": "integer",
@@ -378,6 +466,96 @@
           "additionalProperties": {
             "type": "object",
             "properties": {
+              "dataCenter": {
+                "description": "SeaweedFS data center name for this zone. Defaults to the zone name.",
+                "type": "string"
+              },
+              "nodeSelector": {
+                "description": "YAML nodeSelector for this zone (default: topology.kubernetes.io/zone: \u003czoneName\u003e).",
+                "type": "string"
+              },
+              "pools": {
+                "description": "A map of storage pools for this zone. Each pool creates a separate Volume StatefulSet per zone.",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": [
+                    "diskType"
+                  ],
+                  "properties": {
+                    "diskType": {
+                      "description": "SeaweedFS disk type tag (e.g., \"ssd\", \"hdd\", \"nvme\").",
+                      "type": "string"
+                    },
+                    "replicas": {
+                      "description": "Number of volume replicas. Defaults to volume.replicas (Simple) or zone.replicas/volume.replicas (MultiZone).",
+                      "type": "integer"
+                    },
+                    "resources": {
+                      "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+                      "type": "object",
+                      "properties": {
+                        "cpu": {
+                          "description": "Number of CPU cores allocated.",
+                          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                          "anyOf": [
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ],
+                          "x-kubernetes-int-or-string": true
+                        },
+                        "memory": {
+                          "description": "Amount of memory allocated.",
+                          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                          "anyOf": [
+                            {
+                              "type": "integer"
+                            },
+                            {
+                              "type": "string"
+                            }
+                          ],
+                          "x-kubernetes-int-or-string": true
+                        }
+                      }
+                    },
+                    "resourcesPreset": {
+                      "description": "Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.",
+                      "type": "string",
+                      "enum": [
+                        "nano",
+                        "micro",
+                        "small",
+                        "medium",
+                        "large",
+                        "xlarge",
+                        "2xlarge"
+                      ]
+                    },
+                    "size": {
+                      "description": "Persistent Volume size. Defaults to volume.size (Simple) or zone.size/volume.size (MultiZone).",
+                      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ],
+                      "x-kubernetes-int-or-string": true
+                    },
+                    "storageClass": {
+                      "description": "Kubernetes StorageClass for the pool. Defaults to volume.storageClass.",
+                      "type": "string"
+                    }
+                  }
+                }
+              },
               "replicas": {
                 "description": "Number of replicas in the zone.",
                 "type": "integer"
@@ -394,6 +572,10 @@
                   }
                 ],
                 "x-kubernetes-int-or-string": true
+              },
+              "storageClass": {
+                "description": "StorageClass used to store zone data. Defaults to volume.storageClass.",
+                "type": "string"
               }
             }
           }
