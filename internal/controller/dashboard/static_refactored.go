@@ -503,18 +503,12 @@ func CreateAllCustomFormsOverrides() []*dashboardv1alpha1.CustomFormsOverride {
 				createFormItem("metadata.namespace", "Namespace", "text"),
 				createFormItem("spec.applicationRef.kind", "Application Kind", "text"),
 				createFormItem("spec.applicationRef.name", "Application Name", "text"),
-				createFormItemWithAPI("spec.backupClassName", "Backup Class", "select", map[string]any{
-					"api": map[string]any{
-						"fetchUrl":       "/api/clusters/{cluster}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
-						"pathToItems":    []any{"items"},
-						"pathToValue":    []any{"metadata", "name"},
-						"pathToLabel":    []any{"metadata", "name"},
-						"clusterNameVar": "clusterName",
-					},
-				}),
 				createFormItem("spec.schedule.type", "Schedule Type", "text"),
 				createFormItem("spec.schedule.cron", "Schedule Cron", "text"),
 			},
+			"schema": createSchema(map[string]any{
+				"backupClassName": listInputScemaItemBackupClass(),
+			}),
 		}),
 
 		// BackupJobs form override - backups.cozystack.io/v1alpha1
@@ -526,16 +520,10 @@ func CreateAllCustomFormsOverrides() []*dashboardv1alpha1.CustomFormsOverride {
 				createFormItem("spec.applicationRef.apiGroup", "Application API Group", "text"),
 				createFormItem("spec.applicationRef.kind", "Application Kind", "text"),
 				createFormItem("spec.applicationRef.name", "Application Name", "text"),
-				createFormItemWithAPI("spec.backupClassName", "Backup Class", "select", map[string]any{
-					"api": map[string]any{
-						"fetchUrl":       "/api/clusters/{cluster}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
-						"pathToItems":    []any{"items"},
-						"pathToValue":    []any{"metadata", "name"},
-						"pathToLabel":    []any{"metadata", "name"},
-						"clusterNameVar": "clusterName",
-					},
-				}),
 			},
+			"schema": createSchema(map[string]any{
+				"backupClassName": listInputScemaItemBackupClass(),
+			}),
 		}),
 	}
 }
@@ -2063,9 +2051,9 @@ func createCustomFormsOverride(customizationId string, spec map[string]any) *das
 		"strategy":        "merge",
 	}
 
-	// Merge caller-provided fields (like formItems) into newSpec
+	// Merge into newSpec caller-provided fields without: customizationId, hidden, strategy
 	for key, value := range spec {
-		if key != "customizationId" && key != "hidden" && key != "schema" && key != "strategy" {
+		if key != "customizationId" && key != "hidden" && key != "strategy" {
 			newSpec[key] = value
 		}
 	}
@@ -2105,6 +2093,28 @@ func createNavigation(name string, spec map[string]any) *dashboardv1alpha1.Navig
 		Spec: dashboardv1alpha1.ArbitrarySpec{
 			JSON: v1.JSON{
 				Raw: jsonData,
+			},
+		},
+	}
+}
+
+func listInputScemaItemBackupClass() map[string]any {
+	return map[string]any{
+		"type": "listInput",
+		"customProps": map[string]any{
+			"valueUri":    "/api/clusters/{cluster}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
+			"keysToValue": []any{"metadata", "name"},
+			"keysToLabel": []any{"metadata", "name"},
+		},
+	}
+}
+
+// backupClassSchema returns the schema for spec.backupClassName as listInput (BackupJob/Plan).
+func createSchema(customProps map[string]any) map[string]any {
+	return map[string]any{
+		"properties": map[string]any{
+			"spec": map[string]any{
+				"properties": customProps,
 			},
 		},
 	}
