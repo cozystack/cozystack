@@ -1,0 +1,30 @@
+# Copyright (c) HashiCorp, Inc.
+# SPDX-License-Identifier: MPL-2.0
+
+# These overrides are appropriate defaults for deploying this chart on OpenShift
+
+global:
+  openshift: true
+
+injector:
+  image:
+    repository: "registry.connect.redhat.com/hashicorp/vault-k8s"
+    tag: "1.3.1-ubi"
+
+  agentImage:
+    registry: "quay.io"
+    repository: "openbao/openbao-ubi"
+    tag: "2.3.2"
+    # Use UBI-based OpenBao image for better OpenShift compatibility
+    # See: https://openbao.org/docs/install/#container-registries
+
+server:
+  image:
+    registry: "quay.io"
+    repository: "openbao/openbao-ubi"
+    tag: "2.3.2"
+    # Use UBI-based OpenBao image for better OpenShift compatibility
+    # See: https://openbao.org/docs/install/#container-registries
+
+  readinessProbe:
+    path: "/v1/sys/health?uninitcode=204"

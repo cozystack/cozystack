@@ -1,0 +1,66 @@
+{{- if .Values.snapshotAgent.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  labels:
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  {{- template "openbao.snapshotAgent.annotations" . }}
+  name: {{ template "openbao.fullname" . }}-snapshot
+  namespace: {{ include "openbao.namespace" . }}
+spec:
+  schedule: {{ .Values.snapshotAgent.schedule | quote }}
+  jobTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "openbao.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        component: snapshot-agent
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: {{ include "openbao.name" . }}
+            app.kubernetes.io/instance: {{ .Release.Name }}
+            component: snapshot-agent
+        spec:
+          restartPolicy: {{ .Values.snapshotAgent.restartPolicy }}
+          serviceAccountName: {{  template "openbao.snapshotAgent.serviceAccount.name" . }}
+          {{ template "snapshotAgent.securityContext.pod" .}}
+          containers:
+          - name: bao-snapshot
+            envFrom:
+            - configMapRef:
+                name: {{ template "openbao.fullname" . }}-snapshot
+            env:
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: AWS_SECRET_ACCESS_KEY
+                  name: {{ .Values.snapshotAgent.s3CredentialsSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  key: AWS_ACCESS_KEY_ID
+                  name: {{ .Values.snapshotAgent.s3CredentialsSecret }}
+            {{- include "openbao.extraSecretEnvironmentVars" .Values.snapshotAgent | nindent 12 }}
+            {{- include "openbao.extraEnvironmentVars" .Values.snapshotAgent | nindent 12 }}
+            image: {{ .Values.snapshotAgent.image.repository }}:{{ .Values.snapshotAgent.image.tag }}
+            {{ template "openbao.snapshotAgent.resources". }}
+            {{ template "snapshotAgent.securityContext.container" .}}
+            volumeMounts:
+              - name: snapshot-dir
+                mountPath: /bao-snapshots
+              {{- with .Values.snapshotAgent.extraVolumeMounts }}
+              {{- toYaml . | nindent 14 }}
+              {{- end }}
+            imagePullPolicy: IfNotPresent
+          volumes:
+          - name: snapshot-dir
+            emptyDir: {}
+          {{- if .Values.snapshotAgent.extraVolumes }}
+            {{- toYaml .Values.snapshotAgent.extraVolumes | nindent 10 }}
+          {{- end }}
+{{ end }}

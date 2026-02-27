@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.openbao-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: openbao-system
+          path: system/openbao
+        - name: openbao
+          path: apps/openbao
+          libraries: ["cozy-lib"]
+        - name: openbao-rd
+          path: system/openbao-rd
+          install:
+            namespace: cozy-system
+            releaseName: openbao-rd

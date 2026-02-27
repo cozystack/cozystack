@@ -1,0 +1,157 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{- template "openbao.csiEnabled" . -}}
+{{- if .csiEnabled -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ template "openbao.fullname" . }}-csi-provider
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "openbao.name" . }}-csi-provider
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- if  .Values.csi.daemonSet.extraLabels -}}
+      {{- toYaml .Values.csi.daemonSet.extraLabels | nindent 4 -}}
+    {{- end -}}
+  {{ template "csi.daemonSet.annotations" . }}
+spec:
+  updateStrategy:
+    type: {{ .Values.csi.daemonSet.updateStrategy.type }}
+    {{- if .Values.csi.daemonSet.updateStrategy.maxUnavailable }}
+    rollingUpdate:
+      maxUnavailable: {{ .Values.csi.daemonSet.updateStrategy.maxUnavailable }}
+    {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "openbao.name" . }}-csi-provider
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ template "openbao.name" . }}-csi-provider
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- if  .Values.csi.pod.extraLabels -}}
+          {{- toYaml .Values.csi.pod.extraLabels | nindent 8 -}}
+        {{- end -}}
+      {{ template "csi.pod.annotations" . }}
+    spec:
+      {{ template "csi.daemonSet.securityContext.pod" . }}
+      {{- if .Values.csi.priorityClassName }}
+      priorityClassName: {{ .Values.csi.priorityClassName }}
+      {{- end }}
+      serviceAccountName: {{ template "openbao.fullname" . }}-csi-provider
+      {{- template "csi.pod.tolerations" . }}
+      {{- template "csi.pod.nodeselector" . }}
+      {{- template "csi.pod.affinity" . }}
+      containers:
+        - name: {{ include "openbao.name" . }}-csi-provider
+          {{ template "csi.resources" . }}
+          {{ template "csi.daemonSet.securityContext.container" . }}
+          image: "{{ .Values.csi.image.registry | default "docker.io" }}/{{ .Values.csi.image.repository }}:{{ .Values.csi.image.tag }}"
+          imagePullPolicy: {{ .Values.csi.image.pullPolicy }}
+          args:
+            - --endpoint={{ .Values.csi.daemonSet.endpoint }}
+            - --debug={{ .Values.csi.debug }}
+            {{- if .Values.csi.hmacSecretName }}
+            - --hmac-secret-name={{ .Values.csi.hmacSecretName }}
+            {{- else }}
+            - --hmac-secret-name={{- include "openbao.name" . }}-csi-provider-hmac-key
+            {{- end }}
+            {{- if .Values.csi.extraArgs }}
+            {{- toYaml .Values.csi.extraArgs | nindent 12 }}
+            {{- end }}
+          env:
+            - name: VAULT_ADDR
+            {{- if eq (.Values.csi.agent.enabled | toString) "true" }}
+              value: "unix:///var/run/vault/agent.sock"
+            {{- else if include "openbao.externalAddr" . }}
+              value: "{{ include "openbao.externalAddr" . }}"
+            {{- else }}
+              value: {{ include "openbao.scheme" . }}://{{ template "openbao.fullname" . }}.{{ include "openbao.namespace" . }}.svc:{{ .Values.server.service.port }}
+            {{- end }}
+          volumeMounts:
+            - name: providervol
+              mountPath: "/provider"
+            {{- if eq (.Values.csi.agent.enabled | toString) "true" }}
+            - name: agent-unix-socket
+              mountPath: /var/run/vault
+            {{- end }}
+            {{- if .Values.csi.volumeMounts }}
+              {{- toYaml .Values.csi.volumeMounts | nindent 12}}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            failureThreshold: {{ .Values.csi.livenessProbe.failureThreshold }}
+            initialDelaySeconds: {{ .Values.csi.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.csi.livenessProbe.periodSeconds }}
+            successThreshold: {{ .Values.csi.livenessProbe.successThreshold }}
+            timeoutSeconds: {{ .Values.csi.livenessProbe.timeoutSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            failureThreshold: {{ .Values.csi.readinessProbe.failureThreshold }}
+            initialDelaySeconds: {{ .Values.csi.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.csi.readinessProbe.periodSeconds }}
+            successThreshold: {{ .Values.csi.readinessProbe.successThreshold }}
+            timeoutSeconds: {{ .Values.csi.readinessProbe.timeoutSeconds }}
+        {{- if eq (.Values.csi.agent.enabled | toString) "true" }}
+        - name: {{ include "openbao.name" . }}-agent
+          image: "{{ .Values.csi.agent.image.registry | default "docker.io" }}/{{ .Values.csi.agent.image.repository }}:{{ .Values.csi.agent.image.tag | default (trimPrefix "v" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.csi.agent.image.pullPolicy }}
+          {{ template "csi.agent.resources" . }}
+          command:
+            - bao
+          args:
+            - agent
+            - -config=/etc/vault/config.hcl
+            {{- if .Values.csi.agent.extraArgs }}
+            {{- toYaml .Values.csi.agent.extraArgs | nindent 12 }}
+            {{- end }}
+          ports:
+            - containerPort: 8200
+          env:
+            - name: BAO_LOG_LEVEL
+              value: "{{ .Values.csi.agent.logLevel }}"
+            - name: BAO_LOG_FORMAT
+              value: "{{ .Values.csi.agent.logFormat }}"
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 100
+            runAsGroup: 1000
+          volumeMounts:
+            - name: agent-config
+              mountPath: /etc/vault/config.hcl
+              subPath: config.hcl
+              readOnly: true
+            - name: agent-unix-socket
+              mountPath: /var/run/vault
+            {{- if .Values.csi.volumeMounts }}
+            {{- toYaml .Values.csi.volumeMounts | nindent 12 }}
+            {{- end }}
+        {{- end }}
+      volumes:
+        - name: providervol
+          hostPath:
+            path: {{ .Values.csi.daemonSet.providersDir }}
+        {{- if eq (.Values.csi.agent.enabled | toString) "true" }}
+        - name: agent-config
+          configMap:
+            name: {{ template "openbao.fullname" . }}-csi-provider-agent-config
+        - name: agent-unix-socket
+          emptyDir:
+            medium: Memory
+        {{- end }}
+        {{- if .Values.csi.volumes }}
+        {{- toYaml .Values.csi.volumes | nindent 8}}
+        {{- end }}
+      {{- include "imagePullSecrets" . | nindent 6 }}
+{{- end }}

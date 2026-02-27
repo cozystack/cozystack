@@ -1,0 +1,53 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{ template "openbao.mode" . }}
+{{- if ne .mode "external" }}
+{{- template "openbao.uiEnabled" . -}}
+{{- if .uiEnabled -}}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "openbao.fullname" . }}-ui
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}-ui
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- if  .Values.ui.extraLabels -}}
+      {{- toYaml .Values.ui.extraLabels | nindent 4 -}}
+    {{- end -}}
+  {{- template "openbao.ui.annotations" . }}
+spec:
+  {{- if (semverCompare ">= 1.23-0" .Capabilities.KubeVersion.Version) }}
+  {{- if .Values.ui.serviceIPFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.ui.serviceIPFamilyPolicy }}
+  {{- end }}
+  {{- if .Values.ui.serviceIPFamilies }}
+  ipFamilies: {{ .Values.ui.serviceIPFamilies | toYaml | nindent 2 }}
+  {{- end }}
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    component: server
+    {{- if and (.Values.ui.activeOpenbaoPodOnly) (eq .mode "ha") }}
+    openbao-active: "true"
+    {{- end }}
+  publishNotReadyAddresses: {{ .Values.ui.publishNotReadyAddresses }}
+  ports:
+    - name: {{ include "openbao.scheme" . }}
+      port: {{ .Values.ui.externalPort }}
+      targetPort: {{ .Values.ui.targetPort }}
+      {{- if .Values.ui.serviceNodePort }}
+      nodePort: {{ .Values.ui.serviceNodePort }}
+      {{- end }}
+  type: {{ .Values.ui.serviceType }}
+  {{- include "service.externalTrafficPolicy" .Values.ui }}
+  {{- include "service.loadBalancer" .Values.ui }}
+{{- end -}}
+{{- end }}
