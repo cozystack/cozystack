@@ -1,29 +1,22 @@
 {{- $seaweedfs := .Values._namespace.seaweedfs }}
+{{- $pool := .Values.storagePool }}
 apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketClaim
 metadata:
   name: {{ .Release.Name }}
 spec:
-  bucketClassName: {{ $seaweedfs }}
+  bucketClassName: {{ $seaweedfs }}{{- if $pool }}-{{ $pool }}{{- end }}{{- if .Values.locking }}-lock{{- end }}
   protocols:
     - s3
+{{- range $name, $user := .Values.users }}
 ---
 apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketAccess
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ $.Release.Name }}-{{ $name }}
 spec:
-  bucketAccessClassName: {{ $seaweedfs }}
-  bucketClaimName: {{ .Release.Name }}
-  credentialsSecretName: {{ .Release.Name }}
+  bucketAccessClassName: {{ $seaweedfs }}{{- if $pool }}-{{ $pool }}{{- end }}{{- if $user.readonly }}-readonly{{- end }}
+  bucketClaimName: {{ $.Release.Name }}
+  credentialsSecretName: {{ $.Release.Name }}-{{ $name }}
   protocol: s3
----
-apiVersion: objectstorage.k8s.io/v1alpha1
-kind: BucketAccess
-metadata:
-  name: {{ .Release.Name }}-readonly
-spec:
-  bucketAccessClassName: {{ $seaweedfs }}-readonly
-  bucketClaimName: {{ .Release.Name }}
-  credentialsSecretName: {{ .Release.Name }}-readonly
-  protocol: s3
+{{- end }}

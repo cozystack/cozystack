@@ -1,1 +1,11 @@
-{}
+## @param {bool} locking=false - Provisions bucket from the `-lock` BucketClass (with object lock enabled).
+locking: false
+
+## @param {string} [storagePool] - Selects a specific BucketClass by storage pool name.
+storagePool: ""
+
+## @typedef {struct} User - Bucket user configuration.
+## @field {bool} [readonly] - Whether the user has read-only access.
+
+## @param {map[string]User} users - Users configuration map.
+users: {}
