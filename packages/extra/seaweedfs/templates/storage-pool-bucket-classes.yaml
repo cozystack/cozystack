@@ -1,5 +1,17 @@
-{{- if and (ne .Values.topology "Client") .Values.storagePools }}
-{{- range $poolName, $pool := .Values.storagePools }}
+{{- if ne .Values.topology "Client" }}
+{{- /* Collect unique pools from volume.pools and zones[].pools */ -}}
+{{- $uniquePools := dict }}
+{{- range $poolName, $pool := .Values.volume.pools }}
+{{-   $_ := set $uniquePools $poolName $pool.diskType }}
+{{- end }}
+{{- if eq .Values.topology "MultiZone" }}
+{{-   range $zoneName, $zone := .Values.volume.zones }}
+{{-     range $poolName, $pool := (dig "pools" dict $zone) }}
+{{-       $_ := set $uniquePools $poolName $pool.diskType }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- range $poolName, $diskType := $uniquePools }}
 ---
 kind: BucketClass
 apiVersion: objectstorage.k8s.io/v1alpha1
@@ -8,7 +20,7 @@ metadata:
 driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
 deletionPolicy: Delete
 parameters:
-  diskType: {{ $pool.diskType }}
+  disk: {{ $diskType }}
 ---
 kind: BucketClass
 apiVersion: objectstorage.k8s.io/v1alpha1
@@ -17,7 +29,7 @@ metadata:
 driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
 deletionPolicy: Retain
 parameters:
-  diskType: {{ $pool.diskType }}
+  disk: {{ $diskType }}
   objectLockEnabled: "true"
   objectLockRetentionMode: COMPLIANCE
   objectLockRetentionDays: "36500"

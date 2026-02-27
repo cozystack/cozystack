@@ -29,15 +29,13 @@ rules:
   - {{ $.Release.Name }}-s3
   {{- if eq .Values.topology "Simple" }}
   - {{ $.Release.Name }}-volume
-  {{- range $poolName, $pool := .Values.storagePools }}
+  {{- range $poolName, $pool := .Values.volume.pools }}
   - {{ $.Release.Name }}-volume-{{ $poolName }}
   {{- end }}
   {{- else if eq .Values.topology "MultiZone" }}
   {{- range $zoneName, $zone := .Values.volume.zones }}
   - {{ $.Release.Name }}-volume-{{ $zoneName }}
-  {{- end }}
-  {{- range $poolName, $pool := .Values.storagePools }}
-  {{- range $zoneName, $zone := $.Values.volume.zones }}
+  {{- range $poolName, $pool := (dig "pools" dict $zone) }}
   - {{ $.Release.Name }}-volume-{{ $zoneName }}-{{ $poolName }}
   {{- end }}
   {{- end }}
