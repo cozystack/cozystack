@@ -10,7 +10,11 @@ PATTERN=${2:-*}
 LINE='----------------------------------------------------------------'
 
 cols() { stty size 2>/dev/null | awk '{print $2}' || echo 80; }
-MAXW=$(( $(cols) - 12 )); [ "$MAXW" -lt 40 ] && MAXW=70
+if [ -t 1 ]; then
+  MAXW=$(( $(cols) - 12 )); [ "$MAXW" -lt 40 ] && MAXW=70
+else
+  MAXW=0  # no truncation when not a tty (e.g. CI)
+fi
 BEGIN=$(date +%s)
 timestamp() { s=$(( $(date +%s) - BEGIN )); printf '[%02d:%02d]' $((s/60)) $((s%60)); }
 
@@ -45,7 +49,7 @@ run_one() {
           *)       out=$line ;;
         esac
         now=$(( $(date +%s) - START ))
-        [ ${#out} -gt "$MAXW" ] && out="$(printf '%.*s…' "$MAXW" "$out")"
+        [ "$MAXW" -gt 0 ] && [ ${#out} -gt "$MAXW" ] && out="$(printf '%.*s…' "$MAXW" "$out")"
         printf '┊[%02d:%02d] %s\n' $((now/60)) $((now%60)) "$out"
   done
 
