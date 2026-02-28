@@ -1,0 +1,20 @@
+apiVersion: flowcontrol.apiserver.k8s.io/v1
+kind: FlowSchema
+metadata:
+  name: cozy-dashboard-exempt
+spec:
+  matchingPrecedence: 2
+  priorityLevelConfiguration:
+    name: exempt
+  rules:
+    - subjects:
+        - kind: ServiceAccount
+          serviceAccount:
+            name: incloud-web-web
+            namespace: {{ .Release.Namespace }}
+      resourceRules:
+        - verbs: ["*"]
+          apiGroups: ["*"]
+          resources: ["*"]
+          namespaces: ["*"]
+          clusterScope: true
