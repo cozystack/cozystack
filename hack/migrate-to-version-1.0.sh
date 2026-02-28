@@ -32,6 +32,30 @@ if ! kubectl get namespace "$NAMESPACE" &> /dev/null; then
     exit 1
 fi
 
+# Step 0: Annotate critical resources to prevent Helm from deleting them
+echo "Step 0: Protect critical resources from Helm deletion"
+echo ""
+echo "The following resources will be annotated with helm.sh/resource-policy=keep"
+echo "to prevent Helm from deleting them when the installer release is removed:"
+echo "  - Namespace: $NAMESPACE"
+echo "  - ConfigMap: $NAMESPACE/cozystack-version"
+echo ""
+read -p "Do you want to annotate these resources? (y/N) " -n 1 -r
+echo ""
+
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "Annotating namespace $NAMESPACE..."
+    kubectl annotate namespace "$NAMESPACE" helm.sh/resource-policy=keep --overwrite
+    echo "Annotating ConfigMap cozystack-version..."
+    kubectl annotate configmap -n "$NAMESPACE" cozystack-version helm.sh/resource-policy=keep --overwrite 2>/dev/null || echo "  ConfigMap cozystack-version not found, skipping."
+    echo ""
+    echo "Resources annotated successfully."
+else
+    echo "WARNING: Skipping annotation. If you remove the Helm installer release,"
+    echo "the namespace and its contents may be deleted!"
+fi
+echo ""
+
 # Read ConfigMap cozystack
 echo "Reading ConfigMap cozystack..."
 COZYSTACK_CM=$(kubectl get configmap -n "$NAMESPACE" cozystack -o json 2>/dev/null || echo "{}")
