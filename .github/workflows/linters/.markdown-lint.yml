@@ -1,0 +1,7 @@
+---
+    # MD013/line-length - Line length
+    MD013:
+      # Number of characters, default is 80
+      line_length: 9999
+      # check code blocks?
+      code_blocks: false

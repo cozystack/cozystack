@@ -1,0 +1,81 @@
+{{- if .Values.kubernetes.kubeadm.token }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-kubeadm-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kubeadm-config
+data:
+  join-config.yaml: |
+    {{- include "proxmox-worker.kubeadmJoinConfig" . | nindent 4 }}
+  containerd-config.toml: |
+    {{- include "proxmox-worker.containerdConfig" . | nindent 4 }}
+  kubelet-config.yaml: |
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    kind: KubeletConfiguration
+    authentication:
+      anonymous:
+        enabled: false
+      webhook:
+        enabled: true
+        cacheTTL: 0s
+      x509:
+        clientCAFile: /etc/kubernetes/pki/ca.crt
+    authorization:
+      mode: Webhook
+      webhook:
+        cacheAuthorizedTTL: 0s
+        cacheUnauthorizedTTL: 0s
+    clusterDomain: {{ .Values.networking.dns.domain }}
+    clusterDNS:
+      - {{ .Values.networking.serviceCIDR | split "/" | first | replace "0" "10" }}
+    cpuManagerPolicy: none
+    cgroupDriver: systemd
+    containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
+    evictionHard:
+      imagefs.available: 15%
+      memory.available: 100Mi
+      nodefs.available: 10%
+      nodefs.inodesFree: 5%
+    evictionSoft:
+      imagefs.available: 15%
+      memory.available: 100Mi
+      nodefs.available: 10%
+      nodefs.inodesFree: 5%
+    evictionSoftGracePeriod:
+      imagefs.available: 1m
+      memory.available: 1m
+      nodefs.available: 1m
+      nodefs.inodesFree: 1m
+    evictionMaxPodGracePeriod: 0
+    evictionPressureTransitionPeriod: 0s
+    fileCheckFrequency: 20s
+    healthzBindAddress: 127.0.0.1
+    healthzPort: 10248
+    httpCheckFrequency: 20s
+    imageMinimumGCAge: 0s
+    imageGCHighThresholdPercent: 85
+    imageGCLowThresholdPercent: 80
+    logging:
+      format: json
+      flushFrequency: 0
+      options:
+        json:
+          infoBufferSize: "0"
+      verbosity: 0
+    memorySwap: {}
+    nodeStatusReportFrequency: 0s
+    nodeStatusUpdateFrequency: 0s
+    rotateCertificates: true
+    runtimeRequestTimeout: 2m
+    staticPodPath: /etc/kubernetes/manifests
+    streamingConnectionIdleTimeout: 4h0m0s
+    syncFrequency: 1m0s
+    volumeStatsAggPeriod: 1m0s
+    serverTLSBootstrap: true
+    {{- range $key, $value := .Values.kubernetes.kubeadm.joinConfig.kubeletExtraArgs }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+{{- end }}

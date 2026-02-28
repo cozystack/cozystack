@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://json.schemastore.org/chart.json
+apiVersion: v2
+name: proxmox-csi-plugin
+description: Container Storage Interface plugin for Proxmox
+type: application
+home: https://github.com/sergelogvinov/proxmox-csi-plugin
+icon: https://raw.githubusercontent.com/sergelogvinov/proxmox-csi-plugin/main/charts/proxmox-csi-plugin/icon.png
+sources:
+  - https://github.com/sergelogvinov/proxmox-csi-plugin
+keywords:
+  - csi
+  - storage
+  - block-storage
+  - volume
+  - proxmox
+maintainers:
+  - name: sergelogvinov
+    url: https://github.com/sergelogvinov
+# This is the chart version. This version number should be incremented each time you make changes
+# to the chart and its templates, including the app version.
+# Versions are expected to follow Semantic Versioning (https://semver.org/)
+version: 0.3.0
+# This is the version number of the application being deployed. This version number should be
+# incremented each time you make changes to the application. Versions are not expected to
+# follow Semantic Versioning. They should reflect the version the application is using.
+# It is recommended to use it with quotes.
+appVersion: v0.11.0
