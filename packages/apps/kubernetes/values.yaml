@@ -90,6 +90,10 @@ host: ""
 ## @field {bool} enabled - Enable GPU Operator.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
+## @typedef {struct} HamiAddon - HAMi scheduler extender.
+## @field {bool} enabled - Enable HAMi scheduler extender.
+## @field {object} valuesOverride - Custom Helm values overrides.
+
 ## @typedef {struct} FluxCDAddon - FluxCD GitOps operator.
 ## @field {bool} enabled - Enable FluxCD.
 ## @field {object} valuesOverride - Custom Helm values overrides.
@@ -114,6 +118,7 @@ host: ""
 ## @field {GatewayAPIAddon} gatewayAPI - Gateway API addon.
 ## @field {IngressNginxAddon} ingressNginx - Ingress-NGINX controller.
 ## @field {GPUOperatorAddon} gpuOperator - NVIDIA GPU Operator.
+## @field {HamiAddon} hami - HAMi scheduler extender.
 ## @field {FluxCDAddon} fluxcd - FluxCD GitOps operator.
 ## @field {MonitoringAgentsAddon} monitoringAgents - Monitoring agents.
 ## @field {VerticalPodAutoscalerAddon} verticalPodAutoscaler - Vertical Pod Autoscaler.
@@ -135,6 +140,9 @@ addons:
     hosts: []
     valuesOverride: {}
   gpuOperator:
+    enabled: false
+    valuesOverride: {}
+  hami:
     enabled: false
     valuesOverride: {}
   fluxcd:
