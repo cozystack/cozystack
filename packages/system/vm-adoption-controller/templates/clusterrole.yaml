@@ -1,0 +1,24 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vm-adoption-controller
+rules:
+# Watch VirtualMachines
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+
+# Read Forklift Plans
+- apiGroups: ["forklift.konveyor.io"]
+  resources: ["plans"]
+  verbs: ["get", "list", "watch"]
+
+# Create/manage VMInstances and VMDisks
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["vminstances", "vmdisks"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+# Read DataVolumes (to discover disks)
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
+  verbs: ["get", "list", "watch"]

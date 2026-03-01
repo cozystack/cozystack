@@ -16,4 +16,6 @@
 {{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-instance-application" "kubevirt" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.forklift" $) }}
+{{include "cozystack.platform.package" (list "cozystack.vm-import-application" "kubevirt" $) }}
 {{- end }}

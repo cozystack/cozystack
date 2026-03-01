@@ -1,0 +1,36 @@
+# Default values for vm-adoption-controller
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Controller configuration
+controller:
+  # Watch interval in seconds (reduced from 30s to 15s for faster adoption)
+  watchInterval: 15
+
+  # Namespace to watch (empty = all namespaces)
+  watchNamespace: ""
+
+  # Enable adoption only for VMs with specific labels
+  adoptionEnabled: true
+
+  # Prefix for created VMInstance names (empty = use original VM name)
+  namePrefix: ""
+
+  # Default instance type if not specified in VM
+  defaultInstanceType: "u1.medium"
+
+  # Default preference/profile if not specified in VM
+  defaultPreference: "ubuntu"
