@@ -7,6 +7,7 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   replicas: {{ .Values.replicas }}
+  image: 'rabbitmq:{{ include "rabbitmq.versionMap" $ }}-management'
   {{- if .Values.external }}
   service:
     type: LoadBalancer
