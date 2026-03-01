@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 144" width="144" height="144">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6"/>
+      <stop offset="100%" style="stop-color:#1D4ED8"/>
+    </linearGradient>
+  </defs>
+  <rect width="144" height="144" rx="28" fill="url(#bg)"/>
+  <g transform="translate(72,72)" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Globe -->
+    <circle cx="0" cy="-4" r="32"/>
+    <ellipse cx="0" cy="-4" rx="14" ry="32"/>
+    <line x1="-32" y1="-4" x2="32" y2="-4"/>
+    <path d="M-28,12 Q0,18 28,12"/>
+    <path d="M-28,-20 Q0,-14 28,-20"/>
+    <!-- Arrow pointing out -->
+    <line x1="18" y1="18" x2="36" y2="36"/>
+    <polyline points="28,36 36,36 36,28"/>
+  </g>
+</svg>
