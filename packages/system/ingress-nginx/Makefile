@@ -8,5 +8,6 @@ update:
 	helm repo update ingress-nginx
 	helm pull ingress-nginx/ingress-nginx --untar --untardir charts
 	patch --no-backup-if-mismatch -p 3 < patches/add-metrics2.patch
+	patch --no-backup-if-mismatch -p4 < patches/disable-ca-key-rotation.patch
 	rm -f charts/ingress-nginx/templates/controller-deployment.yaml.orig
 	rm -rf charts/ingress-nginx/changelog/

@@ -9,6 +9,8 @@ spec:
   secretName: linstor-api-ca
   duration: 87600h # 10 years
   isCA: true
+  privateKey:
+    rotationPolicy: Never
   usages:
     - signing
     - key encipherment

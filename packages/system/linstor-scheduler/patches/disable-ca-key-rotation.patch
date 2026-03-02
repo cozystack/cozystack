@@ -1,0 +1,13 @@
+diff --git a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/certmanager.yaml b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/certmanager.yaml
+index 3942555b..760a9d5d 100644
+--- a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/certmanager.yaml
++++ b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/certmanager.yaml
+@@ -24,6 +24,8 @@ spec:
+   issuerRef:
+     name: {{ include "linstor-scheduler.fullname" . }}-admission-selfsigned
+   isCA: true
++  privateKey:
++    rotationPolicy: Never
+ ---
+ apiVersion: cert-manager.io/v1
+ kind: Issuer

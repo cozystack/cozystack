@@ -23,6 +23,8 @@ spec:
     name: {{ include "ingress-nginx.fullname" . }}-self-signed-issuer
   commonName: "ca.webhook.ingress-nginx"
   isCA: true
+  privateKey:
+    rotationPolicy: Never
   subject:
     organizations:
       - ingress-nginx

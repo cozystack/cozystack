@@ -104,6 +104,7 @@ spec:
       - {{ .Release.Name }}
   secretName: etcd-peer-ca-tls
   privateKey:
+    rotationPolicy: Never
     algorithm: RSA
     size: 4096
   issuerRef:
@@ -130,6 +131,7 @@ spec:
       - {{ .Release.Name }}
   secretName: etcd-ca-tls
   privateKey:
+    rotationPolicy: Never
     algorithm: RSA
     size: 4096
   issuerRef:

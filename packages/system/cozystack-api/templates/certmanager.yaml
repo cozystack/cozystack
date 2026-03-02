@@ -18,6 +18,8 @@ spec:
   issuerRef:
     name: cozystack-api-selfsigned
   isCA: true
+  privateKey:
+    rotationPolicy: Never
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
