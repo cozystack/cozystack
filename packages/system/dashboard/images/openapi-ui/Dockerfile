@@ -6,7 +6,7 @@ FROM node:${NODE_VERSION}-alpine AS openapi-k8s-toolkit-builder
 RUN apk add git
 WORKDIR /src
 # release/1.4.0
-ARG COMMIT=c67029cc7b7495c65ee0406033576e773a73bb01
+ARG COMMIT=d6b9e4ad0d1eb9d3730f7f0c664792c8dda3214d
 RUN wget -O- https://github.com/PRO-Robotech/openapi-k8s-toolkit/archive/${COMMIT}.tar.gz | tar -xzvf- --strip-components=1
 
 COPY openapi-k8s-toolkit/patches /patches

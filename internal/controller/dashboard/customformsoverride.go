@@ -195,6 +195,7 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 				"valueUri":    "/api/clusters/{cluster}/k8s/apis/instancetype.kubevirt.io/v1beta1/virtualmachineclusterinstancetypes",
 				"keysToValue": []any{"metadata", "name"},
 				"keysToLabel": []any{"metadata", "name"},
+				"allowEmpty":  true,
 			},
 		}
 		if prop, _ := openAPIProps["instanceType"].(map[string]any); prop != nil {
