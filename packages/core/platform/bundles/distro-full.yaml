@@ -27,7 +27,7 @@ releases:
   dependsOn: [cilium]
 
 - name: cozy-proxy
-  releaseName: cozystack
+  releaseName: cozy-proxy
   chart: cozy-cozy-proxy
   namespace: cozy-system
   optional: true
