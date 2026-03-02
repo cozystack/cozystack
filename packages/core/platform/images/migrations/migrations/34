@@ -1,0 +1,37 @@
+#!/bin/sh
+# Migration 34 --> 35
+# Backfill spec.version on rabbitmq.apps.cozystack.io resources.
+#
+# Before this migration RabbitMQ had no user-selectable version; the
+# operator always used its built-in default image (v3.x).  A version field
+# was added in this release.  Without this migration every existing cluster
+# would be upgraded to the new default (v4.2) on the next reconcile.
+#
+# Set spec.version to "v3.13" for any rabbitmq app resource that does not
+# already have it set.
+
+set -euo pipefail
+
+DEFAULT_VERSION="v3.13"
+RABBITMQS=$(kubectl get rabbitmqs.apps.cozystack.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}')
+for resource in $RABBITMQS; do
+  NS="${resource%%/*}"
+  APP_NAME="${resource##*/}"
+
+  # Skip if spec.version is already set
+  CURRENT_VER=$(kubectl get rabbitmqs.apps.cozystack.io -n "$NS" "$APP_NAME" \
+    -o jsonpath='{.spec.version}')
+  if [ -n "$CURRENT_VER" ]; then
+    echo "SKIP $NS/$APP_NAME: spec.version already set to '$CURRENT_VER'"
+    continue
+  fi
+
+  echo "Patching rabbitmq/$APP_NAME in $NS: setting version=$DEFAULT_VERSION"
+
+  kubectl patch rabbitmqs.apps.cozystack.io -n "$NS" "$APP_NAME" --type=merge \
+    --patch "{\"spec\":{\"version\":\"${DEFAULT_VERSION}\"}}"
+done
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=35 --dry-run=client -o yaml | kubectl apply -f-
