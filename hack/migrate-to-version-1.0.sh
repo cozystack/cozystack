@@ -56,6 +56,30 @@ else
 fi
 echo ""
 
+# Step 1: Check for cozy-proxy HelmRelease with conflicting releaseName
+# In v0.41.x, cozy-proxy was incorrectly configured with releaseName "cozystack",
+# which conflicts with the installer helm release name. If not suspended, cozy-proxy
+# HelmRelease will overwrite the installer release and delete cozystack-operator.
+COZY_PROXY_RELEASE_NAME=$(kubectl get hr -n "$NAMESPACE" cozy-proxy -o jsonpath='{.spec.releaseName}' 2>/dev/null || true)
+if [ "$COZY_PROXY_RELEASE_NAME" = "cozystack" ]; then
+    echo "WARNING: HelmRelease cozy-proxy has releaseName 'cozystack', which conflicts"
+    echo "with the installer release. It must be suspended before proceeding, otherwise"
+    echo "it will overwrite the installer and delete cozystack-operator."
+    echo ""
+    read -p "Suspend HelmRelease cozy-proxy? (y/N) " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        kubectl -n "$NAMESPACE" patch hr cozy-proxy --type=merge --field-manager=flux-client-side-apply -p '{"spec":{"suspend":true}}'
+        echo "HelmRelease cozy-proxy suspended."
+    else
+        echo "ERROR: Cannot proceed with conflicting cozy-proxy HelmRelease active."
+        echo "Please suspend it manually:"
+        echo "  kubectl -n $NAMESPACE patch hr cozy-proxy --type=merge -p '{\"spec\":{\"suspend\":true}}'"
+        exit 1
+    fi
+    echo ""
+fi
+
 # Read ConfigMap cozystack
 echo "Reading ConfigMap cozystack..."
 COZYSTACK_CM=$(kubectl get configmap -n "$NAMESPACE" cozystack -o json 2>/dev/null || echo "{}")
