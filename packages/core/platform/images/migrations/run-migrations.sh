@@ -24,7 +24,7 @@ if [ "$CURRENT_VERSION" -ge "$TARGET_VERSION" ]; then
 fi
 
 # Run migrations sequentially from current version to target version
-for i in $(seq $((CURRENT_VERSION + 1)) $TARGET_VERSION); do
+for i in $(seq $CURRENT_VERSION $((TARGET_VERSION - 1))); do
   if [ -f "/migrations/$i" ]; then
     echo "Running migration $i"
     chmod +x /migrations/$i
