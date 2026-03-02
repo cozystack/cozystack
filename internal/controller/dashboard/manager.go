@@ -307,6 +307,10 @@ func (m *Manager) buildExpectedResourceSet(crds []cozyv1alpha1.ApplicationDefini
 			"stock-project-builtin-table",
 			"stock-project-crd-form",
 			"stock-project-crd-table",
+			"stock-instance-api-form",
+			"stock-instance-api-table",
+			"stock-instance-builtin-form",
+			"stock-instance-builtin-table",
 		}
 		for _, sidebarID := range stockSidebars {
 			expected["Sidebar"][sidebarID] = true

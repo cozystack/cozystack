@@ -243,6 +243,11 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 		"stock-project-builtin-table",
 		"stock-project-crd-form",
 		"stock-project-crd-table",
+		// stock-instance sidebars (namespace-level pages after namespace is selected)
+		"stock-instance-api-form",
+		"stock-instance-api-table",
+		"stock-instance-builtin-form",
+		"stock-instance-builtin-table",
 	}
 
 	// Add details sidebars for all CRDs with dashboard config
