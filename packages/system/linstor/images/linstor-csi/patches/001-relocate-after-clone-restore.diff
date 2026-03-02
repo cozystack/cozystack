@@ -339,7 +339,7 @@ index 5474963..2eb8a7c 100644
  
  // paramKeyString retrieves an enum value from the enum constants string name.
 diff --git a/pkg/volume/snapshot_params.go b/pkg/volume/snapshot_params.go
-index d167cb8..c7a6505 100644
+index d167cb8..50b70fb 100644
 --- a/pkg/volume/snapshot_params.go
 +++ b/pkg/volume/snapshot_params.go
 @@ -35,6 +35,7 @@ type SnapshotParameters struct {
@@ -354,7 +354,7 @@ index d167cb8..c7a6505 100644
  			p.LinstorTargetClusterID = v
  		case "/linstor-target-storage-pool":
  			p.LinstorTargetStoragePool = v
-+		case "/relocate-after-restore":
++		case "/relocateAfterRestore":
 +			b, err := strconv.ParseBool(v)
 +			if err != nil {
 +				return nil, err
