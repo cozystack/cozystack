@@ -215,6 +215,34 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 				"keysToLabel": []any{"metadata", "name"},
 			},
 		}
+
+	case "ClickHouse", "Harbor", "HTTPCache", "Kubernetes", "MariaDB", "MongoDB",
+		"NATS", "OpenBAO", "Postgres", "Qdrant", "RabbitMQ", "Redis", "VMDisk":
+		specProps := ensureSchemaPath(schema, "spec")
+		specProps["storageClass"] = storageClassListInput()
+
+	case "FoundationDB":
+		storageProps := ensureSchemaPath(schema, "spec", "storage")
+		storageProps["storageClass"] = storageClassListInput()
+
+	case "Kafka":
+		kafkaProps := ensureSchemaPath(schema, "spec", "kafka")
+		kafkaProps["storageClass"] = storageClassListInput()
+		zkProps := ensureSchemaPath(schema, "spec", "zookeeper")
+		zkProps["storageClass"] = storageClassListInput()
+	}
+}
+
+// storageClassListInput returns a listInput field config for a storageClass dropdown
+// backed by the cluster's available StorageClasses.
+func storageClassListInput() map[string]any {
+	return map[string]any{
+		"type": "listInput",
+		"customProps": map[string]any{
+			"valueUri":    "/api/clusters/{cluster}/k8s/apis/storage.k8s.io/v1/storageclasses",
+			"keysToValue": []any{"metadata", "name"},
+			"keysToLabel": []any{"metadata", "name"},
+		},
 	}
 }
 

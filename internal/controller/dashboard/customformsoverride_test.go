@@ -236,6 +236,72 @@ func TestApplyListInputOverrides_VMInstance(t *testing.T) {
 	}
 }
 
+func TestApplyListInputOverrides_StorageClassSimple(t *testing.T) {
+	for _, kind := range []string{
+		"ClickHouse", "Harbor", "HTTPCache", "Kubernetes", "MariaDB", "MongoDB",
+		"NATS", "OpenBAO", "Postgres", "Qdrant", "RabbitMQ", "Redis", "VMDisk",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			schema := map[string]any{}
+			applyListInputOverrides(schema, kind, map[string]any{})
+
+			specProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
+			sc, ok := specProps["storageClass"].(map[string]any)
+			if !ok {
+				t.Fatalf("storageClass not found in spec.properties for kind %s", kind)
+			}
+			assertStorageClassListInput(t, sc)
+		})
+	}
+}
+
+func TestApplyListInputOverrides_StorageClassFoundationDB(t *testing.T) {
+	schema := map[string]any{}
+	applyListInputOverrides(schema, "FoundationDB", map[string]any{})
+
+	storageProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)["storage"].(map[string]any)["properties"].(map[string]any)
+	sc, ok := storageProps["storageClass"].(map[string]any)
+	if !ok {
+		t.Fatal("storageClass not found in spec.storage.properties")
+	}
+	assertStorageClassListInput(t, sc)
+}
+
+func TestApplyListInputOverrides_StorageClassKafka(t *testing.T) {
+	schema := map[string]any{}
+	applyListInputOverrides(schema, "Kafka", map[string]any{})
+
+	specProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
+
+	kafkaSC, ok := specProps["kafka"].(map[string]any)["properties"].(map[string]any)["storageClass"].(map[string]any)
+	if !ok {
+		t.Fatal("storageClass not found in spec.kafka.properties")
+	}
+	assertStorageClassListInput(t, kafkaSC)
+
+	zkSC, ok := specProps["zookeeper"].(map[string]any)["properties"].(map[string]any)["storageClass"].(map[string]any)
+	if !ok {
+		t.Fatal("storageClass not found in spec.zookeeper.properties")
+	}
+	assertStorageClassListInput(t, zkSC)
+}
+
+// assertStorageClassListInput verifies that a field is a correctly configured storageClass listInput.
+func assertStorageClassListInput(t *testing.T, field map[string]any) {
+	t.Helper()
+	if field["type"] != "listInput" {
+		t.Errorf("expected type listInput, got %v", field["type"])
+	}
+	customProps, ok := field["customProps"].(map[string]any)
+	if !ok {
+		t.Fatal("customProps not found")
+	}
+	expectedURI := "/api/clusters/{cluster}/k8s/apis/storage.k8s.io/v1/storageclasses"
+	if customProps["valueUri"] != expectedURI {
+		t.Errorf("expected valueUri %s, got %v", expectedURI, customProps["valueUri"])
+	}
+}
+
 func TestApplyListInputOverrides_UnknownKind(t *testing.T) {
 	schema := map[string]any{}
 	applyListInputOverrides(schema, "SomeOtherKind", map[string]any{})
