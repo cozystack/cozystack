@@ -202,6 +202,10 @@ func TestApplyListInputOverrides_VMInstance(t *testing.T) {
 		t.Errorf("expected valueUri %s, got %v", expectedURI, customProps["valueUri"])
 	}
 
+	if customProps["allowEmpty"] != true {
+		t.Errorf("expected allowEmpty true, got %v", customProps["allowEmpty"])
+	}
+
 	// Check disks[].name is a listInput
 	disks, ok := specProps["disks"].(map[string]any)
 	if !ok {

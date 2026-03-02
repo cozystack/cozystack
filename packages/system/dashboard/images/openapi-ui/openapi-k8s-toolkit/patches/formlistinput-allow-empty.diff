@@ -1,0 +1,37 @@
+diff --git a/src/localTypes/formExtensions.ts b/src/localTypes/formExtensions.ts
+--- a/src/localTypes/formExtensions.ts
++++ b/src/localTypes/formExtensions.ts
+@@ -59,2 +59,4 @@
+   relatedValuePath?: string
++  allowEmpty?: boolean
++  persistType?: 'str' | 'number' | 'arr' | 'obj'
+ }
+diff --git a/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx b/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx
+--- a/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx
++++ b/src/components/molecules/BlackholeForm/molecules/FormListInput/FormListInput.tsx
+@@ -149,3 +149,10 @@
+   }, [relatedPath, form, arrName, fixedName, relatedFieldValue, onValuesChangeCallBack, isTouchedPeristed])
+
++  // When allowEmpty is set, auto-persist the field so the BFF preserves empty values
++  useEffect(() => {
++    if (customProps.allowEmpty) {
++      persistedControls.onPersistMark(persistName || name, customProps.persistType ?? 'str')
++    }
++  }, [customProps.allowEmpty, customProps.persistType, persistedControls, persistName, name])
++
+   const uri = prepareTemplate({
+@@ -267,5 +274,14 @@
+           validateTrigger="onBlur"
+           hasFeedback={designNewLayout ? { icons: feedbackIcons } : true}
+           style={{ flex: 1 }}
++          normalize={(value: unknown) => {
++            if (customProps.allowEmpty && (value === undefined || value === null)) {
++              if (customProps.persistType === 'number') return 0
++              if (customProps.persistType === 'arr') return []
++              if (customProps.persistType === 'obj') return {}
++              return ''
++            }
++            return value
++          }}
+         >
+           <Select
