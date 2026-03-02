@@ -92,6 +92,17 @@
         }
       }
     },
+    "version": {
+      "description": "RabbitMQ major.minor version to deploy",
+      "type": "string",
+      "default": "v4.2",
+      "enum": [
+        "v4.2",
+        "v4.1",
+        "v4.0",
+        "v3.13"
+      ]
+    },
     "vhosts": {
       "description": "Virtual hosts configuration map.",
       "type": "object",
