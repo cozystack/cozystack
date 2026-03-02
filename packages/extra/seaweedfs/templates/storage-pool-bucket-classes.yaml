@@ -20,7 +20,7 @@ metadata:
 driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
 deletionPolicy: Delete
 parameters:
-  diskType: {{ $diskType }}
+  disk: {{ $diskType }}
 ---
 kind: BucketClass
 apiVersion: objectstorage.k8s.io/v1alpha1
@@ -29,7 +29,7 @@ metadata:
 driverName: {{ $.Release.Namespace }}.seaweedfs.objectstorage.k8s.io
 deletionPolicy: Retain
 parameters:
-  diskType: {{ $diskType }}
+  disk: {{ $diskType }}
   objectLockEnabled: "true"
   objectLockRetentionMode: "COMPLIANCE"
   objectLockRetentionDays: "365"
