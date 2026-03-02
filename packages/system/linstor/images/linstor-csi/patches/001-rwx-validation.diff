@@ -104,7 +104,7 @@ new file mode 100644
 index 00000000..9fe82768
 --- /dev/null
 +++ b/pkg/utils/rwx_validation.go
-@@ -0,0 +1,263 @@
+@@ -0,0 +1,298 @@
 +/*
 +CSI Driver for Linstor
 +Copyright © 2018 LINBIT USA, LLC
@@ -141,6 +141,18 @@ index 00000000..9fe82768
 +
 +// KubeVirtHotplugDiskLabel is the label that KubeVirt adds to hotplug disk pods.
 +const KubeVirtHotplugDiskLabel = "kubevirt.io"
++
++// CDIAppLabelKey is the standard Kubernetes app label key.
++const CDIAppLabelKey = "app"
++
++// CDIAppLabelValue is the value of the "app" label on CDI (Containerized Data Importer) worker pods.
++const CDIAppLabelValue = "containerized-data-importer"
++
++// CDIManagedByKey is the standard Kubernetes managed-by label key.
++const CDIManagedByKey = "app.kubernetes.io/managed-by"
++
++// CDIManagedByValue is the value of the managed-by label set by the CDI operator.
++const CDIManagedByValue = "cdi-operator"
 +
 +// PodGVR is the GroupVersionResource for pods.
 +var PodGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
@@ -218,6 +230,7 @@ index 00000000..9fe82768
 +	type podInfo struct {
 +		name   string
 +		vmName string
++		isCDI  bool
 +	}
 +
 +	var podsUsingPVC []podInfo
@@ -257,6 +270,7 @@ index 00000000..9fe82768
 +			podsUsingPVC = append(podsUsingPVC, podInfo{
 +				name:   item.GetName(),
 +				vmName: vmName,
++				isCDI:  isCDIPod(&item),
 +			})
 +
 +			break
@@ -287,9 +301,16 @@ index 00000000..9fe82768
 +		return "", nil
 +	}
 +
-+	// Check that all pods belong to the same VM
++	// Check that all non-CDI pods belong to the same VM
 +	var vmName string
 +	for _, pod := range podsUsingPVC {
++		if pod.isCDI {
++			// CDI worker pods are legitimate users of RWX block volumes
++			// for host-assisted PVC cloning. Skip VM ownership check.
++			log.WithField("pod", pod.name).Debug("skipping CDI pod in RWX validation")
++			continue
++		}
++
 +		if pod.vmName == "" {
 +			// Strict mode: if any pod doesn't have the KubeVirt label and there are multiple pods,
 +			// deny the attachment
@@ -368,12 +389,26 @@ index 00000000..9fe82768
 +
 +	return "", nil
 +}
++
++// isCDIPod checks if a pod is a CDI (Containerized Data Importer) worker pod.
++// CDI creates worker pods for host-assisted PVC cloning that mount source PVCs.
++// These pods are legitimate users of RWX block volumes and should be exempt
++// from the VM ownership validation that prevents misuse of allow-two-primaries.
++func isCDIPod(pod *unstructured.Unstructured) bool {
++	labels := pod.GetLabels()
++	if labels == nil {
++		return false
++	}
++
++	return labels[CDIAppLabelKey] == CDIAppLabelValue &&
++		labels[CDIManagedByKey] == CDIManagedByValue
++}
 diff --git a/pkg/utils/rwx_validation_test.go b/pkg/utils/rwx_validation_test.go
 new file mode 100644
 index 00000000..d75690f9
 --- /dev/null
 +++ b/pkg/utils/rwx_validation_test.go
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,401 @@
 +/*
 +CSI Driver for Linstor
 +Copyright © 2018 LINBIT USA, LLC
@@ -408,12 +443,13 @@ index 00000000..d75690f9
 +
 +func TestValidateRWXBlockAttachment(t *testing.T) {
 +	testCases := []struct {
-+		name        string
-+		pods        []*unstructured.Unstructured
-+		pvcName     string
-+		namespace   string
-+		expectError bool
-+		errorMsg    string
++		name             string
++		pods             []*unstructured.Unstructured
++		pvcName          string
++		namespace        string
++		expectError      bool
++		errorMsg         string
++		expectEmptyVMName bool
 +	}{
 +		{
 +			name:        "no pods using PVC",
@@ -515,6 +551,29 @@ index 00000000..d75690f9
 +			expectError: false,
 +		},
 +		{
++			name: "multiple CDI pods cloning same PVC (should succeed)",
++			pods: []*unstructured.Unstructured{
++				createCDIPod("cdi-clone-source-1", "default", "test-pvc", "Running"),
++				createCDIPod("cdi-clone-source-2", "default", "test-pvc", "Running"),
++				createCDIPod("cdi-clone-source-3", "default", "test-pvc", "Running"),
++				createCDIPod("cdi-clone-source-4", "default", "test-pvc", "Running"),
++			},
++			pvcName:           "test-pvc",
++			namespace:         "default",
++			expectError:       false,
++			expectEmptyVMName: true,
++		},
++		{
++			name: "CDI pod alongside VM pod (should succeed)",
++			pods: []*unstructured.Unstructured{
++				createUnstructuredPod("virt-launcher-vm1-abc", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
++				createCDIPod("cdi-clone-source-1", "default", "test-pvc", "Running"),
++			},
++			pvcName:     "test-pvc",
++			namespace:   "default",
++			expectError: false,
++		},
++		{
 +			name: "hotplug disk pod with virt-launcher (should succeed)",
 +			pods: []*unstructured.Unstructured{
 +				createUnstructuredPod("virt-launcher-vm1-abc", "default", "test-pvc", map[string]string{KubeVirtVMLabel: "vm1"}, "Running"),
@@ -575,8 +634,10 @@ index 00000000..d75690f9
 +				}
 +			} else {
 +				assert.NoError(t, err)
-+				// VM name is returned when there are pods using the volume
-+				if len(tc.pods) > 0 {
++				if tc.expectEmptyVMName {
++					assert.Empty(t, vmName)
++				} else if len(tc.pods) > 0 {
++					// VM name is returned when there are non-CDI pods using the volume
 +					assert.NotEmpty(t, vmName)
 +				}
 +			}
@@ -674,6 +735,39 @@ index 00000000..d75690f9
 +	}
 +
 +	return result
++}
++
++// createCDIPod creates a CDI worker pod for testing.
++func createCDIPod(name, namespace, pvcName, phase string) *unstructured.Unstructured {
++	pod := &unstructured.Unstructured{
++		Object: map[string]interface{}{
++			"apiVersion": "v1",
++			"kind":       "Pod",
++			"metadata": map[string]interface{}{
++				"name":      name,
++				"namespace": namespace,
++				"labels": map[string]interface{}{
++					CDIAppLabelKey:  CDIAppLabelValue,
++					CDIManagedByKey: CDIManagedByValue,
++				},
++			},
++			"spec": map[string]interface{}{
++				"volumes": []interface{}{
++					map[string]interface{}{
++						"name": "data",
++						"persistentVolumeClaim": map[string]interface{}{
++							"claimName": pvcName,
++						},
++					},
++				},
++			},
++			"status": map[string]interface{}{
++				"phase": phase,
++			},
++		},
++	}
++
++	return pod
 +}
 +
 +// createHotplugDiskPod creates a hotplug disk pod that references a virt-launcher pod via ownerReferences.
