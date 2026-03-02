@@ -1,29 +1,85 @@
 #!/bin/sh
 # Migration 34 --> 35
-# Protect keycloak HelmReleases from deletion during platform chart upgrade.
+# Protect keycloak data from destruction during v1.0 upgrade.
 #
-# In v0.41.x keycloak, keycloak-operator, and keycloak-configure HelmReleases
-# were created directly by the platform chart (helmreleases.yaml). In v1.0
-# this template was removed and keycloak is managed via Package API instead.
-# Without the keep annotation, Helm deletes these HelmReleases during upgrade,
-# which triggers FluxCD to run helm uninstall, destroying all keycloak data
-# (credentials, realm configuration, PostgreSQL database).
+# Problem:
+# In v0.41.x keycloak HelmReleases (keycloak, keycloak-operator, keycloak-configure)
+# were created via platform chart template (helmreleases.yaml) with spec.chart
+# pointing to a HelmRepository. In v1.0 the Package operator recreates these
+# HelmReleases with spec.chartRef pointing to an ExternalArtifact.
+# FluxCD sees an incompatible chart source change and runs helm uninstall,
+# destroying all keycloak resources (PVCs, PostgreSQL databases, credentials,
+# realm configuration) before doing a fresh helm install.
 #
-# The keep annotation ensures the HelmReleases survive the chart upgrade so
-# the Package operator can adopt them and FluxCD performs a helm upgrade
-# instead of a fresh install.
+# Solution:
+# Delete Helm release secrets (sh.helm.release.v1.<name>.*) BEFORE the chart
+# source change happens. Without these secrets FluxCD has no release to uninstall,
+# so it performs helm install directly. Existing resources with correct
+# meta.helm.sh/release-name annotations are adopted by the new release.
+#
+# Pattern from migration 26 (monitoring migration).
 
 set -euo pipefail
 
-echo "=== Protecting keycloak HelmReleases from deletion ==="
+NAMESPACE="cozy-keycloak"
 
-for hr_name in keycloak keycloak-operator keycloak-configure; do
-  if kubectl get helmrelease "$hr_name" -n cozy-keycloak --no-headers 2>/dev/null | grep -q .; then
-    echo "  [ANNOTATE] hr/${hr_name} in cozy-keycloak"
-    kubectl annotate helmrelease "$hr_name" -n cozy-keycloak \
-      helm.sh/resource-policy=keep --overwrite
+# Delete all helm release secrets for a given release name in a namespace.
+# Uses both label selector and name-pattern matching to ensure complete cleanup.
+delete_helm_secrets() {
+  local ns="$1"
+  local release="$2"
+
+  # Primary: delete by label selector
+  kubectl delete secrets -n "$ns" -l "name=${release},owner=helm" --ignore-not-found
+
+  # Fallback: find and delete by name pattern (in case labels were modified)
+  local remaining
+  remaining=$(kubectl get secrets -n "$ns" -o name | { grep "^secret/sh\.helm\.release\.v1\.${release}\." || true; })
+  if [ -n "$remaining" ]; then
+    echo "    Found secrets not matched by label selector, deleting by name..."
+    echo "$remaining" | while IFS= read -r secret; do
+      echo "      Deleting $secret"
+      kubectl delete -n "$ns" "$secret" --ignore-not-found
+    done
+  fi
+
+  # Verify all secrets are gone
+  remaining=$(kubectl get secrets -n "$ns" -o name | { grep "^secret/sh\.helm\.release\.v1\.${release}\." || true; })
+  if [ -n "$remaining" ]; then
+    echo "    ERROR: Failed to delete helm release secrets:"
+    echo "$remaining"
+    return 1
+  fi
+}
+
+echo "=== Protecting keycloak data from destruction during upgrade ==="
+
+# Check if namespace exists; if not, keycloak was never deployed — skip
+if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+  echo "  Namespace $NAMESPACE does not exist, keycloak not deployed — skipping"
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=35 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+
+for release in keycloak keycloak-operator keycloak-configure; do
+  # Check if HelmRelease exists (handle missing CRD gracefully)
+  out=$(kubectl get helmrelease "$release" -n "$NAMESPACE" -o name 2>&1) && found=true || found=false
+
+  if [ "$found" = "true" ]; then
+    echo "  [DELETE SECRETS] Removing helm release secrets for ${release} in ${NAMESPACE}"
+    delete_helm_secrets "$NAMESPACE" "$release"
   else
-    echo "  [SKIP] hr/${hr_name} not found in cozy-keycloak"
+    # Distinguish "not found" from real errors
+    case "$out" in
+      *"NotFound"*|*"not found"*|*"the server doesn't have a resource type"*|*"no matches for kind"*)
+        echo "  [SKIP] hr/${release} not found in ${NAMESPACE}"
+        ;;
+      *)
+        echo "  [ERROR] Failed to query hr/${release}: $out" >&2
+        exit 1
+        ;;
+    esac
   fi
 done
 

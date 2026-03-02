@@ -51,13 +51,57 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     kubectl annotate configmap -n "$NAMESPACE" cozystack-version helm.sh/resource-policy=keep --overwrite 2>/dev/null || echo "  ConfigMap cozystack-version not found, skipping."
 
     echo "Annotating namespace cozy-keycloak..."
-    kubectl annotate namespace cozy-keycloak helm.sh/resource-policy=keep --overwrite 2>/dev/null || echo "  Namespace cozy-keycloak not found, skipping."
+    if kubectl get namespace cozy-keycloak >/dev/null 2>&1; then
+        kubectl annotate namespace cozy-keycloak helm.sh/resource-policy=keep --overwrite
+    else
+        echo "  Namespace cozy-keycloak not found, skipping."
+    fi
 
     echo ""
     echo "Resources annotated successfully."
 else
     echo "WARNING: Skipping annotation. If you remove the Helm installer release,"
     echo "the namespace and its contents may be deleted!"
+fi
+echo ""
+
+# Step 0.5: Delete keycloak helm release secrets to prevent FluxCD from running helm uninstall
+# When the Package operator recreates keycloak HelmReleases with spec.chartRef
+# (replacing spec.chart), FluxCD sees an incompatible change and runs helm uninstall,
+# destroying all keycloak data. Without helm secrets, FluxCD has nothing to uninstall
+# and performs helm install instead, adopting existing resources.
+echo "Step 0.5: Protect keycloak data from destruction"
+echo ""
+echo "This will delete Helm release secrets for keycloak releases in cozy-keycloak"
+echo "namespace. Without these secrets, FluxCD cannot run helm uninstall and will"
+echo "adopt existing resources instead of recreating them."
+echo ""
+
+if kubectl get namespace cozy-keycloak >/dev/null 2>&1; then
+    read -p "Do you want to delete keycloak helm release secrets? (y/N) " -n 1 -r
+    echo ""
+
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        for release in keycloak keycloak-operator keycloak-configure; do
+            echo "  Deleting helm release secrets for ${release}..."
+            kubectl delete secrets -n cozy-keycloak -l "name=${release},owner=helm" --ignore-not-found
+            # Fallback: delete by name pattern
+            remaining=$(kubectl get secrets -n cozy-keycloak -o name | { grep "^secret/sh\.helm\.release\.v1\.${release}\." || true; })
+            if [ -n "$remaining" ]; then
+                echo "$remaining" | while IFS= read -r secret; do
+                    echo "    Deleting $secret"
+                    kubectl delete -n cozy-keycloak "$secret" --ignore-not-found
+                done
+            fi
+        done
+        echo ""
+        echo "Keycloak helm release secrets deleted."
+    else
+        echo "WARNING: Skipping. Keycloak data may be lost during upgrade if FluxCD"
+        echo "runs helm uninstall due to chart source change."
+    fi
+else
+    echo "  Namespace cozy-keycloak does not exist, keycloak not deployed — skipping."
 fi
 echo ""
 
