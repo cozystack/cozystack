@@ -1,5 +1,5 @@
 diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
-index f544493..ebaa3d7 100644
+index f544493..98e7fde 100644
 --- a/pkg/client/linstor.go
 +++ b/pkg/client/linstor.go
 @@ -181,7 +181,7 @@ func LogLevel(s string) func(*Linstor) error {
@@ -39,7 +39,7 @@ index f544493..ebaa3d7 100644
  		return err
  	}
  
-+	if params.RelocateAfterSnapshotRestore {
++	if snapParams != nil && snapParams.RelocateAfterRestore {
 +		logger.Debug("relocate resources to optimal nodes")
 +
 +		if err := s.relocateResources(ctx, vol.ID, rGroup.Name); err != nil {
@@ -162,7 +162,7 @@ index f544493..ebaa3d7 100644
 +	// Only migrate min(remove, add) pairs.
 +	pairs := min(len(nodesToRemove), len(nodesToAdd))
 +	if pairs == 0 {
-+		logger.Info("no relocation needed, placement is already optimal")
++		logger.Debug("no relocation needed, placement is already optimal")
 +		return nil
 +	}
 +
@@ -240,30 +240,27 @@ index f544493..ebaa3d7 100644
  		if res.State == nil {
  			abnormalNodes = append(abnormalNodes, res.NodeName)
 diff --git a/pkg/volume/parameter.go b/pkg/volume/parameter.go
-index 39acd95..110c597 100644
+index 39acd95..ec21572 100644
 --- a/pkg/volume/parameter.go
 +++ b/pkg/volume/parameter.go
-@@ -50,6 +50,8 @@ const (
+@@ -50,6 +50,7 @@ const (
  	nfsservicename
  	nfssquash
  	nfsrecoveryvolumesize
 +	relocateafterclone
-+	relocateaftersnapshotrestore
  )
  
  // Parameters configuration for linstor volumes.
-@@ -118,6 +120,10 @@ type Parameters struct {
+@@ -118,6 +119,8 @@ type Parameters struct {
  	// NfsRecoveryVolumeSize sets the volume size (in bytes) of the recovery volume used by the NFS server.
  	// Defaults to 300MiB.
  	NfsRecoveryVolumeBytes int64
 +	// RelocateAfterClone triggers asynchronous relocation of replicas to optimal nodes after cloning.
 +	RelocateAfterClone bool
-+	// RelocateAfterSnapshotRestore triggers asynchronous relocation of replicas to optimal nodes after snapshot restore.
-+	RelocateAfterSnapshotRestore bool
  }
  
  const DefaultDisklessStoragePoolName = "DfltDisklessStorPool"
-@@ -136,10 +142,12 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
+@@ -136,10 +139,11 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
  		Encryption:             false,
  		PlacementPolicy:        topology.AutoPlaceTopology,
  		Properties:             make(map[string]string),
@@ -275,12 +272,11 @@ index 39acd95..110c597 100644
 +		NfsServiceName:               "linstor-csi-nfs",
 +		NfsSquash:                    "no_root_squash",
 +		NfsRecoveryVolumeBytes:       300 * 1024 * 1024,
-+		RelocateAfterClone:           true,
-+		RelocateAfterSnapshotRestore: true,
++		RelocateAfterClone: false,
  	}
  
  	for k, v := range params {
-@@ -287,6 +295,20 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
+@@ -287,6 +291,13 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
  			}
  
  			p.NfsRecoveryVolumeBytes = s.Value()
@@ -291,18 +287,11 @@ index 39acd95..110c597 100644
 +			}
 +
 +			p.RelocateAfterClone = val
-+		case relocateaftersnapshotrestore:
-+			val, err := strconv.ParseBool(v)
-+			if err != nil {
-+				return p, err
-+			}
-+
-+			p.RelocateAfterSnapshotRestore = val
  		}
  	}
  
 diff --git a/pkg/volume/paramkey_enumer.go b/pkg/volume/paramkey_enumer.go
-index 5474963..1c2fc87 100644
+index 5474963..2eb8a7c 100644
 --- a/pkg/volume/paramkey_enumer.go
 +++ b/pkg/volume/paramkey_enumer.go
 @@ -7,11 +7,11 @@ import (
@@ -310,46 +299,68 @@ index 5474963..1c2fc87 100644
  )
  
 -const _paramKeyName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesize"
-+const _paramKeyName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesizerelocateafterclonerelocateaftersnapshotrestore"
++const _paramKeyName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesizerelocateafterclone"
  
 -var _paramKeyIndex = [...]uint16{0, 23, 32, 42, 61, 80, 99, 109, 115, 124, 133, 141, 155, 170, 189, 203, 210, 221, 237, 250, 260, 273, 293, 310, 324, 333, 354}
-+var _paramKeyIndex = [...]uint16{0, 23, 32, 42, 61, 80, 99, 109, 115, 124, 133, 141, 155, 170, 189, 203, 210, 221, 237, 250, 260, 273, 293, 310, 324, 333, 354, 372, 400}
++var _paramKeyIndex = [...]uint16{0, 23, 32, 42, 61, 80, 99, 109, 115, 124, 133, 141, 155, 170, 189, 203, 210, 221, 237, 250, 260, 273, 293, 310, 324, 333, 354, 372}
  
 -const _paramKeyLowerName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesize"
-+const _paramKeyLowerName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesizerelocateafterclonerelocateaftersnapshotrestore"
++const _paramKeyLowerName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesizerelocateafterclone"
  
  func (i paramKey) String() string {
  	if i < 0 || i >= paramKey(len(_paramKeyIndex)-1) {
-@@ -50,9 +50,11 @@ func _paramKeyNoOp() {
+@@ -50,9 +50,10 @@ func _paramKeyNoOp() {
  	_ = x[nfsservicename-(23)]
  	_ = x[nfssquash-(24)]
  	_ = x[nfsrecoveryvolumesize-(25)]
 +	_ = x[relocateafterclone-(26)]
-+	_ = x[relocateaftersnapshotrestore-(27)]
  }
  
 -var _paramKeyValues = []paramKey{allowremotevolumeaccess, autoplace, clientlist, disklessonremaining, disklessstoragepool, donotplacewithregex, encryption, fsopts, layerlist, mountopts, nodelist, placementcount, placementpolicy, replicasondifferent, replicasonsame, sizekib, storagepool, postmountxfsopts, resourcegroup, usepvcname, overprovision, xreplicasondifferent, nfsconfigtemplate, nfsservicename, nfssquash, nfsrecoveryvolumesize}
-+var _paramKeyValues = []paramKey{allowremotevolumeaccess, autoplace, clientlist, disklessonremaining, disklessstoragepool, donotplacewithregex, encryption, fsopts, layerlist, mountopts, nodelist, placementcount, placementpolicy, replicasondifferent, replicasonsame, sizekib, storagepool, postmountxfsopts, resourcegroup, usepvcname, overprovision, xreplicasondifferent, nfsconfigtemplate, nfsservicename, nfssquash, nfsrecoveryvolumesize, relocateafterclone, relocateaftersnapshotrestore}
++var _paramKeyValues = []paramKey{allowremotevolumeaccess, autoplace, clientlist, disklessonremaining, disklessstoragepool, donotplacewithregex, encryption, fsopts, layerlist, mountopts, nodelist, placementcount, placementpolicy, replicasondifferent, replicasonsame, sizekib, storagepool, postmountxfsopts, resourcegroup, usepvcname, overprovision, xreplicasondifferent, nfsconfigtemplate, nfsservicename, nfssquash, nfsrecoveryvolumesize, relocateafterclone}
  
  var _paramKeyNameToValueMap = map[string]paramKey{
  	_paramKeyName[0:23]:         allowremotevolumeaccess,
-@@ -107,6 +109,10 @@ var _paramKeyNameToValueMap = map[string]paramKey{
+@@ -107,6 +108,8 @@ var _paramKeyNameToValueMap = map[string]paramKey{
  	_paramKeyLowerName[324:333]: nfssquash,
  	_paramKeyName[333:354]:      nfsrecoveryvolumesize,
  	_paramKeyLowerName[333:354]: nfsrecoveryvolumesize,
 +	_paramKeyName[354:372]:      relocateafterclone,
 +	_paramKeyLowerName[354:372]: relocateafterclone,
-+	_paramKeyName[372:400]:      relocateaftersnapshotrestore,
-+	_paramKeyLowerName[372:400]: relocateaftersnapshotrestore,
  }
  
  var _paramKeyNames = []string{
-@@ -136,6 +142,8 @@ var _paramKeyNames = []string{
+@@ -136,6 +139,7 @@ var _paramKeyNames = []string{
  	_paramKeyName[310:324],
  	_paramKeyName[324:333],
  	_paramKeyName[333:354],
 +	_paramKeyName[354:372],
-+	_paramKeyName[372:400],
  }
  
  // paramKeyString retrieves an enum value from the enum constants string name.
+diff --git a/pkg/volume/snapshot_params.go b/pkg/volume/snapshot_params.go
+index d167cb8..c7a6505 100644
+--- a/pkg/volume/snapshot_params.go
++++ b/pkg/volume/snapshot_params.go
+@@ -35,6 +35,7 @@ type SnapshotParameters struct {
+ 	LinstorTargetUrl         string       `json:"linstor-target-url,omitempty"`
+ 	LinstorTargetClusterID   string       `json:"linstor-target-cluster-id,omitempty"`
+ 	LinstorTargetStoragePool string       `json:"linstor-target-storage-pool,omitempty"`
++	RelocateAfterRestore     bool         `json:"relocate-after-restore,omitempty"`
+ }
+ 
+ func NewSnapshotParameters(params, secrets map[string]string) (*SnapshotParameters, error) {
+@@ -91,6 +92,13 @@ func NewSnapshotParameters(params, secrets map[string]string) (*SnapshotParamete
+ 			p.LinstorTargetClusterID = v
+ 		case "/linstor-target-storage-pool":
+ 			p.LinstorTargetStoragePool = v
++		case "/relocate-after-restore":
++			b, err := strconv.ParseBool(v)
++			if err != nil {
++				return nil, err
++			}
++
++			p.RelocateAfterRestore = b
+ 		default:
+ 			log.WithField("key", k).Warn("ignoring unknown snapshot parameter key")
+ 		}
