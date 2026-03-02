@@ -66,7 +66,7 @@ releases:
   dependsOn: [cilium,kubeovn]
 
 - name: cozy-proxy
-  releaseName: cozystack
+  releaseName: cozy-proxy
   chart: cozy-cozy-proxy
   namespace: cozy-system
   dependsOn: [cilium,kubeovn,multus]
