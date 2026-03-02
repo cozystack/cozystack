@@ -39,6 +39,7 @@ echo "The following resources will be annotated with helm.sh/resource-policy=kee
 echo "to prevent Helm from deleting them when the installer release is removed:"
 echo "  - Namespace: $NAMESPACE"
 echo "  - ConfigMap: $NAMESPACE/cozystack-version"
+echo "  - Namespace: cozy-keycloak"
 echo ""
 read -p "Do you want to annotate these resources? (y/N) " -n 1 -r
 echo ""
@@ -48,6 +49,10 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     kubectl annotate namespace "$NAMESPACE" helm.sh/resource-policy=keep --overwrite
     echo "Annotating ConfigMap cozystack-version..."
     kubectl annotate configmap -n "$NAMESPACE" cozystack-version helm.sh/resource-policy=keep --overwrite 2>/dev/null || echo "  ConfigMap cozystack-version not found, skipping."
+
+    echo "Annotating namespace cozy-keycloak..."
+    kubectl annotate namespace cozy-keycloak helm.sh/resource-policy=keep --overwrite 2>/dev/null || echo "  Namespace cozy-keycloak not found, skipping."
+
     echo ""
     echo "Resources annotated successfully."
 else
