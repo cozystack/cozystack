@@ -82,8 +82,10 @@ spec:
               value: "ispn"
             - name: KC_CACHE_STACK
               value: "kubernetes"
-            - name: KC_PROXY
-              value: "edge"
+            - name: KC_PROXY_HEADERS
+              value: "xforwarded"
+            - name: KC_HTTP_ENABLED
+              value: "true"
             - name: KEYCLOAK_ADMIN
               value: admin
             - name: KEYCLOAK_ADMIN_PASSWORD
