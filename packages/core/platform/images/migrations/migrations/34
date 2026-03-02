@@ -1,0 +1,34 @@
+#!/bin/sh
+# Migration 34 --> 35
+# Protect keycloak HelmReleases from deletion during platform chart upgrade.
+#
+# In v0.41.x keycloak, keycloak-operator, and keycloak-configure HelmReleases
+# were created directly by the platform chart (helmreleases.yaml). In v1.0
+# this template was removed and keycloak is managed via Package API instead.
+# Without the keep annotation, Helm deletes these HelmReleases during upgrade,
+# which triggers FluxCD to run helm uninstall, destroying all keycloak data
+# (credentials, realm configuration, PostgreSQL database).
+#
+# The keep annotation ensures the HelmReleases survive the chart upgrade so
+# the Package operator can adopt them and FluxCD performs a helm upgrade
+# instead of a fresh install.
+
+set -euo pipefail
+
+echo "=== Protecting keycloak HelmReleases from deletion ==="
+
+for hr_name in keycloak keycloak-operator keycloak-configure; do
+  if kubectl get helmrelease "$hr_name" -n cozy-keycloak --no-headers 2>/dev/null | grep -q .; then
+    echo "  [ANNOTATE] hr/${hr_name} in cozy-keycloak"
+    kubectl annotate helmrelease "$hr_name" -n cozy-keycloak \
+      helm.sh/resource-policy=keep --overwrite
+  else
+    echo "  [SKIP] hr/${hr_name} not found in cozy-keycloak"
+  fi
+done
+
+echo "=== Done ==="
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=35 --dry-run=client -o yaml | kubectl apply -f-
