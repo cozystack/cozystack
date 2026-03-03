@@ -40,6 +40,17 @@ spec:
       restartPolicy: Always
       securityContext:
         fsGroup: 1000
+      {{- if .Values.themes }}
+      initContainers:
+        {{- range .Values.themes }}
+        - name: theme-{{ .name }}
+          image: {{ .image }}
+          command: ["sh", "-c", "cp -r /themes/* /opt/keycloak/themes/"]
+          volumeMounts:
+            - name: themes
+              mountPath: /opt/keycloak/themes
+        {{- end }}
+      {{- end }}
       containers:
         - name: keycloak
           image: {{ .Values.image }}
@@ -123,6 +134,11 @@ spec:
               value: https://keycloak.{{ $host }}
             - name: JAVA_OPTS_APPEND
               value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
+          {{- if .Values.themes }}
+          volumeMounts:
+            - name: themes
+              mountPath: /opt/keycloak/themes
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -139,4 +155,9 @@ spec:
               port: http
             initialDelaySeconds: 60
             timeoutSeconds: 1
+      {{- if .Values.themes }}
+      volumes:
+        - name: themes
+          emptyDir: {}
+      {{- end }}
       terminationGracePeriodSeconds: 60
