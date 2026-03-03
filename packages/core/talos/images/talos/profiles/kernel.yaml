@@ -4,6 +4,7 @@ arch: amd64
 platform: metal
 secureboot: false
 version: v1.12.1
+
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz

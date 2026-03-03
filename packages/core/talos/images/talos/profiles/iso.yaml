@@ -4,6 +4,11 @@ arch: amd64
 platform: metal
 secureboot: false
 version: v1.12.1
+customization:
+  extraKernelArgs:
+    - cpufreq.default_governor=performance
+    - amd_pstate=active
+    - intel_idle.max_cstate=0
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
