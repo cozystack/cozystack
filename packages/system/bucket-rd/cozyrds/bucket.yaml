@@ -32,7 +32,6 @@ spec:
     include:
       - resourceNames:
           - bucket-{{ .name }}-credentials
-      - {}
   ingresses:
     exclude: []
     include:
