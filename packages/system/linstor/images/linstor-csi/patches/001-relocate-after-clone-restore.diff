@@ -240,7 +240,7 @@ index f544493..98e7fde 100644
  		if res.State == nil {
  			abnormalNodes = append(abnormalNodes, res.NodeName)
 diff --git a/pkg/volume/parameter.go b/pkg/volume/parameter.go
-index 39acd95..ec21572 100644
+index 39acd95..aed18ab 100644
 --- a/pkg/volume/parameter.go
 +++ b/pkg/volume/parameter.go
 @@ -50,6 +50,7 @@ const (
@@ -260,19 +260,11 @@ index 39acd95..ec21572 100644
  }
  
  const DefaultDisklessStoragePoolName = "DfltDisklessStorPool"
-@@ -136,10 +139,11 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
- 		Encryption:             false,
- 		PlacementPolicy:        topology.AutoPlaceTopology,
- 		Properties:             make(map[string]string),
--		NfsConfigTemplatePath:  "/etc/nfs-helper/default-config.tmpl",
--		NfsServiceName:         "linstor-csi-nfs",
--		NfsSquash:              "no_root_squash",
--		NfsRecoveryVolumeBytes: 300 * 1024 * 1024,
-+		NfsConfigTemplatePath:        "/etc/nfs-helper/default-config.tmpl",
-+		NfsServiceName:               "linstor-csi-nfs",
-+		NfsSquash:                    "no_root_squash",
-+		NfsRecoveryVolumeBytes:       300 * 1024 * 1024,
-+		RelocateAfterClone: false,
+@@ -140,6 +143,7 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
+ 		NfsServiceName:         "linstor-csi-nfs",
+ 		NfsSquash:              "no_root_squash",
+ 		NfsRecoveryVolumeBytes: 300 * 1024 * 1024,
++		RelocateAfterClone:     false,
  	}
  
  	for k, v := range params {
