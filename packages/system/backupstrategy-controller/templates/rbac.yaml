@@ -3,9 +3,34 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: backups.cozystack.io:strategy-controller
 rules:
+# Strategy types (Velero, Job)
 - apiGroups: ["strategy.backups.cozystack.io"]
   resources: ["*"]
   verbs: ["get", "list", "watch"]
+# BackupClass: resolve strategy per application
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["backupclasses"]
+  verbs: ["get", "list", "watch"]
+# BackupJob / RestoreJob: reconcile and update status
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupjobs", "restorejobs"]
   verbs: ["get", "list", "watch"]
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["backupjobs/status", "restorejobs/status"]
+  verbs: ["get", "update", "patch"]
+# Backup: create after Velero backup completes
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["backups"]
+  verbs: ["create", "get", "list", "watch"]
+# Application refs (e.g. VMInstance, VirtualMachine) for backup/restore scope
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch"]
+# Velero Backup/Restore in cozy-velero namespace
+- apiGroups: ["velero.io"]
+  resources: ["backups", "restores"]
+  verbs: ["create", "get", "list", "watch", "update", "patch"]
+# Leader election (--leader-elect)
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
