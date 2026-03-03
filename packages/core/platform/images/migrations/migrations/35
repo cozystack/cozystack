@@ -1,0 +1,223 @@
+#!/bin/bash
+# Migration 35 --> 36
+# Remove deprecated 'storageClass' parameter from Kubernetes app instances.
+# StorageClasses are now auto-discovered from the infrastructure cluster.
+# Idempotent: skips if storageClass key is already absent.
+
+set -euo pipefail
+
+# ============================================================
+# STEP 1: Discover all Kubernetes HelmReleases
+# ============================================================
+echo "=== Discovering Kubernetes HelmReleases ==="
+INSTANCES=()
+while IFS=/ read -r ns name; do
+  [ -z "$ns" ] && continue
+  INSTANCES+=("${ns}/${name}")
+  echo "  Found: ${ns}/${name}"
+done < <(kubectl get hr -A -l "apps.cozystack.io/application.kind=Kubernetes" \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+if [ ${#INSTANCES[@]} -eq 0 ]; then
+  echo "  No Kubernetes HelmReleases found. Nothing to migrate."
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=36 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+echo "  Total: ${#INSTANCES[@]} instance(s)"
+
+# ============================================================
+# STEP 2: Migrate each instance
+# ============================================================
+for entry in "${INSTANCES[@]}"; do
+  NAMESPACE="${entry%%/*}"
+  HR_NAME="${entry#*/}"
+
+  echo ""
+  echo "======================================================================"
+  echo "=== Processing: ${HR_NAME} in ${NAMESPACE}"
+  echo "======================================================================"
+
+  # --- Find values Secret ---
+  VALUES_SECRET=$(kubectl -n "$NAMESPACE" get hr "$HR_NAME" -o json | \
+    jq -r '.spec.valuesFrom // [] | map(select(.kind == "Secret" and (.name | test("cozystack-values") | not))) | .[0].name // ""')
+  VALUES_KEY=$(kubectl -n "$NAMESPACE" get hr "$HR_NAME" -o json | \
+    jq -r '.spec.valuesFrom // [] | map(select(.kind == "Secret" and (.name | test("cozystack-values") | not))) | .[0].valuesKey // "values.yaml"')
+
+  if [ -z "$VALUES_SECRET" ]; then
+    echo "  [SKIP] No values Secret found for hr/${HR_NAME}"
+    continue
+  fi
+
+  if ! kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" --no-headers 2>/dev/null | grep -q .; then
+    echo "  [SKIP] Secret ${VALUES_SECRET} not found"
+    continue
+  fi
+
+  echo "  Reading values from secret: ${VALUES_SECRET} (key: ${VALUES_KEY})"
+
+  # --- Decode current values ---
+  VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" \
+    -o jsonpath="{.data.${VALUES_KEY}}" 2>/dev/null | base64 -d 2>/dev/null || true)
+  if [ -z "$VALUES_YAML" ]; then
+    VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" \
+      -o jsonpath="{.stringData.${VALUES_KEY}}" 2>/dev/null || true)
+  fi
+
+  if [ -z "$VALUES_YAML" ]; then
+    echo "  [SKIP] Could not read values from secret"
+    continue
+  fi
+
+  # --- Check if storageClass key exists ---
+  STORAGE_CLASS=$(echo "$VALUES_YAML" | yq -r '.storageClass // ""')
+
+  if [ -z "$STORAGE_CLASS" ]; then
+    echo "  [SKIP] storageClass key is already absent or empty"
+    continue
+  fi
+
+  echo "  [REMOVE] storageClass='${STORAGE_CLASS}', removing key"
+
+  # --- Remove storageClass key ---
+  NEW_VALUES=$(echo "$VALUES_YAML" | yq 'del(.storageClass)')
+
+  # --- Patch the Secret ---
+  NEW_VALUES_B64=$(echo "$NEW_VALUES" | base64)
+  echo "  [PATCH] Updating secret/${VALUES_SECRET}"
+  kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o json | \
+    jq --arg key "$VALUES_KEY" --arg val "$NEW_VALUES_B64" \
+      '.data[$key] = $val' | \
+    kubectl apply -f -
+
+  echo "  [OK] Removed storageClass for ${HR_NAME}"
+done
+
+# ============================================================
+# STEP 3: PVC rebinding in tenant clusters
+# Migrate PVCs with storageClassName=kubevirt to the new
+# auto-discovered StorageClass name.
+# ============================================================
+echo ""
+echo "=== STEP 3: Migrating PVCs inside tenant clusters ==="
+
+for entry in "${INSTANCES[@]}"; do
+  NAMESPACE="${entry%%/*}"
+  HR_NAME="${entry#*/}"
+
+  echo ""
+  echo "--- Tenant PVC migration: ${HR_NAME} in ${NAMESPACE} ---"
+
+  # 3a. Extract tenant kubeconfig
+  KUBECONFIG_SECRET="${HR_NAME}-admin-kubeconfig"
+  if ! kubectl -n "$NAMESPACE" get secret "$KUBECONFIG_SECRET" --no-headers 2>/dev/null | grep -q .; then
+    echo "  [SKIP] Kubeconfig secret ${KUBECONFIG_SECRET} not found"
+    continue
+  fi
+
+  TENANT_KUBECONFIG=$(mktemp)
+  kubectl -n "$NAMESPACE" get secret "$KUBECONFIG_SECRET" \
+    -o 'jsonpath={.data.super-admin\.svc}' | base64 -d > "$TENANT_KUBECONFIG"
+
+  # Verify connectivity
+  if ! kubectl --kubeconfig="$TENANT_KUBECONFIG" get ns >/dev/null 2>&1; then
+    echo "  [SKIP] Cannot reach tenant cluster ${HR_NAME}"
+    rm -f "$TENANT_KUBECONFIG"
+    continue
+  fi
+
+  # 3b. List all PVCs with storageClassName=kubevirt
+  PVCS=$(kubectl --kubeconfig="$TENANT_KUBECONFIG" get pvc -A \
+    -o jsonpath='{range .items[?(@.spec.storageClassName=="kubevirt")]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+
+  if [ -z "$PVCS" ]; then
+    echo "  [SKIP] No PVCs with storageClassName=kubevirt found"
+    rm -f "$TENANT_KUBECONFIG"
+    continue
+  fi
+
+  # 3c-3d. Rebind each PVC
+  while IFS= read -r pvc_entry; do
+    [ -z "$pvc_entry" ] && continue
+    PVC_NS="${pvc_entry%%/*}"
+    PVC_NAME="${pvc_entry#*/}"
+
+    echo "  Processing PVC ${PVC_NS}/${PVC_NAME}..."
+
+    # Get the bound PV name
+    PV_NAME=$(kubectl --kubeconfig="$TENANT_KUBECONFIG" -n "$PVC_NS" get pvc "$PVC_NAME" \
+      -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
+
+    if [ -z "$PV_NAME" ]; then
+      echo "  [WARN] PVC ${PVC_NS}/${PVC_NAME} has no bound PV, skipping"
+      continue
+    fi
+
+    # Determine the new StorageClass name from PV's CSI volume attributes
+    NEW_SC=$(kubectl --kubeconfig="$TENANT_KUBECONFIG" get pv "$PV_NAME" \
+      -o jsonpath='{.spec.csi.volumeAttributes.infraStorageClassName}' 2>/dev/null || true)
+
+    # Fallback to tenant's default StorageClass
+    if [ -z "$NEW_SC" ]; then
+      NEW_SC=$(kubectl --kubeconfig="$TENANT_KUBECONFIG" get sc \
+        -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{end}' 2>/dev/null || true)
+    fi
+
+    if [ -z "$NEW_SC" ]; then
+      echo "  [WARN] Cannot determine new StorageClass for PVC ${PVC_NS}/${PVC_NAME}, skipping"
+      continue
+    fi
+
+    echo "  Rebinding PVC ${PVC_NS}/${PVC_NAME}: kubevirt → ${NEW_SC} (PV: ${PV_NAME})"
+
+    # 1. Save the PVC spec
+    PVC_JSON=$(kubectl --kubeconfig="$TENANT_KUBECONFIG" -n "$PVC_NS" get pvc "$PVC_NAME" -o json)
+
+    # 2. Protect the PV with Retain policy
+    OLD_RECLAIM=$(kubectl --kubeconfig="$TENANT_KUBECONFIG" get pv "$PV_NAME" \
+      -o jsonpath='{.spec.persistentVolumeReclaimPolicy}')
+    kubectl --kubeconfig="$TENANT_KUBECONFIG" patch pv "$PV_NAME" \
+      -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+
+    # 3. Delete the PVC
+    kubectl --kubeconfig="$TENANT_KUBECONFIG" -n "$PVC_NS" delete pvc "$PVC_NAME" --wait=false
+    kubectl --kubeconfig="$TENANT_KUBECONFIG" -n "$PVC_NS" wait --for=delete pvc/"$PVC_NAME" --timeout=60s 2>/dev/null || true
+
+    # 4. Patch the PV: update storageClassName and release claimRef
+    kubectl --kubeconfig="$TENANT_KUBECONFIG" patch pv "$PV_NAME" --type=json \
+      -p "[{\"op\":\"replace\",\"path\":\"/spec/storageClassName\",\"value\":\"${NEW_SC}\"},
+           {\"op\":\"remove\",\"path\":\"/spec/claimRef/uid\"},
+           {\"op\":\"remove\",\"path\":\"/spec/claimRef/resourceVersion\"}]"
+
+    # 5. Recreate PVC with new storageClassName
+    echo "$PVC_JSON" | jq --arg sc "$NEW_SC" '
+      .spec.storageClassName = $sc |
+      del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp,
+          .metadata.annotations["pv.kubernetes.io/bind-completed"],
+          .metadata.annotations["pv.kubernetes.io/bound-by-controller"],
+          .status)
+    ' | kubectl --kubeconfig="$TENANT_KUBECONFIG" apply -f -
+
+    # 6. Wait for PVC to rebind
+    if kubectl --kubeconfig="$TENANT_KUBECONFIG" -n "$PVC_NS" wait --for=jsonpath='{.status.phase}'=Bound \
+      pvc/"$PVC_NAME" --timeout=60s 2>/dev/null; then
+      # 7. Restore original reclaim policy
+      kubectl --kubeconfig="$TENANT_KUBECONFIG" patch pv "$PV_NAME" \
+        -p "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"${OLD_RECLAIM}\"}}"
+      echo "  [OK] Migrated PVC ${PVC_NS}/${PVC_NAME}: kubevirt → ${NEW_SC}"
+    else
+      echo "  [WARN] PVC ${PVC_NS}/${PVC_NAME} did not reach Bound state within timeout."
+      echo "         PV ${PV_NAME} is protected with Retain policy. Manual intervention may be needed."
+    fi
+
+  done <<< "$PVCS"
+
+  rm -f "$TENANT_KUBECONFIG"
+done
+
+echo ""
+echo "=== Migration complete (${#INSTANCES[@]} instance(s)) ==="
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=36 --dry-run=client -o yaml | kubectl apply -f-

@@ -82,13 +82,6 @@ See the reference for components utilized in this service:
 
 ## Parameters
 
-### Common Parameters
-
-| Name           | Description                          | Type     | Value        |
-| -------------- | ------------------------------------ | -------- | ------------ |
-| `storageClass` | StorageClass used to store the data. | `string` | `replicated` |
-
-
 ### Application-specific Parameters
 
 | Name                                | Description                                                                                    | Type                | Value       |
