@@ -32,6 +32,8 @@ spec:
     include:
       - resourceNames:
           - bucket-{{ .name }}-credentials
+      - matchLabels:
+          apps.cozystack.io/user-secret: "true"
   ingresses:
     exclude: []
     include:
