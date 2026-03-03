@@ -6,3 +6,14 @@ metadata:
  name: linstor-snapshots
 driver: linstor.csi.linbit.com
 deletionPolicy: Delete
+parameters:
+  snap.linstor.csi.linbit.com/relocateAfterRestore: "true"
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+ annotations:
+   velero.io/csi-volumesnapshot-class: "true"
+ name: linstor-snapshots-ephemeral
+driver: linstor.csi.linbit.com
+deletionPolicy: Delete

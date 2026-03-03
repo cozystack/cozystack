@@ -1,0 +1,358 @@
+diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
+index f544493..98e7fde 100644
+--- a/pkg/client/linstor.go
++++ b/pkg/client/linstor.go
+@@ -181,7 +181,7 @@ func LogLevel(s string) func(*Linstor) error {
+ func (s *Linstor) ListAllWithStatus(ctx context.Context) ([]volume.VolumeStatus, error) {
+ 	var vols []volume.VolumeStatus
+ 
+-	resourcesByName := make(map[string][]lapi.Resource)
++	resourcesByName := make(map[string][]lapi.ResourceWithVolumes)
+ 
+ 	resDefs, err := s.client.ResourceDefinitions.GetAll(ctx, lapi.RDGetAllRequest{WithVolumeDefinitions: true})
+ 	if err != nil {
+@@ -194,7 +194,7 @@ func (s *Linstor) ListAllWithStatus(ctx context.Context) ([]volume.VolumeStatus,
+ 	}
+ 
+ 	for i := range allResources {
+-		resourcesByName[allResources[i].Name] = append(resourcesByName[allResources[i].Name], allResources[i].Resource)
++		resourcesByName[allResources[i].Name] = append(resourcesByName[allResources[i].Name], allResources[i])
+ 	}
+ 
+ 	for _, rd := range resDefs {
+@@ -462,6 +462,14 @@ func (s *Linstor) Clone(ctx context.Context, vol, src *volume.Info, params *volu
+ 		return err
+ 	}
+ 
++	if params.RelocateAfterClone {
++		logger.Debug("relocate resources to optimal nodes")
++
++		if err := s.relocateResources(ctx, vol.ID, rGroup.Name); err != nil {
++			logger.WithError(err).Warn("resource relocation failed, volume is still usable")
++		}
++	}
++
+ 	logger.Debug("reconcile extra properties")
+ 
+ 	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
+@@ -1280,6 +1288,14 @@ func (s *Linstor) VolFromSnap(ctx context.Context, snap *volume.Snapshot, vol *v
+ 		return err
+ 	}
+ 
++	if snapParams != nil && snapParams.RelocateAfterRestore {
++		logger.Debug("relocate resources to optimal nodes")
++
++		if err := s.relocateResources(ctx, vol.ID, rGroup.Name); err != nil {
++			logger.WithError(err).Warn("resource relocation failed, volume is still usable")
++		}
++	}
++
+ 	logger.Debug("reconcile extra properties")
+ 
+ 	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
+@@ -1470,9 +1486,8 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+ 		return fmt.Errorf("snapshot '%s' not deployed on any node", snap.Name)
+ 	}
+ 
+-	// Optimize the node we use to restore. It should be one of the preferred nodes, or just the first with a snapshot
+-	// if no preferred nodes match.
+-	var selectedNode string
++	// Collect available snapshot nodes, preferring those matching the topology hints.
++	var preferred, available []string
+ 	for _, snapNode := range snap.Nodes {
+ 		if err := s.NodeAvailable(ctx, snapNode); err != nil {
+ 			logger.WithField("selected node candidate", snapNode).WithError(err).Debug("node is not available")
+@@ -1480,13 +1495,23 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+ 		}
+ 
+ 		if slices.Contains(preferredNodes, snapNode) {
+-			// We found a perfect candidate.
+-			selectedNode = snapNode
+-			break
+-		} else if selectedNode == "" {
+-			// Set a fallback if we have no candidate yet.
+-			selectedNode = snapNode
++			preferred = append(preferred, snapNode)
+ 		}
++
++		available = append(available, snapNode)
++	}
++
++	// Pick a random node from preferred candidates, falling back to any available node.
++	// Randomization distributes restore load across snapshot nodes, preventing all
++	// clones of the same source from concentrating on a single node.
++	candidates := preferred
++	if len(candidates) == 0 {
++		candidates = available
++	}
++
++	var selectedNode string
++	if len(candidates) > 0 {
++		selectedNode = candidates[rand.Intn(len(candidates))]
+ 	}
+ 
+ 	if selectedNode == "" {
+@@ -1679,6 +1704,114 @@ func (s *Linstor) reconcileResourcePlacement(ctx context.Context, vol *volume.In
+ 	return nil
+ }
+ 
++const propertyRelocationTriggered = "Aux/csi-relocation-triggered"
++
++// relocateResources migrates replicas from their current nodes to the nodes that
++// LINSTOR's autoplacer considers optimal. This is a best-effort, fire-and-forget
++// operation: migrate-disk API is asynchronous and the volume remains usable on its
++// current nodes even if relocation fails.
++func (s *Linstor) relocateResources(ctx context.Context, volID, rgName string) error {
++	logger := s.log.WithFields(logrus.Fields{
++		"volume":        volID,
++		"resourceGroup": rgName,
++	})
++
++	// Check if relocation was already triggered (idempotency guard).
++	rd, err := s.client.ResourceDefinitions.Get(ctx, volID)
++	if err != nil {
++		return fmt.Errorf("failed to get resource definition: %w", err)
++	}
++
++	if rd.Props[propertyRelocationTriggered] != "" {
++		logger.Debug("relocation already triggered, skipping")
++		return nil
++	}
++
++	// Get current diskful nodes.
++	resources, err := s.client.Resources.GetAll(ctx, volID)
++	if err != nil {
++		return fmt.Errorf("failed to list resources: %w", err)
++	}
++
++	currentNodes := util.DeployedDiskfullyNodes(resources)
++
++	// Query optimal placement from LINSTOR autoplacer.
++	sizeInfo, err := s.client.ResourceGroups.QuerySizeInfo(ctx, rgName, lapi.QuerySizeInfoRequest{})
++	if err != nil {
++		return fmt.Errorf("failed to query size info: %w", err)
++	}
++
++	if sizeInfo.SpaceInfo == nil || len(sizeInfo.SpaceInfo.NextSpawnResult) == 0 {
++		logger.Debug("no spawn result from query-size-info, skipping relocation")
++		return nil
++	}
++
++	// Build a map of optimal node -> storage pool.
++	optimalPools := make(map[string]string, len(sizeInfo.SpaceInfo.NextSpawnResult))
++	for _, r := range sizeInfo.SpaceInfo.NextSpawnResult {
++		optimalPools[r.NodeName] = r.StorPoolName
++	}
++
++	// Compute nodes to remove (current but not optimal) and nodes to add (optimal but not current).
++	var nodesToRemove, nodesToAdd []string
++
++	for _, node := range currentNodes {
++		if _, ok := optimalPools[node]; !ok {
++			nodesToRemove = append(nodesToRemove, node)
++		}
++	}
++
++	for _, r := range sizeInfo.SpaceInfo.NextSpawnResult {
++		if !slices.Contains(currentNodes, r.NodeName) {
++			nodesToAdd = append(nodesToAdd, r.NodeName)
++		}
++	}
++
++	// Only migrate min(remove, add) pairs.
++	pairs := min(len(nodesToRemove), len(nodesToAdd))
++	if pairs == 0 {
++		logger.Debug("no relocation needed, placement is already optimal")
++		return nil
++	}
++
++	logger.Infof("relocating %d replica(s): %v -> %v", pairs, nodesToRemove[:pairs], nodesToAdd[:pairs])
++
++	// Mark relocation as triggered before starting migrations.
++	err = s.client.ResourceDefinitions.Modify(ctx, volID, lapi.GenericPropsModify{
++		OverrideProps: map[string]string{propertyRelocationTriggered: "true"},
++	})
++	if err != nil {
++		return fmt.Errorf("failed to set relocation property: %w", err)
++	}
++
++	// Migrate each pair sequentially (LINSTOR serializes at the RD level anyway).
++	for i := range pairs {
++		fromNode := nodesToRemove[i]
++		toNode := nodesToAdd[i]
++		storPool := optimalPools[toNode]
++
++		logger := logger.WithFields(logrus.Fields{"from": fromNode, "to": toNode, "storagePool": storPool})
++
++		logger.Info("creating diskless resource on target node")
++
++		err := s.client.Resources.MakeAvailable(ctx, volID, toNode, lapi.ResourceMakeAvailable{})
++		if err != nil {
++			logger.WithError(err).Warn("failed to create diskless on target, skipping this pair")
++			continue
++		}
++
++		logger.Info("initiating migrate-disk")
++
++		err = s.client.Resources.Migrate(ctx, volID, fromNode, toNode, storPool)
++		if err != nil {
++			logger.WithError(err).Warn("migrate-disk failed, skipping this pair")
++			continue
++		}
++	}
++
++	return nil
++}
++
+ // FindSnapsByID searches the snapshot in the backend
+ func (s *Linstor) FindSnapsByID(ctx context.Context, id string) ([]*volume.Snapshot, error) {
+ 	snapshotId, err := volume.ParseSnapshotId(id)
+@@ -2173,7 +2306,7 @@ func (s *Linstor) Status(ctx context.Context, volId string) ([]string, *csi.Volu
+ 		"volume": volId,
+ 	}).Debug("getting assignments")
+ 
+-	ress, err := s.client.Resources.GetAll(ctx, volId)
++	ress, err := s.client.Resources.GetResourceView(ctx, &lapi.ListOpts{Resource: []string{volId}})
+ 	if err != nil {
+ 		return nil, nil, fmt.Errorf("failed to list resources for '%s': %w", volId, err)
+ 	}
+@@ -2261,13 +2394,20 @@ func GetSnapshotRemoteAndReadiness(snap *lapi.Snapshot) (string, bool, error) {
+ 	return "", slices.Contains(snap.Flags, lapiconsts.FlagSuccessful), nil
+ }
+ 
+-func NodesAndConditionFromResources(ress []lapi.Resource) ([]string, *csi.VolumeCondition) {
++func NodesAndConditionFromResources(ress []lapi.ResourceWithVolumes) ([]string, *csi.VolumeCondition) {
+ 	var allNodes, abnormalNodes []string
+ 
+ 	for i := range ress {
+ 		res := &ress[i]
+ 
+-		allNodes = append(allNodes, res.NodeName)
++		// A resource is a CSI publish target if any of its volumes were created
++		// by ControllerPublishVolume, identified by the temporary-diskless-attach property.
++		if slices.ContainsFunc(res.Volumes, func(v lapi.Volume) bool {
++			createdFor, ok := v.Props[linstor.PropertyCreatedFor]
++			return ok && createdFor == linstor.CreatedForTemporaryDisklessAttach
++		}) {
++			allNodes = append(allNodes, res.NodeName)
++		}
+ 
+ 		if res.State == nil {
+ 			abnormalNodes = append(abnormalNodes, res.NodeName)
+diff --git a/pkg/volume/parameter.go b/pkg/volume/parameter.go
+index 39acd95..aed18ab 100644
+--- a/pkg/volume/parameter.go
++++ b/pkg/volume/parameter.go
+@@ -50,6 +50,7 @@ const (
+ 	nfsservicename
+ 	nfssquash
+ 	nfsrecoveryvolumesize
++	relocateafterclone
+ )
+ 
+ // Parameters configuration for linstor volumes.
+@@ -118,6 +119,8 @@ type Parameters struct {
+ 	// NfsRecoveryVolumeSize sets the volume size (in bytes) of the recovery volume used by the NFS server.
+ 	// Defaults to 300MiB.
+ 	NfsRecoveryVolumeBytes int64
++	// RelocateAfterClone triggers asynchronous relocation of replicas to optimal nodes after cloning.
++	RelocateAfterClone bool
+ }
+ 
+ const DefaultDisklessStoragePoolName = "DfltDisklessStorPool"
+@@ -140,6 +143,7 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
+ 		NfsServiceName:         "linstor-csi-nfs",
+ 		NfsSquash:              "no_root_squash",
+ 		NfsRecoveryVolumeBytes: 300 * 1024 * 1024,
++		RelocateAfterClone:     false,
+ 	}
+ 
+ 	for k, v := range params {
+@@ -287,6 +291,13 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
+ 			}
+ 
+ 			p.NfsRecoveryVolumeBytes = s.Value()
++		case relocateafterclone:
++			val, err := strconv.ParseBool(v)
++			if err != nil {
++				return p, err
++			}
++
++			p.RelocateAfterClone = val
+ 		}
+ 	}
+ 
+diff --git a/pkg/volume/paramkey_enumer.go b/pkg/volume/paramkey_enumer.go
+index 5474963..2eb8a7c 100644
+--- a/pkg/volume/paramkey_enumer.go
++++ b/pkg/volume/paramkey_enumer.go
+@@ -7,11 +7,11 @@ import (
+ 	"strings"
+ )
+ 
+-const _paramKeyName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesize"
++const _paramKeyName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesizerelocateafterclone"
+ 
+-var _paramKeyIndex = [...]uint16{0, 23, 32, 42, 61, 80, 99, 109, 115, 124, 133, 141, 155, 170, 189, 203, 210, 221, 237, 250, 260, 273, 293, 310, 324, 333, 354}
++var _paramKeyIndex = [...]uint16{0, 23, 32, 42, 61, 80, 99, 109, 115, 124, 133, 141, 155, 170, 189, 203, 210, 221, 237, 250, 260, 273, 293, 310, 324, 333, 354, 372}
+ 
+-const _paramKeyLowerName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesize"
++const _paramKeyLowerName = "allowremotevolumeaccessautoplaceclientlistdisklessonremainingdisklessstoragepooldonotplacewithregexencryptionfsoptslayerlistmountoptsnodelistplacementcountplacementpolicyreplicasondifferentreplicasonsamesizekibstoragepoolpostmountxfsoptsresourcegroupusepvcnameoverprovisionxreplicasondifferentnfsconfigtemplatenfsservicenamenfssquashnfsrecoveryvolumesizerelocateafterclone"
+ 
+ func (i paramKey) String() string {
+ 	if i < 0 || i >= paramKey(len(_paramKeyIndex)-1) {
+@@ -50,9 +50,10 @@ func _paramKeyNoOp() {
+ 	_ = x[nfsservicename-(23)]
+ 	_ = x[nfssquash-(24)]
+ 	_ = x[nfsrecoveryvolumesize-(25)]
++	_ = x[relocateafterclone-(26)]
+ }
+ 
+-var _paramKeyValues = []paramKey{allowremotevolumeaccess, autoplace, clientlist, disklessonremaining, disklessstoragepool, donotplacewithregex, encryption, fsopts, layerlist, mountopts, nodelist, placementcount, placementpolicy, replicasondifferent, replicasonsame, sizekib, storagepool, postmountxfsopts, resourcegroup, usepvcname, overprovision, xreplicasondifferent, nfsconfigtemplate, nfsservicename, nfssquash, nfsrecoveryvolumesize}
++var _paramKeyValues = []paramKey{allowremotevolumeaccess, autoplace, clientlist, disklessonremaining, disklessstoragepool, donotplacewithregex, encryption, fsopts, layerlist, mountopts, nodelist, placementcount, placementpolicy, replicasondifferent, replicasonsame, sizekib, storagepool, postmountxfsopts, resourcegroup, usepvcname, overprovision, xreplicasondifferent, nfsconfigtemplate, nfsservicename, nfssquash, nfsrecoveryvolumesize, relocateafterclone}
+ 
+ var _paramKeyNameToValueMap = map[string]paramKey{
+ 	_paramKeyName[0:23]:         allowremotevolumeaccess,
+@@ -107,6 +108,8 @@ var _paramKeyNameToValueMap = map[string]paramKey{
+ 	_paramKeyLowerName[324:333]: nfssquash,
+ 	_paramKeyName[333:354]:      nfsrecoveryvolumesize,
+ 	_paramKeyLowerName[333:354]: nfsrecoveryvolumesize,
++	_paramKeyName[354:372]:      relocateafterclone,
++	_paramKeyLowerName[354:372]: relocateafterclone,
+ }
+ 
+ var _paramKeyNames = []string{
+@@ -136,6 +139,7 @@ var _paramKeyNames = []string{
+ 	_paramKeyName[310:324],
+ 	_paramKeyName[324:333],
+ 	_paramKeyName[333:354],
++	_paramKeyName[354:372],
+ }
+ 
+ // paramKeyString retrieves an enum value from the enum constants string name.
+diff --git a/pkg/volume/snapshot_params.go b/pkg/volume/snapshot_params.go
+index d167cb8..50b70fb 100644
+--- a/pkg/volume/snapshot_params.go
++++ b/pkg/volume/snapshot_params.go
+@@ -35,6 +35,7 @@ type SnapshotParameters struct {
+ 	LinstorTargetUrl         string       `json:"linstor-target-url,omitempty"`
+ 	LinstorTargetClusterID   string       `json:"linstor-target-cluster-id,omitempty"`
+ 	LinstorTargetStoragePool string       `json:"linstor-target-storage-pool,omitempty"`
++	RelocateAfterRestore     bool         `json:"relocate-after-restore,omitempty"`
+ }
+ 
+ func NewSnapshotParameters(params, secrets map[string]string) (*SnapshotParameters, error) {
+@@ -91,6 +92,13 @@ func NewSnapshotParameters(params, secrets map[string]string) (*SnapshotParamete
+ 			p.LinstorTargetClusterID = v
+ 		case "/linstor-target-storage-pool":
+ 			p.LinstorTargetStoragePool = v
++		case "/relocateAfterRestore":
++			b, err := strconv.ParseBool(v)
++			if err != nil {
++				return nil, err
++			}
++
++			p.RelocateAfterRestore = b
+ 		default:
+ 			log.WithField("key", k).Warn("ignoring unknown snapshot parameter key")
+ 		}
