@@ -26,10 +26,20 @@ spec:
   upgrade:
     remediation:
       retries: -1
-  {{- with .Values.storageClass }}
   values:
-    storageClass: "{{ . }}"
-  {{- end }}
+    storageClasses:
+    {{- $storageClasses := dict }}
+    {{- range $sc := (lookup "storage.k8s.io/v1" "StorageClass" "" "").items }}
+    {{- $isDefault := false }}
+    {{- if $sc.metadata.annotations }}
+    {{- $isDefault = eq (index $sc.metadata.annotations "storageclass.kubernetes.io/is-default-class" | default "false") "true" }}
+    {{- end }}
+    {{- $_ := set $storageClasses $sc.metadata.name (dict "infraStorageClass" $sc.metadata.name "default" $isDefault) }}
+    {{- end }}
+    {{- if not $storageClasses }}
+    {{- $_ := set $storageClasses "replicated" (dict "infraStorageClass" "replicated" "default" true) }}
+    {{- end }}
+    {{- $storageClasses | toYaml | nindent 6 }}
   dependsOn:
   - name: {{ .Release.Name }}-vsnap-crd
     namespace: {{ .Release.Namespace }}

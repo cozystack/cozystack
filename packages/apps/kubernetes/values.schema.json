@@ -613,11 +613,6 @@
         }
       }
     },
-    "storageClass": {
-      "description": "StorageClass used to store the data.",
-      "type": "string",
-      "default": "replicated"
-    },
     "version": {
       "description": "Kubernetes major.minor version to deploy",
       "type": "string",
