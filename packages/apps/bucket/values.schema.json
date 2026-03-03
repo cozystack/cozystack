@@ -3,7 +3,7 @@
   "type": "object",
   "properties": {
     "locking": {
-      "description": "Provisions bucket from the -lock BucketClass (with object lock enabled).",
+      "description": "Provisions bucket from the `-lock` BucketClass (with object lock enabled).",
       "type": "boolean",
       "default": false
     },
@@ -13,7 +13,7 @@
       "default": ""
     },
     "users": {
-      "description": "Users configuration map. Each entry creates a BucketAccess.",
+      "description": "Users configuration map.",
       "type": "object",
       "default": {},
       "additionalProperties": {
@@ -21,8 +21,7 @@
         "properties": {
           "readonly": {
             "description": "Whether the user has read-only access.",
-            "type": "boolean",
-            "default": false
+            "type": "boolean"
           }
         }
       }
