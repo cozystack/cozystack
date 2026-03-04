@@ -8,9 +8,8 @@ rules:
   resources:
   - secrets
   resourceNames:
-  - {{ .Release.Name }}-credentials
   {{- range $name, $user := .Values.users }}
-  - {{ $.Release.Name }}-{{ $name }}
+  - {{ $.Release.Name }}-{{ $name }}-credentials
   {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
