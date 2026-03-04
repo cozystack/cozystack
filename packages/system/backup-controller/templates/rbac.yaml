@@ -14,3 +14,7 @@ rules:
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupjobs"]
   verbs: ["create", "get", "list", "watch"]
+# Leader election (--leader-elect)
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]

@@ -30,6 +30,10 @@ rules:
 - apiGroups: ["velero.io"]
   resources: ["backups", "restores"]
   verbs: ["create", "get", "list", "watch", "update", "patch"]
+# Events from Recorder.Event() calls
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 # Leader election (--leader-elect)
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
