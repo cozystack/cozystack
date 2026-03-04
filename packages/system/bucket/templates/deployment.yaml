@@ -1,3 +1,4 @@
+{{- $users := keys .Values.users | sortAlpha }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,12 +18,10 @@ spec:
         image: "{{ $.Files.Get "images/s3manager.tag" | trim }}"
         env:
         - name: ENDPOINT
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.bucketName }}-credentials
-              key: endpoint
+          value: "s3.{{ .Values._namespace.host }}"
         - name: SKIP_SSL_VERIFICATION
           value: "true"
+        {{- if $users }}
         - name: ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
@@ -33,3 +32,4 @@ spec:
             secretKeyRef:
               name: {{ .Values.bucketName }}-credentials
               key: secretKey
+        {{- end }}
