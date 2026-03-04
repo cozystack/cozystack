@@ -1,4 +1,3 @@
-{{- $users := keys .Values.users | sortAlpha }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,15 +20,3 @@ spec:
           value: "s3.{{ .Values._namespace.host }}"
         - name: SKIP_SSL_VERIFICATION
           value: "true"
-        {{- if $users }}
-        - name: ACCESS_KEY_ID
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.bucketName }}-credentials
-              key: accessKey
-        - name: SECRET_ACCESS_KEY
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.bucketName }}-credentials
-              key: secretKey
-        {{- end }}
