@@ -264,17 +264,28 @@ metadata:
   name: driver-config
   namespace: {{ .Release.Namespace }}
 data:
-  infraClusterNamespace: 
+  infraClusterNamespace:
   infraClusterLabels: csi-driver/cluster=tenant
+  infraStorageClassEnforcement: |
+    allowAll: false
+    allowDefault: false
+    allowList:
+    {{- range $name, $mapping := .Values.storageClasses }}
+    - {{ $mapping.infraStorageClass | quote }}
+    {{- end }}
+{{- range $name, $mapping := .Values.storageClasses }}
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: kubevirt
+  name: {{ $name }}
+  {{- if $mapping.default }}
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
 provisioner: csi.kubevirt.io
 allowVolumeExpansion: true
 parameters:
-  infraStorageClassName: {{ .Values.storageClass }}
+  infraStorageClassName: {{ $mapping.infraStorageClass }}
   bus: scsi
+{{- end }}
