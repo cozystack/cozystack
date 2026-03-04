@@ -44,29 +44,29 @@ EOF
 
   # Admin can upload
   echo "readwrite test" > /tmp/rw-test.txt
-  mc cp /tmp/rw-test.txt rw-user/$BUCKET_NAME/rw-test.txt
+  mc cp --insecure /tmp/rw-test.txt rw-user/$BUCKET_NAME/rw-test.txt
 
   # Admin can list
-  mc ls rw-user/$BUCKET_NAME/rw-test.txt
+  mc ls --insecure rw-user/$BUCKET_NAME/rw-test.txt
 
   # Admin can download
-  mc cp rw-user/$BUCKET_NAME/rw-test.txt /tmp/rw-test-download.txt
+  mc cp --insecure rw-user/$BUCKET_NAME/rw-test.txt /tmp/rw-test-download.txt
 
   # --- Test readonly user (viewer) ---
   mc alias set ro-user https://localhost:8333 $VIEWER_ACCESS_KEY $VIEWER_SECRET_KEY --insecure
 
   # Viewer can list
-  mc ls ro-user/$BUCKET_NAME/rw-test.txt
+  mc ls --insecure ro-user/$BUCKET_NAME/rw-test.txt
 
   # Viewer can download
-  mc cp ro-user/$BUCKET_NAME/rw-test.txt /tmp/ro-test-download.txt
+  mc cp --insecure ro-user/$BUCKET_NAME/rw-test.txt /tmp/ro-test-download.txt
 
   # Viewer cannot upload (must fail)
   echo "readonly test" > /tmp/ro-test.txt
-  run mc cp /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt
+  run mc cp --insecure /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt
   [ "$status" -ne 0 ]
 
   # --- Cleanup ---
-  mc rm rw-user/$BUCKET_NAME/rw-test.txt
+  mc rm --insecure rw-user/$BUCKET_NAME/rw-test.txt
   kubectl -n tenant-test delete bucket.apps.cozystack.io ${name}
 }
