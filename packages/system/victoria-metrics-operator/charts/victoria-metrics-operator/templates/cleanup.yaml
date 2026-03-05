@@ -1,7 +1,7 @@
-{{- if and .Values.crds.enabled .Values.crds.cleanup.enabled }}
+{{- if .Values.crds.cleanup.enabled }}
 {{- $app := .Values.crds.cleanup }}
 {{- if empty ($app.image).tag }}
-  {{- $tag := (printf "%s.%s" .Capabilities.KubeVersion.Major .Capabilities.KubeVersion.Minor) | replace "+" "" -}}
+  {{- $tag := regexSplit "[+-]" .Capabilities.KubeVersion.Version -1 | first -}}
   {{- $_ := set $app.image "tag" $tag }}
 {{- else if not (kindIs "string" ($app.image).tag) }}
   {{- fail "`crd.cleanup.image.tag` is not string, most probably you need to enquote provided value" -}}
@@ -33,9 +33,20 @@ spec:
           image: {{ include "vm.image" $ctx }}
           imagePullPolicy: {{ $app.image.pullPolicy }}
           resources: {{ toYaml $app.resources | nindent 12 }}
+          {{- if .Values.securityContext.enabled }}
+          securityContext: {{ include "vm.securityContext" (dict "securityContext" .Values.securityContext "helm" .) | nindent 12 }}
+          {{- end }}
+          {{- $names := list }}
+          {{- $crds := .Files.Get "crd.yaml" | splitList "---" }}
+          {{- range $crds }}
+            {{- $crd := . | fromYaml }}
+            {{- $names = append $names $crd.spec.names.singular }}
+          {{- end }}
+          command:
+            - kubectl
           args:
             - delete
-            - {{ (keys .Values.admissionWebhooks.enabledCRDValidation) | sortAlpha | join "," }}
+            - {{ $names | sortAlpha | join "," }}
             - --all
             - --ignore-not-found=true
       restartPolicy: OnFailure

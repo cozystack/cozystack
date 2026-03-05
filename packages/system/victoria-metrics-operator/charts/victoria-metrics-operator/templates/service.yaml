@@ -14,6 +14,9 @@ metadata:
   {{- $_ := unset $ctx "extraLabels" }}
   name: {{ $fullname }}
 spec:
+  {{- with $service.trafficDistribution }}
+  trafficDistribution: {{ . }}
+  {{- end }}
   {{- with $service.clusterIP }}
   clusterIP: {{ . }}
   {{- end }}
