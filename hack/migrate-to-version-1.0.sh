@@ -155,13 +155,13 @@ fi
 if [ -z "$BUNDLE_DISABLE" ]; then
     DISABLED_PACKAGES="[]"
 else
-    DISABLED_PACKAGES=$(echo "$BUNDLE_DISABLE" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - "$0}')
+    DISABLED_PACKAGES=$(echo "$BUNDLE_DISABLE" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - cozystack."$0}')
 fi
 
 if [ -z "$BUNDLE_ENABLE" ]; then
     ENABLED_PACKAGES="[]"
 else
-    ENABLED_PACKAGES=$(echo "$BUNDLE_ENABLE" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - "$0}')
+    ENABLED_PACKAGES=$(echo "$BUNDLE_ENABLE" | sed 's/,/\n/g' | awk 'BEGIN{print}{print "          - cozystack."$0}')
 fi
 
 if [ -z "$EXPOSE_SERVICES" ]; then
@@ -175,7 +175,7 @@ BUNDLE_NAME=$(echo "$BUNDLE_NAME" | sed 's/paas/isp/')
 
 # Extract branding if available
 BRANDING=$(echo "$BRANDING_CM" | jq -r '.data // {} | to_entries[] | "\(.key): \"\(.value)\""')
-if [ -z "$BRANDING" ]; then 
+if [ -z "$BRANDING" ]; then
     BRANDING="{}"
 else
     BRANDING=$(echo "$BRANDING" | awk 'BEGIN{print}{print "          " $0}')
