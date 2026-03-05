@@ -1,6 +1,7 @@
 {{- range .Values.logsStorages }}
-apiVersion: operator.victoriametrics.com/v1beta1
-kind: VLogs
+---
+apiVersion: operator.victoriametrics.com/v1
+kind: VLCluster
 metadata:
   name: {{ .name }}
 spec:
@@ -9,14 +10,23 @@ spec:
       apps.cozystack.io/application.group: apps.cozystack.io
       apps.cozystack.io/application.kind: Monitoring
       apps.cozystack.io/application.name: {{ $.Release.Name }}
-  image:
-    tag: v1.17.0-victorialogs
-  storage:
-    resources:
-      requests:
-        storage: {{ .storage }}
-    storageClassName: {{ .storageClassName }}
-    accessModes: [ReadWriteOnce]
-  retentionPeriod: "{{ .retentionPeriod }}"
-  removePvcAfterDelete: true
+  vlinsert:
+    replicaCount: 2
+    resources: {}
+  vlselect:
+    replicaCount: 2
+    resources: {}
+  vlstorage:
+    retentionPeriod: {{ .retentionPeriod | quote }}
+    replicaCount: 2
+    resources: {}
+    storage:
+      volumeClaimTemplate:
+        spec:
+          {{- with .storageClassName }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ .storage }}
 {{- end }}

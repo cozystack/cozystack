@@ -42,7 +42,9 @@ rules:
   - {{ .name }}-vminsert
   {{- end }}
   {{- range .Values.logsStorages }}
-  - {{ $.Release.Name }}-vlogs-{{ .name }}
+  - {{ .name }}-vlstorage
+  - {{ .name }}-vlselect
+  - {{ .name }}-vlinsert
   {{- end }}
   {{- range .Values.metricsStorages }}
   - vmalert-{{ .name }}
