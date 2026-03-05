@@ -67,16 +67,46 @@ spec:
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
-  name: vlogs-{{ .name }}
+  name: {{ .name }}-vlstorage
 spec:
-  replicas: 1
+  replicas: 2
   minReplicas: 1
   kind: monitoring
-  type: vlogs
+  type: vlstorage
   selector:
     app.kubernetes.io/component: monitoring
     app.kubernetes.io/instance: {{ .name }}
-    app.kubernetes.io/name: vlogs
+    app.kubernetes.io/name: vlstorage
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .name }}-vlselect
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: vlselect
+  selector:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/instance: {{ .name }}
+    app.kubernetes.io/name: vlselect
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .name }}-vlinsert
+spec:
+  replicas: 2
+  minReplicas: 1
+  kind: monitoring
+  type: vlinsert
+  selector:
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/instance: {{ .name }}
+    app.kubernetes.io/name: vlinsert
   version: {{ $.Chart.Version }}
 {{- end }}
 ---

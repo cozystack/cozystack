@@ -87,3 +87,92 @@ spec:
           memory: 8Gi
           {{- end }}
 {{- end }}
+{{- range .Values.logsStorages }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vlinsert-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vlinsert-{{ .name }}
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vlinsert
+        minAllowed:
+          {{- if and .vlinsert .vlinsert.minAllowed }}
+          {{- toYaml .vlinsert.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 25m
+          memory: 64Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vlinsert .vlinsert.maxAllowed }}
+          {{- toYaml .vlinsert.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 2000m
+          memory: 4Gi
+          {{- end }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vlselect-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vlselect-{{ .name }}
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vlselect
+        minAllowed:
+          {{- if and .vlselect .vlselect.minAllowed }}
+          {{- toYaml .vlselect.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 25m
+          memory: 64Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vlselect .vlselect.maxAllowed }}
+          {{- toYaml .vlselect.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 4000m
+          memory: 8Gi
+          {{- end }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vlstorage-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: vlstorage-{{ .name }}
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vlstorage
+        minAllowed:
+          {{- if and .vlstorage .vlstorage.minAllowed }}
+          {{- toYaml .vlstorage.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 25m
+          memory: 64Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vlstorage .vlstorage.maxAllowed }}
+          {{- toYaml .vlstorage.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 4000m
+          memory: 8Gi
+          {{- end }}
+{{- end }}

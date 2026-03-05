@@ -344,8 +344,8 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match kube.*
-          Host vlogs-generic.{{ .Values.global.target }}.svc
-          port 9428
+          Host vlinsert-generic.{{ .Values.global.target }}.svc
+          port 9481
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
           format json_lines
@@ -355,8 +355,8 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match events.*
-          Host vlogs-generic.{{ .Values.global.target }}.svc
-          port 9428
+          Host vlinsert-generic.{{ .Values.global.target }}.svc
+          port 9481
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,reason,meatdata_namespace,metadata_name&_msg_field=message&_time_field=date
           format json_lines
@@ -366,8 +366,8 @@ fluent-bit:
       [OUTPUT]
           Name http
           Match audit.*
-          Host vlogs-generic.{{ .Values.global.target }}.svc
-          port 9428
+          Host vlinsert-generic.{{ .Values.global.target }}.svc
+          port 9481
           compress gzip
           uri /insert/jsonline?_stream_fields=log_source,stage,user_username,verb,requestUri&_msg_field=requestURI&_time_field=date
           format json_lines

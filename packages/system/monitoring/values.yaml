@@ -44,7 +44,7 @@ logsStorages:
 - name: generic
   retentionPeriod: "1"
   storage: 10Gi
-  storageClassName: replicated
+  storageClassName: ""
 alerta:
   storage: 10Gi
   storageClassName: ""
