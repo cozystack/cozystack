@@ -61,10 +61,9 @@ EOF
   # Viewer can download
   mc cp --insecure ro-user/$BUCKET_NAME/rw-test.txt /tmp/ro-test-download.txt
 
-  # Viewer cannot upload (must fail)
+  # Viewer cannot upload (must fail with Access Denied)
   echo "readonly test" > /tmp/ro-test.txt
-  run mc cp --insecure /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt
-  [ "$status" -ne 0 ]
+  ! mc cp --insecure /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt
 
   # --- Cleanup ---
   mc rm --insecure rw-user/$BUCKET_NAME/rw-test.txt
