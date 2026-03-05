@@ -34,7 +34,7 @@ caCert: {{ index $secret.data "ca.crt" }}
 clientCert: {{ index $secret.data "tls.crt" }}
 clientKey: {{ index $secret.data "tls.key" }}
 {{- else -}}
-{{- $altNames := default list -}}
+{{- $altNames := list -}}
 {{- $namePrefix := (printf "%s.%s" $fullname (include "vm.namespace" .)) -}}
 {{- $altNames = append $altNames $namePrefix -}}
 {{- $altNames = append $altNames (printf "%s.svc" $namePrefix) -}}

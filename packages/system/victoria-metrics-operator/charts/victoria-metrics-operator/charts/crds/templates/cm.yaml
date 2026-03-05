@@ -1,0 +1,18 @@
+{{- if .Values.upgrade.enabled }}
+{{- $ctx := dict "helm" . }}
+{{- $upgrade := .Values.upgrade }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "crds.upgrade.serviceAccountName" $ctx }}
+  namespace: {{ template "vm.namespace" $ctx }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade,pre-rollback
+    "helm.sh/hook-weight": "-2"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+  {{- $_ := set $ctx "extraLabels" (dict "app.kubernetes.io/component" "upgrade-crds") }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
+  {{- $_ := unset $ctx "extraLabels" }}
+binaryData:
+  crd.yaml.bz2: {{ .Files.Get "files/crd.yaml.bz2" | b64enc }}
+{{- end }}
