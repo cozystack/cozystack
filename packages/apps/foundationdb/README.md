@@ -1,4 +1,4 @@
-# FoundationDB
+# Managed FoundationDB Service
 
 A managed FoundationDB service for Cozystack.
 
