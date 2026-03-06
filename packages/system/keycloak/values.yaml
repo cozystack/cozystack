@@ -14,3 +14,7 @@ resources:
   requests:
     memory: 500Mi
     cpu: 100m
+
+themes: []
+# - name: my-theme
+#   image: my-registry/my-keycloak-theme:v1.0
