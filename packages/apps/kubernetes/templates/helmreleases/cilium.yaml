@@ -3,6 +3,7 @@ cilium:
   k8sServiceHost: {{ .Release.Name }}.{{ .Release.Namespace }}.svc
   k8sServicePort: 6443
   routingMode: tunnel
+  MTU: 1350
   enableIPv4Masquerade: true
   ipv4NativeRoutingCIDR: ""
   {{- if $.Values.addons.gatewayAPI.enabled }}
