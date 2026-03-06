@@ -76,6 +76,8 @@ spec:
             {{- end }}
             - name: KC_METRICS_ENABLED
               value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
             - name: KC_LOG_LEVEL
               value: "info"
             - name: KC_CACHE
@@ -128,16 +130,23 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            - name: management
+              containerPort: 9000
+              protocol: TCP
           livenessProbe:
             httpGet:
-              path: /
-              port: http
+              path: /health/live
+              port: management
             initialDelaySeconds: 120
+            periodSeconds: 15
             timeoutSeconds: 5
+            failureThreshold: 5
           readinessProbe:
             httpGet:
-              path: /realms/master
-              port: http
+              path: /health/ready
+              port: management
             initialDelaySeconds: 60
-            timeoutSeconds: 1
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
       terminationGracePeriodSeconds: 60
