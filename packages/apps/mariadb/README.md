@@ -15,7 +15,7 @@ This managed service is controlled by mariadb-operator, ensuring efficient manag
 ### How to switch master/slave replica
 
 ```bash
-kubectl edit mariadb <instnace>
+kubectl edit mariadb <instance>
 ```
 update:
 
@@ -54,11 +54,11 @@ more details:
 - **Replication can't be finished with various errors**
 - **Replication can't be finished in case if `binlog` purged**
 
-  Until `mariadbbackup` is not used to bootstrap a node by mariadb-operator (this feature is not inmplemented yet), follow these manual steps to fix it:
+  Until `mariadbbackup` is not used to bootstrap a node by mariadb-operator (this feature is not implemented yet), follow these manual steps to fix it:
   https://github.com/mariadb-operator/mariadb-operator/issues/141#issuecomment-1804760231
 
-- **Corrupted indicies**
-  Sometimes some indecies can be corrupted on master replica, you can recover them from slave:
+- **Corrupted indices**
+  Sometimes some indices can be corrupted on master replica, you can recover them from slave:
 
   ```bash
   mysqldump -h <slave> -P 3306 -u<user> -p<password> --column-statistics=0 <database> <table> ~/tmp/fix-table.sql
