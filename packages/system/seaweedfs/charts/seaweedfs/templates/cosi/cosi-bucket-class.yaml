@@ -7,12 +7,25 @@ metadata:
 driverName: {{ .Values.cosi.driverName }}
 deletionPolicy: Delete
 ---
+kind: BucketClass
+apiVersion: objectstorage.k8s.io/v1alpha1
+metadata:
+  name: {{ .Values.cosi.bucketClassName }}-lock
+driverName: {{ .Values.cosi.driverName }}
+deletionPolicy: Retain
+parameters:
+  objectLockEnabled: "true"
+  objectLockRetentionMode: "COMPLIANCE"
+  objectLockRetentionDays: "365"
+---
 kind: BucketAccessClass
 apiVersion: objectstorage.k8s.io/v1alpha1
 metadata:
   name: {{ .Values.cosi.bucketClassName }}
 driverName: {{ .Values.cosi.driverName }}
 authenticationType: KEY
+parameters:
+  accessPolicy: readwrite
 ---
 kind: BucketAccessClass
 apiVersion: objectstorage.k8s.io/v1alpha1
@@ -21,5 +34,5 @@ metadata:
 driverName: {{ .Values.cosi.driverName }}
 authenticationType: KEY
 parameters:
-  accessPolicy: "readonly"
+  accessPolicy: readonly
 {{- end }}

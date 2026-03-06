@@ -32,8 +32,8 @@
 {{-   if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
 {{-     fail (printf "volume.pools key '%s' must be a valid DNS label (lowercase alphanumeric and hyphens, no dots)." $poolName) }}
 {{-   end }}
-{{-   if or (hasSuffix "-worm" $poolName) (hasSuffix "-readonly" $poolName) }}
-{{-     fail (printf "volume.pools key '%s' must not end with '-worm' or '-readonly' (reserved suffixes for COSI resources)." $poolName) }}
+{{-   if or (hasSuffix "-lock" $poolName) (hasSuffix "-readonly" $poolName) }}
+{{-     fail (printf "volume.pools key '%s' must not end with '-lock' or '-readonly' (reserved suffixes for COSI resources)." $poolName) }}
 {{-   end }}
 {{-   if not $pool.diskType }}
 {{-     fail (printf "volume.pools.%s.diskType is required." $poolName) }}
@@ -52,8 +52,8 @@
 {{-       if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
 {{-         fail (printf "volume.zones.%s.pools key '%s' must be a valid DNS label." $zoneName $poolName) }}
 {{-       end }}
-{{-       if or (hasSuffix "-worm" $poolName) (hasSuffix "-readonly" $poolName) }}
-{{-         fail (printf "volume.zones.%s.pools key '%s' must not end with '-worm' or '-readonly' (reserved suffixes for COSI resources)." $zoneName $poolName) }}
+{{-       if or (hasSuffix "-lock" $poolName) (hasSuffix "-readonly" $poolName) }}
+{{-         fail (printf "volume.zones.%s.pools key '%s' must not end with '-lock' or '-readonly' (reserved suffixes for COSI resources)." $zoneName $poolName) }}
 {{-       end }}
 {{-       if not $pool.diskType }}
 {{-         fail (printf "volume.zones.%s.pools.%s.diskType is required." $zoneName $poolName) }}

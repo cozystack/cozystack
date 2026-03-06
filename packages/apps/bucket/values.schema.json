@@ -1,5 +1,30 @@
 {
   "title": "Chart Values",
   "type": "object",
-  "properties": {}
+  "properties": {
+    "locking": {
+      "description": "Provisions bucket from the `-lock` BucketClass (with object lock enabled).",
+      "type": "boolean",
+      "default": false
+    },
+    "storagePool": {
+      "description": "Selects a specific BucketClass by storage pool name.",
+      "type": "string",
+      "default": ""
+    },
+    "users": {
+      "description": "Users configuration map.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "readonly": {
+            "description": "Whether the user has read-only access.",
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
 }

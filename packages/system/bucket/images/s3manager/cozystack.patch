@@ -1,3 +1,235 @@
+diff --git a/go.mod b/go.mod
+index b5d8540..6ede8e8 100644
+--- a/go.mod
++++ b/go.mod
+@@ -1,10 +1,11 @@
+ module github.com/cloudlena/s3manager
+ 
+-go 1.22.5
++go 1.23
+ 
+ require (
+ 	github.com/cloudlena/adapters v0.0.0-20240708203353-a39be02cc801
+ 	github.com/gorilla/mux v1.8.1
++	github.com/gorilla/sessions v1.4.0
+ 	github.com/matryer/is v1.4.1
+ 	github.com/minio/minio-go/v7 v7.0.74
+ 	github.com/spf13/viper v1.19.0
+@@ -16,6 +17,7 @@ require (
+ 	github.com/go-ini/ini v1.67.0 // indirect
+ 	github.com/goccy/go-json v0.10.3 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
++	github.com/gorilla/securecookie v1.1.2 // indirect
+ 	github.com/hashicorp/hcl v1.0.0 // indirect
+ 	github.com/klauspost/compress v1.17.9 // indirect
+ 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
+diff --git a/go.sum b/go.sum
+index 1ea1b16..d7866ce 100644
+--- a/go.sum
++++ b/go.sum
+@@ -16,10 +16,16 @@ github.com/goccy/go-json v0.10.3 h1:KZ5WoDbxAIgm2HNbYckL0se1fHD6rz5j4ywS6ebzDqA=
+ github.com/goccy/go-json v0.10.3/go.mod h1:oq7eo15ShAhp70Anwd5lgX2pLfOS3QCiwU/PULtXL6M=
+ github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
+ github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
++github.com/google/gofuzz v1.2.0 h1:xRy4A+RhZaiKjJ1bPfwQ8sedCA+YS2YcCHW6ec7JMi0=
++github.com/google/gofuzz v1.2.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
+ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+ github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+ github.com/gorilla/mux v1.8.1 h1:TuBL49tXwgrFYWhqrNgrUNEY92u81SPhu7sTdzQEiWY=
+ github.com/gorilla/mux v1.8.1/go.mod h1:AKf9I4AEqPTmMytcMc0KkNouC66V3BtZ4qD5fmWSiMQ=
++github.com/gorilla/securecookie v1.1.2 h1:YCIWL56dvtr73r6715mJs5ZvhtnY73hBvEF8kXD8ePA=
++github.com/gorilla/securecookie v1.1.2/go.mod h1:NfCASbcHqRSY+3a8tlWJwsQap2VX5pwzwo4h3eOamfo=
++github.com/gorilla/sessions v1.4.0 h1:kpIYOp/oi6MG/p5PgxApU8srsSw9tuFbt46Lt7auzqQ=
++github.com/gorilla/sessions v1.4.0/go.mod h1:FLWm50oby91+hl7p/wRxDth9bWSuk0qVL2emc7lT5ik=
+ github.com/hashicorp/hcl v1.0.0 h1:0Anlzjpi4vEasTeNFn2mLJgTSwt0+6sfsiTG8qcWGx4=
+ github.com/hashicorp/hcl v1.0.0/go.mod h1:E5yfLk+7swimpb2L/Alb/PJmXilQ/rhwaUYs4T20WEQ=
+ github.com/klauspost/compress v1.17.9 h1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2qeMA=
+diff --git a/main.go b/main.go
+index 2ffe8ab..723a1b8 100644
+--- a/main.go
++++ b/main.go
+@@ -41,10 +41,12 @@ type configuration struct {
+ 	Timeout             int32
+ 	SseType             string
+ 	SseKey              string
++	LoginMode           bool
+ }
+ 
+ func parseConfiguration() configuration {
+ 	var accessKeyID, secretAccessKey, iamEndpoint string
++	var loginMode bool
+ 
+ 	viper.AutomaticEnv()
+ 
+@@ -57,13 +59,10 @@ func parseConfiguration() configuration {
+ 		iamEndpoint = viper.GetString("IAM_ENDPOINT")
+ 	} else {
+ 		accessKeyID = viper.GetString("ACCESS_KEY_ID")
+-		if len(accessKeyID) == 0 {
+-			log.Fatal("please provide ACCESS_KEY_ID")
+-		}
+-
+ 		secretAccessKey = viper.GetString("SECRET_ACCESS_KEY")
+-		if len(secretAccessKey) == 0 {
+-			log.Fatal("please provide SECRET_ACCESS_KEY")
++		if len(accessKeyID) == 0 || len(secretAccessKey) == 0 {
++			log.Println("ACCESS_KEY_ID or SECRET_ACCESS_KEY not set, starting in login mode")
++			loginMode = true
+ 		}
+ 	}
+ 
+@@ -115,6 +114,7 @@ func parseConfiguration() configuration {
+ 		Timeout:             timeout,
+ 		SseType:             sseType,
+ 		SseKey:              sseKey,
++		LoginMode:           loginMode,
+ 	}
+ }
+ 
+@@ -135,57 +135,96 @@ func main() {
+ 		log.Fatal(err)
+ 	}
+ 
+-	// Set up S3 client
+-	opts := &minio.Options{
+-		Secure: configuration.UseSSL,
+-	}
+-	if configuration.UseIam {
+-		opts.Creds = credentials.NewIAM(configuration.IamEndpoint)
+-	} else {
+-		var signatureType credentials.SignatureType
+-
+-		switch configuration.SignatureType {
+-		case "V2":
+-			signatureType = credentials.SignatureV2
+-		case "V4":
+-			signatureType = credentials.SignatureV4
+-		case "V4Streaming":
+-			signatureType = credentials.SignatureV4Streaming
+-		case "Anonymous":
+-			signatureType = credentials.SignatureAnonymous
+-		default:
+-			log.Fatalf("Invalid SIGNATURE_TYPE: %s", configuration.SignatureType)
++	// Set up router
++	r := mux.NewRouter()
++	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.FS(statics)))).Methods(http.MethodGet)
++
++	if configuration.LoginMode {
++		// Login mode: no pre-configured S3 client, per-session credentials
++		sessionCfg := &s3manager.SessionConfig{
++			Store:         s3manager.NewSessionStore(),
++			Endpoint:      configuration.Endpoint,
++			UseSSL:        configuration.UseSSL,
++			SkipSSLVerify: configuration.SkipSSLVerification,
++			AllowDelete:   configuration.AllowDelete,
++			ForceDownload: configuration.ForceDownload,
++			ListRecursive: configuration.ListRecursive,
++			SseInfo:       sseType,
++			Templates:     templates,
+ 		}
+ 
+-		opts.Creds = credentials.NewStatic(configuration.AccessKeyID, configuration.SecretAccessKey, "", signatureType)
+-	}
++		// Public routes (no auth required)
++		r.Handle("/login", s3manager.HandleLoginView(templates)).Methods(http.MethodGet)
++		r.Handle("/login", s3manager.HandleLogin(sessionCfg)).Methods(http.MethodPost)
++		r.Handle("/logout", s3manager.HandleLogout(sessionCfg)).Methods(http.MethodPost)
++
++		// Protected routes (auth required via middleware)
++		protected := mux.NewRouter()
++		protected.Handle("/", http.RedirectHandler("/buckets", http.StatusPermanentRedirect)).Methods(http.MethodGet)
++		protected.Handle("/buckets", s3manager.HandleBucketsViewDynamic(templates, configuration.AllowDelete)).Methods(http.MethodGet)
++		protected.PathPrefix("/buckets/").Handler(s3manager.HandleBucketViewDynamic(templates, configuration.AllowDelete, configuration.ListRecursive)).Methods(http.MethodGet)
++		protected.Handle("/api/buckets", s3manager.HandleCreateBucketDynamic()).Methods(http.MethodPost)
++		if configuration.AllowDelete {
++			protected.Handle("/api/buckets/{bucketName}", s3manager.HandleDeleteBucketDynamic()).Methods(http.MethodDelete)
++		}
++		protected.Handle("/api/buckets/{bucketName}/objects", s3manager.HandleCreateObjectDynamic(sseType)).Methods(http.MethodPost)
++		protected.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}/url", s3manager.HandleGenerateUrlDynamic()).Methods(http.MethodGet)
++		protected.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}", s3manager.HandleGetObjectDynamic(configuration.ForceDownload)).Methods(http.MethodGet)
++		if configuration.AllowDelete {
++			protected.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}", s3manager.HandleDeleteObjectDynamic()).Methods(http.MethodDelete)
++		}
+ 
+-	if configuration.Region != "" {
+-		opts.Region = configuration.Region
+-	}
+-	if configuration.UseSSL && configuration.SkipSSLVerification {
+-		opts.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec
+-	}
+-	s3, err := minio.New(configuration.Endpoint, opts)
+-	if err != nil {
+-		log.Fatalln(fmt.Errorf("error creating s3 client: %w", err))
+-	}
++		r.PathPrefix("/").Handler(s3manager.RequireAuth(sessionCfg, protected))
++	} else {
++		// Pre-configured mode: existing behavior with static S3 client
++		opts := &minio.Options{
++			Secure: configuration.UseSSL,
++		}
++		if configuration.UseIam {
++			opts.Creds = credentials.NewIAM(configuration.IamEndpoint)
++		} else {
++			var signatureType credentials.SignatureType
++
++			switch configuration.SignatureType {
++			case "V2":
++				signatureType = credentials.SignatureV2
++			case "V4":
++				signatureType = credentials.SignatureV4
++			case "V4Streaming":
++				signatureType = credentials.SignatureV4Streaming
++			case "Anonymous":
++				signatureType = credentials.SignatureAnonymous
++			default:
++				log.Fatalf("Invalid SIGNATURE_TYPE: %s", configuration.SignatureType)
++			}
++
++			opts.Creds = credentials.NewStatic(configuration.AccessKeyID, configuration.SecretAccessKey, "", signatureType)
++		}
+ 
+-	// Set up router
+-	r := mux.NewRouter()
+-	r.Handle("/", http.RedirectHandler("/buckets", http.StatusPermanentRedirect)).Methods(http.MethodGet)
+-	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.FS(statics)))).Methods(http.MethodGet)
+-	r.Handle("/buckets", s3manager.HandleBucketsView(s3, templates, configuration.AllowDelete)).Methods(http.MethodGet)
+-	r.PathPrefix("/buckets/").Handler(s3manager.HandleBucketView(s3, templates, configuration.AllowDelete, configuration.ListRecursive)).Methods(http.MethodGet)
+-	r.Handle("/api/buckets", s3manager.HandleCreateBucket(s3)).Methods(http.MethodPost)
+-	if configuration.AllowDelete {
+-		r.Handle("/api/buckets/{bucketName}", s3manager.HandleDeleteBucket(s3)).Methods(http.MethodDelete)
+-	}
+-	r.Handle("/api/buckets/{bucketName}/objects", s3manager.HandleCreateObject(s3, sseType)).Methods(http.MethodPost)
+-	r.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}/url", s3manager.HandleGenerateUrl(s3)).Methods(http.MethodGet)
+-	r.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}", s3manager.HandleGetObject(s3, configuration.ForceDownload)).Methods(http.MethodGet)
+-	if configuration.AllowDelete {
+-		r.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}", s3manager.HandleDeleteObject(s3)).Methods(http.MethodDelete)
++		if configuration.Region != "" {
++			opts.Region = configuration.Region
++		}
++		if configuration.UseSSL && configuration.SkipSSLVerification {
++			opts.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec
++		}
++		s3, err := minio.New(configuration.Endpoint, opts)
++		if err != nil {
++			log.Fatalln(fmt.Errorf("error creating s3 client: %w", err))
++		}
++
++		r.Handle("/", http.RedirectHandler("/buckets", http.StatusPermanentRedirect)).Methods(http.MethodGet)
++		r.Handle("/buckets", s3manager.HandleBucketsView(s3, templates, configuration.AllowDelete)).Methods(http.MethodGet)
++		r.PathPrefix("/buckets/").Handler(s3manager.HandleBucketView(s3, templates, configuration.AllowDelete, configuration.ListRecursive)).Methods(http.MethodGet)
++		r.Handle("/api/buckets", s3manager.HandleCreateBucket(s3)).Methods(http.MethodPost)
++		if configuration.AllowDelete {
++			r.Handle("/api/buckets/{bucketName}", s3manager.HandleDeleteBucket(s3)).Methods(http.MethodDelete)
++		}
++		r.Handle("/api/buckets/{bucketName}/objects", s3manager.HandleCreateObject(s3, sseType)).Methods(http.MethodPost)
++		r.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}/url", s3manager.HandleGenerateUrl(s3)).Methods(http.MethodGet)
++		r.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}", s3manager.HandleGetObject(s3, configuration.ForceDownload)).Methods(http.MethodGet)
++		if configuration.AllowDelete {
++			r.Handle("/api/buckets/{bucketName}/objects/{objectName:.*}", s3manager.HandleDeleteObject(s3)).Methods(http.MethodDelete)
++		}
+ 	}
+ 
+ 	lr := logging.Handler(os.Stdout)(r)
 diff --git a/web/template/bucket.html.tmpl b/web/template/bucket.html.tmpl
 index e2f8d28..87add13 100644
 --- a/web/template/bucket.html.tmpl
@@ -24,3 +256,298 @@ index c7ea184..fb1dce7 100644
      </div>
  </nav>
  
+diff --git a/internal/app/s3manager/auth.go b/internal/app/s3manager/auth.go
+new file mode 100644
+index 0000000..58589e2
+--- /dev/null
++++ b/internal/app/s3manager/auth.go
+@@ -0,0 +1,237 @@
++package s3manager
++
++import (
++	"context"
++	"crypto/rand"
++	"crypto/tls"
++	"fmt"
++	"html/template"
++	"io/fs"
++	"log"
++	"net/http"
++
++	"github.com/gorilla/sessions"
++	"github.com/minio/minio-go/v7"
++	"github.com/minio/minio-go/v7/pkg/credentials"
++)
++
++type contextKey string
++
++const s3ContextKey contextKey = "s3client"
++
++// SessionConfig holds session store and S3 connection settings for login mode.
++type SessionConfig struct {
++	Store           *sessions.CookieStore
++	Endpoint        string
++	UseSSL          bool
++	SkipSSLVerify   bool
++	AllowDelete     bool
++	ForceDownload   bool
++	ListRecursive   bool
++	SseInfo         SSEType
++	Templates       fs.FS
++}
++
++// NewSessionStore creates a CookieStore with a random encryption key.
++func NewSessionStore() *sessions.CookieStore {
++	key := make([]byte, 32)
++	if _, err := rand.Read(key); err != nil {
++		log.Fatal("failed to generate session key:", err)
++	}
++	store := sessions.NewCookieStore(key)
++	store.Options = &sessions.Options{
++		Path:     "/",
++		MaxAge:   86400,
++		HttpOnly: true,
++		Secure:   true,
++		SameSite: http.SameSiteLaxMode,
++	}
++	return store
++}
++
++// NewS3Client creates a minio client from user-provided credentials.
++func NewS3Client(endpoint, accessKey, secretKey string, useSSL, skipSSLVerify bool) (*minio.Client, error) {
++	opts := &minio.Options{
++		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
++		Secure: useSSL,
++	}
++	if useSSL && skipSSLVerify {
++		opts.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec
++	}
++	return minio.New(endpoint, opts)
++}
++
++// S3FromContext retrieves the S3 client stored in request context.
++func S3FromContext(ctx context.Context) S3 {
++	if s3, ok := ctx.Value(s3ContextKey).(S3); ok {
++		return s3
++	}
++	return nil
++}
++
++func contextWithS3(ctx context.Context, s3 S3) context.Context {
++	return context.WithValue(ctx, s3ContextKey, s3)
++}
++
++// RequireAuth is middleware that validates session credentials and injects
++// an S3 client into the request context. Redirects to /login if no session.
++func RequireAuth(cfg *SessionConfig, next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		session, _ := cfg.Store.Get(r, "s3session")
++		accessKey, ok1 := session.Values["accessKey"].(string)
++		secretKey, ok2 := session.Values["secretKey"].(string)
++		if !ok1 || !ok2 || accessKey == "" || secretKey == "" {
++			http.Redirect(w, r, "/login", http.StatusFound)
++			return
++		}
++
++		s3, err := NewS3Client(cfg.Endpoint, accessKey, secretKey, cfg.UseSSL, cfg.SkipSSLVerify)
++		if err != nil {
++			// Session has bad credentials — clear and redirect to login
++			session.Options.MaxAge = -1
++			_ = session.Save(r, w)
++			http.Redirect(w, r, "/login", http.StatusFound)
++			return
++		}
++
++		ctx := contextWithS3(r.Context(), s3)
++		next.ServeHTTP(w, r.WithContext(ctx))
++	})
++}
++
++// HandleLoginView renders the login page.
++func HandleLoginView(templates fs.FS) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		errorMsg := r.URL.Query().Get("error")
++
++		data := struct {
++			Error string
++		}{
++			Error: errorMsg,
++		}
++
++		t, err := template.ParseFS(templates, "layout.html.tmpl", "login.html.tmpl")
++		if err != nil {
++			handleHTTPError(w, fmt.Errorf("error parsing login template: %w", err))
++			return
++		}
++		err = t.ExecuteTemplate(w, "layout", data)
++		if err != nil {
++			handleHTTPError(w, fmt.Errorf("error executing login template: %w", err))
++			return
++		}
++	}
++}
++
++// HandleLogin processes the login form POST.
++func HandleLogin(cfg *SessionConfig) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		accessKey := r.FormValue("accessKey")
++		secretKey := r.FormValue("secretKey")
++
++		if accessKey == "" || secretKey == "" {
++			http.Redirect(w, r, "/login?error=credentials+required", http.StatusFound)
++			return
++		}
++
++		// Validate credentials by attempting ListBuckets
++		s3, err := NewS3Client(cfg.Endpoint, accessKey, secretKey, cfg.UseSSL, cfg.SkipSSLVerify)
++		if err != nil {
++			http.Redirect(w, r, "/login?error=connection+failed", http.StatusFound)
++			return
++		}
++		_, err = s3.ListBuckets(r.Context())
++		if err != nil {
++			http.Redirect(w, r, "/login?error=invalid+credentials", http.StatusFound)
++			return
++		}
++
++		// Save credentials to session
++		session, _ := cfg.Store.Get(r, "s3session")
++		session.Values["accessKey"] = accessKey
++		session.Values["secretKey"] = secretKey
++		err = session.Save(r, w)
++		if err != nil {
++			handleHTTPError(w, fmt.Errorf("error saving session: %w", err))
++			return
++		}
++
++		http.Redirect(w, r, "/buckets", http.StatusFound)
++	}
++}
++
++// HandleLogout destroys the session and redirects to login.
++func HandleLogout(cfg *SessionConfig) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		session, _ := cfg.Store.Get(r, "s3session")
++		session.Options.MaxAge = -1
++		_ = session.Save(r, w)
++		http.Redirect(w, r, "/login", http.StatusFound)
++	}
++}
++
++// Dynamic handler wrappers — extract S3 from context, delegate to original handlers.
++
++// HandleBucketsViewDynamic wraps HandleBucketsView for login mode.
++func HandleBucketsViewDynamic(templates fs.FS, allowDelete bool) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleBucketsView(s3, templates, allowDelete).ServeHTTP(w, r)
++	}
++}
++
++// HandleBucketViewDynamic wraps HandleBucketView for login mode.
++func HandleBucketViewDynamic(templates fs.FS, allowDelete bool, listRecursive bool) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleBucketView(s3, templates, allowDelete, listRecursive).ServeHTTP(w, r)
++	}
++}
++
++// HandleCreateBucketDynamic wraps HandleCreateBucket for login mode.
++func HandleCreateBucketDynamic() http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleCreateBucket(s3).ServeHTTP(w, r)
++	}
++}
++
++// HandleDeleteBucketDynamic wraps HandleDeleteBucket for login mode.
++func HandleDeleteBucketDynamic() http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleDeleteBucket(s3).ServeHTTP(w, r)
++	}
++}
++
++// HandleCreateObjectDynamic wraps HandleCreateObject for login mode.
++func HandleCreateObjectDynamic(sseInfo SSEType) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleCreateObject(s3, sseInfo).ServeHTTP(w, r)
++	}
++}
++
++// HandleGenerateUrlDynamic wraps HandleGenerateUrl for login mode.
++func HandleGenerateUrlDynamic() http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleGenerateUrl(s3).ServeHTTP(w, r)
++	}
++}
++
++// HandleGetObjectDynamic wraps HandleGetObject for login mode.
++func HandleGetObjectDynamic(forceDownload bool) http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleGetObject(s3, forceDownload).ServeHTTP(w, r)
++	}
++}
++
++// HandleDeleteObjectDynamic wraps HandleDeleteObject for login mode.
++func HandleDeleteObjectDynamic() http.HandlerFunc {
++	return func(w http.ResponseWriter, r *http.Request) {
++		s3 := S3FromContext(r.Context())
++		HandleDeleteObject(s3).ServeHTTP(w, r)
++	}
++}
+diff --git a/web/template/login.html.tmpl b/web/template/login.html.tmpl
+new file mode 100644
+index 0000000..f153018
+--- /dev/null
++++ b/web/template/login.html.tmpl
+@@ -0,0 +1,46 @@
++{{ define "content" }}
++<nav>
++    <div class="nav-wrapper container">
++        <a href="/" class="brand-logo">Cozystack S3 Manager</a>
++    </div>
++</nav>
++
++<div class="container">
++    <div class="section">
++        <div class="row">
++            <div class="col l6 offset-l3 m8 offset-m2 s12">
++                <div class="card">
++                    <div class="card-content">
++                        <span class="card-title">Sign In</span>
++                        <p>Enter your S3 credentials to access the bucket manager.</p>
++                        <br>
++
++                        {{ if .Error }}
++                        <div class="card-panel red lighten-4 red-text text-darken-4">
++                            <i class="material-icons tiny">error</i> {{ .Error }}
++                        </div>
++                        {{ end }}
++
++                        <form method="POST" action="/login">
++                            <div class="input-field">
++                                <i class="material-icons prefix">vpn_key</i>
++                                <input id="accessKey" name="accessKey" type="text" required>
++                                <label for="accessKey">Access Key ID</label>
++                            </div>
++                            <div class="input-field">
++                                <i class="material-icons prefix">lock</i>
++                                <input id="secretKey" name="secretKey" type="password" required>
++                                <label for="secretKey">Secret Access Key</label>
++                            </div>
++                            <br>
++                            <button type="submit" class="btn waves-effect waves-light" style="width:100%;">
++                                Sign In <i class="material-icons right">send</i>
++                            </button>
++                        </form>
++                    </div>
++                </div>
++            </div>
++        </div>
++    </div>
++</div>
++{{ end }}
