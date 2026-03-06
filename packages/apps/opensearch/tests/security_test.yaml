@@ -1,0 +1,207 @@
+suite: security secrets tests
+
+templates:
+  - templates/security.yaml
+
+tests:
+  ###################
+  # Basic rendering #
+  ###################
+
+  - it: renders three secrets (admin-credentials, security-config, credentials)
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  ###########################
+  # Admin credentials       #
+  ###########################
+
+  - it: sets admin-credentials secret name
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-os-admin-credentials
+        documentIndex: 0
+
+  - it: sets admin username
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: stringData.username
+          value: admin
+        documentIndex: 0
+
+  - it: generates a 32-char alphanumeric password
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - matchRegex:
+          path: stringData.password
+          pattern: "^[a-zA-Z0-9]{32}$"
+        documentIndex: 0
+
+  ###########################
+  # Security config         #
+  ###########################
+
+  - it: sets security-config secret name
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-os-security-config
+        documentIndex: 1
+
+  - it: includes config.yml with basic auth
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - exists:
+          path: stringData["config.yml"]
+        documentIndex: 1
+
+  - it: includes internal_users.yml with bcrypt hash
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - matchRegex:
+          path: stringData["internal_users.yml"]
+          pattern: "hash:.*\\$2a\\$"
+        documentIndex: 1
+
+  - it: includes roles_mapping.yml
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - exists:
+          path: stringData["roles_mapping.yml"]
+        documentIndex: 1
+
+  ###########################
+  # User-facing credentials #
+  ###########################
+
+  - it: sets credentials secret name
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-os-credentials
+        documentIndex: 2
+
+  - it: sets correct host and port
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: stringData.host
+          value: test-os.tenant-test.svc.cozy.local
+        documentIndex: 2
+      - equal:
+          path: stringData.port
+          value: "9200"
+        documentIndex: 2
+
+  - it: sets https URI with credentials
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - matchRegex:
+          path: stringData.uri
+          pattern: "^https://admin:[a-zA-Z0-9]{32}@test-os\\.tenant-test\\.svc\\.cozy\\.local:9200$"
+        documentIndex: 2
+
+  - it: does not include dashboards fields when dashboards disabled
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      dashboards:
+        enabled: false
+        replicas: 1
+        resourcesPreset: "medium"
+        resources: {}
+    asserts:
+      - notExists:
+          path: stringData.dashboards-host
+        documentIndex: 2
+
+  - it: includes dashboards fields when dashboards enabled
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "medium"
+        resources: {}
+    asserts:
+      - equal:
+          path: stringData.dashboards-host
+          value: test-os-dashboards.tenant-test.svc.cozy.local
+        documentIndex: 2
+      - equal:
+          path: stringData.dashboards-port
+          value: "5601"
+        documentIndex: 2
+      - matchRegex:
+          path: stringData.dashboards-uri
+          pattern: "^https://admin:[a-zA-Z0-9]{32}@test-os-dashboards\\.tenant-test\\.svc\\.cozy\\.local:5601$"
+        documentIndex: 2

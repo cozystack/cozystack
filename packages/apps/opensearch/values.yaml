@@ -1,0 +1,111 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each OpenSearch node.
+## @field {quantity} [cpu] - CPU available to each node.
+## @field {quantity} [memory] - Memory (RAM) available to each node.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of OpenSearch nodes in the cluster.
+replicas: 3
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each OpenSearch node. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="large" - Default sizing preset used when `resources` is omitted. OpenSearch requires minimum 2Gi memory.
+resourcesPreset: "large"
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+storageClass: ""
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
+## @value soft - Best-effort distribution (ScheduleAnyway) - pods may be scheduled on same node if needed
+## @value hard - Strict distribution (DoNotSchedule) - pods will not schedule if spread cannot be achieved
+
+## @param {TopologySpreadPolicy} topologySpreadPolicy="soft" - How strictly to enforce pod distribution across nodes and zones.
+topologySpreadPolicy: "soft"
+
+##
+## @enum {string} Version
+## @value v3
+## @value v2
+## @value v1
+
+## @param {Version} version - OpenSearch major version to deploy.
+version: v2
+
+##
+## @section Image configuration
+##
+
+## @typedef {struct} Images - Container image configuration.
+## @field {string} opensearch - OpenSearch image.
+
+## @param {Images} images - Container images used by the operator.
+images:
+  opensearch: ""
+
+##
+## @section Node roles configuration
+##
+
+## @typedef {struct} NodeRoles - OpenSearch node roles.
+## @field {bool} master - Enable cluster_manager role.
+## @field {bool} data - Enable data role.
+## @field {bool} ingest - Enable ingest role.
+## @field {bool} ml - Enable machine learning role.
+
+## @param {NodeRoles} nodeRoles - Node roles configuration.
+nodeRoles:
+  master: true
+  data: true
+  ingest: true
+  ml: false
+
+##
+## @section Users configuration
+##
+
+## @typedef {struct} User - User configuration.
+## @field {string} [password] - Password for the user (auto-generated if omitted).
+## @field {[]string} roles - List of OpenSearch roles.
+
+## @param {map[string]User} users - Custom OpenSearch users configuration map.
+users: {}
+## Example:
+## users:
+##   myuser:
+##     roles:
+##       - all_access
+
+##
+## @section OpenSearch Dashboards configuration
+##
+
+## @typedef {struct} Dashboards - OpenSearch Dashboards deployment configuration.
+## @field {bool} enabled - Enable OpenSearch Dashboards deployment.
+## @field {int} replicas - Number of Dashboards replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration for Dashboards.
+## @field {ResourcesPreset} resourcesPreset - Default sizing preset for Dashboards.
+
+## @param {Dashboards} dashboards - OpenSearch Dashboards configuration.
+dashboards:
+  enabled: false
+  replicas: 1
+  resources: {}
+  resourcesPreset: "medium"
