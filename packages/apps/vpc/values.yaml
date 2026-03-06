@@ -14,3 +14,25 @@ subnets: []
 ##     cidr: "172.16.0.0/24"
 ##   - name: mysubnet1
 ##     cidr: "172.16.1.0/24"
+
+## @typedef {struct} Peer - VPC peering target
+## @field {string} vpcName - Logical name of the remote VPC (without "virtualprivatecloud-" prefix)
+## @field {string} tenantNamespace - Namespace of the remote tenant
+
+## @param {[]Peer} peers - VPC peering connections (bidirectional declaration required)
+peers: []
+## Example:
+## peers:
+##   - vpcName: "other-vpc"
+##     tenantNamespace: "tenant-other"
+
+## @typedef {struct} Route - Static route entry
+## @field {string} cidr - Destination CIDR
+## @field {string} nextHopIP - Next hop IP address
+
+## @param {[]Route} routes - Static routes for the VPC
+routes: []
+## Example:
+## routes:
+##   - cidr: "172.16.1.0/24"
+##     nextHopIP: "10.0.0.1"

@@ -15,6 +15,39 @@ spec:
   enableExternal: false
   namespaces:
     - {{ .Release.Namespace }}
+{{- if .Values.peers }}
+{{- $hexLookup := dict "0" 0 "1" 1 "2" 2 "3" 3 "4" 4 "5" 5 "6" 6 "7" 7 "8" 8 "9" 9 "a" 10 "b" 11 "c" 12 "d" 13 "e" 14 "f" 15 }}
+  vpcPeerings:
+{{- range .Values.peers }}
+{{- $remoteRelease := printf "virtualprivatecloud-%s" .vpcName }}
+{{- $remoteVpcId := printf "vpc-%s" (printf "%s/%s" .tenantNamespace $remoteRelease | sha256sum | trunc 6) }}
+{{- $sorted := list $vpcId $remoteVpcId | sortAlpha }}
+{{- $pairKey := join "/" $sorted }}
+{{- $pairHash := sha256sum $pairKey }}
+{{- $h0 := int (get $hexLookup (substr 0 1 $pairHash)) }}
+{{- $h1 := int (get $hexLookup (substr 1 2 $pairHash)) }}
+{{- $h2 := int (get $hexLookup (substr 2 3 $pairHash)) }}
+{{- $h3 := int (get $hexLookup (substr 3 4 $pairHash)) }}
+{{- $byte0 := add (mul $h0 16) $h1 }}
+{{- $byte1 := add (mul $h2 16) $h3 }}
+{{- $oct3 := int (add (mod $byte0 254) 1) }}
+{{- $base4 := int (mul (mod $byte1 64) 4) }}
+{{- if eq $vpcId (index $sorted 0) }}
+    - remoteVpc: {{ $remoteVpcId }}
+      localConnectIP: {{ printf "169.254.%d.%d" $oct3 (int (add $base4 1)) }}
+{{- else }}
+    - remoteVpc: {{ $remoteVpcId }}
+      localConnectIP: {{ printf "169.254.%d.%d" $oct3 (int (add $base4 2)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if .Values.routes }}
+  staticRoutes:
+{{- range .Values.routes }}
+    - cidr: {{ .cidr | quote }}
+      nextHopIP: {{ .nextHopIP | quote }}
+{{- end }}
+{{- end }}
 
 {{- range .Values.subnets }}
 {{- $subnetId := print "subnet-" (print $.Release.Namespace "/" $vpcId "/" .name | sha256sum | trunc 8) }}
@@ -69,6 +102,12 @@ data:
   {{- range .Values.subnets }}
   {{ .name }}.ID: {{ print "subnet-" (print $.Release.Namespace "/" $vpcId "/" .name | sha256sum | trunc 8) }}
   {{ .name }}.CIDR: {{ .cidr }}
+  {{- end }}
+  {{- range .Values.peers }}
+  {{- $remoteRelease := printf "virtualprivatecloud-%s" .vpcName }}
+  {{- $remoteVpcId := printf "vpc-%s" (printf "%s/%s" .tenantNamespace $remoteRelease | sha256sum | trunc 6) }}
+  peer.{{ .tenantNamespace }}.{{ .vpcName }}.vpcId: {{ $remoteVpcId | quote }}
+  peer.{{ .tenantNamespace }}.{{ .vpcName }}.tenantNamespace: {{ .tenantNamespace | quote }}
   {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1

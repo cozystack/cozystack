@@ -2,6 +2,50 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "peers": {
+      "description": "VPC peering connections (bidirectional declaration required)",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "tenantNamespace",
+          "vpcName"
+        ],
+        "properties": {
+          "tenantNamespace": {
+            "description": "Namespace of the remote tenant",
+            "type": "string"
+          },
+          "vpcName": {
+            "description": "Logical name of the remote VPC (without \"virtualprivatecloud-\" prefix)",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "routes": {
+      "description": "Static routes for the VPC",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "cidr",
+          "nextHopIP"
+        ],
+        "properties": {
+          "cidr": {
+            "description": "Destination CIDR",
+            "type": "string"
+          },
+          "nextHopIP": {
+            "description": "Next hop IP address",
+            "type": "string"
+          }
+        }
+      }
+    },
     "subnets": {
       "description": "Subnets of a VPC",
       "type": "array",
