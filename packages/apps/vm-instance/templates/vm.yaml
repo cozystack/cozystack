@@ -34,6 +34,12 @@ spec:
     metadata:
       annotations:
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+        {{- $ovnIPName := printf "%s.%s" (include "virtual-machine.fullname" .) .Release.Namespace }}
+        {{- $ovnIP := lookup "kubeovn.io/v1" "IP" "" $ovnIPName }}
+        {{- if $ovnIP }}
+        ovn.kubernetes.io/mac_address: {{ $ovnIP.spec.macAddress | quote }}
+        ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
+        {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
     spec:
