@@ -1,0 +1,178 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "proxmox-csi-plugin.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-csi-plugin.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.updateStrategy.type }}
+    rollingUpdate:
+      {{- toYaml .Values.updateStrategy.rollingUpdate | nindent 6 }}
+  selector:
+    matchLabels:
+      {{- include "proxmox-csi-plugin.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toJson .Values.config | sha256sum }}
+      {{- with default .Values.podAnnotations .Values.controller.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and .Values.metrics.enabled (eq .Values.metrics.type "annotation") }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+      {{- end }}
+      labels:
+        {{- include "proxmox-csi-plugin.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      enableServiceLinks: false
+      serviceAccountName: {{ include "proxmox-csi-plugin.serviceAccountName" . }}-controller
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      hostAliases: {{- toYaml .Values.hostAliases | nindent 8 }}
+      initContainers: {{- toYaml .Values.initContainers | nindent 8 }}
+      containers:
+        - name: {{ include "proxmox-csi-plugin.fullname" . }}-controller
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.controller.plugin.image.repository }}:{{ .Values.controller.plugin.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.controller.plugin.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--cloud-config={{ .Values.configFile }}"
+            {{- if .Values.metrics.enabled }}
+            - "--metrics-address=:{{ .Values.metrics.port }}"
+            {{- end }}
+          ports:
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          resources:
+            {{- toYaml .Values.controller.plugin.resources | nindent 12 }}
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: cloud-config
+              mountPath: /etc/proxmox/
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        - name: csi-attacher
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.controller.attacher.image.repository }}:{{ .Values.controller.attacher.image.tag }}"
+          imagePullPolicy: {{ .Values.controller.attacher.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--timeout={{ .Values.timeout }}"
+            - "--leader-election"
+            - "--default-fstype=ext4"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources: {{ toYaml .Values.controller.attacher.resources | nindent 12 }}
+        - name: csi-provisioner
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.controller.provisioner.image.repository }}:{{ .Values.controller.provisioner.image.tag }}"
+          imagePullPolicy: {{ .Values.controller.provisioner.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--timeout={{ .Values.timeout }}"
+            - "--leader-election"
+            - "--default-fstype=ext4"
+            - "--feature-gates=Topology=True"
+            - "--enable-capacity"
+            - "--capacity-ownerref-level=2"
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources: {{ toYaml .Values.controller.provisioner.resources | nindent 12 }}
+        - name: csi-resizer
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.controller.resizer.image.repository }}:{{ .Values.controller.resizer.image.tag }}"
+          imagePullPolicy: {{ .Values.controller.resizer.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+            - "--timeout={{ .Values.timeout }}"
+            - "--handle-volume-inuse-error=false"
+            - "--leader-election"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources: {{ toYaml .Values.controller.resizer.resources | nindent 12 }}
+        - name: liveness-probe
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.livenessprobe.image.repository }}:{{ .Values.livenessprobe.image.tag }}"
+          imagePullPolicy: {{ .Values.livenessprobe.image.pullPolicy }}
+          args:
+            - "-v={{ .Values.logVerbosityLevel }}"
+            - "--csi-address=unix:///csi/csi.sock"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources: {{ toYaml .Values.livenessprobe.resources | nindent 12 }}
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        {{- if .Values.existingConfigSecret }}
+        - name: cloud-config
+          secret:
+            secretName: {{ .Values.existingConfigSecret }}
+            items:
+              - key: {{ .Values.existingConfigSecretKey }}
+                path: config.yaml
+        {{- else }}
+        - name: cloud-config
+          secret:
+            secretName: {{ include "proxmox-csi-plugin.fullname" . }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "proxmox-csi-plugin.selectorLabels" . | nindent 14 }}
