@@ -6,8 +6,6 @@ env:
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths-ignore:
-      - 'docs/**/*'
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 concurrency:
@@ -15,6 +13,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  detect-changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!docs/**'
+
   build:
     name: Build
     runs-on: [self-hosted]
@@ -22,9 +33,11 @@ jobs:
       contents: read
       packages: write
 
-    # Never run when the PR carries the "release" label.
+    needs: ["detect-changes"]
+    # Never run when the PR carries the "release" label or only docs changed.
     if: |
-      !contains(github.event.pull_request.labels.*.name, 'release')
+      needs.detect-changes.outputs.code == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
 
     steps:
       - name: Checkout code
