@@ -1936,12 +1936,12 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 				map[string]any{
 					"type": "EnrichedTable",
 					"data": map[string]any{
-						"id":                   "external-ips-table",
-						"fetchUrl":             "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
-						"clusterNamePartOfUrl": "{2}",
-						"baseprefix":           "/openapi-ui",
-						"customizationId":      "factory-details-v1.services",
-						"pathToItems":          []any{"items"},
+						"id":              "external-ips-table",
+						"fetchUrl":        "/api/clusters/{2}/k8s/api/v1/namespaces/{3}/services",
+						"cluster":         "{2}",
+						"baseprefix":      "/openapi-ui",
+						"customizationId": "factory-details-v1.services",
+						"pathToItems":     ".items",
 						"fieldSelector": map[string]any{
 							"spec.type": "LoadBalancer",
 						},
