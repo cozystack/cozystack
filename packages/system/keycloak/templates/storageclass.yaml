@@ -1,0 +1,10 @@
+{{- if .Values.storageClass.enable }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: keycloak-db-retain
+provisioner: {{ required ".Values.storageClass.provisioner is required when storageClass.enable is true" .Values.storageClass.provisioner }}
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+{{- end }}

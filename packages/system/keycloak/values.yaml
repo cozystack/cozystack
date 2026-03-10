@@ -10,6 +10,11 @@ ingress:
     nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
     nginx.ingress.kubernetes.io/session-cookie-max-age: "86400"
     nginx.ingress.kubernetes.io/session-cookie-name: "keycloak-cookie"
+
+storageClass:
+  enable: false
+  provisioner: ""
+
 resources:
   requests:
     memory: 500Mi
