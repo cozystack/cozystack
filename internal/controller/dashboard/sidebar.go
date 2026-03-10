@@ -38,6 +38,23 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 	}
 	all = crdList.Items
 
+	// 1b) Fetch all MarketplacePanels to determine which resources are hidden
+	hiddenResources := map[string]bool{}
+	var mpList dashv1alpha1.MarketplacePanelList
+	if err := m.List(ctx, &mpList, &client.ListOptions{}); err == nil {
+		for i := range mpList.Items {
+			mp := &mpList.Items[i]
+			if mp.Spec.Raw != nil {
+				var spec map[string]any
+				if err := json.Unmarshal(mp.Spec.Raw, &spec); err == nil {
+					if hidden, ok := spec["hidden"].(bool); ok && hidden {
+						hiddenResources[mp.Name] = true
+					}
+				}
+			}
+		}
+	}
+
 	// 2) Build category -> []item map (only for CRDs with spec.dashboard != nil)
 	type item struct {
 		Key    string
@@ -62,6 +79,11 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 		g, v, kind := pickGVK(def)
 		plural := pickPlural(kind, def)
 		lowerKind := strings.ToLower(kind)
+
+		// Skip resources hidden via MarketplacePanel
+		if hiddenResources[def.Name] {
+			continue
+		}
 
 		// Check if this resource is a module
 		if def.Spec.Dashboard.Module {
