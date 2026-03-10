@@ -285,6 +285,11 @@ vmagent:
   extraArgs: {}
 
 fluent-bit:
+  # Per-tenant log routing: routes logs from tenant namespaces to their own VLogs
+  # tenantLogRouting:
+  # - namespace: tenant-example
+  #   vlogs: vlogs-generic.tenant-example.svc
+  tenantLogRouting: []
   rbac:
     eventsAccess: true
   readinessProbe:
@@ -374,6 +379,21 @@ fluent-bit:
           json_date_format iso8601
           header AccountID 0
           header ProjectID 0
+      {{- range .Values.tenantLogRouting }}
+      {{- if not .namespace }}{{ fail "tenantLogRouting: namespace is required" }}{{- end }}
+      {{- if not .vlogs }}{{ fail "tenantLogRouting: vlogs is required" }}{{- end }}
+      [OUTPUT]
+          Name http
+          Match tenant.{{ .namespace }}.*
+          Host {{ .vlogs }}
+          port 9428
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      {{- end }}
     filters: |
       [FILTER]
           Name kubernetes
@@ -423,6 +443,13 @@ fluent-bit:
           Name modify
           Match *
           Add cluster root-cluster
+      {{- range .Values.tenantLogRouting }}
+      {{- if not .namespace }}{{ fail "tenantLogRouting: namespace is required" }}{{- end }}
+      [FILTER]
+          Name rewrite_tag
+          Match kube.*
+          Rule $kubernetes_namespace_name ^({{ .namespace }})$ tenant.{{ .namespace }}.$TAG false
+      {{- end }}
 scrapeRules:
   etcd:
     enabled: false
