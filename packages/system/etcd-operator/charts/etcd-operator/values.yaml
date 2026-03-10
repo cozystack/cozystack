@@ -98,13 +98,13 @@ kubeRbacProxy:
   image:
 
     # -- Image repository
-    repository: gcr.io/kubebuilder/kube-rbac-proxy
+    repository: quay.io/brancz/kube-rbac-proxy
 
     # -- Image pull policy
     pullPolicy: IfNotPresent
 
     # -- Version of image
-    tag: v0.16.0
+    tag: v0.18.1
 
   args:
     - --secure-listen-address=0.0.0.0:8443
