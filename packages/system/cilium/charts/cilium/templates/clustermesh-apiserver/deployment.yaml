@@ -137,6 +137,7 @@ spec:
         - --advertise-client-urls=https://localhost:2379
         - --initial-cluster-token=$(INITIAL_CLUSTER_TOKEN)
         - --auto-compaction-retention=1
+        - --enable-grpc-gateway=false
         {{- if .Values.clustermesh.apiserver.metrics.etcd.enabled }}
         - --listen-metrics-urls=http://0.0.0.0:{{ .Values.clustermesh.apiserver.metrics.etcd.port }}
         - --metrics={{ .Values.clustermesh.apiserver.metrics.etcd.mode }}
@@ -208,12 +209,13 @@ spec:
         - --prometheus-serve-addr=:{{ .Values.clustermesh.apiserver.metrics.port }}
         - --controller-group-metrics=all
         {{- end }}
-        {{- if .Values.clustermesh.enableMCSAPISupport }}
+        {{- if or .Values.clustermesh.mcsapi.enabled .Values.clustermesh.enableMCSAPISupport }}
         - --clustermesh-enable-mcs-api
         {{- end }}
         {{- if .Values.ciliumEndpointSlice.enabled }}
         - --enable-cilium-endpoint-slice
         {{- end }}
+        {{- include "clustermesh.apiserver.args.extra" . | nindent 8 }}
         {{- with .Values.clustermesh.apiserver.extraArgs }}
         {{- toYaml . | trim | nindent 8 }}
         {{- end }}
@@ -303,12 +305,14 @@ spec:
         {{- if hasKey .Values.clustermesh "maxConnectedClusters" }}
         - --max-connected-clusters={{ .Values.clustermesh.maxConnectedClusters }}
         {{- end }}
+        - --clustermesh-cache-ttl={{ .Values.clustermesh.cacheTTL }}
         - --health-port={{ .Values.clustermesh.apiserver.kvstoremesh.healthPort }}
         {{- if .Values.clustermesh.apiserver.metrics.kvstoremesh.enabled }}
         - --prometheus-serve-addr=:{{ .Values.clustermesh.apiserver.metrics.kvstoremesh.port }}
         - --controller-group-metrics=all
         {{- end }}
         - --enable-heartbeat={{ eq "true" (include "identityAllocationCRD" .) | ternary "false" "true" }}
+        {{- include "clustermesh.kvstoremesh.args.extra" . | nindent 8 }}
         {{- with .Values.clustermesh.apiserver.kvstoremesh.extraArgs }}
         {{- toYaml . | trim | nindent 8 }}
         {{- end }}
@@ -505,7 +509,7 @@ spec:
       {{- end }}
       {{- if and .Values.clustermesh.config.enabled .Values.clustermesh.apiserver.kvstoremesh.enabled }}
       hostAliases:
-      {{- range $cluster := .Values.clustermesh.config.clusters }}
+      {{- range $_, $cluster := (include "clustermesh-clusters" . | fromJson) }}
       {{- range $ip := $cluster.ips }}
       - ip: {{ $ip }}
         hostnames: [ "{{ $cluster.name }}.{{ $.Values.clustermesh.config.domain }}" ]
