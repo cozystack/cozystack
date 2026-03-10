@@ -68,30 +68,45 @@ func (m *Manager) ensureMarketplacePanel(ctx context.Context, crd *cozyv1alpha1.
 		tags[i] = t
 	}
 
-	specMap := map[string]any{
-		"description": d.Description,
-		"name":        displayName,
-		"type":        "nonCrd",
-		"apiGroup":    "apps.cozystack.io",
-		"apiVersion":  "v1alpha1",
-		"plural":      app.Plural, // e.g., "buckets"
-		"disabled":    false,
-		"hidden":      false,
-		"tags":        tags,
-		"icon":        d.Icon,
-	}
-
-	specBytes, err := json.Marshal(specMap)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	_, err = controllerutil.CreateOrUpdate(ctx, m.Client, mp, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, m.Client, mp, func() error {
 		if err := controllerutil.SetOwnerReference(crd, mp, m.Scheme); err != nil {
 			return err
 		}
 		// Add dashboard labels to dynamic resources
 		m.addDashboardLabels(mp, crd, ResourceTypeDynamic)
+
+		// Preserve user-set disabled/hidden values from existing resource
+		disabled := false
+		hidden := false
+		if mp.Spec.Raw != nil {
+			var existing map[string]any
+			if err := json.Unmarshal(mp.Spec.Raw, &existing); err == nil {
+				if v, ok := existing["disabled"].(bool); ok {
+					disabled = v
+				}
+				if v, ok := existing["hidden"].(bool); ok {
+					hidden = v
+				}
+			}
+		}
+
+		specMap := map[string]any{
+			"description": d.Description,
+			"name":        displayName,
+			"type":        "nonCrd",
+			"apiGroup":    "apps.cozystack.io",
+			"apiVersion":  "v1alpha1",
+			"plural":      app.Plural, // e.g., "buckets"
+			"disabled":    disabled,
+			"hidden":      hidden,
+			"tags":        tags,
+			"icon":        d.Icon,
+		}
+
+		specBytes, err := json.Marshal(specMap)
+		if err != nil {
+			return err
+		}
 
 		// Only update spec if it's different to avoid unnecessary updates
 		newSpec := dashv1alpha1.ArbitrarySpec{
