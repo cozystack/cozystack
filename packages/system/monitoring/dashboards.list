@@ -7,6 +7,8 @@ ingress/namespace-detail
 db/cloudnativepg
 db/maria-db
 db/redis
+vm/virtual-machines
+vm/console-logs
 kafka/strimzi-kafka
 clickhouse/altinity-clickhouse-operator-dashboard
 nats/nats-jetstream
