@@ -155,5 +155,6 @@
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.cozystack-scheduler" $) }}
 
 {{- end }}
