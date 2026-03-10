@@ -13,6 +13,15 @@
 set -euo pipefail
 
 DEFAULT_VERSION="v3.13"
+
+# Skip if the CRD does not exist (rabbitmq was never installed)
+if ! kubectl api-resources --api-group=apps.cozystack.io -o name 2>/dev/null | grep -q '^rabbitmqs\.'; then
+  echo "CRD rabbitmqs.apps.cozystack.io not found, skipping migration"
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=35 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+
 RABBITMQS=$(kubectl get rabbitmqs.apps.cozystack.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}')
 for resource in $RABBITMQS; do
   NS="${resource%%/*}"
