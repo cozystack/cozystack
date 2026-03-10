@@ -1,0 +1,938 @@
+{
+  "uid": "vm-tenant",
+  "title": "Virtual Machines",
+  "tags": ["vm"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "query": "label_values(kubevirt_vmi_memory_available_bytes, namespace)",
+        "multi": false,
+        "includeAll": false,
+        "current": {},
+        "sort": 1
+      },
+      {
+        "name": "vm",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds}"
+        },
+        "query": "label_values(kubevirt_vmi_memory_available_bytes{namespace=\"$namespace\"}, name)",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "title": "",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "title": "Active VMs",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "count(kubevirt_vmi_memory_available_bytes{namespace=\"$namespace\", name=~\"$vm\"})",
+          "legendFormat": ""
+        }
+      ],
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Total Memory",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "sum(kubevirt_vmi_memory_domain_bytes{namespace=\"$namespace\", name=~\"$vm\"})",
+          "legendFormat": ""
+        }
+      ],
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": { "steps": [{ "color": "blue", "value": null }] }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Total Memory Used",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "sum(kubevirt_vmi_memory_domain_bytes{namespace=\"$namespace\", name=~\"$vm\"} - kubevirt_vmi_memory_unused_bytes{namespace=\"$namespace\", name=~\"$vm\"})",
+          "legendFormat": ""
+        }
+      ],
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": { "steps": [{ "color": "orange", "value": null }] }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Average CPU",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "avg(rate(kubevirt_vmi_cpu_usage_seconds_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval]))",
+          "legendFormat": ""
+        }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area", "textMode": "value" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "red", "value": 0.9 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Total Network",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "sum(rate(kubevirt_vmi_network_traffic_bytes_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval]))",
+          "legendFormat": ""
+        }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area", "textMode": "value" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "thresholds": { "steps": [{ "color": "purple", "value": null }] }
+        }
+      }
+    },
+    {
+      "id": 50,
+      "title": "VM Overview",
+      "type": "table",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_cpu_usage_seconds_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}",
+          "refId": "cpu",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "kubevirt_vmi_memory_domain_bytes{namespace=\"$namespace\", name=~\"$vm\"}",
+          "legendFormat": "{{ name }}",
+          "refId": "mem_total",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "1 - (kubevirt_vmi_memory_unused_bytes{namespace=\"$namespace\", name=~\"$vm\"} / kubevirt_vmi_memory_domain_bytes{namespace=\"$namespace\", name=~\"$vm\"})",
+          "legendFormat": "{{ name }}",
+          "refId": "mem_pct",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "rate(kubevirt_vmi_network_receive_bytes_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}",
+          "refId": "net_rx",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "rate(kubevirt_vmi_network_transmit_bytes_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}",
+          "refId": "net_tx",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "rate(kubevirt_vmi_storage_iops_read_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}",
+          "refId": "iops_r",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "rate(kubevirt_vmi_storage_iops_write_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}",
+          "refId": "iops_w",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "expr": "kubevirt_vmi_filesystem_used_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"} / kubevirt_vmi_filesystem_capacity_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"}",
+          "legendFormat": "{{ name }}",
+          "refId": "disk_pct",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "cluster": true,
+              "disk_name": true,
+              "drive": true,
+              "file_system_type": true,
+              "interface": true,
+              "job": true,
+              "kubernetes_vmi_label_app_kubernetes_io_instance": true,
+              "kubernetes_vmi_label_app_kubernetes_io_name": true,
+              "mount_point": true,
+              "namespace": true,
+              "prometheus": true,
+              "tenant": true
+            },
+            "renameByName": {
+              "name": "VM",
+              "Value #cpu": "CPU",
+              "Value #mem_total": "Total RAM",
+              "Value #mem_pct": "RAM %",
+              "Value #disk_pct": "Disk %",
+              "Value #net_rx": "Net RX",
+              "Value #net_tx": "Net TX",
+              "Value #iops_r": "IOPS Read",
+              "Value #iops_w": "IOPS Write"
+            },
+            "indexByName": {
+              "VM": 0,
+              "CPU": 1,
+              "Total RAM": 2,
+              "RAM %": 3,
+              "Disk %": 4,
+              "Net RX": 5,
+              "Net TX": 6,
+              "IOPS Read": 7,
+              "IOPS Write": 8
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "CPU" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "decimals", "value": 1 },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 0.5 },
+                    { "color": "red", "value": 0.8 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background-solid" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Total RAM" },
+            "properties": [
+              { "id": "unit", "value": "bytes" },
+              { "id": "decimals", "value": 0 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "RAM %" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "decimals", "value": 0 },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 0.7 },
+                    { "color": "red", "value": 0.9 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background-solid" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Disk %" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "decimals", "value": 0 },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 0.7 },
+                    { "color": "orange", "value": 0.85 },
+                    { "color": "red", "value": 0.95 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background-solid" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Net RX" },
+            "properties": [{ "id": "unit", "value": "Bps" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Net TX" },
+            "properties": [{ "id": "unit", "value": "Bps" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "IOPS Read" },
+            "properties": [
+              { "id": "unit", "value": "iops" },
+              { "id": "decimals", "value": 0 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "IOPS Write" },
+            "properties": [
+              { "id": "unit", "value": "iops" },
+              { "id": "decimals", "value": 0 }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 101,
+      "title": "CPU",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false
+    },
+    {
+      "id": 10,
+      "title": "CPU per VM",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_cpu_usage_seconds_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "CPU User / System",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_cpu_user_usage_seconds_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - user"
+        },
+        {
+          "expr": "rate(kubevirt_vmi_cpu_system_usage_seconds_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - system"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "vCPU Wait (Saturation)",
+      "description": "Time spent by the vCPU waiting for scheduling. A high value indicates CPU contention on the host.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_vcpu_wait_seconds_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "vCPU Delay (Steal Time)",
+      "description": "Time during which the vCPU was ready but could not execute. Equivalent to steal time.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_vcpu_delay_seconds_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 102,
+      "title": "Memory",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "collapsed": false
+    },
+    {
+      "id": 20,
+      "title": "Memory Used per VM",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "kubevirt_vmi_memory_domain_bytes{namespace=\"$namespace\", name=~\"$vm\"} - kubevirt_vmi_memory_unused_bytes{namespace=\"$namespace\", name=~\"$vm\"}",
+          "legendFormat": "{{ name }} - used"
+        },
+        {
+          "expr": "kubevirt_vmi_memory_domain_bytes{namespace=\"$namespace\", name=~\"$vm\"}",
+          "legendFormat": "{{ name }} - total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Memory % Used",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "1 - (kubevirt_vmi_memory_unused_bytes{namespace=\"$namespace\", name=~\"$vm\"} / kubevirt_vmi_memory_domain_bytes{namespace=\"$namespace\", name=~\"$vm\"})",
+          "legendFormat": "{{ name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "red", "value": 0.9 }
+            ]
+          },
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Swap I/O",
+      "description": "Swap activity. Swap usage indicates memory pressure inside the VM.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_memory_swap_in_traffic_bytes{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - swap in"
+        },
+        {
+          "expr": "rate(kubevirt_vmi_memory_swap_out_traffic_bytes{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - swap out"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 23,
+      "title": "Page Faults",
+      "description": "Major page faults indicate memory pressure (data read from disk).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_memory_pgmajfault_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - major"
+        },
+        {
+          "expr": "rate(kubevirt_vmi_memory_pgminfault_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - minor"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 103,
+      "title": "Network",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 },
+      "collapsed": false
+    },
+    {
+      "id": 30,
+      "title": "Inbound Throughput (RX)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_network_receive_bytes_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 31,
+      "title": "Outbound Throughput (TX)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_network_transmit_bytes_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 32,
+      "title": "Packets/s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 57 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_network_receive_packets_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }} RX"
+        },
+        {
+          "expr": "rate(kubevirt_vmi_network_transmit_packets_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }} TX"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 33,
+      "title": "Errors & Drops",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 57 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_network_receive_errors_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }} RX errors"
+        },
+        {
+          "expr": "rate(kubevirt_vmi_network_transmit_errors_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }} TX errors"
+        },
+        {
+          "expr": "rate(kubevirt_vmi_network_receive_packets_dropped_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }} RX dropped"
+        },
+        {
+          "expr": "rate(kubevirt_vmi_network_transmit_packets_dropped_total{namespace=\"$namespace\", name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} - {{ interface }} TX dropped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 105,
+      "title": "Filesystem",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 65 },
+      "collapsed": false
+    },
+    {
+      "id": 60,
+      "title": "Disk Usage (/) per VM",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 66 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "kubevirt_vmi_filesystem_used_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"} / kubevirt_vmi_filesystem_capacity_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"}",
+          "legendFormat": "{{ name }}"
+        }
+      ],
+      "options": {
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "orange", "value": 0.85 },
+              { "color": "red", "value": 0.95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 61,
+      "title": "Used vs Capacity (/)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 66 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "kubevirt_vmi_filesystem_used_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"}",
+          "legendFormat": "{{ name }} - used"
+        },
+        {
+          "expr": "kubevirt_vmi_filesystem_capacity_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"} - kubevirt_vmi_filesystem_used_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"}",
+          "legendFormat": "{{ name }} - free"
+        }
+      ],
+      "options": {
+        "displayMode": "lcd",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": { "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*free" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "semi-dark-green", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": ".*used" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "semi-dark-orange", "mode": "fixed" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 62,
+      "title": "Disk Usage Over Time (/)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 74 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "kubevirt_vmi_filesystem_used_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"} / kubevirt_vmi_filesystem_capacity_bytes{namespace=\"$namespace\", name=~\"$vm\", mount_point=\"/\", file_system_type=~\"ext4|xfs|btrfs\"}",
+          "legendFormat": "{{ name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.7 },
+              { "color": "orange", "value": 0.85 },
+              { "color": "red", "value": 0.95 }
+            ]
+          },
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "id": 104,
+      "title": "Disk I/O",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 82 },
+      "collapsed": false
+    },
+    {
+      "id": 40,
+      "title": "IOPS Read",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 83 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_iops_read_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "iops",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 41,
+      "title": "IOPS Write",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 83 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_iops_write_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "iops",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 42,
+      "title": "Read Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 91 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_read_traffic_bytes_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 43,
+      "title": "Write Throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 91 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_write_traffic_bytes_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 44,
+      "title": "Read Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 99 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_read_times_seconds_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval]) / clamp_min(rate(kubevirt_vmi_storage_iops_read_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval]), 0.001)",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 45,
+      "title": "Write Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 99 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_write_times_seconds_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval]) / clamp_min(rate(kubevirt_vmi_storage_iops_write_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval]), 0.001)",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 46,
+      "title": "Flush Latency",
+      "description": "Average time of flush operations (disk sync). Spikes indicate storage saturation.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 107 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_flush_times_seconds_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval]) / clamp_min(rate(kubevirt_vmi_storage_flush_requests_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval]), 0.001)",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    },
+    {
+      "id": 47,
+      "title": "Flush Ops/s",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 107 },
+      "datasource": { "type": "prometheus", "uid": "${ds}" },
+      "targets": [
+        {
+          "expr": "rate(kubevirt_vmi_storage_flush_requests_total{namespace=\"$namespace\", name=~\"$vm\", drive!=\"cloudinitdisk\"}[$__rate_interval])",
+          "legendFormat": "{{ name }} ({{ drive }})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        }
+      }
+    }
+  ]
+}

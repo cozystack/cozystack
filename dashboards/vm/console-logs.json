@@ -1,0 +1,72 @@
+{
+  "uid": "vm-console-logs",
+  "title": "VM Console Logs",
+  "tags": ["vm", "logs"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "ds_logs",
+        "label": "Logs",
+        "type": "datasource",
+        "query": "victoriametrics-logs-datasource",
+        "current": {}
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "textbox",
+        "current": {
+          "text": "*",
+          "value": "*"
+        },
+        "description": "Kubernetes namespace filter (supports wildcards, e.g. tenant-* or *)"
+      },
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "textbox",
+        "current": {
+          "text": "*",
+          "value": "*"
+        },
+        "description": "VM name filter (supports wildcards, e.g. node-* or *)"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Console Output",
+      "description": "Serial console output from virtual machines.",
+      "type": "logs",
+      "gridPos": { "h": 28, "w": 24, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "${ds_logs}"
+      },
+      "targets": [
+        {
+          "expr": "kubernetes_container_name:guest-console-log kubernetes_namespace_name:${namespace} kubernetes_labels.vm.kubevirt.io/name:${vm} | rename \"kubernetes_labels.vm.kubevirt.io/name\" as vm, kubernetes_namespace_name as namespace | fields _time, _msg, namespace, vm",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    }
+  ]
+}
