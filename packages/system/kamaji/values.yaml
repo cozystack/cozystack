@@ -3,7 +3,7 @@ kamaji:
     deploy: false
   image:
     pullPolicy: IfNotPresent
-    tag: v0.41.10@sha256:9ac09f817c67de652bacedcdc0390cd343401879b6c1a1c28131a0f109af3804
+    tag: v0.41.11@sha256:9ac09f817c67de652bacedcdc0390cd343401879b6c1a1c28131a0f109af3804
     repository: ghcr.io/cozystack/cozystack/kamaji
   resources:
     limits:
@@ -13,4 +13,4 @@ kamaji:
       cpu: 100m
       memory: 100Mi
   extraArgs:
-    - --migrate-image=ghcr.io/cozystack/cozystack/kamaji:v0.41.10@sha256:9ac09f817c67de652bacedcdc0390cd343401879b6c1a1c28131a0f109af3804
+    - --migrate-image=ghcr.io/cozystack/cozystack/kamaji:v0.41.11@sha256:9ac09f817c67de652bacedcdc0390cd343401879b6c1a1c28131a0f109af3804
