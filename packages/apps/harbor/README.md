@@ -1,6 +1,6 @@
 # Managed Harbor Container Registry
 
-Harbor is an open source trusted cloud native registry project that stores, signs, and scans content.
+Harbor is an open-source trusted cloud-native registry project that stores, signs, and scans content.
 
 ## Parameters
 
