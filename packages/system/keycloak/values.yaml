@@ -13,6 +13,7 @@ ingress:
 
 storageClass:
   enable: false
+  name: ""
   provisioner: ""
 
 resources:

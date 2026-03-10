@@ -7,7 +7,7 @@ spec:
   storage:
     size: 20Gi
     {{- if .Values.storageClass.enable }}
-    storageClass: keycloak-db-retain
+    storageClass: {{ .Values.storageClass.name | default "keycloak-db-retain" }}
     {{- end }}
   {{- if .Values._cluster.scheduling }}
   {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
