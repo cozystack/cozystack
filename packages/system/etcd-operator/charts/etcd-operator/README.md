@@ -38,8 +38,8 @@
 | kubeRbacProxy.args[2] | string | `"--logtostderr=true"` |  |
 | kubeRbacProxy.args[3] | string | `"--v=0"` |  |
 | kubeRbacProxy.image.pullPolicy | string | `"IfNotPresent"` | Image pull policy |
-| kubeRbacProxy.image.repository | string | `"gcr.io/kubebuilder/kube-rbac-proxy"` | Image repository |
-| kubeRbacProxy.image.tag | string | `"v0.16.0"` | Version of image |
+| kubeRbacProxy.image.repository | string | `"quay.io/brancz/kube-rbac-proxy"` | Image repository |
+| kubeRbacProxy.image.tag | string | `"v0.18.1"` | Version of image |
 | kubeRbacProxy.livenessProbe | object | `{}` | https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/ |
 | kubeRbacProxy.readinessProbe | object | `{}` | https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/ |
 | kubeRbacProxy.resources | object | `{"limits":{"cpu":"250m","memory":"128Mi"},"requests":{"cpu":"100m","memory":"64Mi"}}` | ref: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/ |
