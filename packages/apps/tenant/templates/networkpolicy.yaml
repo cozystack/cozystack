@@ -207,6 +207,27 @@ spec:
   - toEndpoints:
       - matchLabels:
           "k8s:io.kubernetes.pod.namespace": cozy-kubevirt-cdi
+{{- if .Values.monitoring }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-egress-virt-handler
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+      "k8s:app.kubernetes.io/name": "vmagent"
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:kubevirt.io": "virt-handler"
+        "k8s:io.kubernetes.pod.namespace": "cozy-kubevirt"
+    toPorts:
+    - ports:
+      - port: "8443"
+        protocol: TCP
+{{- end }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
