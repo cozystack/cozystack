@@ -2,6 +2,10 @@
 name: keycloak-operator
 # -- Annotations to be added to the Deployment
 annotations: {}
+# -- Cluster domain for constructing service DNS names
+clusterDomain: cluster.local
+# -- Labels to be added to the pod
+podLabels: {}
 # -- Node labels for pod assignment
 nodeSelector: {}
 # -- Node tolerations for server scheduling to nodes with taints
@@ -9,6 +13,8 @@ tolerations: []
 # -- Affinity for pod assignment
 affinity: {}
 image:
+  # -- KubeRocketCI keycloak-operator Docker image registry.
+  registry: ""
   # -- KubeRocketCI keycloak-operator Docker image name. The released image can be found on [Dockerhub](https://hub.docker.com/r/epamedp/keycloak-operator)
   repository: epamedp/keycloak-operator
   # if not defined then .Chart.AppVersion is used
@@ -27,6 +33,16 @@ resources:
     cpu: 50m
     memory: 64Mi
 
+# -- Deployment Security Context
+# Ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+securityContext:
+  runAsNonRoot: true
+
+# -- Container Security Context
+# Ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+
 # -- Additional volumes to be added to the pod
 extraVolumes: []
 #  - name: custom-ca
@@ -44,3 +60,11 @@ extraVolumeMounts: []
 # -- If clusterReconciliationEnabled is true, the operator reconciles all Keycloak instances in the cluster;
 #  otherwise, it only reconciles instances in the same namespace by default, and cluster-scoped resources are ignored.
 clusterReconciliationEnabled: false
+
+# -- If set to true, the operator will set the owner reference for all resources that have Keycloak or KeycloakRealm as reference.
+# This is legacy behavior and not recommended for use. In the future, this will be set to false by default.
+enableOwnerRef: true
+
+# -- If set to true, enables webhook resources (ValidatingWebhookConfiguration, Service, and Certificate).
+# Webhooks require cert-manager to be installed in the cluster.
+enableWebhooks: true

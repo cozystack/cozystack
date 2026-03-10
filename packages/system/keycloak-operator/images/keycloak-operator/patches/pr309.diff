@@ -1,0 +1,187 @@
+diff --git a/internal/controller/keycloakrealmgroup/chain/chain.go b/internal/controller/keycloakrealmgroup/chain/chain.go
+index 1ca497a0..dbc3844b 100644
+--- a/internal/controller/keycloakrealmgroup/chain/chain.go
++++ b/internal/controller/keycloakrealmgroup/chain/chain.go
+@@ -15,6 +15,10 @@ type GroupContext struct {
+ 	// GroupID is the Keycloak group ID, set by CreateOrUpdateGroup handler.
+ 	GroupID string
+ 
++	// ExistingGroupID is the Keycloak group ID from a previous reconciliation (status.ID).
++	// Used to detect renames: if set, the group is fetched by ID first.
++	ExistingGroupID string
++
+ 	// ParentGroupID is the parent group's Keycloak ID (empty if top-level).
+ 	ParentGroupID string
+ 
+diff --git a/internal/controller/keycloakrealmgroup/chain/create_or_update_group.go b/internal/controller/keycloakrealmgroup/chain/create_or_update_group.go
+index 0504d9dd..931fab27 100644
+--- a/internal/controller/keycloakrealmgroup/chain/create_or_update_group.go
++++ b/internal/controller/keycloakrealmgroup/chain/create_or_update_group.go
+@@ -33,17 +33,34 @@ func (h *CreateOrUpdateGroup) Serve(
+ 		err           error
+ 	)
+ 
+-	if groupCtx.ParentGroupID != "" {
+-		existingGroup, _, err = kClient.Groups.FindChildGroupByName(ctx, realm, groupCtx.ParentGroupID, spec.Name)
+-	} else {
+-		existingGroup, _, err = kClient.Groups.FindGroupByName(ctx, realm, spec.Name)
++	// If we already have an ID from a previous reconciliation, fetch by ID first.
++	// This handles renames: spec.Name may have changed but the ID stays the same.
++	if groupCtx.ExistingGroupID != "" {
++		existingGroup, _, err = kClient.Groups.GetGroup(ctx, realm, groupCtx.ExistingGroupID)
++		if err != nil && !keycloakv2.IsNotFound(err) {
++			return fmt.Errorf("unable to get group by ID %q: %w", groupCtx.ExistingGroupID, err)
++		}
++
++		if keycloakv2.IsNotFound(err) {
++			log.Info("Group not found by ID, will search by name", "groupID", groupCtx.ExistingGroupID)
++			existingGroup = nil
++		}
+ 	}
+ 
+-	if err != nil && !keycloakv2.IsNotFound(err) {
+-		return fmt.Errorf("unable to search for group %q: %w", spec.Name, err)
++	// If we didn't find the group by ID, search by name.
++	if existingGroup == nil {
++		if groupCtx.ParentGroupID != "" {
++			existingGroup, _, err = kClient.Groups.FindChildGroupByName(ctx, realm, groupCtx.ParentGroupID, spec.Name)
++		} else {
++			existingGroup, _, err = kClient.Groups.FindGroupByName(ctx, realm, spec.Name)
++		}
++
++		if err != nil && !keycloakv2.IsNotFound(err) {
++			return fmt.Errorf("unable to search for group %q: %w", spec.Name, err)
++		}
+ 	}
+ 
+-	if keycloakv2.IsNotFound(err) {
++	if existingGroup == nil {
+ 		groupRep := keycloakv2.GroupRepresentation{
+ 			Name:        &spec.Name,
+ 			Description: &spec.Description,
+@@ -67,6 +84,7 @@ func (h *CreateOrUpdateGroup) Serve(
+ 		log.Info("Group created", "groupID", groupCtx.GroupID)
+ 	} else {
+ 		groupCtx.GroupID = *existingGroup.Id
++		existingGroup.Name = &spec.Name
+ 		existingGroup.Description = &spec.Description
+ 		existingGroup.Path = &spec.Path
+ 		existingGroup.Attributes = &spec.Attributes
+diff --git a/internal/controller/keycloakrealmgroup/chain/create_or_update_group_test.go b/internal/controller/keycloakrealmgroup/chain/create_or_update_group_test.go
+index 26841a71..000c7538 100644
+--- a/internal/controller/keycloakrealmgroup/chain/create_or_update_group_test.go
++++ b/internal/controller/keycloakrealmgroup/chain/create_or_update_group_test.go
+@@ -265,3 +265,97 @@ func TestCreateOrUpdateGroup_Serve_FindChildGroupError(t *testing.T) {
+ 	err := h.Serve(context.Background(), group, kClient, groupCtx)
+ 	assert.ErrorContains(t, err, "unable to search for group")
+ }
++
++func TestCreateOrUpdateGroup_Serve_RenameByID(t *testing.T) {
++	mockGroups := mocks.NewMockGroupsClient(t)
++
++	kClient := &keycloakv2.KeycloakClient{Groups: mockGroups}
++	groupCtx := &GroupContext{RealmName: "test-realm", ExistingGroupID: "existing-id"}
++
++	group := &keycloakApi.KeycloakRealmGroup{}
++	group.Spec.Name = "new-name"
++	group.Spec.Description = "Updated desc"
++	group.Spec.Path = "/new-name"
++	group.Spec.Attributes = map[string][]string{"key": {"val"}}
++
++	mockGroups.EXPECT().GetGroup(
++		context.Background(), "test-realm", "existing-id",
++	).Return(&keycloakv2.GroupRepresentation{
++		Id:   ptr.To("existing-id"),
++		Name: ptr.To("old-name"),
++		Path: ptr.To("/old-name"),
++	}, nil, nil)
++
++	mockGroups.EXPECT().UpdateGroup(
++		context.Background(), "test-realm", "existing-id",
++		keycloakv2.GroupRepresentation{
++			Id:          ptr.To("existing-id"),
++			Name:        ptr.To("new-name"),
++			Description: ptr.To("Updated desc"),
++			Path:        ptr.To("/new-name"),
++			Attributes:  &map[string][]string{"key": {"val"}},
++		},
++	).Return(nil, nil)
++
++	h := NewCreateOrUpdateGroup()
++	err := h.Serve(context.Background(), group, kClient, groupCtx)
++	require.NoError(t, err)
++	assert.Equal(t, "existing-id", groupCtx.GroupID)
++}
++
++func TestCreateOrUpdateGroup_Serve_ExistingIDNotFound_FallsBackToName(t *testing.T) {
++	mockGroups := mocks.NewMockGroupsClient(t)
++
++	kClient := &keycloakv2.KeycloakClient{Groups: mockGroups}
++	groupCtx := &GroupContext{RealmName: "test-realm", ExistingGroupID: "deleted-id"}
++
++	group := &keycloakApi.KeycloakRealmGroup{}
++	group.Spec.Name = testGroupName
++	group.Spec.Path = "/test-group"
++	group.Spec.Attributes = map[string][]string{"key": {"val"}}
++
++	mockGroups.EXPECT().GetGroup(
++		context.Background(), "test-realm", "deleted-id",
++	).Return(nil, nil, keycloakv2.ErrNotFound)
++
++	mockGroups.EXPECT().FindGroupByName(
++		context.Background(), "test-realm", testGroupName,
++	).Return(nil, nil, keycloakv2.ErrNotFound)
++
++	mockGroups.EXPECT().CreateGroup(
++		context.Background(), "test-realm",
++		keycloakv2.GroupRepresentation{
++			Name:        ptr.To(testGroupName),
++			Description: ptr.To(""),
++			Path:        ptr.To("/test-group"),
++			Attributes:  &map[string][]string{"key": {"val"}},
++		},
++	).Return(&keycloakv2.Response{
++		HTTPResponse: &http.Response{
++			Header: http.Header{"Location": []string{"http://localhost/admin/realms/test-realm/groups/new-id"}},
++		},
++	}, nil)
++
++	h := NewCreateOrUpdateGroup()
++	err := h.Serve(context.Background(), group, kClient, groupCtx)
++	require.NoError(t, err)
++	assert.Equal(t, "new-id", groupCtx.GroupID)
++}
++
++func TestCreateOrUpdateGroup_Serve_GetGroupByIDError(t *testing.T) {
++	mockGroups := mocks.NewMockGroupsClient(t)
++
++	kClient := &keycloakv2.KeycloakClient{Groups: mockGroups}
++	groupCtx := &GroupContext{RealmName: "test-realm", ExistingGroupID: "existing-id"}
++
++	group := &keycloakApi.KeycloakRealmGroup{}
++	group.Spec.Name = testGroupName
++
++	mockGroups.EXPECT().GetGroup(
++		context.Background(), "test-realm", "existing-id",
++	).Return(nil, nil, errors.New("connection error"))
++
++	h := NewCreateOrUpdateGroup()
++	err := h.Serve(context.Background(), group, kClient, groupCtx)
++	assert.ErrorContains(t, err, "unable to get group by ID")
++}
+diff --git a/internal/controller/keycloakrealmgroup/keycloakrealmgroup_controller.go b/internal/controller/keycloakrealmgroup/keycloakrealmgroup_controller.go
+index 0f7e6ce3..52015e24 100644
+--- a/internal/controller/keycloakrealmgroup/keycloakrealmgroup_controller.go
++++ b/internal/controller/keycloakrealmgroup/keycloakrealmgroup_controller.go
+@@ -166,8 +166,9 @@ func (r *ReconcileKeycloakRealmGroup) tryReconcile(ctx context.Context, keycloak
+ 	}
+ 
+ 	groupCtx := &chain.GroupContext{
+-		RealmName:     realmName,
+-		ParentGroupID: parentGroupID,
++		RealmName:       realmName,
++		ParentGroupID:   parentGroupID,
++		ExistingGroupID: keycloakRealmGroup.Status.ID,
+ 	}
+ 
+ 	if err := chain.MakeChain().Serve(ctx, keycloakRealmGroup, kClientV2, groupCtx); err != nil {

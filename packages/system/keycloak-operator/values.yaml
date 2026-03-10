@@ -1,4 +1,8 @@
 keycloak-operator:
+  image:
+    registry: ghcr.io
+    repository: cozystack/cozystack/keycloak-operator
+    tag: "latest@sha256:27279247dfbd2d1e86fc4e827d34c891880ca65eefd75da1701bc0a1adf865a9"
   clusterReconciliationEnabled: true
   resources:
     limits:

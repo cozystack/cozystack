@@ -37,6 +37,10 @@ spec:
   displayHtmlName: {{ $brandingConfig.branding }}
   {{- end }}
   {{- end }}
+  sessions:
+    ssoSessionSettings:
+      idleTimeout: 86400
+      maxLifespan: 604800
 
 ---
 

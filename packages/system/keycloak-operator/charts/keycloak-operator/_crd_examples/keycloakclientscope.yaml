@@ -8,6 +8,7 @@ spec:
     name: keycloakrealm-sample
     kind: KeycloakRealm
   description: "Group Membership"
+  type: default
   protocol: openid-connect
   protocolMappers:
     - name: groups

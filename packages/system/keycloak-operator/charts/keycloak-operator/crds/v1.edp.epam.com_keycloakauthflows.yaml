@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.18.0
   name: keycloakauthflows.v1.edp.epam.com
 spec:
   group: v1.edp.epam.com
@@ -15,7 +15,7 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Reconcilation status
+    - description: Reconciliation status
       jsonPath: .status.value
       name: Status
       type: string
@@ -109,15 +109,11 @@ spec:
                 description: ProviderID for root auth flow and provider for child
                   auth flows.
                 type: string
-              realm:
-                description: |-
-                  Deprecated: use RealmRef instead.
-                  Realm is name of KeycloakRealm custom resource.
-                type: string
               realmRef:
                 description: RealmRef is reference to Realm custom resource.
                 properties:
                   kind:
+                    default: KeycloakRealm
                     description: Kind specifies the kind of the Keycloak resource.
                     enum:
                     - KeycloakRealm
@@ -126,6 +122,8 @@ spec:
                   name:
                     description: Name specifies the name of the Keycloak resource.
                     type: string
+                required:
+                - name
                 type: object
               topLevel:
                 description: TopLevel is true if this is root auth flow.
@@ -134,6 +132,7 @@ spec:
             - alias
             - builtIn
             - providerId
+            - realmRef
             - topLevel
             type: object
           status:

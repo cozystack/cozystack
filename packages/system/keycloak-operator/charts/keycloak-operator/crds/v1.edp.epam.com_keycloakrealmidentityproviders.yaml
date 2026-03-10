@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.18.0
   name: keycloakrealmidentityproviders.v1.edp.epam.com
 spec:
   group: v1.edp.epam.com
@@ -15,7 +15,7 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Reconcilation status
+    - description: Reconciliation status
       jsonPath: .status.value
       name: Status
       type: string
@@ -49,6 +49,12 @@ spec:
               addReadTokenRoleOnCreate:
                 description: AddReadTokenRoleOnCreate is a flag to add read token
                   role on create.
+                type: boolean
+              adminFineGrainedPermissionsEnabled:
+                description: |-
+                  AdminFineGrainedPermissionsEnabled enable/disable fine-grained admin permissions for an identity provider.
+                  Feature flag admin-fine-grained-authz:v1 should be enabled in Keycloak server.
+                  Important: FGAP:V1 Keycloak feature remains in preview and may be deprecated and removed in a future releases.
                 type: boolean
               alias:
                 description: Alias is a alias of identity provider.
@@ -102,18 +108,38 @@ spec:
                   type: object
                 nullable: true
                 type: array
+              permission:
+                description: Permission is a identity provider permissions configuration
+                nullable: true
+                properties:
+                  scopePermissions:
+                    description: ScopePermissions mapping of scope and the policies
+                      attached
+                    items:
+                      properties:
+                        name:
+                          type: string
+                        policies:
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - name
+                      type: object
+                    type: array
+                type: object
+              postBrokerLoginFlowAlias:
+                description: PostBrokerLoginFlowAlias is a post broker login flow
+                  alias.
+                type: string
               providerId:
                 description: ProviderID is a provider ID of identity provider.
-                type: string
-              realm:
-                description: |-
-                  Deprecated: use RealmRef instead.
-                  Realm is name of KeycloakRealm custom resource.
                 type: string
               realmRef:
                 description: RealmRef is reference to Realm custom resource.
                 properties:
                   kind:
+                    default: KeycloakRealm
                     description: Kind specifies the kind of the Keycloak resource.
                     enum:
                     - KeycloakRealm
@@ -122,6 +148,8 @@ spec:
                   name:
                     description: Name specifies the name of the Keycloak resource.
                     type: string
+                required:
+                - name
                 type: object
               storeToken:
                 description: StoreToken is a flag to store token.
@@ -134,6 +162,7 @@ spec:
             - config
             - enabled
             - providerId
+            - realmRef
             type: object
           status:
             description: KeycloakRealmIdentityProviderStatus defines the observed
