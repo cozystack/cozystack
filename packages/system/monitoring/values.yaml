@@ -80,3 +80,7 @@ vmagent:
     urls:
       - http://vminsert-shortterm:8480/insert/0/prometheus
       - http://vminsert-longterm:8480/insert/0/prometheus
+  ## inlineScrapeConfig: |
+  ##   - job_name: "custom"
+  ##     static_configs:
+  ##       - targets: ["my-service:9090"]
