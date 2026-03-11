@@ -156,7 +156,16 @@
 # Optional System Packages (controlled via bundles.enabledPackages)
 {{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
+{{- $externalDnsComponents := dict -}}
+{{- if .Values.gateway.gatewayAPI -}}
+{{- $externalDnsValues := dict "external-dns" (dict "sources" (list "service" "ingress" "gateway-httproute")) -}}
+{{- $_ := set $externalDnsComponents "external-dns" (dict "values" $externalDnsValues) -}}
+{{- end -}}
+{{- $disabled := default (list) .Values.bundles.disabledPackages -}}
+{{- $enabled := default (list) .Values.bundles.enabledPackages -}}
+{{- if and (has "cozystack.external-dns" $enabled) (not (has "cozystack.external-dns" $disabled)) -}}
+{{include "cozystack.platform.package" (list "cozystack.external-dns" "default" $ $externalDnsComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
