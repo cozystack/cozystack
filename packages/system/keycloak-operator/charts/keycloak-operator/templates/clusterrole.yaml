@@ -159,6 +159,32 @@ rules:
   - apiGroups:
       - v1.edp.epam.com
     resources:
+      - keycloakorganizations
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakorganizations/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakorganizations/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
       - keycloakrealmcomponents
     verbs:
       - create

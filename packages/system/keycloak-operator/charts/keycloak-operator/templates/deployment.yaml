@@ -16,11 +16,20 @@ spec:
   template:
     metadata:
       labels:
+        {{- include "keycloak-operator.selectorLabels" . | nindent 8 }}
         name: {{ .Values.name }}
+        control-plane: controller-manager
+        {{- if hasKey .Values.podLabels "name" }}
+        {{ fail "The 'name' key is not allowed in podLabels" }}
+        {{- end }}
+        {{- range $key, $value := .Values.podLabels }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
     spec:
       serviceAccountName: edp-{{ .Values.name }}
-      securityContext:
-        runAsNonRoot: true
+      {{- if .Values.securityContext }}
+      securityContext: {{ toYaml .Values.securityContext | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -28,12 +37,20 @@ spec:
       containers:
         - name: {{ .Values.name }}
           # Replace this with the built image name
-          image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+          image: {{ if .Values.image.registry }}{{ .Values.image.registry }}/{{ end }}{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
           imagePullPolicy: "{{ .Values.imagePullPolicy }}"
           command:
             - /manager
-          securityContext:
-            allowPrivilegeEscalation: false
+          args:
+            - --metrics-bind-address=:8443
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            {{- if .Values.enableWebhooks }}
+            - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+            {{- end }}
+          {{- if .Values.containerSecurityContext }}
+          securityContext: {{ toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- end }}
           env:
             - name: WATCH_NAMESPACE
               {{- if .Values.clusterReconciliationEnabled }}
@@ -51,11 +68,26 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-        {{- if .Values.extraVolumeMounts }}
+            - name: ENABLE_OWNER_REF
+              value: {{ .Values.enableOwnerRef | quote }}
+            - name: ENABLE_WEBHOOKS
+              value: {{ .Values.enableWebhooks | quote }}
+        {{- if or .Values.extraVolumeMounts .Values.enableWebhooks }}
           volumeMounts:
+          {{- if .Values.enableWebhooks }}
+            - mountPath: /tmp/k8s-webhook-server/serving-certs
+              name: webhook-certs
+              readOnly: true
+          {{- end }}
           {{- if .Values.extraVolumeMounts }}
             {{- toYaml .Values.extraVolumeMounts | nindent 12 }}
           {{- end }}
+        {{- end }}
+        {{- if .Values.enableWebhooks }}
+          ports:
+          - containerPort: 9443
+            name: webhook-server
+            protocol: TCP
         {{- end }}
           livenessProbe:
             httpGet:
@@ -71,8 +103,13 @@ spec:
             periodSeconds: 10
           resources:
 {{ toYaml .Values.resources | indent 12 }}
-    {{- if .Values.extraVolumes }}
+    {{- if or .Values.extraVolumes .Values.enableWebhooks }}
       volumes:
+      {{- if .Values.enableWebhooks }}
+        - name: webhook-certs
+          secret:
+            secretName: webhook-server-cert
+      {{- end }}
       {{- if .Values.extraVolumes }}
         {{- toYaml .Values.extraVolumes | nindent 8 }}
       {{- end }}

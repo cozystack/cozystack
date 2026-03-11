@@ -157,30 +157,29 @@ annotations:
     - apiVersion: v1.edp.epam.com/v1
       kind: KeycloakRealmIdentityProvider
       metadata:
-        name: instagram-test
+        name: github-test
       spec:
         realm: d2-id-k8s-realm-name
-        alias: instagram
+        alias: github
         authenticateByDefault: false
         enabled: true
         firstBrokerLoginFlowAlias: "first broker login"
-        providerId: "instagram"
+        providerId: "github"
         config:
           clientId: "foo"
           clientSecret: "bar"
-          hideOnLoginPage: "true"
           syncMode: "IMPORT"
           useJwksUrl: "true"
         mappers:
           - name: "test3212"
             identityProviderMapper: "oidc-hardcoded-role-idp-mapper"
-            identityProviderAlias: "instagram"
+            identityProviderAlias: "github"
             config:
               role: "role-tr"
               syncMode: "INHERIT"
           - name: "test-33221"
             identityProviderMapper: "hardcoded-attribute-idp-mapper"
-            identityProviderAlias: "instagram"
+            identityProviderAlias: "github"
             config:
               attribute: "foo"
               "attribute.value": "bar"
@@ -272,8 +271,8 @@ annotations:
         secret: secret-name-in-operator-ns
         url: https://keycloak.example.com
   artifacthub.io/images: |
-    - name: keycloak-operator:1.25.0
-      image: epamedp/keycloak-operator:1.25.0
+    - name: keycloak-operator:1.32.0
+      image: epamedp/keycloak-operator:1.32.0
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: KubeRocketCI Documentation
@@ -283,7 +282,7 @@ annotations:
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Deep Insights
 apiVersion: v2
-appVersion: 1.25.0
+appVersion: 1.32.0
 description: A Helm chart for KubeRocketCI Keycloak Operator
 home: https://docs.kuberocketci.io/
 icon: https://docs.kuberocketci.io/img/logo.svg
@@ -308,4 +307,4 @@ name: keycloak-operator
 sources:
 - https://github.com/epam/edp-keycloak-operator
 type: application
-version: 1.25.0
+version: 1.32.0

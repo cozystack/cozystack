@@ -14,11 +14,16 @@ spec:
   webUrl: https://argocd.example.com
   adminUrl: https://admin.example.com
   homeUrl: /home/
-  defaultClientScopes:
-    - groups
   redirectUris:
     - /url1/*
     - /url2/*
+  clientRolesV2:
+    - name: roleA
+      description: "Role A"
+      associatedClientRoles:
+        - roleB
+    - name: roleB
+      description: "Role B"
 
 ---
 

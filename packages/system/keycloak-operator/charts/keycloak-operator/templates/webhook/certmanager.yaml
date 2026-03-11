@@ -1,0 +1,25 @@
+{{- if .Values.enableWebhooks }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+      {{- include "keycloak-operator.labels" . | nindent 4 }}
+  name: {{ .Values.name }}-serving-cert
+spec:
+  dnsNames:
+  - {{ .Values.name }}-webhook-service.{{ .Release.Namespace }}.svc
+  - {{ .Values.name }}-webhook-service.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}
+  issuerRef:
+    kind: Issuer
+    name: {{ .Values.name }}-selfsigned-issuer
+  secretName: webhook-server-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  labels:
+    {{- include "keycloak-operator.labels" . | nindent 4 }}
+  name: {{ .Values.name }}-selfsigned-issuer
+spec:
+  selfSigned: {}
+{{- end }}

@@ -1,0 +1,16 @@
+{{- if .Values.enableWebhooks }}
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+      {{- include "keycloak-operator.labels" . | nindent 4 }}
+  name: {{ .Values.name }}-webhook-service
+spec:
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: 9443
+  selector:
+    {{- include "keycloak-operator.selectorLabels" . | nindent 4 }}
+    control-plane: controller-manager
+{{- end }}

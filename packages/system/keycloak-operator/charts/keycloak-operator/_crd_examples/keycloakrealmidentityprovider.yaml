@@ -5,23 +5,33 @@ metadata:
 spec:
   realmRef:
     kind: KeycloakRealm
-    name: realm
-  alias: instagram
+    name: keycloakrealm-sample
+  alias: github
   authenticateByDefault: false
   enabled: true
   firstBrokerLoginFlowAlias: "first broker login"
-  providerId: "instagram"
+  postBrokerLoginFlowAlias: "browser"
+  providerId: "github"
   config:
     clientId: "foo"
-    clientSecret: "$secretName:secretKey"
-    hideOnLoginPage: "true"
+    clientSecret: "$test-idp-secret:secret"
     syncMode: "IMPORT"
     useJwksUrl: "true"
   mappers:
     - name: "test-33221"
       identityProviderMapper: "hardcoded-attribute-idp-mapper"
-      identityProviderAlias: "instagram"
+      identityProviderAlias: "github"
       config:
         attribute: "foo"
         "attribute.value": "bar"
         syncMode: "IMPORT"
+
+---
+  
+apiVersion: v1
+kind: Secret
+metadata:
+  name: test-idp-secret
+type: Opaque
+data:
+  secret: "c2VjcmV0"  # base64 encoded value of "secret"

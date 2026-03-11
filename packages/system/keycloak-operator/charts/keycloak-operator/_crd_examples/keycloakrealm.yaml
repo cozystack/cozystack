@@ -3,7 +3,6 @@ kind: KeycloakRealm
 metadata:
   name: keycloakrealm-sample
 spec:
-  id: bfebeff6-ac63-4b46-a1f3-37df5099a9c4
   realmName: realm-sample
   keycloakRef:
     name: keycloak-sample
@@ -16,6 +15,7 @@ spec:
   realmEventConfig:
     adminEventsDetailsEnabled: false
     adminEventsEnabled: true
+    adminEventsExpiration: 544
     enabledEventTypes:
       - UPDATE_CONSENT_ERROR
       - CLIENT_LOGIN
@@ -32,6 +32,15 @@ spec:
     refreshTokenMaxReuse: 300
     revokeRefreshToken: true
     defaultSignatureAlgorithm: RS256
+  login:
+    userRegistration: true
+    forgotPassword: true
+    rememberMe: true
+    emailAsUsername: true
+    loginWithEmail: true
+    duplicateEmails: false
+    verifyEmail: true
+    editUsername: true
   userProfileConfig:
     unmanagedAttributePolicy: "ENABLED"
     attributes:
@@ -94,3 +103,16 @@ spec:
             key: "password"
         username:
           value: "username"
+  sessions:
+    ssoLoginSettings:
+      accessCodeLifespanLogin: 1800      # 30 minutes
+      accessCodeLifespanUserAction: 300  # 5 minutes
+    ssoSessionSettings:
+      idleTimeout: 1800                  # 30 minutes
+      idleTimeoutRememberMe: 604800      # 7 days
+      maxLifespan: 36000                 # 10 hours
+      maxLifespanRememberMe: 2592000     # 30 days
+    ssoOfflineSessionSettings:
+      idleTimeout: 2592000               # 30 days
+      maxLifespan: 5184000               # 60 days
+      maxLifespanEnabled: true

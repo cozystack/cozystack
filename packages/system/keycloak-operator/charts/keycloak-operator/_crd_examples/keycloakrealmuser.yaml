@@ -13,8 +13,21 @@ spec:
   enabled: true
   emailVerified: true
   keepResource: true
+  passwordSecret:
+    key: password
+    name: keycloakrealmuser-sample-password
+    temporary: true
   requiredUserActions:
-    - UPDATE_PASSWORD
-  attributes:
-    foo: "bar"
-    baz: "jazz"
+    - UPDATE_PROFILE
+  attributesV2:
+    department: ["IT"]
+    location: ["Winterfell"]
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloakrealmuser-sample-password
+type: Opaque
+data:
+  password: "U29tZVBhc3N3b3JkMTIzIQ==" # SomePassword123!

@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.18.0
   name: keycloakclients.v1.edp.epam.com
 spec:
   group: v1.edp.epam.com
@@ -15,7 +15,7 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Reconcilation status
+    - description: Reconciliation status
       jsonPath: .status.value
       name: Status
       type: string
@@ -45,8 +45,10 @@ spec:
             description: KeycloakClientSpec defines the desired state of KeycloakClient.
             properties:
               adminFineGrainedPermissionsEnabled:
-                description: AdminFineGrainedPermissionsEnabled enable/disable fine-grained
-                  admin permissions for a client.
+                description: |-
+                  AdminFineGrainedPermissionsEnabled enable/disable fine-grained admin permissions for a client.
+                  Feature flag admin-fine-grained-authz:v1 should be enabled in Keycloak server.
+                  Important: FGAP:V1 Keycloak feature remains in preview and may be deprecated and removed in a future releases.
                 type: boolean
               adminUrl:
                 description: |-
@@ -222,6 +224,8 @@ spec:
                                 within an access token or ID token representing the identity asking permissions.
                                 If not defined, user's groups are obtained from your realm configuration.
                               type: string
+                          required:
+                          - groups
                           type: object
                         logic:
                           default: POSITIVE
@@ -419,10 +423,34 @@ spec:
                   URI and tokens.
                 type: string
               clientRoles:
-                description: ClientRoles is a list of client roles names assigned
-                  to client.
+                description: |-
+                  ClientRoles is a list of client roles names assigned to client.
+                  Deprecated: Use ClientRolesV2 instead.
                 items:
                   type: string
+                nullable: true
+                type: array
+              clientRolesV2:
+                description: ClientRolesV2 is a list of client roles assigned to client.
+                items:
+                  properties:
+                    associatedClientRoles:
+                      description: |-
+                        AssociatedClientRoles is a list of client roles names associated with the current role.
+                        These roles won't be created automatically, user should specify them separately in clientRolesV2.
+                      items:
+                        type: string
+                      nullable: true
+                      type: array
+                    description:
+                      description: Description is a client role description.
+                      type: string
+                    name:
+                      description: Name is a client role name.
+                      type: string
+                  required:
+                  - name
+                  type: object
                 nullable: true
                 type: array
               consentRequired:
@@ -524,6 +552,7 @@ spec:
                 description: RealmRef is reference to Realm custom resource.
                 properties:
                   kind:
+                    default: KeycloakRealm
                     description: Kind specifies the kind of the Keycloak resource.
                     enum:
                     - KeycloakRealm
@@ -532,6 +561,8 @@ spec:
                   name:
                     description: Name specifies the name of the Keycloak resource.
                     type: string
+                required:
+                - name
                 type: object
               realmRoles:
                 description: RealmRoles is a list of realm roles assigned to client.
@@ -582,7 +613,19 @@ spec:
                   attributes:
                     additionalProperties:
                       type: string
-                    description: Attributes is a map of service account attributes.
+                    description: |-
+                      Attributes is a map of service account attributes.
+                      Deprecated: Use AttributesV2 instead.
+                    nullable: true
+                    type: object
+                  attributesV2:
+                    additionalProperties:
+                      items:
+                        type: string
+                      type: array
+                    description: |-
+                      AttributesV2 is a map of service account attributes.
+                      Each attribute can have multiple values.
                     nullable: true
                     type: object
                   clientRoles:
@@ -595,7 +638,7 @@ spec:
                           type: string
                         roles:
                           description: Roles is a list of client roles names assigned
-                            to service account.
+                            to user.
                           items:
                             type: string
                           nullable: true
@@ -608,6 +651,12 @@ spec:
                   enabled:
                     description: Enabled is a flag to enable service account.
                     type: boolean
+                  groups:
+                    description: Groups is a list of groups assigned to service account
+                    items:
+                      type: string
+                    nullable: true
+                    type: array
                   realmRoles:
                     description: RealmRoles is a list of realm roles assigned to service
                       account.
@@ -623,13 +672,6 @@ spec:
               surrogateAuthRequired:
                 description: SurrogateAuthRequired is a flag to enable surrogate auth.
                 type: boolean
-              targetRealm:
-                description: |-
-                  Deprecated: use RealmRef instead.
-                  TargetRealm is a realm name where client will be created.
-                  It has higher priority than RealmRef for backward compatibility.
-                  If both TargetRealm and RealmRef are specified, TargetRealm will be used for client creation.
-                type: string
               webOrigins:
                 description: |-
                   WebOrigins is a list of allowed CORS origins.
@@ -647,12 +689,72 @@ spec:
                 type: string
             required:
             - clientId
+            - realmRef
             type: object
           status:
             description: KeycloakClientStatus defines the observed state of KeycloakClient.
             properties:
               clientId:
                 type: string
+              conditions:
+                description: Conditions represent the latest available observations
+                  of an object's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                nullable: true
+                type: array
               failureCount:
                 format: int64
                 type: integer

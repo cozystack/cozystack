@@ -7,3 +7,29 @@ spec:
     name: keycloakrealm-sample
     kind: KeycloakRealm
   name: ArgoCDAdmins
+---
+# Example of a child group using parentGroup
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakRealmGroup
+metadata:
+  name: keycloakrealmgroup-child-sample
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  name: ArgoCDDevelopers
+  parentGroup:
+    name: keycloakrealmgroup-sample
+
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakRealmGroup
+metadata:
+  name: keycloakrealmgroup-child-sample2
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  name: ArgoCDGoDevs
+  parentGroup:
+    name: keycloakrealmgroup-child-sample

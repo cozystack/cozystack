@@ -1,0 +1,45 @@
+# Organization with identity provider configuration
+apiVersion: v1.edp.epam.com/v1alpha1
+kind: KeycloakOrganization
+metadata:
+  name: test-keycloak-organization
+  namespace: default
+spec:
+  name: "Test Organization"
+  alias: "test-org"
+  domains:
+    - "example.com"
+    - "test.com"
+  redirectUrl: "https://example.com/redirect"
+  description: "Test organization"
+  attributes:
+    department:
+      - "engineering"
+      - "qa"
+    location:
+      - "us-east"
+  identityProviders:
+    - alias: "test-org-idp"
+  realmRef:
+    kind: KeycloakRealm
+    name: test-org-realm
+
+---
+
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakRealmIdentityProvider
+metadata:
+  name: test-org-idp
+  namespace: default
+spec:
+  alias: "test-org-idp"
+  enabled: true
+  providerId: "github"
+  realmRef:
+    kind: KeycloakRealm
+    name: test-org-realm
+  config:
+    clientId: "test-org-client-id"
+    clientSecret: "test-org-client-secret"
+    kc.org.domain: "example.com"
+    kc.org.broker.redirect.mode.email-matches: "true"
