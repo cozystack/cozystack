@@ -1,0 +1,3 @@
+cert-manager:
+  config:
+    enableGatewayAPI: true
