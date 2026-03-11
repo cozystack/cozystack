@@ -46,6 +46,9 @@ spec:
         publishing:
           host: "example.org"
           apiServerEndpoint: "https://192.168.123.10:6443"
+        bundles:
+          enabledPackages:
+            - cozystack.external-dns-application
 EOF
 
   # Wait until HelmReleases appear & reconcile them
