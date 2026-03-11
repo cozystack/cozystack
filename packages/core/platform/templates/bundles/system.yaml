@@ -16,10 +16,14 @@
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* For Talos (isp-full): use KubePrism endpoint and disable cgroup autoMount */ -}}
-{{- $ciliumValues := dict "cilium" (dict
+{{- $ciliumDict := dict
   "k8sServiceHost" "localhost"
   "k8sServicePort" "7445"
-  "cgroup" (dict "autoMount" (dict "enabled" false))) -}}
+  "cgroup" (dict "autoMount" (dict "enabled" false)) -}}
+{{- if .Values.gateway.gatewayAPI -}}
+{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true) -}}
+{{- end -}}
+{{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
@@ -83,10 +87,14 @@
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* Cilium configuration - for generic k8s, always enable cgroup autoMount */ -}}
-{{- $ciliumValues := dict "cilium" (dict
+{{- $ciliumDict := dict
   "k8sServiceHost" $apiHost
   "k8sServicePort" $apiPort
-  "cgroup" (dict "autoMount" (dict "enabled" true))) -}}
+  "cgroup" (dict "autoMount" (dict "enabled" true)) -}}
+{{- if .Values.gateway.gatewayAPI -}}
+{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true) -}}
+{{- end -}}
+{{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{- /* Use kubeovn-cilium-generic variant (no values-talos.yaml) */ -}}
