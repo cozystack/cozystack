@@ -1,6 +1,10 @@
 {{- $ctx := dict "helm" . "noEnterprise" true }}
 {{- $fullname := include "vm.plain.fullname" $ctx }}
 {{- $ns := include "vm.namespace" $ctx }}
+{{- $env := dict -}}
+{{- range .Values.env | default list -}}
+  {{- $_ := set $env .name .value -}}
+{{- end -}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -33,6 +37,9 @@ spec:
       {{- if .Values.hostNetwork }}
       hostNetwork: true
       {{- end }}
+      {{- if .Values.shareProcessNamespace }}
+      shareProcessNamespace: true
+      {{- end }}
       {{- if or (.Values.serviceAccount).name (.Values.serviceAccount).create }}
       serviceAccountName: {{ (.Values.serviceAccount).name | default $fullname }}
       {{- end }}
@@ -61,9 +68,15 @@ spec:
                   fieldPath: metadata.name
             - name: OPERATOR_NAME
               value: {{ .Chart.Name }}
-            {{- if .Values.operator.useCustomConfigReloader }}
-            - name: VM_USECUSTOMCONFIGRELOADER
-              value: "true"
+            {{- with (((.Values).global).image).registry }}
+            - name: VM_CONTAINERREGISTRY
+              value: {{ quote . }}
+            {{- end -}}
+            {{- if not (empty (.Values.configReloader).image) }}
+            - name: VM_CONFIG_RELOADER_IMAGE
+              {{- $_ := set $ctx "appKey" (list "configReloader") }}
+              value: {{ include "vm.image" $ctx }}
+              {{- $_ := unset $ctx "appKey" }}
             {{- end }}
             {{- if .Values.operator.disable_prometheus_converter }}
             - name: VM_ENABLEDPROMETHEUSCONVERTER_PODMONITOR
@@ -81,7 +94,7 @@ spec:
               value: "true"
             {{- end }}
             - name: VM_ENABLEDPROMETHEUSCONVERTEROWNERREFERENCES
-              value: {{.Values.operator.enable_converter_ownership | quote}}
+              value: {{ .Values.operator.enable_converter_ownership | quote}}
           args:
             - --zap-log-level={{ .Values.logLevel }}
             - --leader-elect

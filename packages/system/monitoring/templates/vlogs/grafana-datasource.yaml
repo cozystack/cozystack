@@ -8,7 +8,7 @@ spec:
     access: proxy
     type: victoriametrics-logs-datasource
     name: vlogs-{{ .name }}
-    url: http://vlogs-{{ .name }}.{{ $.Release.Namespace }}.svc:9428
+    url: http://vlselect-{{ .name }}.{{ $.Release.Namespace }}.svc:9471
   instanceSelector:
     matchLabels:
       dashboards: grafana

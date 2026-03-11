@@ -49,7 +49,7 @@ Victoria Metrics Image
       {{- end -}}
     {{- end -}}
   {{- end -}}
-  {{- $image := ternary $ctx.image $values.image (hasKey $ctx "image") -}}
+  {{- $image := ternary (deepCopy ($ctx.image | default dict)) (deepCopy ($values.image | default dict)) (hasKey $ctx "image") -}}
   {{- if not $image.registry }}
     {{- if (($Values.global).image).registry -}}
       {{- $_ := set $image "registry" (($Values.global).image).registry -}}

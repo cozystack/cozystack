@@ -195,8 +195,10 @@ If release name contains chart name it will be used as a full name.
 {{- /* Common labels */ -}}
 {{- define "vm.labels" -}}
   {{- include "vm.validate.args" . -}}
+  {{- $Values := (.helm).Values | default .Values -}}
+  {{- $globalLabels := deepCopy (($Values.global).extraLabels | default dict) -}}
   {{- $labels := fromYaml (include "vm.selectorLabels" .) -}}
-  {{- $labels = mergeOverwrite $labels (fromYaml (include "vm.metaLabels" .)) -}}
+  {{- $labels = mergeOverwrite $globalLabels $labels (fromYaml (include "vm.metaLabels" .)) -}}
   {{- with (include "vm.image.tag" .) }}
     {{- $_ := set $labels "app.kubernetes.io/version" (regexReplaceAll "(.*)(@sha.*)" . "${1}") -}}
   {{- end -}}
