@@ -35,6 +35,8 @@ networking:
   kubeovn:
     MASTER_NODES: ""
 # Gateway configuration
+# ingress and gatewayAPI can be enabled independently;
+# future work will wire gateway.ingress into ingress controller selection
 gateway:
   ingress: true
   gatewayAPI: false
