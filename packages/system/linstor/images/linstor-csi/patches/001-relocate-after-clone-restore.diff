@@ -264,7 +264,7 @@ index 39acd95..aed18ab 100644
  		NfsServiceName:         "linstor-csi-nfs",
  		NfsSquash:              "no_root_squash",
  		NfsRecoveryVolumeBytes: 300 * 1024 * 1024,
-+		RelocateAfterClone:     false,
++		RelocateAfterClone:     true,
  	}
  
  	for k, v := range params {
