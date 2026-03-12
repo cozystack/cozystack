@@ -18,5 +18,5 @@ spec:
       path: system/backupstrategy-controller
       install:
         privileged: true
-        namespace: cozy-backupstrategy-controller
+        namespace: cozy-backup-controller
         releaseName: backupstrategy-controller
