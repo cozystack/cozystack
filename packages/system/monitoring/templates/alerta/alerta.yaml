@@ -140,6 +140,14 @@ spec:
             - name: SLACK_SEVERITY_FILTER
               value: {{ .Values.alerta.alerts.slack.disabledSeverity | toJson | quote }}
             {{- end }}
+            {{- if .Values.alerta.alerts.slack.dashboardUrl }}
+            - name: DASHBOARD_URL
+              value: {{ .Values.alerta.alerts.slack.dashboardUrl | quote }}
+            {{- end }}
+            {{- if .Values.alerta.alerts.slack.summaryFmt }}
+            - name: SLACK_SUMMARY_FMT
+              value: {{ .Values.alerta.alerts.slack.summaryFmt | quote }}
+            {{- end }}
             {{- end }}
 
           ports:

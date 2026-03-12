@@ -63,6 +63,8 @@ alerta:
     slack:
       url: ""
       disabledSeverity: []
+      dashboardUrl: ""
+      summaryFmt: ""
 grafana:
   db:
     size: 10Gi
@@ -76,7 +78,8 @@ grafana:
 vmagent:
   externalLabels:
     cluster: cozystack
+    environment: ""
   remoteWrite:
     urls:
-      - http://vminsert-shortterm:8480/insert/0/prometheus
-      - http://vminsert-longterm:8480/insert/0/prometheus
+    - http://vminsert-shortterm:8480/insert/0/prometheus
+    - http://vminsert-longterm:8480/insert/0/prometheus
