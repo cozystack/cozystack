@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -141,8 +142,8 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err := r.Status().Update(ctx, pkg); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Return success to avoid requeue, but don't create HelmReleases
-		return ctrl.Result{}, nil
+		// Requeue to periodically recheck dependencies in case watch events are missed
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// Create HelmReleases for components with Install section
