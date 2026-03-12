@@ -1,0 +1,9 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozystack-scheduler
+rules:
+  - apiGroups: ["cozystack.io"]
+    resources:
+      - schedulingclasses
+    verbs: ["get", "list", "watch"]

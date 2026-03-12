@@ -1,0 +1,3 @@
+apiVersion: v2
+name: cozy-cozystack-scheduler
+version: 0.1.0

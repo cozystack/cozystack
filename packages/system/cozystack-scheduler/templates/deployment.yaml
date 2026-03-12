@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cozystack-scheduler
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: cozystack-scheduler
+  template:
+    metadata:
+      labels:
+        app: cozystack-scheduler
+    spec:
+      serviceAccountName: cozystack-scheduler
+      containers:
+        - name: cozystack-scheduler
+          image: {{ .Values.image }}
+          command:
+            - /cozystack-scheduler
+            - --config=/etc/kubernetes/scheduler-config.yaml
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+            initialDelaySeconds: 15
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kubernetes/scheduler-config.yaml
+              subPath: scheduler-config.yaml
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: cozystack-scheduler-config

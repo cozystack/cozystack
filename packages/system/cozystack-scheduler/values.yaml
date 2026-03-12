@@ -1,0 +1,2 @@
+image: ghcr.io/cozystack/cozystack/cozystack-scheduler:v0.1.0@sha256:5f7150c82177478467ff80628acb5a400291aff503364aa9e26fc346d79a73cf
+replicas: 1
