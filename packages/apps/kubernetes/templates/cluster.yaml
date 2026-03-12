@@ -74,7 +74,7 @@ spec:
           volumes:
           - name: system
             containerDisk:
-              image: "{{ $.Files.Get "images/ubuntu-container-disk.tag" | trim }}"
+              image: "{{ $.Files.Get (printf "images/ubuntu-container-disk-%s.tag" $.Values.version) | trim }}"
           - name: ephemeral
             emptyDisk:
               capacity: {{ .group.ephemeralStorage | default "20Gi" }}
@@ -249,6 +249,9 @@ spec:
       joinConfiguration:
         nodeRegistration:
           kubeletExtraArgs: {}
+          # Ignore this for 1.31
+          ignorePreflightErrors:
+          - FileExisting-conntrack
         discovery:
           bootstrapToken:
             apiServerEndpoint: {{ $.Release.Name }}.{{ $.Release.Namespace }}.svc:6443
