@@ -1,3 +1,12 @@
+{{- $endpoint := printf "s3.%s" .Values._namespace.host }}
+{{- range $name, $user := .Values.users }}
+  {{- $secretName := printf "%s-%s" $.Values.bucketName $name }}
+  {{- $existingSecret := lookup "v1" "Secret" $.Release.Namespace $secretName }}
+  {{- if $existingSecret }}
+    {{- $bucketInfo := fromJson (b64dec (index $existingSecret.data "BucketInfo")) }}
+    {{- $endpoint = trimPrefix "https://" (index $bucketInfo.spec.secretS3 "endpoint") }}
+  {{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,6 +26,6 @@ spec:
         image: "{{ $.Files.Get "images/s3manager.tag" | trim }}"
         env:
         - name: ENDPOINT
-          value: "s3.{{ .Values._namespace.host }}"
+          value: {{ $endpoint | quote }}
         - name: SKIP_SSL_VERIFICATION
           value: "true"
