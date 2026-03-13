@@ -1,0 +1,27 @@
+{{- if .Values.devicePlugin.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hami-vgpu.device-plugin" . }}
+  namespace: {{ include "hami-vgpu.namespace" . }}
+  labels:
+    app.kubernetes.io/component: hami-device-plugin
+    {{- include "hami-vgpu.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {
+        "nodeconfig": [
+            {
+                "name": "m5-cloudinfra-online02",
+                "operatingmode": "hami-core",
+                "devicememoryscaling": 1.8,
+                "devicesplitcount": 10,
+                "migstrategy":"none",
+                "filterdevices": {
+                  "uuid": [],
+                  "index": []
+                }
+            }
+        ]
+    }
+{{- end -}}

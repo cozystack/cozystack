@@ -1,0 +1,63 @@
+{{- define "cozystack.defaultHamiValues" -}}
+hami:
+  devicePlugin:
+    runtimeClassName: nvidia
+  scheduler:
+    kubeScheduler:
+      image:
+        registry: registry.k8s.io
+        repository: kube-scheduler
+        tag: {{ include "kubernetes.versionMap" . | quote }}
+{{- end }}
+{{- if .Values.addons.hami.enabled }}
+{{- if not .Values.addons.gpuOperator.enabled }}
+{{- fail "addons.hami requires addons.gpuOperator to be enabled" }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-hami
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+spec:
+  releaseName: hami
+  chart:
+    spec:
+      chart: cozy-hami
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: HelmRepository
+        name: cozystack-system
+        namespace: cozy-system
+      version: '>= 0.0.0-0'
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: kube-system
+  storageNamespace: kube-system
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: false
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  values:
+    {{- $defaults := fromYaml (include "cozystack.defaultHamiValues" .) }}
+    {{- $overrides := deepCopy (default (dict) .Values.addons.hami.valuesOverride) }}
+    {{- toYaml (mergeOverwrite $defaults $overrides) | nindent 4 }}
+  dependsOn:
+  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
+  - name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-gpu-operator
+    namespace: {{ .Release.Namespace }}
+{{- end }}
