@@ -10,7 +10,6 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TLSRoute
 metadata:
   name: vm-exportproxy
-  namespace: cozy-kubevirt
 spec:
   parentRefs:
   - name: {{ $gatewayName }}

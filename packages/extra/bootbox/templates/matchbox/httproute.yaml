@@ -40,6 +40,23 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
+  name: bootbox-redirect-to-https
+spec:
+  parentRefs:
+  - name: bootbox
+    sectionName: http
+  hostnames:
+  - {{ $bootboxHost | quote }}
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
   name: bootbox
 spec:
   parentRefs:
