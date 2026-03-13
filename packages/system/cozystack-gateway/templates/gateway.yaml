@@ -12,6 +12,9 @@ metadata:
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
 spec:
   gatewayClassName: cilium
+  infrastructure:
+    labels:
+      cozystack.io/gateway: tenant-root
   listeners:
   - name: http
     protocol: HTTP
