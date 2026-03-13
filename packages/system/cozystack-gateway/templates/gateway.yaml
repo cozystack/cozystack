@@ -3,11 +3,12 @@
 {{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
 {{- $oidcEnabled := (index .Values._cluster "oidc-enabled") | default "false" }}
 {{- $hostnames := .Values._cluster.hostnames | default dict }}
+{{- $gatewayName := (index .Values._cluster "gateway-name") | default "cozystack" }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: cozystack
+  name: {{ $gatewayName }}
   annotations:
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
 spec:
@@ -81,3 +82,18 @@ spec:
       namespaces:
         from: All
   {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $gatewayName }}-redirect-to-https
+spec:
+  parentRefs:
+  - name: {{ $gatewayName }}
+    sectionName: http
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
