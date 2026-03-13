@@ -33,28 +33,47 @@ for extension in $EXTENSIONS; do
   export "$extension_var=$image"
 done
 
+customizationDefinition=$(cat <<EOF
+customization:
+  extraKernelArgs:
+    - cpufreq.default_governor=performance
+    - amd_pstate=active
+    - intel_idle.max_cstate=0
+EOF
+)
 for profile in $PROFILES; do
   echo "writing profile images/talos/profiles/$profile.yaml"
   case "$profile" in
-    initramfs|kernel|iso)
+    iso)
+      customization=$customizationDefinition
       image_options="{}"
       out_format="raw"
       platform="metal"
       kind="$profile"
       ;;
+    initramfs|kernel)
+      customization=
+      image_options="{}"
+      out_format="raw"
+      platform="metal"
+      kind="$profile"
+      ;; 
     installer)
+      customization=$customizationDefinition
       image_options="{}"
       out_format="raw"
       platform="metal"
       kind="installer"
       ;;
     metal)
+      customization=$customizationDefinition
       image_options="{ diskSize: 1306525696, diskFormat: raw }"
       out_format=".xz"
       platform="metal"
       kind="image"
       ;;
     nocloud)
+      customization=$customizationDefinition
       image_options="{ diskSize: 1306525696, diskFormat: raw }"
       out_format=".xz"
       platform="nocloud"
@@ -73,6 +92,7 @@ arch: amd64
 platform: ${platform}
 secureboot: false
 version: ${TALOS_VERSION}
+${customization}
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
