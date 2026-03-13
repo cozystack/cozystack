@@ -1,0 +1,23 @@
+{{- if .Values.kibana.enabled }}
+---
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  version: {{ include "elasticsearch.versionMap" $ }}
+  count: {{ .Values.kibana.replicas | default 1 }}
+  elasticsearchRef:
+    name: {{ .Release.Name }}
+  config:
+    monitoring.ui.ccs.enabled: false
+  podTemplate:
+    spec:
+      containers:
+        - name: kibana
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.kibana.resourcesPreset | default "medium") .Values.kibana.resources $) | nindent 12 }}
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: false
+{{- end }}
