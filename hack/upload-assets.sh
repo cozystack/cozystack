@@ -14,3 +14,4 @@ gh release upload --clobber $version _out/assets/kernel-amd64
 gh release upload --clobber $version _out/assets/initramfs-metal-amd64.xz
 gh release upload --clobber $version _out/assets/cozypkg-*.tar.gz
 gh release upload --clobber $version _out/assets/cozypkg-checksums.txt
+gh release upload --clobber $version _out/assets/openapi.json

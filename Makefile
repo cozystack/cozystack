@@ -58,7 +58,11 @@ manifests:
 cozypkg:
 	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg ./cmd/cozypkg
 
-assets: assets-talos assets-cozypkg
+assets: assets-talos assets-cozypkg openapi-json
+
+openapi-json:
+	mkdir -p _out/assets
+	VERSION=$(shell git describe --tags --always 2>/dev/null || echo dev) go run ./tools/openapi-gen/ > _out/assets/openapi.json
 
 assets-talos:
 	make -C packages/core/talos assets
