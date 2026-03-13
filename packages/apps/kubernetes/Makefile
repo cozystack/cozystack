@@ -1,4 +1,4 @@
-KUBERNETES_VERSION = v1.35
+KUBERNETES_VERSIONS = $(shell awk -F'"' '{print $$2}' files/versions.yaml)
 KUBERNETES_PKG_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
 
 include ../../../hack/common-envs.mk
@@ -15,17 +15,19 @@ update:
 image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
 
 image-ubuntu-container-disk:
-	docker buildx build images/ubuntu-container-disk \
-		--build-arg KUBERNETES_VERSION=${KUBERNETES_VERSION} \
-		--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(KUBERNETES_VERSION)) \
-		--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(KUBERNETES_VERSION)-$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/ubuntu-container-disk:latest \
-		--cache-to type=inline \
-		--metadata-file images/ubuntu-container-disk.json \
-		$(BUILDX_ARGS)
-	echo "$(REGISTRY)/ubuntu-container-disk:$(call settag,$(KUBERNETES_VERSION))@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk.json -o json -r)" \
-		> images/ubuntu-container-disk.tag
-	rm -f images/ubuntu-container-disk.json
+	$(foreach ver,$(KUBERNETES_VERSIONS), \
+		docker buildx build images/ubuntu-container-disk \
+			--build-arg KUBERNETES_VERSION=$(ver) \
+			--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(ver)) \
+			--tag $(REGISTRY)/ubuntu-container-disk:$(call settag,$(ver)-$(TAG)) \
+			--cache-from type=registry,ref=$(REGISTRY)/ubuntu-container-disk:$(call settag,$(ver)) \
+			--cache-to type=inline \
+			--metadata-file images/ubuntu-container-disk-$(ver).json \
+			$(BUILDX_ARGS) && \
+		echo "$(REGISTRY)/ubuntu-container-disk:$(call settag,$(ver))@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk-$(ver).json -o json -r)" \
+			> images/ubuntu-container-disk-$(ver).tag && \
+		rm -f images/ubuntu-container-disk-$(ver).json; \
+	)
 
 image-kubevirt-cloud-provider:
 	docker buildx build images/kubevirt-cloud-provider \
