@@ -80,6 +80,7 @@ tenant-u1
 | `etcd`           | Deploy own Etcd cluster.                                                                                                   | `bool`                | `false` |
 | `monitoring`     | Deploy own Monitoring Stack.                                                                                               | `bool`                | `false` |
 | `ingress`        | Deploy own Ingress Controller.                                                                                             | `bool`                | `false` |
+| `gateway`        | Deploy own Gateway API gateway (separate LB for this tenant).                                                              | `bool`                | `false` |
 | `seaweedfs`      | Deploy own SeaweedFS.                                                                                                      | `bool`                | `false` |
 | `resourceQuotas` | Define resource quotas for the tenant.                                                                                     | `map[string]quantity` | `{}`    |
 
