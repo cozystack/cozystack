@@ -1,0 +1,28 @@
+{{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $hostnames := .Values._cluster.hostnames | default dict }}
+{{- $gatewayName := (index .Values._cluster "gateway-name") | default "cozystack" }}
+{{- $gatewayNamespace := (index .Values._cluster "gateway-namespace") | default "cozy-gateway" }}
+{{- $keycloakHost := .Values.ingress.host | default (index $hostnames "keycloak") | default (printf "keycloak.%s" $host) }}
+
+{{- if eq $gatewayAPI "true" }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: keycloak
+spec:
+  parentRefs:
+  - name: {{ $gatewayName }}
+    namespace: {{ $gatewayNamespace }}
+    sectionName: https-keycloak
+  hostnames:
+  - {{ $keycloakHost | quote }}
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: keycloak-http
+      port: 80
+{{- end }}
