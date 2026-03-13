@@ -40,6 +40,13 @@ stringData:
       scheduling:
         {{- . | toYaml | nindent 8 }}
       {{- end }}
+      gateway-api: {{ .Values.gateway.gatewayAPI | quote }}
+      gateway-name: {{ .Values.gateway.name | quote }}
+      gateway-namespace: {{ .Values.gateway.namespace | quote }}
+      {{- with .Values.publishing.hostnames }}
+      hostnames:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
       {{- with $kubeRootCa.data }}
       kube-root-ca: {{ index . "ca.crt" | b64enc | quote }}
       {{- end }}

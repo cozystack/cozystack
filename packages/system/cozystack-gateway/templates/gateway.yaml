@@ -1,0 +1,80 @@
+{{- $rootHost := index .Values._cluster "root-host" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $oidcEnabled := (index .Values._cluster "oidc-enabled") | default "false" }}
+{{- $hostnames := .Values._cluster.hostnames | default dict }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cozystack
+  annotations:
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+spec:
+  gatewayClassName: cilium
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+  {{- if has "dashboard" $exposeServices }}
+  - name: https-dashboard
+    protocol: HTTPS
+    port: 443
+    hostname: {{ index $hostnames "dashboard" | default (printf "dashboard.%s" $rootHost) | quote }}
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: gateway-dashboard-tls
+    allowedRoutes:
+      namespaces:
+        from: All
+  {{- end }}
+  {{- if eq $oidcEnabled "true" }}
+  - name: https-keycloak
+    protocol: HTTPS
+    port: 443
+    hostname: {{ index $hostnames "keycloak" | default (printf "keycloak.%s" $rootHost) | quote }}
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: gateway-keycloak-tls
+    allowedRoutes:
+      namespaces:
+        from: All
+  {{- end }}
+  {{- if has "api" $exposeServices }}
+  - name: tls-passthrough-api
+    protocol: TLS
+    port: 443
+    hostname: {{ index $hostnames "api" | default (printf "api.%s" $rootHost) | quote }}
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      namespaces:
+        from: All
+  {{- end }}
+  {{- if has "vm-exportproxy" $exposeServices }}
+  - name: tls-passthrough-vm-exportproxy
+    protocol: TLS
+    port: 443
+    hostname: {{ index $hostnames "vm-exportproxy" | default (printf "vm-exportproxy.%s" $rootHost) | quote }}
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      namespaces:
+        from: All
+  {{- end }}
+  {{- if has "cdi-uploadproxy" $exposeServices }}
+  - name: tls-passthrough-cdi-uploadproxy
+    protocol: TLS
+    port: 443
+    hostname: {{ index $hostnames "cdi-uploadproxy" | default (printf "cdi-uploadproxy.%s" $rootHost) | quote }}
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      namespaces:
+        from: All
+  {{- end }}

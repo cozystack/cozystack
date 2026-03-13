@@ -129,6 +129,9 @@
 {{- $_ := set $certManagerComponents "cert-manager" (dict "values" $certManagerValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.cert-manager" "default" $ $certManagerComponents) }}
+{{- if .Values.gateway.gatewayAPI }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozystack-gateway" $) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.flux-plunger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}
 {{- $tenantComponents := dict -}}
