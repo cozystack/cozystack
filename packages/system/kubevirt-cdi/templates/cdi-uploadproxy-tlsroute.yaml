@@ -1,0 +1,25 @@
+{{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $hostnames := .Values._cluster.hostnames | default dict }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $gatewayName := (index .Values._cluster "gateway-name") | default "cozystack" }}
+{{- $gatewayNamespace := (index .Values._cluster "gateway-namespace") | default "cozy-gateway" }}
+
+{{- if and (eq $gatewayAPI "true") (has "cdi-uploadproxy" $exposeServices) }}
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: cdi-uploadproxy
+  namespace: cozy-kubevirt-cdi
+spec:
+  parentRefs:
+  - name: {{ $gatewayName }}
+    namespace: {{ $gatewayNamespace }}
+    sectionName: tls-passthrough-cdi-uploadproxy
+  hostnames:
+  - {{ index $hostnames "cdi-uploadproxy" | default (printf "cdi-uploadproxy.%s" $host) | quote }}
+  rules:
+  - backendRefs:
+    - name: cdi-uploadproxy
+      port: 443
+{{- end }}

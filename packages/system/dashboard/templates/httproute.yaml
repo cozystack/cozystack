@@ -1,0 +1,28 @@
+{{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $hostnames := .Values._cluster.hostnames | default dict }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $gatewayName := (index .Values._cluster "gateway-name") | default "cozystack" }}
+{{- $gatewayNamespace := (index .Values._cluster "gateway-namespace") | default "cozy-gateway" }}
+
+{{- if and (eq $gatewayAPI "true") (has "dashboard" $exposeServices) }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dashboard-web
+spec:
+  parentRefs:
+  - name: {{ $gatewayName }}
+    namespace: {{ $gatewayNamespace }}
+    sectionName: https-dashboard
+  hostnames:
+  - {{ index $hostnames "dashboard" | default (printf "dashboard.%s" $host) | quote }}
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: incloud-web-gatekeeper
+      port: 8000
+{{- end }}
