@@ -123,6 +123,20 @@ jobs:
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
           git push origin HEAD || true
 
+      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev
+      - name: Tag API submodule
+        if: steps.check_release.outputs.skip == 'false'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          VTAG="${{ steps.tag.outputs.tag }}"
+          SUBTAG="api/apps/v1alpha1/${VTAG}"
+          git config user.name  "cozystack-bot"
+          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
+          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git tag "${SUBTAG}" "${VTAG}^{}" 2>/dev/null || git tag "${SUBTAG}" HEAD
+          git push origin "${SUBTAG}" || true
+
       # Create or reuse draft release
       - name: Create / reuse draft release
         if: steps.check_release.outputs.skip == 'false'
