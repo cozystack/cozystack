@@ -1,0 +1,13 @@
+
+image:
+  pullPolicy: Always
+  tag: edge
+
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+
+logVerbosityLevel: 4
+
+enabledControllers:
+  - cloud-node
+  - cloud-node-lifecycle
