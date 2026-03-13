@@ -1,5 +1,5 @@
 backupStrategyController:
-  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.0.4@sha256:6486a75725a05ae735f2574c6b2c9d3184ea8301b127c4bcb1adaee51564e1a0"
+  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.0.5@sha256:96eed9980a63cc1093249dcfd5408be8f278cf6c11896d92885aa8a093395a9b"
   replicas: 2
   debug: false
   metrics:
