@@ -14,6 +14,9 @@ monitoring: false
 ## @param {bool} ingress - Deploy own Ingress Controller.
 ingress: false
 
+## @param {bool} gateway - Deploy own Gateway API gateway (separate LB for this tenant).
+gateway: false
+
 ## @param {bool} seaweedfs - Deploy own SeaweedFS.
 seaweedfs: false
 

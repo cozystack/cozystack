@@ -40,6 +40,10 @@ networking:
 gateway:
   ingress: true
   gatewayAPI: false
+  # Gateway name and namespace for system-level Gateway resource
+  # Components reference this Gateway via parentRefs
+  name: cozystack
+  namespace: cozy-gateway
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
@@ -49,6 +53,15 @@ publishing:
     - dashboard
     - vm-exportproxy
     - cdi-uploadproxy
+  # Hostname overrides for system services
+  # By default, hostname = {service-name}.{host}
+  # Override individual hostnames when the convention doesn't fit
+  #
+  # Example:
+  # hostnames:
+  #   keycloak: "auth.example.org"
+  #   dashboard: "panel.example.org"
+  hostnames: {}
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
   certificates:

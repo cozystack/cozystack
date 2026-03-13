@@ -29,6 +29,11 @@
 {{- $ingress = $tenantName }}
 {{- end }}
 
+{{- $gateway := $parentNamespace.gateway | default "" }}
+{{- if .Values.gateway }}
+{{- $gateway = $tenantName }}
+{{- end }}
+
 {{- $monitoring := $parentNamespace.monitoring | default "" }}
 {{- if .Values.monitoring }}
 {{- $monitoring = $tenantName }}
@@ -55,6 +60,7 @@ metadata:
     {{/* Labels for network policies */}}
     namespace.cozystack.io/etcd: {{ $etcd | quote }}
     namespace.cozystack.io/ingress: {{ $ingress | quote }}
+    namespace.cozystack.io/gateway: {{ $gateway | quote }}
     namespace.cozystack.io/monitoring: {{ $monitoring | quote }}
     namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
     namespace.cozystack.io/host: {{ $computedHost | quote }}
@@ -83,6 +89,7 @@ stringData:
     _namespace:
       etcd: {{ $etcd | quote }}
       ingress: {{ $ingress | quote }}
+      gateway: {{ $gateway | quote }}
       monitoring: {{ $monitoring | quote }}
       seaweedfs: {{ $seaweedfs | quote }}
       host: {{ $computedHost | quote }}

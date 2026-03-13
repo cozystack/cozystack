@@ -1,0 +1,75 @@
+{{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $gateway := .Values._namespace.gateway | default "" }}
+{{- $host := .Values._namespace.host }}
+{{- $bootboxHost := printf "bootbox.%s" (.Values.host | default $host) }}
+
+{{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: bootbox
+  annotations:
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+spec:
+  gatewayClassName: cilium
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ $gateway }}
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    hostname: {{ $bootboxHost | quote }}
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: {{ $bootboxHost | quote }}
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: bootbox-gateway-tls
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bootbox-redirect-to-https
+spec:
+  parentRefs:
+  - name: bootbox
+    sectionName: http
+  hostnames:
+  - {{ $bootboxHost | quote }}
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bootbox
+spec:
+  parentRefs:
+  - name: bootbox
+    sectionName: https
+  hostnames:
+  - {{ $bootboxHost | quote }}
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: bootbox
+      port: 8080
+{{- end }}
