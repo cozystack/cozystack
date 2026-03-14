@@ -15,6 +15,12 @@ spec:
   - name: cilium
     dependsOn: []
     components:
+    - name: gateway-api-crds
+      path: system/gateway-api-crds
+      install:
+        namespace: cozy-gateway-api-crds
+        releaseName: gateway-api-crds
+        dependsOn: []
     - name: cilium
       path: system/cilium
       valuesFiles:
@@ -24,7 +30,8 @@ spec:
         privileged: true
         namespace: cozy-cilium
         releaseName: cilium
-        dependsOn: []
+        dependsOn:
+        - gateway-api-crds
     - name: cilium-networkpolicy
       path: system/cilium-networkpolicy
       install:
@@ -36,6 +43,12 @@ spec:
   - name: cilium-kilo
     dependsOn: []
     components:
+    - name: gateway-api-crds
+      path: system/gateway-api-crds
+      install:
+        namespace: cozy-gateway-api-crds
+        releaseName: gateway-api-crds
+        dependsOn: []
     - name: cilium
       path: system/cilium
       valuesFiles:
@@ -46,7 +59,8 @@ spec:
         privileged: true
         namespace: cozy-cilium
         releaseName: cilium
-        dependsOn: []
+        dependsOn:
+        - gateway-api-crds
     - name: kilo
       path: system/kilo
       valuesFiles:
@@ -62,6 +76,12 @@ spec:
   - name: cilium-generic
     dependsOn: []
     components:
+    - name: gateway-api-crds
+      path: system/gateway-api-crds
+      install:
+        namespace: cozy-gateway-api-crds
+        releaseName: gateway-api-crds
+        dependsOn: []
     - name: cilium
       path: system/cilium
       valuesFiles:
@@ -70,7 +90,8 @@ spec:
         privileged: true
         namespace: cozy-cilium
         releaseName: cilium
-        dependsOn: []
+        dependsOn:
+        - gateway-api-crds
     - name: cilium-networkpolicy
       path: system/cilium-networkpolicy
       install:
@@ -82,6 +103,12 @@ spec:
   - name: kubeovn-cilium
     dependsOn: []
     components:
+    - name: gateway-api-crds
+      path: system/gateway-api-crds
+      install:
+        namespace: cozy-gateway-api-crds
+        releaseName: gateway-api-crds
+        dependsOn: []
     - name: cilium
       path: system/cilium
       valuesFiles:
@@ -92,7 +119,8 @@ spec:
         privileged: true
         namespace: cozy-cilium
         releaseName: cilium
-        dependsOn: []
+        dependsOn:
+        - gateway-api-crds
     - name: cilium-networkpolicy
       path: system/cilium-networkpolicy
       install:
@@ -113,6 +141,12 @@ spec:
   - name: kubeovn-cilium-generic
     dependsOn: []
     components:
+    - name: gateway-api-crds
+      path: system/gateway-api-crds
+      install:
+        namespace: cozy-gateway-api-crds
+        releaseName: gateway-api-crds
+        dependsOn: []
     - name: cilium
       path: system/cilium
       valuesFiles:
@@ -122,7 +156,8 @@ spec:
         privileged: true
         namespace: cozy-cilium
         releaseName: cilium
-        dependsOn: []
+        dependsOn:
+        - gateway-api-crds
     - name: cilium-networkpolicy
       path: system/cilium-networkpolicy
       install:

@@ -16,10 +16,14 @@
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* For Talos (isp-full): use KubePrism endpoint and disable cgroup autoMount */ -}}
-{{- $ciliumValues := dict "cilium" (dict
+{{- $ciliumDict := dict
   "k8sServiceHost" "localhost"
   "k8sServicePort" "7445"
-  "cgroup" (dict "autoMount" (dict "enabled" false))) -}}
+  "cgroup" (dict "autoMount" (dict "enabled" false)) -}}
+{{- if .Values.gateway.gatewayAPI -}}
+{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true) -}}
+{{- end -}}
+{{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
@@ -83,10 +87,14 @@
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* Cilium configuration - for generic k8s, always enable cgroup autoMount */ -}}
-{{- $ciliumValues := dict "cilium" (dict
+{{- $ciliumDict := dict
   "k8sServiceHost" $apiHost
   "k8sServicePort" $apiPort
-  "cgroup" (dict "autoMount" (dict "enabled" true))) -}}
+  "cgroup" (dict "autoMount" (dict "enabled" true)) -}}
+{{- if .Values.gateway.gatewayAPI -}}
+{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true) -}}
+{{- end -}}
+{{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
 {{- /* Use kubeovn-cilium-generic variant (no values-talos.yaml) */ -}}
@@ -118,7 +126,12 @@
 {{- end }}
 
 # Common Packages
-{{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{- $certManagerComponents := dict -}}
+{{- if .Values.gateway.gatewayAPI -}}
+{{- $certManagerValues := dict "cert-manager" (dict "config" (dict "enableGatewayAPI" true)) -}}
+{{- $_ := set $certManagerComponents "cert-manager" (dict "values" $certManagerValues) -}}
+{{- end -}}
+{{include "cozystack.platform.package" (list "cozystack.cert-manager" "default" $ $certManagerComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.flux-plunger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}
 {{- $tenantComponents := dict -}}
@@ -148,7 +161,16 @@
 # Optional System Packages (controlled via bundles.enabledPackages)
 {{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
+{{- $externalDnsComponents := dict -}}
+{{- if .Values.gateway.gatewayAPI -}}
+{{- $externalDnsValues := dict "external-dns" (dict "sources" (list "service" "ingress" "gateway-httproute")) -}}
+{{- $_ := set $externalDnsComponents "external-dns" (dict "values" $externalDnsValues) -}}
+{{- end -}}
+{{- $disabled := default (list) .Values.bundles.disabledPackages -}}
+{{- $enabled := default (list) .Values.bundles.enabledPackages -}}
+{{- if and (has "cozystack.external-dns" $enabled) (not (has "cozystack.external-dns" $disabled)) -}}
+{{include "cozystack.platform.package" (list "cozystack.external-dns" "default" $ $externalDnsComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
