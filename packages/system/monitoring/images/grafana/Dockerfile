@@ -13,3 +13,4 @@ RUN curl -L https://github.com/VictoriaMetrics/victorialogs-datasource/releases/
 
 RUN grafana-cli --pluginsDir /var/lib/grafana-plugins plugins install natel-discrete-panel
 RUN grafana-cli --pluginsDir /var/lib/grafana-plugins plugins install grafana-worldmap-panel
+RUN grafana-cli --pluginsDir /var/lib/grafana-plugins plugins install marcusolsson-dynamictext-panel

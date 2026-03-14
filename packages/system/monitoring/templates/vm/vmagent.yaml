@@ -11,6 +11,9 @@ spec:
   externalLabels:
     cluster: {{ .Values.vmagent.externalLabels.cluster }}
     tenant: {{ .Release.Namespace }}
+    {{- if .Values.vmagent.externalLabels.environment }}
+    environment: {{ .Values.vmagent.externalLabels.environment | quote }}
+    {{- end }}
   extraArgs:
     promscrape.maxScrapeSize: "32MB"
     promscrape.streamParse: "true"
