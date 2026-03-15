@@ -21,3 +21,8 @@ spec:
         - name: opensearch
           path: apps/opensearch
           libraries: ["cozy-lib"]
+        - name: opensearch-rd
+          path: system/opensearch-rd
+          install:
+            namespace: cozy-system
+            releaseName: opensearch-rd
