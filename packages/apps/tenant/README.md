@@ -74,14 +74,15 @@ tenant-u1
 
 ### Common parameters
 
-| Name             | Description                                                                                                                | Type                  | Value   |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------- |
-| `host`           | The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host). | `string`              | `""`    |
-| `etcd`           | Deploy own Etcd cluster.                                                                                                   | `bool`                | `false` |
-| `monitoring`     | Deploy own Monitoring Stack.                                                                                               | `bool`                | `false` |
-| `ingress`        | Deploy own Ingress Controller.                                                                                             | `bool`                | `false` |
-| `seaweedfs`      | Deploy own SeaweedFS.                                                                                                      | `bool`                | `false` |
-| `resourceQuotas` | Define resource quotas for the tenant.                                                                                     | `map[string]quantity` | `{}`    |
+| Name              | Description                                                                                                                | Type                  | Value   |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------- |
+| `host`            | The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host). | `string`              | `""`    |
+| `etcd`            | Deploy own Etcd cluster.                                                                                                   | `bool`                | `false` |
+| `monitoring`      | Deploy own Monitoring Stack.                                                                                               | `bool`                | `false` |
+| `ingress`         | Deploy own Ingress Controller.                                                                                             | `bool`                | `false` |
+| `seaweedfs`       | Deploy own SeaweedFS.                                                                                                      | `bool`                | `false` |
+| `schedulingClass` | The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.                              | `string`              | `""`    |
+| `resourceQuotas`  | Define resource quotas for the tenant.                                                                                     | `map[string]quantity` | `{}`    |
 
 
 ## Configuration
