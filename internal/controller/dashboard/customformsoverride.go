@@ -230,6 +230,10 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 		kafkaProps["storageClass"] = storageClassListInput()
 		zkProps := ensureSchemaPath(schema, "spec", "zookeeper")
 		zkProps["storageClass"] = storageClassListInput()
+
+	case "Tenant":
+		specProps := ensureSchemaPath(schema, "spec")
+		specProps["schedulingClass"] = schedulingClassListInput()
 	}
 }
 
@@ -242,6 +246,20 @@ func storageClassListInput() map[string]any {
 			"valueUri":    "/api/clusters/{cluster}/k8s/apis/storage.k8s.io/v1/storageclasses",
 			"keysToValue": []any{"metadata", "name"},
 			"keysToLabel": []any{"metadata", "name"},
+		},
+	}
+}
+
+// schedulingClassListInput returns a listInput field config for a schedulingClass dropdown
+// backed by the cluster's available SchedulingClass CRs.
+func schedulingClassListInput() map[string]any {
+	return map[string]any{
+		"type": "listInput",
+		"customProps": map[string]any{
+			"valueUri":    "/api/clusters/{cluster}/k8s/apis/cozystack.io/v1alpha1/schedulingclasses",
+			"keysToValue": []any{"metadata", "name"},
+			"keysToLabel": []any{"metadata", "name"},
+			"allowEmpty":  true,
 		},
 	}
 }
