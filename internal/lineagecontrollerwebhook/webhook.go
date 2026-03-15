@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -31,6 +33,11 @@ const (
 	ManagerGroupKey  = "apps.cozystack.io/application.group"
 	ManagerKindKey   = "apps.cozystack.io/application.kind"
 	ManagerNameKey   = "apps.cozystack.io/application.name"
+
+	// Scheduling constants
+	SchedulingClassLabel      = "scheduling.cozystack.io/class"
+	SchedulingClassAnnotation = "scheduler.cozystack.io/scheduling-class"
+	CozystackSchedulerName    = "cozystack-scheduler"
 )
 
 // getResourceSelectors returns the appropriate ApplicationDefinitionResources for a given GroupKind
@@ -115,6 +122,11 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 
 	h.applyLabels(obj, labels)
 
+	if err := h.applySchedulingClass(ctx, obj, req.Namespace); err != nil {
+		logger.Error(err, "error applying scheduling class")
+		return admission.Errored(500, fmt.Errorf("error applying scheduling class: %w", err))
+	}
+
 	mutated, err := json.Marshal(obj)
 	if err != nil {
 		return admission.Errored(500, fmt.Errorf("marshal mutated pod: %w", err))
@@ -183,6 +195,37 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 		existing[k] = v
 	}
 	o.SetLabels(existing)
+}
+
+// applySchedulingClass injects schedulerName and scheduling-class annotation
+// into Pods whose namespace carries the scheduling.cozystack.io/class label.
+func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj *unstructured.Unstructured, namespace string) error {
+	if obj.GetKind() != "Pod" {
+		return nil
+	}
+
+	ns := &corev1.Namespace{}
+	if err := h.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
+		return fmt.Errorf("getting namespace %s: %w", namespace, err)
+	}
+
+	schedulingClass, ok := ns.Labels[SchedulingClassLabel]
+	if !ok || schedulingClass == "" {
+		return nil
+	}
+
+	if err := unstructured.SetNestedField(obj.Object, CozystackSchedulerName, "spec", "schedulerName"); err != nil {
+		return fmt.Errorf("setting schedulerName: %w", err)
+	}
+
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[SchedulingClassAnnotation] = schedulingClass
+	obj.SetAnnotations(annotations)
+
+	return nil
 }
 
 func (h *LineageControllerWebhook) decodeUnstructured(req admission.Request, out *unstructured.Unstructured) error {
