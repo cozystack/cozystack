@@ -1,0 +1,31 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+spec:
+  replicas: {{ .Values.opensearch.replicas }}
+  minReplicas: 1
+  kind: opensearch
+  type: opensearch
+  selector:
+    opster.io/opensearch-cluster: {{ $.Release.Name }}
+    opster.io/opensearch-nodepool: nodes
+  version: {{ $.Chart.Version }}
+
+{{- if .Values.dashboards.enabled }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-dashboards
+spec:
+  replicas: {{ .Values.dashboards.replicas }}
+  minReplicas: 1
+  kind: opensearch
+  type: dashboards
+  selector:
+    opster.io/opensearch-cluster: {{ $.Release.Name }}
+    opensearch.cluster.dashboards: "true"
+  version: {{ $.Chart.Version }}
+{{- end }}

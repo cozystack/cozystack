@@ -1,0 +1,98 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.description" . }}
+
+## Getting started
+
+The Operator can be easily installed using helm on any CNCF-certified Kubernetes cluster. Please refer to the [User Guide](https://github.com/opensearch-project/opensearch-k8s-operator/blob/main/docs/userguide/main.md) for more information.
+
+### Installation Using Helm
+
+#### Get Repo Info
+
+```shell
+helm repo add opensearch-operator https://opensearch-project.github.io/opensearch-k8s-operator/
+helm repo update
+```
+
+#### Install Chart
+
+```shell
+helm install [RELEASE_NAME] opensearch-operator/opensearch-operator
+```
+
+#### Uninstall Chart
+
+```shell
+helm uninstall [RELEASE_NAME]
+```
+
+#### Upgrade Chart
+
+```shell
+helm repo update
+helm upgrade [RELEASE_NAME] opensearch-operator/opensearch-operator
+```
+
+{{ define "chart.valuesTableHtml" }}
+
+The following table lists the configurable parameters of the Helm chart.
+
+| Parameter | Type | Default | Description |
+| --- | ---- | ------- | ----------- |
+{{- range .Values }}
+| `{{ .Key }}` | {{ .Type }} | {{ .Default }} | {{ if .Description }}{{ .Description }}{{ else }}{{ .AutoDescription }}{{ end }} |
+{{- end }}
+
+Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`.
+
+{{ end }}
+
+{{ template "chart.valuesSectionHtml" . -}}
+
+## Namespace-scoped RBAC
+
+By default, the operator uses cluster-scoped RBAC resources (ClusterRole and ClusterRoleBinding). If you want to restrict the operator's permissions to a specific namespace, you can enable namespace-scoped RBAC by setting `useRoleBindings: true`.
+
+### Installation with namespace-scoped RBAC
+
+```shell
+helm install opensearch-operator opensearch-operator/opensearch-operator \
+  --set useRoleBindings=true \
+  --set manager.watchNamespace=<your-namespace>
+```
+
+### Important considerations
+
+When `useRoleBindings` is enabled:
+
+- **Manager and proxy roles** will be created as namespace-scoped `Role` resources instead of `ClusterRole`
+- **Metrics ClusterRole** will NOT be created, as Kubernetes does not allow namespace-scoped Roles to grant permissions to non-resource URLs (like `/metrics`)
+- **Metrics endpoint access**: The operator's `/metrics` endpoint is exposed via the kube-apiserver and requires authentication (via `TokenReviews`) and authorization (via `SubjectAccessReviews`). If you need to access metrics with monitoring tools (e.g., Prometheus), you must manually create the appropriate `ClusterRole` and `ClusterRoleBinding`:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensearch-operator-metrics-reader
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensearch-operator-metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensearch-operator-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: <your-monitoring-service-account>
+  namespace: <monitoring-namespace>
+```
+
+Opensearch-operator Helm Chart version: `{{ template "chart.version" . }}`

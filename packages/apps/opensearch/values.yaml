@@ -1,0 +1,55 @@
+##
+## @section Common parameters
+##
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+##
+## @section OpenSearch configuration
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @typedef {struct} OpenSearch - OpenSearch node configuration.
+## @field {int} replicas - Number of OpenSearch replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
+## @field {quantity} size - Persistent Volume size for OpenSearch data.
+## @field {string} storageClass - StorageClass used to store the OpenSearch data.
+
+## @param {OpenSearch} opensearch - OpenSearch configuration.
+opensearch:
+  replicas: 3
+  resources: {}
+  resourcesPreset: "medium"
+  size: 10Gi
+  storageClass: ""
+
+##
+## @section Dashboards configuration
+##
+
+## @typedef {struct} Dashboards - OpenSearch Dashboards configuration.
+## @field {bool} enabled - Enable OpenSearch Dashboards.
+## @field {int} replicas - Number of Dashboards replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
+
+## @param {Dashboards} dashboards - OpenSearch Dashboards configuration.
+dashboards:
+  enabled: true
+  replicas: 1
+  resources: {}
+  resourcesPreset: "small"

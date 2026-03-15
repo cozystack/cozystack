@@ -1,0 +1,14 @@
+<svg width="144" height="144" viewBox="0 0 144 144" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="144" height="144" rx="24" fill="url(#paint0_linear_opensearch)"/>
+<g transform="translate(28, 28) scale(0.61)">
+  <path d="M72 0C32.24 0 0 32.24 0 72s32.24 72 72 72c11.44 0 22.2-2.68 31.8-7.44l-15.2-15.2C82.08 124.08 77.16 125.2 72 125.2c-29.36 0-53.2-23.84-53.2-53.2S42.64 18.8 72 18.8s53.2 23.84 53.2 53.2c0 5.16-1.12 10.08-3.84 16.6l15.2 15.2C141.32 94.2 144 83.44 144 72 144 32.24 111.76 0 72 0z" fill="white"/>
+  <circle cx="72" cy="72" r="28" stroke="white" stroke-width="16" fill="none"/>
+  <path d="M100.8 100.8l30.4 30.4" stroke="white" stroke-width="16" stroke-linecap="round"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_opensearch" x1="140" y1="130.5" x2="4" y2="9.49999" gradientUnits="userSpaceOnUse">
+<stop stop-color="#005EB8"/>
+<stop offset="1" stop-color="#003B73"/>
+</linearGradient>
+</defs>
+</svg>

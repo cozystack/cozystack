@@ -1,0 +1,25 @@
+{{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-selfsigned-issuer
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-serving-cert
+  namespace: {{ .Release.Namespace }}
+spec:
+  dnsNames:
+  - {{ include "opensearch-operator.fullname" . }}-webhook-service.{{ .Release.Namespace }}.svc
+  - {{ include "opensearch-operator.fullname" . }}-webhook-service.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: {{ include "opensearch-operator.fullname" . }}-selfsigned-issuer
+  secretName: {{ include "opensearch-operator.fullname" . }}-webhook-server-cert
+{{- end }}
+

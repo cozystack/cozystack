@@ -1,0 +1,60 @@
+{{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-admin-password" .Release.Name) }}
+{{- $password := randAlphaNum 32 | b64enc }}
+{{- if $existingPassword }}
+  {{- $password = index $existingPassword.data "password" }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-admin-password
+data:
+  password: {{ $password }}
+
+---
+apiVersion: opensearch.opster.io/v1
+kind: OpenSearchCluster
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  general:
+    serviceName: {{ .Release.Name }}
+    version: {{ .Chart.AppVersion }}
+    httpPort: 9200
+    vendor: opensearch
+    setVMMaxMapCount: true
+    additionalConfig:
+      plugins.security.ssl.http.enabled: "true"
+  security:
+    config:
+      adminSecret:
+        name: {{ .Release.Name }}-admin-password
+  dashboards:
+    {{- if .Values.dashboards.enabled }}
+    enable: true
+    replicas: {{ .Values.dashboards.replicas }}
+    version: {{ .Chart.AppVersion }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.dashboards.resourcesPreset .Values.dashboards.resources $) | nindent 6 }}
+    {{- else }}
+    enable: false
+    {{- end }}
+  nodePools:
+    - component: nodes
+      replicas: {{ .Values.opensearch.replicas }}
+      diskSize: {{ .Values.opensearch.size | quote }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.opensearch.resourcesPreset .Values.opensearch.resources $) | nindent 8 }}
+      roles:
+        - cluster_manager
+        - data
+        - ingest
+      persistence:
+        pvc:
+          accessModes:
+            - ReadWriteOnce
+          {{- with .Values.opensearch.storageClass }}
+          storageClass: {{ . }}
+          {{- end }}
+      jvm: -Xmx512M -Xms512M

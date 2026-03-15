@@ -1,0 +1,203 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: opensearchsnapshotpolicies.opensearch.opster.io
+spec:
+  group: opensearch.opster.io
+  names:
+    kind: OpensearchSnapshotPolicy
+    listKind: OpensearchSnapshotPolicyList
+    plural: opensearchsnapshotpolicies
+    singular: opensearchsnapshotpolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Existing policy state
+      jsonPath: .status.existingSnapshotPolicy
+      name: existingpolicy
+      type: boolean
+    - description: Snapshot policy name
+      jsonPath: .status.snapshotPolicyName
+      name: policyName
+      type: string
+    - jsonPath: .status.state
+      name: state
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: OpensearchSnapshotPolicy is the Schema for the opensearchsnapshotpolicies
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              creation:
+                properties:
+                  schedule:
+                    properties:
+                      cron:
+                        properties:
+                          expression:
+                            type: string
+                          timezone:
+                            type: string
+                        required:
+                        - expression
+                        - timezone
+                        type: object
+                    required:
+                    - cron
+                    type: object
+                  timeLimit:
+                    type: string
+                required:
+                - schedule
+                type: object
+              deletion:
+                properties:
+                  deleteCondition:
+                    properties:
+                      maxAge:
+                        type: string
+                      maxCount:
+                        type: integer
+                      minCount:
+                        type: integer
+                    type: object
+                  schedule:
+                    properties:
+                      cron:
+                        properties:
+                          expression:
+                            type: string
+                          timezone:
+                            type: string
+                        required:
+                        - expression
+                        - timezone
+                        type: object
+                    required:
+                    - cron
+                    type: object
+                  timeLimit:
+                    type: string
+                type: object
+              description:
+                type: string
+              enabled:
+                type: boolean
+              notification:
+                properties:
+                  channel:
+                    properties:
+                      id:
+                        type: string
+                    required:
+                    - id
+                    type: object
+                  conditions:
+                    properties:
+                      creation:
+                        type: boolean
+                      deletion:
+                        type: boolean
+                      failure:
+                        type: boolean
+                    type: object
+                required:
+                - channel
+                type: object
+              opensearchCluster:
+                description: |-
+                  LocalObjectReference contains enough information to let you locate the
+                  referenced object inside the same namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              policyName:
+                type: string
+              snapshotConfig:
+                properties:
+                  dateFormat:
+                    type: string
+                  dateFormatTimezone:
+                    type: string
+                  ignoreUnavailable:
+                    type: boolean
+                  includeGlobalState:
+                    type: boolean
+                  indices:
+                    type: string
+                  metadata:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  partial:
+                    type: boolean
+                  repository:
+                    type: string
+                required:
+                - repository
+                type: object
+            required:
+            - creation
+            - opensearchCluster
+            - policyName
+            - snapshotConfig
+            type: object
+          status:
+            description: OpensearchSnapshotPolicyStatus defines the observed state
+              of OpensearchSnapshotPolicy
+            properties:
+              existingSnapshotPolicy:
+                type: boolean
+              managedCluster:
+                description: |-
+                  UID is a type that holds unique ID values, including UUIDs.  Because we
+                  don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                  intent and helps make sure that UIDs and names do not get conflated.
+                type: string
+              reason:
+                type: string
+              snapshotPolicyName:
+                type: string
+              state:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

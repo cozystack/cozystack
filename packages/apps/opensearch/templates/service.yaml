@@ -1,0 +1,19 @@
+{{- if .Values.external }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: LoadBalancer
+  selector:
+    opster.io/opensearch-cluster: {{ .Release.Name }}
+    opster.io/opensearch-nodepool: nodes
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+      protocol: TCP
+{{- end }}

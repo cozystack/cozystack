@@ -1,0 +1,413 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-validating-webhook-configuration
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "opensearch-operator.fullname" . }}-serving-cert
+  {{- end }}
+webhooks:
+- name: vopensearchactiongroup.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchactiongroup
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchactiongroups
+  sideEffects: None
+- name: vopensearchcluster.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchcluster
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchclusters
+  sideEffects: None
+- name: vopensearchcomponenttemplate.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchcomponenttemplate
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchcomponenttemplates
+  sideEffects: None
+- name: vopensearchindextemplate.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchindextemplate
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchindextemplates
+  sideEffects: None
+- name: vopensearchismpolicy.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchismpolicy
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchismpolicies
+  sideEffects: None
+- name: vopensearchrole.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchrole
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchroles
+  sideEffects: None
+- name: vopensearchsnapshotpolicy.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchsnapshotpolicy
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchsnapshotpolicies
+  sideEffects: None
+- name: vopensearchtenant.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchtenant
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchtenants
+  sideEffects: None
+- name: vopensearchuser.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchuser
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchusers
+  sideEffects: None
+- name: vopensearchuserrolebinding.opensearch.opster.io
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-opster-io-v1-opensearchuserrolebinding
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.opster.io
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchuserrolebindings
+  sideEffects: None
+# New API group: opensearch.org webhooks
+- name: vopensearchactiongroup.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchactiongroup
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchactiongroups
+  sideEffects: None
+- name: vopensearchcluster.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchcluster
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchclusters
+  sideEffects: None
+- name: vopensearchcomponenttemplate.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchcomponenttemplate
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchcomponenttemplates
+  sideEffects: None
+- name: vopensearchindextemplate.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchindextemplate
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchindextemplates
+  sideEffects: None
+- name: vopensearchismpolicy.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchismpolicy
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchismpolicies
+  sideEffects: None
+- name: vopensearchrole.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchrole
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchroles
+  sideEffects: None
+- name: vopensearchsnapshotpolicy.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchsnapshotpolicy
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchsnapshotpolicies
+  sideEffects: None
+- name: vopensearchtenant.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchtenant
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchtenants
+  sideEffects: None
+- name: vopensearchuser.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchuser
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchusers
+  sideEffects: None
+- name: vopensearchuserrolebinding.opensearch.org
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "opensearch-operator.fullname" . }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-opensearch-org-v1-opensearchuserrolebinding
+  failurePolicy: {{ .Values.webhook.failurePolicy | default "Fail" }}
+  rules:
+  - apiGroups:
+    - opensearch.org
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - opensearchuserrolebindings
+  sideEffects: None
+{{- end }}
+

@@ -1,0 +1,289 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+{{- if .Values.useRoleBindings }}
+kind: Role
+{{- else }}
+kind: ClusterRole
+{{- end }}
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}
+{{- if .Values.useRoleBindings }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+  labels:
+    {{- include "opensearch-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - pods
+  - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  - statefulsets/status
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - opensearch.opster.io
+  - opensearch.org
+  resources:
+  - opensearchactiongroups
+  - opensearchclusters
+  - opensearchcomponenttemplates
+  - opensearchindextemplates
+  - opensearchismpolicies
+  - opensearchroles
+  - opensearchsnapshotpolicies
+  - opensearchtenants
+  - opensearchuserrolebindings
+  - opensearchusers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - opensearch.opster.io
+  - opensearch.org
+  resources:
+  - opensearchactiongroups/finalizers
+  - opensearchclusters/finalizers
+  - opensearchcomponenttemplates/finalizers
+  - opensearchindextemplates/finalizers
+  - opensearchismpolicies/finalizers
+  - opensearchroles/finalizers
+  - opensearchsnapshotpolicies/finalizers
+  - opensearchtenants/finalizers
+  - opensearchuserrolebindings/finalizers
+  - opensearchusers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - opensearch.opster.io
+  - opensearch.org
+  resources:
+  - opensearchactiongroups/status
+  - opensearchclusters/status
+  - opensearchcomponenttemplates/status
+  - opensearchindextemplates/status
+  - opensearchismpolicies/status
+  - opensearchroles/status
+  - opensearchsnapshotpolicies/status
+  - opensearchtenants/status
+  - opensearchuserrolebindings/status
+  - opensearchusers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+{{- if not .Values.useRoleBindings }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-metrics
+  labels:
+    {{- include "opensearch-operator.labels" . | nindent 4 }}
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+{{- if .Values.useRoleBindings }}
+kind: Role
+{{- else }}
+kind: ClusterRole
+{{- end }}
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-proxy
+{{- if .Values.useRoleBindings }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+  labels:
+    {{- include "opensearch-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opensearch-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "opensearch-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "opensearch-operator.fullname" . }}-leader-election
+subjects:
+- kind: ServiceAccount
+  name: {{ include "opensearch-operator.serviceAccountName" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if .Values.useRoleBindings }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}
+{{- if .Values.useRoleBindings }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+  labels:
+    {{- include "opensearch-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: {{ if .Values.useRoleBindings }}Role{{ else }}ClusterRole{{ end }}
+  name: {{ include "opensearch-operator.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "opensearch-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if .Values.useRoleBindings }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
+metadata:
+  name: {{ include "opensearch-operator.fullname" . }}-proxy
+{{- if .Values.useRoleBindings }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+  labels:
+    {{- include "opensearch-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: {{ if .Values.useRoleBindings }}Role{{ else }}ClusterRole{{ end }}
+  name: {{ include "opensearch-operator.fullname" . }}-proxy
+subjects:
+- kind: ServiceAccount
+  name: {{ include "opensearch-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
