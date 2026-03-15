@@ -9,6 +9,7 @@ import (
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -199,6 +200,9 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 
 // applySchedulingClass injects schedulerName and scheduling-class annotation
 // into Pods whose namespace carries the scheduling.cozystack.io/class label.
+// If the referenced SchedulingClass CR does not exist (e.g. the scheduler
+// package is not installed), the injection is silently skipped so that pods
+// are not left Pending.
 func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj *unstructured.Unstructured, namespace string) error {
 	if obj.GetKind() != "Pod" {
 		return nil
@@ -214,6 +218,17 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 		return nil
 	}
 
+	// Verify that the referenced SchedulingClass CR exists.
+	// If the CRD is not installed or the CR is missing, skip injection
+	// so that pods are not stuck Pending on a non-existent scheduler.
+	_, err := h.dynClient.Resource(schedulingClassGVR).Get(ctx, schedulingClass, metav1.GetOptions{})
+	if err != nil {
+		logger := log.FromContext(ctx)
+		logger.Info("SchedulingClass not found, skipping scheduler injection",
+			"schedulingClass", schedulingClass, "namespace", namespace)
+		return nil
+	}
+
 	if err := unstructured.SetNestedField(obj.Object, CozystackSchedulerName, "spec", "schedulerName"); err != nil {
 		return fmt.Errorf("setting schedulerName: %w", err)
 	}
@@ -226,6 +241,12 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	obj.SetAnnotations(annotations)
 
 	return nil
+}
+
+var schedulingClassGVR = schema.GroupVersionResource{
+	Group:    "cozystack.io",
+	Version:  "v1alpha1",
+	Resource: "schedulingclasses",
 }
 
 func (h *LineageControllerWebhook) decodeUnstructured(req admission.Request, out *unstructured.Unstructured) error {
