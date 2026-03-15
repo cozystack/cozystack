@@ -1,0 +1,24 @@
+apiVersion: v2
+name: proxmox-cloud-controller-manager
+description: Cloud Controller Manager plugin for Proxmox
+type: application
+home: https://github.com/sergelogvinov/proxmox-cloud-controller-manager
+icon: https://raw.githubusercontent.com/sergelogvinov/proxmox-cloud-controller-manager/main/charts/proxmox-cloud-controller-manager/icon.png
+sources:
+  - https://github.com/sergelogvinov/proxmox-cloud-controller-manager
+keywords:
+  - ccm
+  - proxmox
+  - kubernetes
+maintainers:
+  - name: sergelogvinov
+    url: https://github.com/sergelogvinov
+# This is the chart version. This version number should be incremented each time you make changes
+# to the chart and its templates, including the app version.
+# Versions are expected to follow Semantic Versioning (https://semver.org/)
+version: 0.3.0
+# This is the version number of the application being deployed. This version number should be
+# incremented each time you make changes to the application. Versions are not expected to
+# follow Semantic Versioning. They should reflect the version the application is using.
+# It is recommended to use it with quotes.
+appVersion: v0.7.0

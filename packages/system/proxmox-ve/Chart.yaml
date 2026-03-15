@@ -1,0 +1,19 @@
+apiVersion: v2
+name: proxmox-ve
+description: A Helm chart for Proxmox VE integration with Kubernetes
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/cozystack/cozystack
+sources:
+  - https://github.com/cozystack/cozystack
+maintainers:
+  - name: CozyStack Team
+    email: team@cozystack.io
+keywords:
+  - proxmox
+  - kubernetes
+  - cluster-api
+  - csi
+  - networking
+# No external dependencies - all components are managed by CozyStack platform
