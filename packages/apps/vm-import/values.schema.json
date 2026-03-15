@@ -1,0 +1,99 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "enableAdoption": {
+      "description": "Automatically label imported VMs for Cozystack adoption and dashboard visibility.",
+      "type": "boolean",
+      "default": true
+    },
+    "networkMap": {
+      "description": "Mapping of source networks to destination networks.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "destinationType",
+          "sourceId"
+        ],
+        "properties": {
+          "destinationName": {
+            "description": "Name of the destination network (required if type is `multus`).",
+            "type": "string"
+          },
+          "destinationNamespace": {
+            "description": "Namespace of the destination network.",
+            "type": "string"
+          },
+          "destinationType": {
+            "description": "Destination type: `pod` for pod network, or `multus` for a Multus network.",
+            "type": "string"
+          },
+          "sourceId": {
+            "description": "The managed object reference ID of the source network in vSphere.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "sourceSecretName": {
+      "description": "Name of the Kubernetes Secret containing VMware credentials (`user`, `password`, `thumbprint` keys).",
+      "type": "string",
+      "default": ""
+    },
+    "sourceUrl": {
+      "description": "URL of the VMware vCenter server (e.g. `https://vcenter.example.com/sdk`).",
+      "type": "string",
+      "default": ""
+    },
+    "storageMap": {
+      "description": "Mapping of source datastores to destination StorageClasses.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "sourceId",
+          "storageClass"
+        ],
+        "properties": {
+          "sourceId": {
+            "description": "The managed object reference ID of the source datastore in vSphere.",
+            "type": "string"
+          },
+          "storageClass": {
+            "description": "Name of the destination Kubernetes StorageClass.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "vms": {
+      "description": "List of virtual machines to migrate.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "description": "The managed object reference ID of the VM in vSphere (e.g. `vm-123`).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Optional target name for the VM in KubeVirt.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warm": {
+      "description": "Enable warm migration (incremental replication before cutover).",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

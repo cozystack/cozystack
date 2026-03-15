@@ -1,0 +1,14 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: PackageSource
+metadata:
+  name: cozystack.vm-adoption-controller
+  namespace: cozy-system
+spec:
+  components:
+    vm-adoption-controller:
+      kind: ExternalArtifact
+      namespace: cozy-system
+      path: system/vm-adoption-controller
+  dependsOn:
+    - name: cozystack.kubevirt
+    - name: cozystack.forklift
