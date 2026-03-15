@@ -17,5 +17,8 @@ ingress: false
 ## @param {bool} seaweedfs - Deploy own SeaweedFS.
 seaweedfs: false
 
+## @param {string} [schedulingClass] - The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.
+schedulingClass: ""
+
 ## @param {map[string]quantity} resourceQuotas - Define resource quotas for the tenant.
 resourceQuotas: {}

@@ -38,6 +38,12 @@
 {{- if .Values.seaweedfs }}
 {{- $seaweedfs = $tenantName }}
 {{- end }}
+
+{{/* SchedulingClass: inherited from parent, can be set if parent has none */}}
+{{- $schedulingClass := $parentNamespace.schedulingClass | default "" }}
+{{- if and (not $schedulingClass) .Values.schedulingClass }}
+{{- $schedulingClass = .Values.schedulingClass }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -86,4 +92,7 @@ stringData:
       monitoring: {{ $monitoring | quote }}
       seaweedfs: {{ $seaweedfs | quote }}
       host: {{ $computedHost | quote }}
+      {{- with $schedulingClass }}
+      schedulingClass: {{ . | quote }}
+      {{- end }}
 {{- end }}
