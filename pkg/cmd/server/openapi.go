@@ -5,6 +5,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cozystack/cozystack/pkg/apiserver"
+	"github.com/cozystack/cozystack/pkg/config"
+	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
+	"k8s.io/apiserver/pkg/endpoints/openapi"
+	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/kube-openapi/pkg/spec3"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
@@ -210,7 +215,9 @@ func rewriteRefForKind(old, kind string) string {
 // -----------------------------------------------------------------------------
 // OpenAPI **v3** post-processor
 // -----------------------------------------------------------------------------
-func buildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*spec3.OpenAPI, error) {
+// BuildPostProcessV3 returns an OpenAPI v3 post-processor that clones base
+// Application schemas into per-kind schemas and rewrites $ref pointers.
+func BuildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*spec3.OpenAPI, error) {
 	return func(doc *spec3.OpenAPI) (*spec3.OpenAPI, error) {
 
 		if doc.Components == nil {
@@ -333,7 +340,36 @@ func sanitizeForV2(s *spec.Schema) {
 // -----------------------------------------------------------------------------
 // OpenAPI **v2** (swagger) post-processor
 // -----------------------------------------------------------------------------
-func buildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spec.Swagger, error) {
+// BuildPostProcessV2 returns a Swagger post-processor that clones base
+// Application schemas into per-kind schemas and rewrites $ref pointers.
+// KindSchemasFromConfig extracts the kind→OpenAPISchema mapping from a ResourceConfig.
+func KindSchemasFromConfig(rc *config.ResourceConfig) map[string]string {
+	m := make(map[string]string, len(rc.Resources))
+	for _, r := range rc.Resources {
+		m[r.Application.Kind] = r.Application.OpenAPISchema
+	}
+	return m
+}
+
+// ConfigureOpenAPI sets up OpenAPI v2 and v3 on a GenericAPIServer Config,
+// including the post-processors that clone Application schemas to per-kind schemas.
+func ConfigureOpenAPI(cfg *genericapiserver.Config, kindSchemas map[string]string, title, version string) {
+	cfg.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(
+		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
+	)
+	cfg.OpenAPIConfig.Info.Title = title
+	cfg.OpenAPIConfig.Info.Version = version
+	cfg.OpenAPIConfig.PostProcessSpec = BuildPostProcessV2(kindSchemas)
+
+	cfg.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
+		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
+	)
+	cfg.OpenAPIV3Config.Info.Title = title
+	cfg.OpenAPIV3Config.Info.Version = version
+	cfg.OpenAPIV3Config.PostProcessSpec = BuildPostProcessV3(kindSchemas)
+}
+
+func BuildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spec.Swagger, error) {
 	return func(sw *spec.Swagger) (*spec.Swagger, error) {
 		defs := sw.Definitions
 		base, ok1 := defs[baseRef]

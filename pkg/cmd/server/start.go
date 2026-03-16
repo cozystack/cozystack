@@ -31,12 +31,10 @@ import (
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
-	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/apiserver/pkg/endpoints/openapi"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -213,10 +211,6 @@ func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 
 	serverConfig := genericapiserver.NewRecommendedConfig(apiserver.Codecs)
 
-	serverConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(
-		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
-	)
-
 	apiVersion := "0.1"
 	if o.ResourceConfig != nil {
 		raw, err := json.Marshal(o.ResourceConfig)
@@ -227,23 +221,8 @@ func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 		apiVersion = "0.1-" + hex.EncodeToString(sum[:8])
 	}
 
-	// capture schemas from config once for fast lookup inside the closure
-	kindSchemas := map[string]string{}
-	for _, r := range o.ResourceConfig.Resources {
-		kindSchemas[r.Application.Kind] = r.Application.OpenAPISchema
-	}
-
-	serverConfig.OpenAPIConfig.Info.Title = "Cozy"
-	serverConfig.OpenAPIConfig.Info.Version = apiVersion
-	serverConfig.OpenAPIConfig.PostProcessSpec = buildPostProcessV2(kindSchemas)
-
-	serverConfig.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
-		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
-	)
-	serverConfig.OpenAPIV3Config.Info.Title = "Cozy"
-	serverConfig.OpenAPIV3Config.Info.Version = apiVersion
-
-	serverConfig.OpenAPIV3Config.PostProcessSpec = buildPostProcessV3(kindSchemas)
+	kindSchemas := KindSchemasFromConfig(o.ResourceConfig)
+	ConfigureOpenAPI(&serverConfig.Config, kindSchemas, "Cozy", apiVersion)
 
 	// Set FeatureGate and EffectiveVersion - required for Complete() in Kubernetes v0.34.1
 	// Following the pattern from sample-apiserver, but creating EffectiveVersion directly
