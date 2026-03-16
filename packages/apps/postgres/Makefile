@@ -1,7 +1,7 @@
 include ../../../hack/package.mk
 
 generate:
-	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
+	cozyvalues-gen -m 'postgresql' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/postgresql/types.go
 	../../../hack/update-crd.sh
 
 update:

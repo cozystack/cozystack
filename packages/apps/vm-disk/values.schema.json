@@ -39,7 +39,8 @@
           }
         },
         "upload": {
-          "description": "Upload local image."
+          "description": "Upload local image.",
+          "type": "object"
         }
       }
     },
