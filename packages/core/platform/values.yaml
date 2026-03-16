@@ -54,6 +54,11 @@ authentication:
     enabled: false
     insecureSkipVerify: false
     keycloakExtraRedirectUri: ""
+    # Internal URL to access KeyCloak realm for backend-to-backend requests (bypasses external DNS).
+    # When set, oauth2-proxy uses --skip-oidc-discovery and routes all backend calls (token, jwks,
+    # userinfo, logout) through this URL while keeping browser redirects on the external URL.
+    # Example: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+    keycloakInternalUrl: ""
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
