@@ -21,7 +21,8 @@
   "k8sServicePort" "7445"
   "cgroup" (dict "autoMount" (dict "enabled" false)) -}}
 {{- if .Values.gateway.gatewayAPI -}}
-{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true) -}}
+{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true "enableAlpn" true) -}}
+{{- $_ := set $ciliumDict "envoy" (dict "streamIdleTimeoutDurationSeconds" 86400) -}}
 {{- end -}}
 {{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
@@ -89,7 +90,8 @@
   "k8sServicePort" $apiPort
   "cgroup" (dict "autoMount" (dict "enabled" true)) -}}
 {{- if .Values.gateway.gatewayAPI -}}
-{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true) -}}
+{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true "enableAlpn" true) -}}
+{{- $_ := set $ciliumDict "envoy" (dict "streamIdleTimeoutDurationSeconds" 86400) -}}
 {{- end -}}
 {{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
