@@ -21,6 +21,10 @@ spec:
 
   scrapeInterval: 30s
   selectAllByDefault: false
+  {{- with .Values.vmagent.inlineScrapeConfig }}
+  inlineScrapeConfig: |
+    {{- . | nindent 4 }}
+  {{- end }}
   podScrapeNamespaceSelector:
     matchLabels:
       namespace.cozystack.io/monitoring: {{ .Release.Namespace }}
