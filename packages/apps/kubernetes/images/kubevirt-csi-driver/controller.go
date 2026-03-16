@@ -317,11 +317,7 @@ func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, 
 				"ownerReferences": []interface{}{vmiOwnerRef},
 			},
 			"spec": map[string]interface{}{
-				"endpointSelector": map[string]interface{}{
-					"matchLabels": map[string]interface{}{
-						"kubevirt.io/vm": vmName,
-					},
-				},
+				"endpointSelector": buildEndpointSelector([]string{vmName}),
 				"egress": []interface{}{
 					map[string]interface{}{
 						"toEndpoints": []interface{}{
@@ -441,6 +437,13 @@ func (w *WrappedControllerService) addCNPOwnerReference(ctx context.Context, nam
 		if err := unstructured.SetNestedSlice(existing.Object, ownerRefs, "metadata", "ownerReferences"); err != nil {
 			return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
 		}
+
+		// Rebuild endpointSelector to include all VMs
+		selector := buildEndpointSelector(vmNamesFromOwnerRefs(ownerRefs))
+		if err := unstructured.SetNestedField(existing.Object, selector, "spec", "endpointSelector"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set endpointSelector: %v", err)
+		}
+
 		if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
 			return err
 		}
@@ -486,12 +489,50 @@ func (w *WrappedControllerService) removeCNPOwnerReference(ctx context.Context, 
 		if err := unstructured.SetNestedSlice(existing.Object, remaining, "metadata", "ownerReferences"); err != nil {
 			return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
 		}
+
+		// Rebuild endpointSelector from remaining VMs
+		selector := buildEndpointSelector(vmNamesFromOwnerRefs(remaining))
+		if err := unstructured.SetNestedField(existing.Object, selector, "spec", "endpointSelector"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set endpointSelector: %v", err)
+		}
+
 		if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
 			return err
 		}
 		klog.V(3).Infof("Removed VMI %s ownerReference from CiliumNetworkPolicy %s", vmName, cnpName)
 		return nil
 	})
+}
+
+// buildEndpointSelector returns an endpointSelector using matchExpressions
+// so that multiple VMs can be listed in a single selector.
+func buildEndpointSelector(vmNames []string) map[string]interface{} {
+	values := make([]interface{}, len(vmNames))
+	for i, name := range vmNames {
+		values[i] = name
+	}
+	return map[string]interface{}{
+		"matchExpressions": []interface{}{
+			map[string]interface{}{
+				"key":      "kubevirt.io/vm",
+				"operator": "In",
+				"values":   values,
+			},
+		},
+	}
+}
+
+// vmNamesFromOwnerRefs extracts VM names from ownerReferences.
+func vmNamesFromOwnerRefs(ownerRefs []interface{}) []string {
+	var names []string
+	for _, ref := range ownerRefs {
+		if refMap, ok := ref.(map[string]interface{}); ok {
+			if name, ok := refMap["name"].(string); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 func hasRWXAccessMode(pvc *corev1.PersistentVolumeClaim) bool {
