@@ -4,6 +4,8 @@
 {{- $host := .Values._namespace.host }}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 
+{{- $gatewayClassName := (index .Values._cluster "gateway-class-name") | default "cilium" }}
+
 {{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -13,7 +15,7 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
 spec:
-  gatewayClassName: cilium
+  gatewayClassName: {{ $gatewayClassName }}
   infrastructure:
     labels:
       cozystack.io/gateway: {{ $gateway }}

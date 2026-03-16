@@ -40,6 +40,8 @@ networking:
 gateway:
   ingress: true
   gatewayAPI: false
+  # GatewayClass name for all Gateway resources (default: cilium)
+  gatewayClassName: cilium
   # Gateway name and namespace for system-level Gateway resource
   # Components reference this Gateway via parentRefs
   name: cozystack
