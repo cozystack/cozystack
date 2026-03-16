@@ -1,77 +1,8 @@
 {{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
-{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $gateway := .Values._namespace.gateway | default "" }}
 {{- $host := .Values._namespace.host }}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 
-{{- $gatewayClassName := (index .Values._cluster "gateway-class-name") | default "cilium" }}
-
 {{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: {{ .Release.Name }}-harbor
-  annotations:
-    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
-spec:
-  gatewayClassName: {{ $gatewayClassName }}
-  infrastructure:
-    labels:
-      cozystack.io/gateway: {{ $gateway }}
-  listeners:
-  - name: http
-    protocol: HTTP
-    port: 80
-    hostname: {{ $harborHost | quote }}
-    allowedRoutes:
-      namespaces:
-        from: Same
-  - name: https
-    protocol: HTTPS
-    port: 443
-    hostname: {{ $harborHost | quote }}
-    tls:
-      mode: Terminate
-      certificateRefs:
-      - name: {{ .Release.Name }}-harbor-gateway-tls
-    allowedRoutes:
-      namespaces:
-        from: Same
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: {{ .Release.Name }}-harbor-redirect-to-https
-spec:
-  parentRefs:
-  - name: {{ .Release.Name }}-harbor
-    sectionName: http
-  hostnames:
-  - {{ $harborHost | quote }}
-  rules:
-  - filters:
-    - type: RequestRedirect
-      requestRedirect:
-        scheme: https
-        statusCode: 301
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: {{ .Release.Name }}-harbor
-spec:
-  parentRefs:
-  - name: {{ .Release.Name }}-harbor
-    sectionName: https
-  hostnames:
-  - {{ $harborHost | quote }}
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: {{ .Release.Name }}
-      port: 80
+{{ include "cozy-lib.gateway.httpRoute" (dict "ctx" . "name" (printf "%s-harbor" .Release.Name) "hostname" $harborHost "backendName" .Release.Name "backendPort" 80 "certRef" (printf "%s-harbor-gateway-tls" .Release.Name)) }}
 {{- end }}
