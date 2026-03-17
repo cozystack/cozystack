@@ -119,14 +119,6 @@ Usage: {{ include "cozy-lib.ns-seaweedfs" . }}
 {{- end }}
 
 {{/*
-Get the gateway namespace reference.
-Usage: {{ include "cozy-lib.ns-gateway" . }}
-*/}}
-{{- define "cozy-lib.ns-gateway" -}}
-{{- .Values._namespace.gateway | default "" }}
-{{- end }}
-
-{{/*
 Legacy helper - kept for backward compatibility during migration.
 Loads config into context. Deprecated: use direct .Values._cluster access instead.
 */}}

@@ -20,7 +20,6 @@ spec:
       components:
         - name: bucket-system
           path: system/bucket
-          libraries: ["cozy-lib"]
         - name: bucket
           path: apps/bucket
           libraries: ["cozy-lib"]

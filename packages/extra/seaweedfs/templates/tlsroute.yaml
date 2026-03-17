@@ -2,6 +2,42 @@
 {{- $gateway := .Values._namespace.gateway | default "" }}
 {{- $host := .Values._namespace.host }}
 
+{{- $gatewayClassName := (index .Values._cluster "gateway-class-name") | default "cilium" }}
+
 {{- if and (eq $gatewayAPI "true") (ne $gateway "") (not (eq .Values.topology "Client")) (.Values.filer.grpcHost) }}
-{{ include "cozy-lib.gateway.tlsRoute" (dict "ctx" . "name" "seaweedfs-filer" "hostname" (.Values.filer.grpcHost | default (printf "filer.%s" $host)) "backendName" (printf "%s-filer-external" .Release.Name) "backendPort" 18888) }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: seaweedfs-filer
+spec:
+  gatewayClassName: {{ $gatewayClassName }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ $gateway }}
+  listeners:
+  - name: tls-passthrough
+    protocol: TLS
+    port: 443
+    hostname: {{ .Values.filer.grpcHost | default (printf "filer.%s" $host) | quote }}
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: seaweedfs-filer
+spec:
+  parentRefs:
+  - name: seaweedfs-filer
+    sectionName: tls-passthrough
+  hostnames:
+  - {{ .Values.filer.grpcHost | default (printf "filer.%s" $host) | quote }}
+  rules:
+  - backendRefs:
+    - name: {{ $.Release.Name }}-filer-external
+      port: 18888
 {{- end }}

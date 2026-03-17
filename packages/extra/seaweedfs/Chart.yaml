@@ -5,7 +5,3 @@ icon: /logos/seaweedfs.svg
 type: application
 version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
 appVersion: "3.71"
-dependencies:
-  - name: cozy-lib
-    version: "*"
-    repository: "file://charts/cozy-lib"

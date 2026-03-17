@@ -14,13 +14,9 @@ spec:
     dependsOn:
     - cozystack.networking
     - cozystack.cert-manager
-    libraries:
-      - name: cozy-lib
-        path: library/cozy-lib
     components:
     - name: cozystack-gateway
       path: system/cozystack-gateway
-      libraries: ["cozy-lib"]
       install:
         namespace: cozy-gateway
         releaseName: cozystack-gateway
