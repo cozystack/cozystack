@@ -6,6 +6,11 @@
       "description": "OpenSearch Dashboards configuration.",
       "type": "object",
       "default": {},
+      "required": [
+        "enabled",
+        "replicas",
+        "resourcesPreset"
+      ],
       "properties": {
         "enabled": {
           "description": "Enable OpenSearch Dashboards deployment.",
@@ -75,6 +80,9 @@
       "description": "Container images used by the operator.",
       "type": "object",
       "default": {},
+      "required": [
+        "opensearch"
+      ],
       "properties": {
         "opensearch": {
           "description": "OpenSearch image.",
@@ -87,6 +95,12 @@
       "description": "Node roles configuration.",
       "type": "object",
       "default": {},
+      "required": [
+        "data",
+        "ingest",
+        "master",
+        "ml"
+      ],
       "properties": {
         "data": {
           "description": "Enable data role.",
