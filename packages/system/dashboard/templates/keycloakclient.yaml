@@ -49,6 +49,8 @@ apiVersion: v1.edp.epam.com/v1
 kind: KeycloakClient
 metadata:
   name: dashboard-client
+  annotations:
+    secret-hash: {{ $dashboardClient | sha256sum }}
 spec:
   serviceAccount:
     enabled: true
