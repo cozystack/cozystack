@@ -130,7 +130,11 @@
 {{- $certManagerValues := dict "cert-manager" (dict "config" (dict "enableGatewayAPI" true)) -}}
 {{- $_ := set $certManagerComponents "cert-manager" (dict "values" $certManagerValues) -}}
 {{- end -}}
+{{- if gt (len $certManagerComponents) 0 }}
 {{include "cozystack.platform.package" (list "cozystack.cert-manager" "default" $ $certManagerComponents) }}
+{{- else }}
+{{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{- end }}
 {{- if .Values.gateway.gatewayAPI }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-gateway" $) }}
 {{- end }}
@@ -171,7 +175,11 @@
 {{- $disabled := default (list) .Values.bundles.disabledPackages -}}
 {{- $enabled := default (list) .Values.bundles.enabledPackages -}}
 {{- if and (has "cozystack.external-dns" $enabled) (not (has "cozystack.external-dns" $disabled)) -}}
+{{- if gt (len $externalDnsComponents) 0 }}
 {{include "cozystack.platform.package" (list "cozystack.external-dns" "default" $ $externalDnsComponents) }}
+{{- else }}
+{{include "cozystack.platform.package.default" (list "cozystack.external-dns" $) }}
+{{- end }}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
