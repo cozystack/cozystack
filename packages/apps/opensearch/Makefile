@@ -8,4 +8,4 @@ generate:
 
 update:
 	hack/update-versions.sh
-	make generate
+	$(MAKE) generate

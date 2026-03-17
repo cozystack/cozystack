@@ -13,6 +13,7 @@ spec:
     serviceName: {{ .Release.Name }}
     version: {{ include "opensearch.versionMap" $ }}
     httpPort: 9200
+    setVMMaxMapCount: true
     drainDataNodes: true
     {{- if gt (len .Values.images.opensearch) 0 }}
     image: {{ .Values.images.opensearch }}

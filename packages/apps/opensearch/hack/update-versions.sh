@@ -42,7 +42,7 @@ for MAJOR in $SUPPORTED_MAJOR_VERSIONS; do
 
     if [ -n "$LATEST" ]; then
         echo "v${MAJOR}: latest tag is ${LATEST}"
-        echo "\"v${MAJOR}\": \"${LATEST}\"" >> "${VERSIONS_FILE}"
+        echo "v${MAJOR}: \"${LATEST}\"" >> "${VERSIONS_FILE}"
     else
         echo "WARNING: No stable release found for major version ${MAJOR}" >&2
     fi
