@@ -1,3 +1,5 @@
 cloudnative-pg:
   crds:
     create: true
+  image:
+    tag: "1.27.3"
