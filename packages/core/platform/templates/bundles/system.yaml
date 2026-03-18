@@ -70,15 +70,12 @@
   "SVC_CIDR" $svcCIDR
   "JOIN_CIDR" $joinCIDR -}}
 {{- $kubeovnDict := dict "ipv4" $kubeovnIpv4 -}}
-{{- /* Set MASTER_NODES: explicit value > parsed from apiServerEndpoint > empty (use helm lookup) */ -}}
+{{- /* Set MASTER_NODES: explicit value or empty (let kube-ovn discover nodes by label) */ -}}
 {{- $masterNodes := .Values.networking.kubeovn.MASTER_NODES -}}
-{{- if and (not $masterNodes) $apiServerEndpoint -}}
-{{- $masterNodes = $apiHost -}}
-{{- end -}}
 {{- if $masterNodes -}}
 {{- $_ := set $kubeovnDict "MASTER_NODES" $masterNodes -}}
 {{- end -}}
-{{- /* For generic k8s (k3s, kubeadm), control-plane label has value "true" */ -}}
+{{- /* For generic k8s (k3s), control-plane label has value "true" */ -}}
 {{- $_ := set $kubeovnDict "MASTER_NODES_LABEL" "node-role.kubernetes.io/control-plane=true" -}}
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
