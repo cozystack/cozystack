@@ -100,9 +100,10 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 	}
 
 	// Auto-migrate: move user files from root into /data (skip internal artifacts).
+	// Fail the publish if migration cannot complete to avoid hiding user data.
 	entries, err := os.ReadDir(tmpMount)
 	if err != nil {
-		klog.Warningf("Failed to read NFS root for migration (volume %s): %v", req.GetVolumeId(), err)
+		return nil, status.Errorf(codes.Internal, "failed to read NFS root for migration (volume %s): %v", req.GetVolumeId(), err)
 	}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -116,7 +117,10 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		}
 		klog.Infof("Migrating %s to /data/%s for volume %s", name, name, req.GetVolumeId())
 		if err := os.Rename(src, dst); err != nil {
-			klog.Warningf("Failed to migrate %s for volume %s: %v", name, req.GetVolumeId(), err)
+			if os.IsNotExist(err) {
+				continue // benign: concurrent publish already moved it
+			}
+			return nil, status.Errorf(codes.Internal, "failed to migrate %s for volume %s: %v", name, req.GetVolumeId(), err)
 		}
 	}
 
