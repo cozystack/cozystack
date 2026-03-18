@@ -435,26 +435,14 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 	logger := getLogger(ctx)
 	logger.Debug("createVeleroRestore called", "strategy", strategy.Name, "veleroBackupName", veleroBackupName)
 
-	// Determine target application reference
-	targetAppRef := r.getTargetApplicationRef(restoreJob, backup)
-
-	// Get the target application object for templating
-	mapping, err := r.RESTMapping(schema.GroupKind{Group: *targetAppRef.APIGroup, Kind: targetAppRef.Kind})
-	if err != nil {
-		return fmt.Errorf("failed to get REST mapping for target application: %w", err)
-	}
-	ns := restoreJob.Namespace
-	if mapping.Scope.Name() != meta.RESTScopeNameNamespace {
-		ns = ""
-	}
-	app, err := r.Resource(mapping.Resource).Namespace(ns).Get(ctx, targetAppRef.Name, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get target application: %w", err)
-	}
-
-	// Build template context
 	templateContext := map[string]interface{}{
-		"Application": app.Object,
+		"Application": map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"name":      backup.Spec.ApplicationRef.Name,
+				"namespace": backup.Namespace,
+			},
+			"kind": backup.Spec.ApplicationRef.Kind,
+		},
 		// TODO: Parameters are not currently stored on Backup, so they're unavailable during restore.
 		// This is a design limitation that should be addressed by persisting Parameters on the Backup object.
 		"Parameters": map[string]string{},
