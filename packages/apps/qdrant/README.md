@@ -13,16 +13,16 @@ Service deploys Qdrant as a StatefulSet with automatic cluster mode when multipl
 
 ### Common parameters
 
-| Name               | Description                                                                                                                      | Type       | Value   |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
-| `replicas`         | Number of Qdrant replicas. Cluster mode is automatically enabled when replicas > 1.                                              | `int`      | `1`     |
-| `resources`        | Explicit CPU and memory configuration for each Qdrant replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `resources.cpu`    | CPU available to each replica.                                                                                                   | `quantity` | `""`    |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                          | `quantity` | `""`    |
+| Name               | Description                                                                                                                      | Type       | Value      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `replicas`         | Number of Qdrant replicas. Cluster mode is automatically enabled when replicas > 1.                                              | `int`      | `1`        |
+| `resources`        | Explicit CPU and memory configuration for each Qdrant replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
+| `resources.cpu`    | CPU available to each replica.                                                                                                   | `quantity` | `""`       |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                          | `quantity` | `""`       |
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                          | `string`   | `m1.small` |
-| `size`             | Persistent Volume Claim size available for vector data storage.                                                                  | `quantity` | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data.                                                                                             | `string`   | `""`    |
-| `external`         | Enable external access from outside the cluster.                                                                                 | `bool`     | `false` |
+| `size`             | Persistent Volume Claim size available for vector data storage.                                                                  | `quantity` | `10Gi`     |
+| `storageClass`     | StorageClass used to store the data.                                                                                             | `string`   | `""`       |
+| `external`         | Enable external access from outside the cluster.                                                                                 | `bool`     | `false`    |
 
 
 ## Parameter examples and reference
