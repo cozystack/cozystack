@@ -77,27 +77,33 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 
 	// Temp-mount the NFS root to ensure /data subdir exists and migrate any
 	// user files that were written before this fix (backward compatibility).
-	tmpMount := fmt.Sprintf("/tmp/nfs-init-%s", req.GetVolumeId())
-	if err := os.MkdirAll(tmpMount, 0750); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create temp mount: %v", err)
+	tmpMount, err := os.MkdirTemp("", fmt.Sprintf("nfs-init-%s-", req.GetVolumeId()))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create temp mount dir: %v", err)
 	}
+	defer os.Remove(tmpMount)
 
 	rootSource := fmt.Sprintf("%s:%s", host, path)
 	rootOpts := []string{"nfsvers=4.2", fmt.Sprintf("port=%s", port)}
 	if err := w.mounter.Mount(rootSource, tmpMount, "nfs", rootOpts); err != nil {
-		os.Remove(tmpMount)
 		return nil, status.Errorf(codes.Internal, "NFS temp mount failed: %v", err)
 	}
+	defer func() {
+		if err := w.mounter.Unmount(tmpMount); err != nil {
+			klog.Warningf("Failed to unmount temp dir %s: %v", tmpMount, err)
+		}
+	}()
 
 	dataDir := filepath.Join(tmpMount, "data")
 	if err := os.MkdirAll(dataDir, 0777); err != nil {
-		w.mounter.Unmount(tmpMount)
-		os.Remove(tmpMount)
 		return nil, status.Errorf(codes.Internal, "failed to create /data subdir: %v", err)
 	}
 
 	// Auto-migrate: move user files from root into /data (skip internal artifacts).
-	entries, _ := os.ReadDir(tmpMount)
+	entries, err := os.ReadDir(tmpMount)
+	if err != nil {
+		klog.Warningf("Failed to read NFS root for migration (volume %s): %v", req.GetVolumeId(), err)
+	}
 	for _, entry := range entries {
 		name := entry.Name()
 		if name == "data" || name == "disk.img" || name == "lost+found" {
@@ -109,11 +115,10 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 			continue // already exists in /data, skip
 		}
 		klog.Infof("Migrating %s to /data/%s for volume %s", name, name, req.GetVolumeId())
-		os.Rename(src, dst)
+		if err := os.Rename(src, dst); err != nil {
+			klog.Warningf("Failed to migrate %s for volume %s: %v", name, req.GetVolumeId(), err)
+		}
 	}
-
-	w.mounter.Unmount(tmpMount)
-	os.Remove(tmpMount)
 
 	// Mount only the /data subdir at the pod's target path.
 	dataSource := fmt.Sprintf("%s:%s/data", host, path)
