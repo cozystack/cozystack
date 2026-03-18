@@ -40,6 +40,7 @@ stringData:
       scheduling:
         {{- . | toYaml | nindent 8 }}
       {{- end }}
+      ingress-enabled: {{ .Values.gateway.ingress | quote }}
       gateway-api: {{ .Values.gateway.gatewayAPI | quote }}
       gateway-class-name: {{ .Values.gateway.gatewayClassName | quote }}
       gateway-name: {{ .Values.gateway.name | quote }}
