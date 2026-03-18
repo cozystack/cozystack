@@ -31,6 +31,7 @@ image-operator:
 
 image-packages:
 	mkdir -p ../../../_out/assets images
+	echo $$(git rev-parse HEAD; git diff HEAD; git ls-files --others --exclude-standard) | shasum -a 256 > ../platform/.build-revision
 	flux push artifact \
 		oci://$(REGISTRY)/cozystack-packages:$(call settag,$(TAG)) \
 		--path=../../../packages \
