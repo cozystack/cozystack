@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -226,8 +227,8 @@ func (c *AdoptionController) isAdoptionEnabled(ctx context.Context, namespace, p
 
 	plan, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, planName, metav1.GetOptions{})
 	if err != nil {
-		klog.Warningf("Failed to get Plan %s/%s: %v (defaulting to adoption enabled)", namespace, planName, err)
-		return true // Default to enabled if we can't check
+		klog.Warningf("Failed to get Plan %s/%s: %v (defaulting to adoption disabled)", namespace, planName, err)
+		return false // Default to disabled if we can't check - avoid adopting VMs unintentionally
 	}
 
 	annotations := plan.GetAnnotations()
@@ -267,12 +268,25 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 
 	// Extract VM spec
 	spec, found, err := unstructured.NestedMap(vmUnstructured.Object, "spec")
-	if err != nil || !found {
+	if err != nil {
 		return fmt.Errorf("failed to get VM spec: %w", err)
 	}
+	if !found {
+		return fmt.Errorf("VM %s/%s has no spec field", vm.Namespace, vm.Name)
+	}
 
-	// Extract running state
+	// Extract running state and convert to runStrategy
 	running, _, _ := unstructured.NestedBool(spec, "running")
+	runStrategy := "Always"
+	if !running {
+		// Also check runStrategy directly (newer KubeVirt VMs use this)
+		rs, rsFound, _ := unstructured.NestedString(spec, "runStrategy")
+		if rsFound && rs != "" {
+			runStrategy = rs
+		} else {
+			runStrategy = "Halted"
+		}
+	}
 
 	// Extract instance type
 	instanceType, _, _ := unstructured.NestedString(spec, "instancetype", "name")
@@ -294,6 +308,8 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 	volumes, _, _ := unstructured.NestedSlice(templateSpec, "volumes")
 
 	var disks []interface{}
+	diskNames := make(map[string]bool)
+	diskIndex := 0
 	for i, vol := range volumes {
 		volMap, ok := vol.(map[string]interface{})
 		if !ok {
@@ -319,32 +335,82 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 			continue
 		}
 
-		diskName, ok := dvNameRaw.(string)
+		dvName, ok := dvNameRaw.(string)
 		if !ok {
 			klog.V(2).Infof("VM %s/%s: skipping volume %d: dataVolume name has unexpected type %T", vm.Namespace, vm.Name, i, dvNameRaw)
 			continue
 		}
 
-		// Extract disk name (remove vm-disk- prefix if present)
-		if len(diskName) > 8 && diskName[:8] == "vm-disk-" {
-			diskName = diskName[8:]
+		// Generate a unique disk name to avoid collisions in the VMInstance spec
+		diskName := fmt.Sprintf("imported-%d", diskIndex)
+		diskIndex++
+
+		if diskNames[diskName] {
+			klog.Warningf("VM %s/%s: duplicate disk name %s, skipping", vm.Namespace, vm.Name, diskName)
+			continue
 		}
+		diskNames[diskName] = true
 
 		disks = append(disks, map[string]interface{}{
-			"name": diskName,
-			"bus":  "virtio",
+			"name":   diskName,
+			"dvName": dvName,
+			"bus":    "virtio",
 		})
-		klog.V(3).Infof("VM %s/%s: added disk %s", vm.Namespace, vm.Name, diskName)
+		klog.V(3).Infof("VM %s/%s: added disk %s (dvName=%s)", vm.Namespace, vm.Name, diskName, dvName)
 	}
 
-	klog.Infof("VM %s/%s: extracted %d disk(s), instanceType=%s, preference=%s, running=%v",
-		vm.Namespace, vm.Name, len(disks), instanceType, preference, running)
+	// Extract Multus networks from VM spec
+	networks, _, _ := unstructured.NestedSlice(templateSpec, "networks")
+	var subnets []interface{}
+	for i, net := range networks {
+		netMap, ok := net.(map[string]interface{})
+		if !ok {
+			klog.V(2).Infof("VM %s/%s: skipping network %d: unexpected type %T", vm.Namespace, vm.Name, i, net)
+			continue
+		}
+
+		multus, hasMultus := netMap["multus"]
+		if !hasMultus {
+			// Pod network or other type — skip (pod network is always added by vm-instance template)
+			continue
+		}
+
+		multusMap, ok := multus.(map[string]interface{})
+		if !ok {
+			klog.V(2).Infof("VM %s/%s: skipping network %d: multus has unexpected type %T", vm.Namespace, vm.Name, i, multus)
+			continue
+		}
+
+		networkName, ok := multusMap["networkName"].(string)
+		if !ok || networkName == "" {
+			klog.V(2).Infof("VM %s/%s: skipping network %d: multus has no networkName", vm.Namespace, vm.Name, i)
+			continue
+		}
+
+		// networkName format is "namespace/name" — extract just the name part
+		// since the vm-instance template re-adds the namespace prefix
+		subnetName := networkName
+		if idx := strings.LastIndex(networkName, "/"); idx >= 0 {
+			subnetName = networkName[idx+1:]
+		}
+
+		subnets = append(subnets, map[string]interface{}{
+			"name": subnetName,
+		})
+		klog.V(3).Infof("VM %s/%s: added subnet %s (from %s)", vm.Namespace, vm.Name, subnetName, networkName)
+	}
+
+	klog.Infof("VM %s/%s: extracted %d disk(s), %d subnet(s), instanceType=%s, preference=%s, running=%v",
+		vm.Namespace, vm.Name, len(disks), len(subnets), instanceType, preference, running)
 
 	// Create VMInstance name
 	vmInstanceName := vm.Name
 	if namePrefix != "" {
 		vmInstanceName = namePrefix + vm.Name
 	}
+
+	// The HelmRelease name is derived from the ApplicationDefinition prefix + VMInstance name
+	helmReleaseName := "vm-instance-" + vmInstanceName
 
 	// Check if VMInstance already exists
 	vmInstanceGVR := schema.GroupVersionResource{
@@ -356,10 +422,18 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 	_, err = c.dynamicClient.Resource(vmInstanceGVR).Namespace(vm.Namespace).Get(ctx, vmInstanceName, metav1.GetOptions{})
 	if err == nil {
 		klog.Infof("VMInstance %s/%s already exists, ensuring VM is labeled", vm.Namespace, vmInstanceName)
-		return c.labelVMAsAdopted(ctx, vm.Namespace, vm.Name, vmInstanceName)
+		return c.labelVMAsAdopted(ctx, vm.Namespace, vm.Name, vmInstanceName, helmReleaseName)
 	}
 
-	// Create VMInstance
+	// STEP 1: Label the existing Forklift VM with Helm metadata so that
+	// Helm will adopt it instead of trying to create a new one.
+	if err := c.prepareVMForHelmAdoption(ctx, vm.Namespace, vm.Name, helmReleaseName); err != nil {
+		return fmt.Errorf("failed to prepare VM for Helm adoption: %w", err)
+	}
+
+	// STEP 2: Create VMInstance CRD which triggers HelmRelease creation.
+	// fullnameOverride ensures the chart generates a VirtualMachine with the
+	// same name as the existing Forklift VM, so Helm adopts it.
 	vmInstance := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": fmt.Sprintf("%s/%s", vmInstanceGroup, vmInstanceVersion),
@@ -377,19 +451,20 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 				},
 			},
 			"spec": map[string]interface{}{
-				"running":         running,
-				"instanceType":    instanceType,
-				"instanceProfile": preference,
-				"disks":           disks,
-				"external":        false,
-				"externalMethod":  "PortList",
-				"externalPorts":   []int{22},
-				"gpus":            []interface{}{},
-				"resources":       map[string]interface{}{},
-				"sshKeys":         []interface{}{},
-				"subnets":         []interface{}{},
-				"cloudInit":       "",
-				"cloudInitSeed":   "imported-vm",
+				"fullnameOverride": vm.Name,
+				"runStrategy":      runStrategy,
+				"instanceType":     instanceType,
+				"instanceProfile":  preference,
+				"disks":            disks,
+				"external":         false,
+				"externalMethod":   "PortList",
+				"externalPorts":    []int{22},
+				"gpus":             []interface{}{},
+				"resources":        map[string]interface{}{},
+				"sshKeys":          []interface{}{},
+				"subnets":          subnets,
+				"cloudInit":        "",
+				"cloudInitSeed":    "",
 			},
 		},
 	}
@@ -399,10 +474,10 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		return fmt.Errorf("failed to create VMInstance: %w", err)
 	}
 
-	klog.Infof("✓ Created VMInstance %s/%s", vm.Namespace, vmInstanceName)
+	klog.Infof("Created VMInstance %s/%s", vm.Namespace, vmInstanceName)
 
-	// Label the original VM as adopted (CRITICAL: rollback on failure)
-	if err := c.labelVMAsAdopted(ctx, vm.Namespace, vm.Name, vmInstanceName); err != nil {
+	// STEP 3: Mark the VM as adopted
+	if err := c.labelVMAsAdopted(ctx, vm.Namespace, vm.Name, vmInstanceName, helmReleaseName); err != nil {
 		klog.Errorf("Failed to label VM %s/%s as adopted: %v, rolling back VMInstance", vm.Namespace, vm.Name, err)
 
 		// Rollback: delete the VMInstance we just created
@@ -418,11 +493,52 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		return fmt.Errorf("adoption failed: could not label VM: %w", err)
 	}
 
-	klog.Infof("✓ Successfully adopted VM %s/%s", vm.Namespace, vm.Name)
+	klog.Infof("Successfully adopted VM %s/%s", vm.Namespace, vm.Name)
 	return nil
 }
 
-func (c *AdoptionController) labelVMAsAdopted(ctx context.Context, namespace, vmName, vmInstanceName string) error {
+// prepareVMForHelmAdoption adds Helm metadata labels and annotations to an existing
+// VirtualMachine so that Helm will adopt it as a managed resource instead of
+// failing with "already exists".
+func (c *AdoptionController) prepareVMForHelmAdoption(ctx context.Context, namespace, vmName, helmReleaseName string) error {
+	vmGVR := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	vm, err := c.dynamicClient.Resource(vmGVR).Namespace(namespace).Get(ctx, vmName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get VM: %w", err)
+	}
+
+	// Add Helm ownership labels
+	labels := vm.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels["app.kubernetes.io/managed-by"] = "Helm"
+	vm.SetLabels(labels)
+
+	// Add Helm release annotations
+	annotations := vm.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations["meta.helm.sh/release-name"] = helmReleaseName
+	annotations["meta.helm.sh/release-namespace"] = namespace
+	vm.SetAnnotations(annotations)
+
+	_, err = c.dynamicClient.Resource(vmGVR).Namespace(namespace).Update(ctx, vm, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to add Helm metadata to VM: %w", err)
+	}
+
+	klog.Infof("Prepared VM %s/%s for Helm adoption (release=%s)", namespace, vmName, helmReleaseName)
+	return nil
+}
+
+func (c *AdoptionController) labelVMAsAdopted(ctx context.Context, namespace, vmName, vmInstanceName, helmReleaseName string) error {
 	vmGVR := schema.GroupVersionResource{
 		Group:    "kubevirt.io",
 		Version:  "v1",
@@ -440,13 +556,22 @@ func (c *AdoptionController) labelVMAsAdopted(ctx context.Context, namespace, vm
 	}
 	labels[adoptedLabel] = "true"
 	labels[adoptedByLabel] = vmInstanceName
+	labels["app.kubernetes.io/managed-by"] = "Helm"
 	vm.SetLabels(labels)
+
+	annotations := vm.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations["meta.helm.sh/release-name"] = helmReleaseName
+	annotations["meta.helm.sh/release-namespace"] = namespace
+	vm.SetAnnotations(annotations)
 
 	_, err = c.dynamicClient.Resource(vmGVR).Namespace(namespace).Update(ctx, vm, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to update VM labels: %w", err)
 	}
 
-	klog.Infof("✓ Labeled VM %s/%s as adopted by %s", namespace, vmName, vmInstanceName)
+	klog.Infof("Labeled VM %s/%s as adopted by %s (release=%s)", namespace, vmName, vmInstanceName, helmReleaseName)
 	return nil
 }

@@ -1,41 +1,41 @@
 # VM Import Adoption Design
 
-## Contexte
+## Context
 
-Forklift importe des VMs depuis VMware et crée des objets `VirtualMachine` KubeVirt natifs.
-Cozystack gère les VMs via des applications Helm (`vm-instance`, `vm-disk`).
+Forklift imports VMs from VMware and creates native KubeVirt `VirtualMachine` resources.
+Cozystack manages VMs via Helm applications (`vm-instance`, `vm-disk`).
 
-**Problème** : Les VMs importées ne sont pas visibles/gérables via le dashboard Cozystack car elles ne sont pas créées via les applications Helm standard.
+**Problem**: Imported VMs are not visible/manageable through the Cozystack dashboard because they are not created through standard Helm applications.
 
-## Solution proposée
+## Solution
 
-### 1. Lifecycle des ressources
+### 1. Resource Lifecycle
 
-#### Ressources Helm (gérées par vm-import)
-- `Provider` (source et destination)
+#### Helm Resources (managed by vm-import)
+- `Provider` (source and destination)
 - `NetworkMap`
 - `StorageMap`
 - `Plan`
 - `Migration`
 
-**Comportement à la suppression de vm-import** :
-- Les `Providers` sont conservés avec `helm.sh/resource-policy: keep` (peuvent être réutilisés)
-- Les autres ressources (Plan, Migration, Maps) sont supprimées (objets temporaires de migration)
+**On vm-import deletion**:
+- `Providers` are kept with `helm.sh/resource-policy: keep` (reusable for future imports)
+- Other resources (Plan, Migration, Maps) are deleted (temporary migration objects)
 
-#### Ressources créées par Forklift (NON gérées par Helm)
+#### Resources created by Forklift (NOT managed by Helm)
 - `VirtualMachine` (KubeVirt)
 - `DataVolume` (CDI)
 - `PersistentVolumeClaim`
 
-**Comportement à la suppression de vm-import** :
-- **JAMAIS supprimées** car elles ne font pas partie de la release Helm
-- Les VMs restent opérationnelles et gérables via `kubectl`
+**On vm-import deletion**:
+- **NEVER deleted** as they are not part of the Helm release
+- VMs remain operational and manageable via `kubectl`
 
-### 2. Mécanisme d'adoption
+### 2. Adoption Mechanism
 
-#### Phase 1 : Labels automatiques (via Forklift)
+#### Phase 1: Forklift Labels (automatic)
 
-Les VMs créées par Forklift ont déjà des labels :
+VMs created by Forklift already have labels:
 ```yaml
 metadata:
   labels:
@@ -43,7 +43,7 @@ metadata:
     forklift.konveyor.io/vm-name: <vm-name>
 ```
 
-On ajoute via annotations sur le Plan :
+The Plan gets adoption annotations when `enableAdoption: true`:
 ```yaml
 metadata:
   annotations:
@@ -51,210 +51,63 @@ metadata:
     vm-import.cozystack.io/target-namespace: {{ .Release.Namespace }}
 ```
 
-#### Phase 2 : Controller d'adoption (nouveau composant)
+#### Phase 2: VM Adoption Controller
 
-Un controller léger (`vm-import-adoption-controller`) :
+A dedicated controller (`vm-adoption-controller`) deployed as a platform package:
 
-1. **Surveille** les VMs avec label `forklift.konveyor.io/plan`
-2. **Détecte** l'annotation `vm-import.cozystack.io/adoption-enabled` sur le Plan correspondant
-3. **Adopte** la VM en ajoutant des labels Cozystack :
+1. **Watches** VMs with label `forklift.konveyor.io/plan`
+2. **Checks** the Plan annotation `vm-import.cozystack.io/adoption-enabled`
+3. **Creates** a `VMInstance` CRD via the Cozystack aggregated API
+4. **Labels** the original VM as adopted:
    ```yaml
    labels:
      cozystack.io/adopted: "true"
-     cozystack.io/source: "vm-import"
-     cozystack.io/original-plan: <plan-name>
-     app.kubernetes.io/managed-by: "cozystack"
+     cozystack.io/adopted-by: "<vminstance-name>"
    ```
 
-4. **Crée** des objets ConfigMap pour le tracking :
-   ```yaml
-   apiVersion: v1
-   kind: ConfigMap
-   metadata:
-     name: vm-adopted-<vm-name>
-     namespace: <namespace>
-     labels:
-       cozystack.io/type: "adopted-vm"
-   data:
-     vmName: <vm-name>
-     sourcePlan: <plan-name>
-     sourceType: "vmware"
-     adoptedAt: <timestamp>
-     managementEndpoint: "kubectl"
-   ```
+The `VMInstance` creation triggers the standard Cozystack controller flow:
+- `cozystack-controller` creates a `HelmRelease` for the VMInstance
+- The VM becomes visible and manageable in the Cozystack dashboard
 
-#### Phase 3 : Visibilité dans le dashboard
+#### Phase 3: Dashboard Visibility
 
-Le dashboard Cozystack affiche les VMs avec le label `cozystack.io/adopted: "true"` dans une section "Imported VMs".
+Adopted VMs appear in the dashboard as regular VM Instances with full management capabilities:
+- Start/stop/restart
+- Console access
+- Resource modification
+- Disk management
+- Network configuration
 
-Options de gestion :
-- **View only** : Afficher l'état, les métriques
-- **Basic operations** : Start/Stop via KubeVirt API
-- **Advanced** : Créer une release `vm-instance` pour adoption complète (gestion Helm)
+### 3. Manual Adoption (fallback)
 
-### 3. Adoption complète (optionnelle)
+If automatic adoption is disabled or fails, users can manually adopt a VM using:
 
-Un utilisateur peut "fully adopt" une VM en créant manuellement une release `vm-instance` qui référence la VM existante.
-
-**Script helper fourni** : `adopt-vm.sh`
 ```bash
-#!/bin/bash
-# adopt-vm.sh <vm-name> <namespace>
-# Crée une HelmRelease vm-instance qui adopte une VM existante
-
-VM_NAME=$1
-NAMESPACE=$2
-
-# Extrait les specs de la VM existante
-kubectl get vm "$VM_NAME" -n "$NAMESPACE" -o yaml > /tmp/vm-spec.yaml
-
-# Génère values.yaml pour vm-instance
-# (mapping des specs existantes vers le format vm-instance)
-
-# Crée la HelmRelease avec adoption
-cat <<EOF | kubectl apply -f -
-apiVersion: helm.toolkit.fluxcd.io/v2beta1
-kind: HelmRelease
-metadata:
-  name: $VM_NAME
-  namespace: $NAMESPACE
-spec:
-  chart:
-    spec:
-      chart: vm-instance
-      sourceRef:
-        kind: HelmRepository
-        name: cozystack
-  install:
-    createNamespace: false
-    # N'essaie pas de créer la VM (elle existe déjà)
-    disableWait: true
-  upgrade:
-    # Ne modifie pas la VM existante
-    force: false
-  values:
-    # Valeurs extraites de la VM existante
-    ...
-EOF
+./docs/scripts/adopt-vm.sh <vm-name> <namespace> [instance-type] [profile]
 ```
 
-### 4. Implémentation
+This generates a values file for creating a `VMInstance` Helm release.
 
-#### Fichiers à modifier
+## Architecture
 
-1. **packages/apps/vm-import/templates/plan.yaml**
-   ```yaml
-   metadata:
-     annotations:
-       vm-import.cozystack.io/adoption-enabled: "true"
-       vm-import.cozystack.io/target-namespace: {{ .Release.Namespace }}
-   ```
-
-2. **packages/apps/vm-import/templates/provider.yaml**
-   ```yaml
-   metadata:
-     annotations:
-       helm.sh/resource-policy: keep  # Providers conservés
-   ```
-
-3. **packages/apps/vm-import/values.yaml**
-   ```yaml
-   ## @param {bool} enableAdoption - Automatically label imported VMs for Cozystack adoption.
-   enableAdoption: true
-   ```
-
-#### Nouveau package : vm-import-adoption-controller
-
-Structure :
 ```
-packages/system/vm-import-adoption-controller/
-├── Chart.yaml
-├── templates/
-│   ├── deployment.yaml          # Controller deployment
-│   ├── serviceaccount.yaml
-│   ├── role.yaml                # RBAC: watch VMs, Plans; create ConfigMaps
-│   └── rolebinding.yaml
-└── images/
-    └── Dockerfile               # Controller image
-        └── main.go              # Controller logic
+Forklift imports VM
+       ↓
+VirtualMachine (KubeVirt) created
+       ↓
+vm-adoption-controller detects it
+       ↓
+VMInstance (Cozystack CRD) created
+       ↓
+cozystack-controller creates HelmRelease
+       ↓
+VM visible in dashboard
 ```
 
-Controller logic (pseudo-code) :
-```go
-// Watch VirtualMachines with label "forklift.konveyor.io/plan"
-// For each VM:
-//   1. Get the Plan referenced
-//   2. Check if Plan has annotation "vm-import.cozystack.io/adoption-enabled"
-//   3. If yes, add Cozystack labels to VM
-//   4. Create adoption ConfigMap
-```
+## Advantages
 
-### 5. Documentation
-
-#### README.md amélioré
-
-```markdown
-## VM Lifecycle
-
-### Import Phase
-When you create a `vm-import` application:
-1. Forklift migrates VMs from VMware to KubeVirt
-2. VMs are created as native KubeVirt `VirtualMachine` resources
-3. If `enableAdoption: true` (default), VMs are automatically labeled for Cozystack tracking
-
-### Post-Import
-Imported VMs are:
-- ✅ **Visible** in the Cozystack dashboard (as "Imported VMs")
-- ✅ **Manageable** via `kubectl` and KubeVirt APIs
-- ✅ **Persistent** - they are NOT deleted when you remove the `vm-import` application
-
-### Adoption Options
-
-#### Option 1: Dashboard Management (Automatic)
-VMs are automatically labeled and appear in the dashboard. Basic operations (view, start, stop) available.
-
-#### Option 2: Full Helm Management (Manual)
-Create a `vm-instance` application referencing the existing VM:
-```bash
-./adopt-vm.sh my-imported-vm my-namespace
-```
-
-### Cleanup
-To delete a `vm-import` application:
-```bash
-kubectl delete vmimport my-import -n my-namespace
-```
-
-**What gets deleted**:
-- ❌ Migration Plan
-- ❌ Network/Storage Maps
-- ✅ Providers (kept for reuse)
-
-**What is preserved**:
-- ✅ All imported VMs
-- ✅ All DataVolumes and disks
-- ✅ Adoption tracking ConfigMaps
-```
-
-## Avantages de cette approche
-
-1. **Non-destructif** : Suppression de vm-import ne supprime jamais les VMs
-2. **Flexible** : Les utilisateurs choisissent le niveau d'adoption (basic vs full Helm)
-3. **Traçable** : ConfigMaps gardent l'historique d'import
-4. **Évolutif** : Le controller peut être enrichi progressivement
-5. **Compatible** : Les VMs restent des objets KubeVirt standard
-
-## Migration Path
-
-### Court terme (MVP)
-1. Ajouter annotations sur Plan/Provider
-2. Documenter clairement le lifecycle
-3. Fournir script `adopt-vm.sh`
-
-### Moyen terme
-1. Implémenter controller d'adoption
-2. Intégrer dans le dashboard
-
-### Long terme
-1. Adoption Helm automatique (optionnelle)
-2. Synchronisation bidirectionnelle VM <-> Helm
+1. **Non-destructive**: Deleting vm-import never deletes VMs
+2. **Automatic**: VMs appear in dashboard within ~30 seconds
+3. **Traceable**: Labels and annotations track the import source
+4. **Standard**: Uses the same VMInstance CRD as manually created VMs
+5. **Compatible**: VMs remain standard KubeVirt objects

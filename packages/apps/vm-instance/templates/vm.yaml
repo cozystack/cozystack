@@ -64,7 +64,8 @@ spec:
           disks:
           {{- range $i, $disk := .Values.disks }}
           - name: disk-{{ $disk.name }}
-            {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
+            {{- $dvName := default (printf "vm-disk-%s" $disk.name) $disk.dvName }}
+            {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace $dvName }}
             {{- if $dv }}
             {{- if and (hasKey $dv.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $dv.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
             cdrom:
@@ -76,7 +77,7 @@ spec:
               {{- end }}
             bootOrder: {{ add $i 1 }}
             {{- else }}
-            {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
+            {{-   fail (printf "Specified disk not exists in cluster: %s" $dvName) }}
             {{- end }}
           {{- end }}
           {{- if or .Values.cloudInit .Values.sshKeys }}
@@ -112,7 +113,7 @@ spec:
       {{- range .Values.disks }}
       - name: disk-{{ .name }}
         dataVolume:
-          name: vm-disk-{{ .name }}
+          name: {{ default (printf "vm-disk-%s" .name) .dvName }}
       {{- end }}
       {{- if or .Values.cloudInit .Values.sshKeys }}
       - name: cloudinitdisk
