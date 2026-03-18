@@ -90,7 +90,7 @@ This generates a values file for creating a `VMInstance` Helm release.
 
 ## Architecture
 
-```
+```text
 Forklift imports VM
        ↓
 VirtualMachine (KubeVirt) created

@@ -185,7 +185,7 @@ kubectl delete dv -n <namespace> -l forklift.konveyor.io/plan=<import-name>
 
 | Name             | Description                                                                       | Type       | Value   |
 | ---------------- | --------------------------------------------------------------------------------- | ---------- | ------- |
-| `vms`            | List of virtual machines to migrate.                                              | `[]object` | `[]`    |
+| `vms`            | List of virtual machines to migrate. If empty (`[]`), no Plan or migration is created. | `[]object` | `[]`    |
 | `vms[i].id`      | The managed object reference ID of the VM in vSphere (e.g. `vm-123`).             | `string`   | `""`    |
 | `vms[i].name`    | Optional target name for the VM in KubeVirt.                                      | `string`   | `""`    |
 | `warm`           | Enable warm migration (incremental replication before cutover).                   | `bool`     | `false` |
