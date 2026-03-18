@@ -42,6 +42,8 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		return w.NodeService.NodePublishVolume(ctx, req)
 	}
 
+	klog.V(3).Infof("Publishing NFS volume %s at %s", req.GetVolumeId(), req.GetTargetPath())
+
 	host, port, path, err := parseNFSExport(nfsExport)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to parse NFS export: %v", err)
@@ -61,6 +63,7 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		notMnt = true
 	}
 	if !notMnt {
+		klog.V(3).Infof("NFS volume %s already mounted at %s", req.GetVolumeId(), targetPath)
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
