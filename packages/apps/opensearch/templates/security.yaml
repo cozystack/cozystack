@@ -1,0 +1,120 @@
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $existingAdminCreds := lookup "v1" "Secret" .Release.Namespace (printf "%s-admin-credentials" .Release.Name) }}
+{{- $existingSecurityConfig := lookup "v1" "Secret" .Release.Namespace (printf "%s-security-config" .Release.Name) }}
+{{- $password := randAlphaNum 32 }}
+{{- if and $existingAdminCreds (hasKey $existingAdminCreds.data "password") }}
+{{- $password = index $existingAdminCreds.data "password" | b64dec }}
+{{- end }}
+---
+# Admin credentials for the OpenSearch operator (referenced by adminCredentialsSecret)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-admin-credentials
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: {{ .Release.Name }}
+type: Opaque
+stringData:
+  username: admin
+  password: {{ $password | quote }}
+---
+# Security plugin configuration (referenced by securityConfigSecret)
+# On upgrades, the existing secret is preserved to avoid bcrypt hash regeneration
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-security-config
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: {{ .Release.Name }}
+type: Opaque
+{{- if and $existingSecurityConfig (hasKey $existingSecurityConfig.data "internal_users.yml") }}
+data:
+  {{- range $key, $val := $existingSecurityConfig.data }}
+  {{ $key }}: {{ $val }}
+  {{- end }}
+{{- else }}
+stringData:
+  config.yml: |
+    ---
+    _meta:
+      type: "config"
+      config_version: 2
+    config:
+      dynamic:
+        http:
+          anonymous_auth_enabled: false
+        authc:
+          basic_internal_auth_domain:
+            description: "Authenticate via HTTP Basic against internal users database"
+            http_enabled: true
+            transport_enabled: true
+            order: 0
+            http_authenticator:
+              type: basic
+              challenge: true
+            authentication_backend:
+              type: internal
+
+  internal_users.yml: |
+    ---
+    _meta:
+      type: "internalusers"
+      config_version: 2
+    admin:
+      hash: {{ htpasswd "admin" $password | trimPrefix "admin:" | quote }}
+      reserved: true
+      backend_roles:
+        - "admin"
+      description: "Admin user"
+
+  roles.yml: |
+    ---
+    _meta:
+      type: "roles"
+      config_version: 2
+
+  roles_mapping.yml: |
+    ---
+    _meta:
+      type: "rolesmapping"
+      config_version: 2
+    all_access:
+      reserved: false
+      backend_roles:
+        - "admin"
+
+  action_groups.yml: |
+    ---
+    _meta:
+      type: "actiongroups"
+      config_version: 2
+
+  tenants.yml: |
+    ---
+    _meta:
+      type: "tenants"
+      config_version: 2
+{{- end }}
+---
+# User-facing credentials with connection URI
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-credentials
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/instance: {{ .Release.Name }}
+type: Opaque
+stringData:
+  username: admin
+  password: {{ $password | quote }}
+  host: {{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+  port: "9200"
+  uri: https://admin:{{ $password | urlquery }}@{{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}:9200
+  {{- if .Values.dashboards.enabled }}
+  dashboards-host: {{ .Release.Name }}-dashboards.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+  dashboards-port: "5601"
+  dashboards-uri: https://admin:{{ $password | urlquery }}@{{ .Release.Name }}-dashboards.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}:5601
+  {{- end }}
