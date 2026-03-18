@@ -13,7 +13,7 @@ spec:
   replicas: 1
   size: 10Gi
   storageClass: ""
-  resourcesPreset: "small"
+  resourcesPreset: "s1.small"
   resources: {}
   external: false
   ui: true

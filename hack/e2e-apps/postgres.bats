@@ -38,7 +38,7 @@ spec:
     s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
     resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
   resources: {}
-  resourcesPreset: "nano"
+  resourcesPreset: "u1.nano"
 EOF
   sleep 5
   kubectl -n tenant-test wait hr postgres-$name --timeout=100s --for=condition=ready

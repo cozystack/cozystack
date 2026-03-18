@@ -43,18 +43,18 @@ spec:
   controlPlane:
     apiServer:
       resources: {}
-      resourcesPreset: small
+      resourcesPreset: u1.small
     controllerManager:
       resources: {}
-      resourcesPreset: micro
+      resourcesPreset: s1.micro
     konnectivity:
       server:
         resources: {}
-        resourcesPreset: micro
+        resourcesPreset: s1.micro
     replicas: 2
     scheduler:
       resources: {}
-      resourcesPreset: micro
+      resourcesPreset: s1.micro
   host: ""
   nodeGroups:
     md0:

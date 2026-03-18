@@ -46,7 +46,7 @@ storage:
 
 ```yaml
 # Use preset sizing
-resourcesPreset: "medium"  # small, medium, large, xlarge, 2xlarge
+resourcesPreset: "u1.small"  # s1 (Standard 1:2), u1 (Universal 1:4), m1 (Memory 1:8) x nano..4xlarge
 
 # Or custom resource configuration
 resources:

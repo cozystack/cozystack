@@ -10,7 +10,7 @@
 | `resources`            | Explicit CPU and memory configuration for each OpenSearch node. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
 | `resources.cpu`        | CPU available to each node.                                                                                                       | `quantity` | `""`    |
 | `resources.memory`     | Memory (RAM) available to each node.                                                                                              | `quantity` | `""`    |
-| `resourcesPreset`      | Default sizing preset used when `resources` is omitted. OpenSearch requires minimum 2Gi memory.                                   | `string`   | `large` |
+| `resourcesPreset`      | Default sizing preset used when `resources` is omitted. OpenSearch requires minimum 2Gi memory.                                   | `string`   | `m1.large` |
 | `size`                 | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`  |
 | `storageClass`         | StorageClass used to store the data.                                                                                              | `string`   | `""`    |
 | `external`             | Enable external access from outside the cluster.                                                                                  | `bool`     | `false` |
@@ -56,5 +56,5 @@
 | `dashboards.resources`        | Explicit CPU and memory configuration for Dashboards. | `object`   | `{}`     |
 | `dashboards.resources.cpu`    | CPU available to each node.                           | `quantity` | `""`     |
 | `dashboards.resources.memory` | Memory (RAM) available to each node.                  | `quantity` | `""`     |
-| `dashboards.resourcesPreset`  | Default sizing preset for Dashboards.                 | `string`   | `medium` |
+| `dashboards.resourcesPreset`  | Default sizing preset for Dashboards.                 | `string`   | `s1.medium` |
 
