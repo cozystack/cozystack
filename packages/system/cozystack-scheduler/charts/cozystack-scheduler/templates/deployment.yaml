@@ -20,6 +20,9 @@ spec:
           command:
             - /cozystack-scheduler
             - --config=/etc/kubernetes/scheduler-config.yaml
+            {{- with .Values.defaultLabelSelectorKeys }}
+            - --default-label-selector-keys={{ join "," . }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
