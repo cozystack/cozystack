@@ -66,6 +66,39 @@ stringData:
     EOT
     done
 
+    echo "== delete databases"
+    MANAGED_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm'")
+    DEFINED_DBS="{{ join " " (keys .Values.databases) }}"
+    DELETE_DBS=$(for db in $MANAGED_DBS; do case " $DEFINED_DBS " in *" $db "*) :;; *) echo $db;; esac; done)
+
+    echo "databases to delete: $DELETE_DBS"
+    for db in $DELETE_DBS; do
+    psql -v ON_ERROR_STOP=1 --echo-all -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$db' AND pid <> pg_backend_pid();"
+    psql -v ON_ERROR_STOP=1 --echo-all -c "DROP DATABASE IF EXISTS \"$db\";"
+    done
+
+    echo "== delete orphaned managed roles"
+    MANAGED_ROLES=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT rolname FROM pg_roles r JOIN pg_shdescription s ON r.oid = s.objoid WHERE s.description = 'role managed by helm'")
+    DEFINED_ROLES="{{ range $database, $d := .Values.databases }}{{ $database }}_admin {{ $database }}_readonly {{ end }}"
+    DELETE_ROLES=$(for role in $MANAGED_ROLES; do case " $DEFINED_ROLES " in *" $role "*) :;; *) echo $role;; esac; done)
+
+    echo "roles to delete: $DELETE_ROLES"
+    for role in $DELETE_ROLES; do
+    psql -v ON_ERROR_STOP=1 --echo-all <<EOT
+    DO \$\$
+    DECLARE
+        member record;
+    BEGIN
+        FOR member IN SELECT m.rolname FROM pg_auth_members am JOIN pg_roles m ON am.member = m.oid JOIN pg_roles r ON am.roleid = r.oid WHERE r.rolname = '$role' LOOP
+            EXECUTE format('REVOKE %I FROM %I', '$role', member.rolname);
+        END LOOP;
+    END\$\$;
+    REASSIGN OWNED BY "$role" TO postgres;
+    DROP OWNED BY "$role";
+    DROP ROLE IF EXISTS "$role";
+    EOT
+    done
+
     echo "== create databases and roles"
     {{- if .Values.databases }}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
