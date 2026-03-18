@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,9 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
 	// Number of OpenBAO replicas. HA with Raft is automatically enabled when replicas > 1. Switching between standalone (file storage) and HA (Raft storage) modes requires data migration.
 	// +kubebuilder:default:=1
 	Replicas int `json:"replicas"`
@@ -37,6 +35,9 @@ type ConfigSpec struct {
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
 	// Enable the OpenBAO web UI.
 	// +kubebuilder:default:=true
 	Ui bool `json:"ui"`

@@ -2,301 +2,10 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
-    "alerta": {
-      "description": "Configuration for the Alerta service.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "alerts": {
-          "description": "Alert routing configuration.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "slack": {
-              "description": "Configuration for Slack alerts.",
-              "type": "object",
-              "default": {},
-              "required": [
-                "url"
-              ],
-              "properties": {
-                "disabledSeverity": {
-                  "description": "List of severities without alerts (e.g. [\"informational\",\"warning\"]).",
-                  "type": "array",
-                  "default": [],
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "url": {
-                  "description": "Configuration uri for Slack alerts.",
-                  "type": "string",
-                  "default": ""
-                }
-              }
-            },
-            "telegram": {
-              "description": "Configuration for Telegram alerts.",
-              "type": "object",
-              "default": {},
-              "required": [
-                "chatID",
-                "token"
-              ],
-              "properties": {
-                "chatID": {
-                  "description": "Telegram chat ID(s), separated by commas.",
-                  "type": "string",
-                  "default": ""
-                },
-                "disabledSeverity": {
-                  "description": "List of severities without alerts (e.g. [\"informational\",\"warning\"]).",
-                  "type": "array",
-                  "default": [],
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "token": {
-                  "description": "Telegram bot token.",
-                  "type": "string",
-                  "default": ""
-                }
-              }
-            }
-          }
-        },
-        "resources": {
-          "description": "Resource configuration.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "limits": {
-              "description": "Resource limits.",
-              "type": "object",
-              "default": {},
-              "properties": {
-                "cpu": {
-                  "description": "CPU limit.",
-                  "default": 1,
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                },
-                "memory": {
-                  "description": "Memory limit.",
-                  "default": "1Gi",
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                }
-              }
-            },
-            "requests": {
-              "description": "Resource requests.",
-              "type": "object",
-              "default": {},
-              "properties": {
-                "cpu": {
-                  "description": "CPU request.",
-                  "default": "100m",
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                },
-                "memory": {
-                  "description": "Memory request.",
-                  "default": "256Mi",
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                }
-              }
-            }
-          }
-        },
-        "storage": {
-          "description": "Persistent volume size for the database.",
-          "type": "string",
-          "default": "10Gi"
-        },
-        "storageClassName": {
-          "description": "StorageClass used for the database.",
-          "type": "string",
-          "default": ""
-        }
-      }
-    },
-    "grafana": {
-      "description": "Configuration for Grafana.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "db": {
-          "description": "Database configuration.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "size": {
-              "description": "Persistent volume size for the database.",
-              "type": "string",
-              "default": "10Gi"
-            }
-          }
-        },
-        "resources": {
-          "description": "Resource configuration.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "limits": {
-              "description": "Resource limits.",
-              "type": "object",
-              "default": {},
-              "properties": {
-                "cpu": {
-                  "description": "CPU limit.",
-                  "default": 1,
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                },
-                "memory": {
-                  "description": "Memory limit.",
-                  "default": "1Gi",
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                }
-              }
-            },
-            "requests": {
-              "description": "Resource requests.",
-              "type": "object",
-              "default": {},
-              "properties": {
-                "cpu": {
-                  "description": "CPU request.",
-                  "default": "100m",
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                },
-                "memory": {
-                  "description": "Memory request.",
-                  "default": "256Mi",
-                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                  "anyOf": [
-                    {
-                      "type": "integer"
-                    },
-                    {
-                      "type": "string"
-                    }
-                  ],
-                  "x-kubernetes-int-or-string": true
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "host": {
       "description": "The hostname used to access Grafana externally (defaults to 'grafana' subdomain for the tenant host).",
       "type": "string",
       "default": ""
-    },
-    "logsStorages": {
-      "description": "Configuration of logs storage instances.",
-      "type": "array",
-      "default": [
-        {
-          "name": "generic",
-          "retentionPeriod": "1",
-          "storage": "10Gi",
-          "storageClassName": "replicated"
-        }
-      ],
-      "items": {
-        "type": "object",
-        "required": [
-          "name",
-          "retentionPeriod",
-          "storage",
-          "storageClassName"
-        ],
-        "properties": {
-          "name": {
-            "description": "Name of the storage instance.",
-            "type": "string"
-          },
-          "retentionPeriod": {
-            "description": "Retention period for logs.",
-            "type": "string",
-            "default": "1"
-          },
-          "storage": {
-            "description": "Persistent volume size.",
-            "type": "string",
-            "default": "10Gi"
-          },
-          "storageClassName": {
-            "description": "StorageClass used to store the data.",
-            "type": "string",
-            "default": "replicated"
-          }
-        }
-      }
     },
     "metricsStorages": {
       "description": "Configuration of metrics storage instances.",
@@ -572,6 +281,297 @@
         }
       }
     },
+    "logsStorages": {
+      "description": "Configuration of logs storage instances.",
+      "type": "array",
+      "default": [
+        {
+          "name": "generic",
+          "retentionPeriod": "1",
+          "storage": "10Gi",
+          "storageClassName": "replicated"
+        }
+      ],
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "retentionPeriod",
+          "storage",
+          "storageClassName"
+        ],
+        "properties": {
+          "name": {
+            "description": "Name of the storage instance.",
+            "type": "string"
+          },
+          "retentionPeriod": {
+            "description": "Retention period for logs.",
+            "type": "string",
+            "default": "1"
+          },
+          "storage": {
+            "description": "Persistent volume size.",
+            "type": "string",
+            "default": "10Gi"
+          },
+          "storageClassName": {
+            "description": "StorageClass used to store the data.",
+            "type": "string",
+            "default": "replicated"
+          }
+        }
+      }
+    },
+    "alerta": {
+      "description": "Configuration for the Alerta service.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "alerts": {
+          "description": "Alert routing configuration.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "slack": {
+              "description": "Configuration for Slack alerts.",
+              "type": "object",
+              "default": {},
+              "required": [
+                "url"
+              ],
+              "properties": {
+                "disabledSeverity": {
+                  "description": "List of severities without alerts (e.g. [\"informational\",\"warning\"]).",
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "url": {
+                  "description": "Configuration uri for Slack alerts.",
+                  "type": "string",
+                  "default": ""
+                }
+              }
+            },
+            "telegram": {
+              "description": "Configuration for Telegram alerts.",
+              "type": "object",
+              "default": {},
+              "required": [
+                "chatID",
+                "token"
+              ],
+              "properties": {
+                "chatID": {
+                  "description": "Telegram chat ID(s), separated by commas.",
+                  "type": "string",
+                  "default": ""
+                },
+                "disabledSeverity": {
+                  "description": "List of severities without alerts (e.g. [\"informational\",\"warning\"]).",
+                  "type": "array",
+                  "default": [],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "token": {
+                  "description": "Telegram bot token.",
+                  "type": "string",
+                  "default": ""
+                }
+              }
+            }
+          }
+        },
+        "resources": {
+          "description": "Resource configuration.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "limits": {
+              "description": "Resource limits.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit.",
+                  "default": 1,
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit.",
+                  "default": "1Gi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "requests": {
+              "description": "Resource requests.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU request.",
+                  "default": "100m",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request.",
+                  "default": "256Mi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        },
+        "storage": {
+          "description": "Persistent volume size for the database.",
+          "type": "string",
+          "default": "10Gi"
+        },
+        "storageClassName": {
+          "description": "StorageClass used for the database.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "grafana": {
+      "description": "Configuration for Grafana.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "db": {
+          "description": "Database configuration.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "size": {
+              "description": "Persistent volume size for the database.",
+              "type": "string",
+              "default": "10Gi"
+            }
+          }
+        },
+        "resources": {
+          "description": "Resource configuration.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "limits": {
+              "description": "Resource limits.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit.",
+                  "default": 1,
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit.",
+                  "default": "1Gi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "requests": {
+              "description": "Resource requests.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU request.",
+                  "default": "100m",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request.",
+                  "default": "256Mi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "vmagent": {
       "description": "Configuration for VictoriaMetrics Agent.",
       "type": "object",
@@ -579,12 +579,14 @@
       "properties": {
         "externalLabels": {
           "description": "External labels applied to all metrics.",
+          "type": "object",
           "default": {
             "cluster": "cozystack"
           }
         },
         "remoteWrite": {
           "description": "Remote write configuration.",
+          "type": "object",
           "default": {
             "urls": [
               "http://vminsert-shortterm:8480/insert/0/prometheus",

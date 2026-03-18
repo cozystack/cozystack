@@ -2,6 +2,26 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "host": {
+      "description": "The hostname used to access SeaweedFS externally (defaults to 's3' subdomain for the tenant host).",
+      "type": "string",
+      "default": ""
+    },
+    "topology": {
+      "description": "The topology of the SeaweedFS cluster.",
+      "type": "string",
+      "default": "Simple",
+      "enum": [
+        "Simple",
+        "MultiZone",
+        "Client"
+      ]
+    },
+    "replicationFactor": {
+      "description": "Replication factor: number of replicas for each volume in the SeaweedFS cluster.",
+      "type": "integer",
+      "default": 2
+    },
     "db": {
       "description": "Database configuration.",
       "type": "object",
@@ -77,6 +97,65 @@
           "description": "StorageClass used to store the data.",
           "type": "string",
           "default": ""
+        }
+      }
+    },
+    "master": {
+      "description": "Master service configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "replicas": {
+          "description": "Number of master replicas.",
+          "type": "integer",
+          "default": 3
+        },
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "small",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
         }
       }
     },
@@ -156,144 +235,6 @@
           }
         }
       }
-    },
-    "host": {
-      "description": "The hostname used to access SeaweedFS externally (defaults to 's3' subdomain for the tenant host).",
-      "type": "string",
-      "default": ""
-    },
-    "master": {
-      "description": "Master service configuration.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "replicas": {
-          "description": "Number of master replicas.",
-          "type": "integer",
-          "default": 3
-        },
-        "resources": {
-          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "cpu": {
-              "description": "Number of CPU cores allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            },
-            "memory": {
-              "description": "Amount of memory allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            }
-          }
-        },
-        "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted.",
-          "type": "string",
-          "default": "small",
-          "enum": [
-            "nano",
-            "micro",
-            "small",
-            "medium",
-            "large",
-            "xlarge",
-            "2xlarge"
-          ]
-        }
-      }
-    },
-    "replicationFactor": {
-      "description": "Replication factor: number of replicas for each volume in the SeaweedFS cluster.",
-      "type": "integer",
-      "default": 2
-    },
-    "s3": {
-      "description": "S3 service configuration.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "replicas": {
-          "description": "Number of S3 replicas.",
-          "type": "integer",
-          "default": 2
-        },
-        "resources": {
-          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
-          "type": "object",
-          "default": {},
-          "properties": {
-            "cpu": {
-              "description": "Number of CPU cores allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            },
-            "memory": {
-              "description": "Amount of memory allocated.",
-              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "string"
-                }
-              ],
-              "x-kubernetes-int-or-string": true
-            }
-          }
-        },
-        "resourcesPreset": {
-          "description": "Default sizing preset used when `resources` is omitted.",
-          "type": "string",
-          "default": "small",
-          "enum": [
-            "nano",
-            "micro",
-            "small",
-            "medium",
-            "large",
-            "xlarge",
-            "2xlarge"
-          ]
-        }
-      }
-    },
-    "topology": {
-      "description": "The topology of the SeaweedFS cluster.",
-      "type": "string",
-      "default": "Simple",
-      "enum": [
-        "Simple",
-        "MultiZone",
-        "Client"
-      ]
     },
     "volume": {
       "description": "Volume service configuration.",
@@ -579,6 +520,65 @@
               }
             }
           }
+        }
+      }
+    },
+    "s3": {
+      "description": "S3 service configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "replicas": {
+          "description": "Number of S3 replicas.",
+          "type": "integer",
+          "default": 2
+        },
+        "resources": {
+          "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "Number of CPU cores allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Amount of memory allocated.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset used when `resources` is omitted.",
+          "type": "string",
+          "default": "small",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
         }
       }
     }

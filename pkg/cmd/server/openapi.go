@@ -337,11 +337,6 @@ func sanitizeForV2(s *spec.Schema) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// OpenAPI **v2** (swagger) post-processor
-// -----------------------------------------------------------------------------
-// BuildPostProcessV2 returns a Swagger post-processor that clones base
-// Application schemas into per-kind schemas and rewrites $ref pointers.
 // KindSchemasFromConfig extracts the kind→OpenAPISchema mapping from a ResourceConfig.
 func KindSchemasFromConfig(rc *config.ResourceConfig) map[string]string {
 	m := make(map[string]string, len(rc.Resources))
@@ -369,6 +364,11 @@ func ConfigureOpenAPI(cfg *genericapiserver.Config, kindSchemas map[string]strin
 	cfg.OpenAPIV3Config.PostProcessSpec = BuildPostProcessV3(kindSchemas)
 }
 
+// -----------------------------------------------------------------------------
+// OpenAPI **v2** (swagger) post-processor
+// -----------------------------------------------------------------------------
+// BuildPostProcessV2 returns a Swagger post-processor that clones base
+// Application schemas into per-kind schemas and rewrites $ref pointers.
 func BuildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spec.Swagger, error) {
 	return func(sw *spec.Swagger) (*spec.Swagger, error) {
 		defs := sw.Definitions

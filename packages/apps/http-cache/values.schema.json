@@ -2,6 +2,30 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "size": {
+      "description": "Persistent Volume Claim size available for application data.",
+      "default": "10Gi",
+      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "x-kubernetes-int-or-string": true
+    },
+    "storageClass": {
+      "description": "StorageClass used to store the data.",
+      "type": "string",
+      "default": ""
+    },
+    "external": {
+      "description": "Enable external access from outside the cluster.",
+      "type": "boolean",
+      "default": false
+    },
     "endpoints": {
       "description": "Endpoints configuration, as a list of \u003cip:port\u003e.",
       "type": "array",
@@ -9,11 +33,6 @@
       "items": {
         "type": "string"
       }
-    },
-    "external": {
-      "description": "Enable external access from outside the cluster.",
-      "type": "boolean",
-      "default": false
     },
     "haproxy": {
       "description": "HAProxy configuration.",
@@ -140,25 +159,6 @@
           ]
         }
       }
-    },
-    "size": {
-      "description": "Persistent Volume Claim size available for application data.",
-      "default": "10Gi",
-      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-      "anyOf": [
-        {
-          "type": "integer"
-        },
-        {
-          "type": "string"
-        }
-      ],
-      "x-kubernetes-int-or-string": true
-    },
-    "storageClass": {
-      "description": "StorageClass used to store the data.",
-      "type": "string",
-      "default": ""
     }
   }
 }

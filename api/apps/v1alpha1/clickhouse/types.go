@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,39 +20,39 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Backup configuration.
-	// +kubebuilder:default:={}
-	Backup Backup `json:"backup"`
-	// ClickHouse Keeper configuration.
-	// +kubebuilder:default:={}
-	ClickhouseKeeper ClickHouseKeeper `json:"clickhouseKeeper"`
-	// Size of Persistent Volume for logs.
-	// +kubebuilder:default:="2Gi"
-	LogStorageSize resource.Quantity `json:"logStorageSize"`
-	// TTL (expiration time) for `query_log` and `query_thread_log`.
-	// +kubebuilder:default:=15
-	LogTTL int `json:"logTTL"`
 	// Number of ClickHouse replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
+	// Number of ClickHouse shards.
+	// +kubebuilder:default:=1
+	Shards int `json:"shards"`
 	// Explicit CPU and memory configuration for each ClickHouse replica. When omitted, the preset defined in `resourcesPreset` is applied.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
-	// Number of ClickHouse shards.
-	// +kubebuilder:default:=1
-	Shards int `json:"shards"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
+	// Size of Persistent Volume for logs.
+	// +kubebuilder:default:="2Gi"
+	LogStorageSize resource.Quantity `json:"logStorageSize"`
+	// TTL (expiration time) for `query_log` and `query_thread_log`.
+	// +kubebuilder:default:=15
+	LogTTL int `json:"logTTL"`
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
+	// Backup configuration.
+	// +kubebuilder:default:={}
+	Backup Backup `json:"backup"`
+	// ClickHouse Keeper configuration.
+	// +kubebuilder:default:={}
+	ClickhouseKeeper ClickHouseKeeper `json:"clickhouseKeeper"`
 }
 
 type Backup struct {

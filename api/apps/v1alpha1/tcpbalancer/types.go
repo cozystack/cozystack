@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,12 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
-	// HTTP and HTTPS configuration.
-	// +kubebuilder:default:={}
-	HttpAndHttps HttpAndHttps `json:"httpAndHttps"`
 	// Number of HAProxy replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
@@ -34,12 +29,18 @@ type ConfigSpec struct {
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
-	// List of allowed client networks.
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
+	// HTTP and HTTPS configuration.
 	// +kubebuilder:default:={}
-	Whitelist []string `json:"whitelist,omitempty"`
+	HttpAndHttps HttpAndHttps `json:"httpAndHttps"`
 	// Secure HTTP by whitelisting client networks (default: false).
 	// +kubebuilder:default:=false
 	WhitelistHTTP bool `json:"whitelistHTTP"`
+	// List of allowed client networks.
+	// +kubebuilder:default:={}
+	Whitelist []string `json:"whitelist,omitempty"`
 }
 
 type HttpAndHttps struct {

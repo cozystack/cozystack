@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,36 +20,36 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Enable automatic pod replacements.
-	// +kubebuilder:default:=true
-	AutomaticReplacements bool `json:"automaticReplacements"`
-	// Backup configuration.
-	// +kubebuilder:default:={}
-	Backup Backup `json:"backup"`
 	// Cluster configuration.
 	// +kubebuilder:default:={}
 	Cluster Cluster `json:"cluster"`
-	// Custom parameters to pass to FoundationDB.
+	// Storage configuration.
 	// +kubebuilder:default:={}
-	CustomParameters []string `json:"customParameters,omitempty"`
-	// Container image deployment type.
-	// +kubebuilder:default:="unified"
-	ImageType ImageType `json:"imageType"`
-	// Monitoring configuration.
-	// +kubebuilder:default:={}
-	Monitoring Monitoring `json:"monitoring"`
+	Storage Storage `json:"storage"`
 	// Explicit CPU and memory configuration for each FoundationDB instance. When omitted, the preset defined in `resourcesPreset` is applied.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="medium"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+	// Backup configuration.
+	// +kubebuilder:default:={}
+	Backup Backup `json:"backup"`
+	// Monitoring configuration.
+	// +kubebuilder:default:={}
+	Monitoring Monitoring `json:"monitoring"`
+	// Custom parameters to pass to FoundationDB.
+	// +kubebuilder:default:={}
+	CustomParameters []string `json:"customParameters,omitempty"`
+	// Container image deployment type.
+	// +kubebuilder:default:="unified"
+	ImageType ImageType `json:"imageType"`
 	// Security context for containers.
 	// +kubebuilder:default:={}
 	SecurityContext SecurityContext `json:"securityContext"`
-	// Storage configuration.
-	// +kubebuilder:default:={}
-	Storage Storage `json:"storage"`
+	// Enable automatic pod replacements.
+	// +kubebuilder:default:=true
+	AutomaticReplacements bool `json:"automaticReplacements"`
 }
 
 type Backup struct {

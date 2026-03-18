@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,24 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Backup configuration.
-	// +kubebuilder:default:={}
-	Backup Backup `json:"backup"`
-	// Bootstrap configuration.
-	// +kubebuilder:default:={}
-	Bootstrap Bootstrap `json:"bootstrap"`
-	// Databases configuration map.
-	// +kubebuilder:default:={}
-	Databases map[string]Database `json:"databases,omitempty"`
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
-	// PostgreSQL server configuration.
-	// +kubebuilder:default:={}
-	Postgresql PostgreSQL `json:"postgresql"`
-	// Quorum configuration for synchronous replication.
-	// +kubebuilder:default:={}
-	Quorum Quorum `json:"quorum"`
 	// Number of Postgres replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
@@ -52,12 +35,30 @@ type ConfigSpec struct {
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
-	// Users configuration map.
-	// +kubebuilder:default:={}
-	Users map[string]User `json:"users,omitempty"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
+	// PostgreSQL server configuration.
+	// +kubebuilder:default:={}
+	Postgresql PostgreSQL `json:"postgresql"`
+	// Quorum configuration for synchronous replication.
+	// +kubebuilder:default:={}
+	Quorum Quorum `json:"quorum"`
+	// Users configuration map.
+	// +kubebuilder:default:={}
+	Users map[string]User `json:"users,omitempty"`
+	// Databases configuration map.
+	// +kubebuilder:default:={}
+	Databases map[string]Database `json:"databases,omitempty"`
+	// Backup configuration.
+	// +kubebuilder:default:={}
+	Backup Backup `json:"backup"`
+	// Bootstrap configuration.
+	// +kubebuilder:default:={}
+	Bootstrap Bootstrap `json:"bootstrap"`
 }
 
 type Backup struct {

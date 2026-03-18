@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,12 +20,12 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Defines if disk should be considered optical.
-	// +kubebuilder:default:=false
-	Optical bool `json:"optical"`
 	// The source image location used to create a disk.
 	// +kubebuilder:default:={}
 	Source Source `json:"source"`
+	// Defines if disk should be considered optical.
+	// +kubebuilder:default:=false
+	Optical bool `json:"optical"`
 	// The size of the disk allocated for the virtual machine.
 	// +kubebuilder:default:="5Gi"
 	Storage resource.Quantity `json:"storage"`

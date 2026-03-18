@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,22 +20,25 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Deploy own Etcd cluster.
-	// +kubebuilder:default:=false
-	Etcd bool `json:"etcd"`
 	// The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).
 	// +kubebuilder:default:=""
 	Host string `json:"host,omitempty"`
-	// Deploy own Ingress Controller.
+	// Deploy own Etcd cluster.
 	// +kubebuilder:default:=false
-	Ingress bool `json:"ingress"`
+	Etcd bool `json:"etcd"`
 	// Deploy own Monitoring Stack.
 	// +kubebuilder:default:=false
 	Monitoring bool `json:"monitoring"`
-	// Define resource quotas for the tenant.
-	// +kubebuilder:default:={}
-	ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas,omitempty"`
+	// Deploy own Ingress Controller.
+	// +kubebuilder:default:=false
+	Ingress bool `json:"ingress"`
 	// Deploy own SeaweedFS.
 	// +kubebuilder:default:=false
 	Seaweedfs bool `json:"seaweedfs"`
+	// The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.
+	// +kubebuilder:default:=""
+	SchedulingClass string `json:"schedulingClass,omitempty"`
+	// Define resource quotas for the tenant.
+	// +kubebuilder:default:={}
+	ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas,omitempty"`
 }

@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,15 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
-	// List of externalIPs for service. Optional. If not specified, will use LoadBalancer service by default.
-	// +kubebuilder:default:={}
-	ExternalIPs []string `json:"externalIPs,omitempty"`
-	// Host used to substitute into generated URLs.
-	// +kubebuilder:default:=""
-	Host string `json:"host"`
 	// Number of VPN server replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
@@ -37,9 +29,18 @@ type ConfigSpec struct {
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
+	// Host used to substitute into generated URLs.
+	// +kubebuilder:default:=""
+	Host string `json:"host"`
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
+	// List of externalIPs for service. Optional. If not specified, will use LoadBalancer service by default.
+	// +kubebuilder:default:={}
+	ExternalIPs []string `json:"externalIPs,omitempty"`
 }
 
 type Resources struct {

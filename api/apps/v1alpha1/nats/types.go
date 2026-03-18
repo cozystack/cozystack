@@ -13,6 +13,7 @@ import (
 	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -20,15 +21,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// NATS configuration.
-	// +kubebuilder:default:={}
-	Config ValuesConfig `json:"config"`
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
-	// Jetstream configuration.
-	// +kubebuilder:default:={}
-	Jetstream Jetstream `json:"jetstream"`
 	// Number of replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
@@ -41,9 +33,18 @@ type ConfigSpec struct {
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
+	// Jetstream configuration.
+	// +kubebuilder:default:={}
+	Jetstream Jetstream `json:"jetstream"`
+	// NATS configuration.
+	// +kubebuilder:default:={}
+	Config ValuesConfig `json:"config"`
 }
 
 type ValuesConfig struct {

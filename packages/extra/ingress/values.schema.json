@@ -2,15 +2,23 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
-    "cloudflareProxy": {
-      "description": "Restoring original visitor IPs when Cloudflare proxied is enabled.",
-      "type": "boolean",
-      "default": false
-    },
     "replicas": {
       "description": "Number of ingress-nginx replicas.",
       "type": "integer",
       "default": 2
+    },
+    "whitelist": {
+      "description": "List of client networks.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "cloudflareProxy": {
+      "description": "Restoring original visitor IPs when Cloudflare proxied is enabled.",
+      "type": "boolean",
+      "default": false
     },
     "resources": {
       "description": "Explicit CPU and memory configuration for each ingress-nginx replica. When omitted, the preset defined in `resourcesPreset` is applied.",
@@ -58,14 +66,6 @@
         "xlarge",
         "2xlarge"
       ]
-    },
-    "whitelist": {
-      "description": "List of client networks.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "string"
-      }
     }
   }
 }

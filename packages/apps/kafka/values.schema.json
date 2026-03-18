@@ -7,6 +7,39 @@
       "type": "boolean",
       "default": false
     },
+    "topics": {
+      "description": "Topics configuration.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "config",
+          "name",
+          "partitions",
+          "replicas"
+        ],
+        "properties": {
+          "config": {
+            "description": "Topic configuration.",
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "name": {
+            "description": "Topic name.",
+            "type": "string"
+          },
+          "partitions": {
+            "description": "Number of partitions.",
+            "type": "integer"
+          },
+          "replicas": {
+            "description": "Number of replicas.",
+            "type": "integer"
+          }
+        }
+      }
+    },
     "kafka": {
       "description": "Kafka configuration.",
       "type": "object",
@@ -88,39 +121,6 @@
           "description": "StorageClass used to store the Kafka data.",
           "type": "string",
           "default": ""
-        }
-      }
-    },
-    "topics": {
-      "description": "Topics configuration.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": [
-          "config",
-          "name",
-          "partitions",
-          "replicas"
-        ],
-        "properties": {
-          "config": {
-            "description": "Topic configuration.",
-            "type": "object",
-            "x-kubernetes-preserve-unknown-fields": true
-          },
-          "name": {
-            "description": "Topic name.",
-            "type": "string"
-          },
-          "partitions": {
-            "description": "Number of partitions.",
-            "type": "integer"
-          },
-          "replicas": {
-            "description": "Number of replicas.",
-            "type": "integer"
-          }
         }
       }
     },

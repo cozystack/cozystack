@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,9 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
 	// Number of RabbitMQ replicas.
 	// +kubebuilder:default:=3
 	Replicas int `json:"replicas"`
@@ -37,12 +35,15 @@ type ConfigSpec struct {
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
-	// Users configuration map.
-	// +kubebuilder:default:={}
-	Users map[string]User `json:"users,omitempty"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
 	// RabbitMQ major.minor version to deploy
 	// +kubebuilder:default:="v4.2"
 	Version Version `json:"version"`
+	// Users configuration map.
+	// +kubebuilder:default:={}
+	Users map[string]User `json:"users,omitempty"`
 	// Virtual hosts configuration map.
 	// +kubebuilder:default:={}
 	Vhosts map[string]Vhost `json:"vhosts,omitempty"`

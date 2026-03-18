@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,12 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Enable password generation.
-	// +kubebuilder:default:=true
-	AuthEnabled bool `json:"authEnabled"`
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
 	// Number of Redis replicas.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
@@ -40,9 +35,15 @@ type ConfigSpec struct {
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
 	// Redis major version to deploy
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
+	// Enable password generation.
+	// +kubebuilder:default:=true
+	AuthEnabled bool `json:"authEnabled"`
 }
 
 type Resources struct {

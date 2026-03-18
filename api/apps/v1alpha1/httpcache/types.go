@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,24 +20,24 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Endpoints configuration, as a list of <ip:port>.
-	// +kubebuilder:default:={}
-	Endpoints []string `json:"endpoints,omitempty"`
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
-	// HAProxy configuration.
-	// +kubebuilder:default:={}
-	Haproxy HAProxy `json:"haproxy"`
-	// Nginx configuration.
-	// +kubebuilder:default:={}
-	Nginx Nginx `json:"nginx"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
+	// Endpoints configuration, as a list of <ip:port>.
+	// +kubebuilder:default:={}
+	Endpoints []string `json:"endpoints,omitempty"`
+	// HAProxy configuration.
+	// +kubebuilder:default:={}
+	Haproxy HAProxy `json:"haproxy"`
+	// Nginx configuration.
+	// +kubebuilder:default:={}
+	Nginx Nginx `json:"nginx"`
 }
 
 type HAProxy struct {

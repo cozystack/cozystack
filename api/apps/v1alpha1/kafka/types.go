@@ -13,6 +13,7 @@ import (
 	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -23,12 +24,12 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// Kafka configuration.
-	// +kubebuilder:default:={}
-	Kafka Kafka `json:"kafka"`
 	// Topics configuration.
 	// +kubebuilder:default:={}
 	Topics []Topic `json:"topics,omitempty"`
+	// Kafka configuration.
+	// +kubebuilder:default:={}
+	Kafka Kafka `json:"kafka"`
 	// ZooKeeper configuration.
 	// +kubebuilder:default:={}
 	Zookeeper ZooKeeper `json:"zookeeper"`

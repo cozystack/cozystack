@@ -13,6 +13,7 @@ import (
 	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -20,24 +21,24 @@ type Config struct {
 }
 
 type ConfigSpec struct {
+	// StorageClass used to store the data.
+	// +kubebuilder:default:="replicated"
+	StorageClass string `json:"storageClass"`
+	// Worker nodes configuration map.
+	// +kubebuilder:default:={"md0":{"ephemeralStorage":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
+	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
+	// Kubernetes major.minor version to deploy
+	// +kubebuilder:default:="v1.35"
+	Version Version `json:"version"`
+	// External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.
+	// +kubebuilder:default:=""
+	Host string `json:"host"`
 	// Cluster addons configuration.
 	// +kubebuilder:default:={}
 	Addons Addons `json:"addons"`
 	// Kubernetes control-plane configuration.
 	// +kubebuilder:default:={}
 	ControlPlane ControlPlane `json:"controlPlane"`
-	// External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.
-	// +kubebuilder:default:=""
-	Host string `json:"host"`
-	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"ephemeralStorage":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
-	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
-	// StorageClass used to store the data.
-	// +kubebuilder:default:="replicated"
-	StorageClass string `json:"storageClass"`
-	// Kubernetes major.minor version to deploy
-	// +kubebuilder:default:="v1.35"
-	Version Version `json:"version"`
 }
 
 type APIServer struct {

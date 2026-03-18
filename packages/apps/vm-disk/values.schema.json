@@ -2,11 +2,6 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
-    "optical": {
-      "description": "Defines if disk should be considered optical.",
-      "type": "boolean",
-      "default": false
-    },
     "source": {
       "description": "The source image location used to create a disk.",
       "type": "object",
@@ -43,6 +38,11 @@
           "type": "object"
         }
       }
+    },
+    "optical": {
+      "description": "Defines if disk should be considered optical.",
+      "type": "boolean",
+      "default": false
     },
     "storage": {
       "description": "The size of the disk allocated for the virtual machine.",

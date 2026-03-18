@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,30 +20,30 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Core API server configuration.
-	// +kubebuilder:default:={}
-	Core Core `json:"core"`
-	// PostgreSQL database configuration.
-	// +kubebuilder:default:={}
-	Database Database `json:"database"`
 	// Hostname for external access to Harbor (defaults to 'harbor' subdomain for the tenant host).
 	// +kubebuilder:default:=""
 	Host string `json:"host,omitempty"`
-	// Background job service configuration.
-	// +kubebuilder:default:={}
-	Jobservice Jobservice `json:"jobservice"`
-	// Redis cache configuration.
-	// +kubebuilder:default:={}
-	Redis Redis `json:"redis"`
-	// Container image registry configuration.
-	// +kubebuilder:default:={}
-	Registry Registry `json:"registry"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
+	// Core API server configuration.
+	// +kubebuilder:default:={}
+	Core Core `json:"core"`
+	// Container image registry configuration.
+	// +kubebuilder:default:={}
+	Registry Registry `json:"registry"`
+	// Background job service configuration.
+	// +kubebuilder:default:={}
+	Jobservice Jobservice `json:"jobservice"`
 	// Trivy vulnerability scanner configuration.
 	// +kubebuilder:default:={}
 	Trivy Trivy `json:"trivy"`
+	// PostgreSQL database configuration.
+	// +kubebuilder:default:={}
+	Database Database `json:"database"`
+	// Redis cache configuration.
+	// +kubebuilder:default:={}
+	Redis Redis `json:"redis"`
 }
 
 type Core struct {

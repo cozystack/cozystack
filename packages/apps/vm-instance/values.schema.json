@@ -2,42 +2,6 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
-    "cloudInit": {
-      "description": "Cloud-init user data.",
-      "type": "string",
-      "default": ""
-    },
-    "cloudInitSeed": {
-      "description": "Seed string to generate SMBIOS UUID for the VM.",
-      "type": "string",
-      "default": ""
-    },
-    "cpuModel": {
-      "description": "Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map",
-      "type": "string",
-      "default": ""
-    },
-    "disks": {
-      "description": "List of disks to attach.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "bus": {
-            "description": "Disk bus type (e.g. \"sata\").",
-            "type": "string"
-          },
-          "name": {
-            "description": "Disk name.",
-            "type": "string"
-          }
-        }
-      }
-    },
     "external": {
       "description": "Enable external access from outside the cluster.",
       "type": "boolean",
@@ -62,22 +26,22 @@
         "type": "integer"
       }
     },
-    "gpus": {
-      "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "name": {
-            "description": "The name of the GPU resource to attach.",
-            "type": "string"
-          }
-        }
-      }
+    "runStrategy": {
+      "description": "Requested running state of the VirtualMachineInstance",
+      "type": "string",
+      "default": "Always",
+      "enum": [
+        "Always",
+        "Halted",
+        "Manual",
+        "RerunOnFailure",
+        "Once"
+      ]
+    },
+    "instanceType": {
+      "description": "Virtual Machine instance type.",
+      "type": "string",
+      "default": "u1.medium"
     },
     "instanceProfile": {
       "description": "Virtual Machine preferences profile.",
@@ -129,10 +93,62 @@
         ""
       ]
     },
-    "instanceType": {
-      "description": "Virtual Machine instance type.",
+    "disks": {
+      "description": "List of disks to attach.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "bus": {
+            "description": "Disk bus type (e.g. \"sata\").",
+            "type": "string"
+          },
+          "name": {
+            "description": "Disk name.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "subnets": {
+      "description": "Additional subnets",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Subnet name",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gpus": {
+      "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "description": "The name of the GPU resource to attach.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "cpuModel": {
+      "description": "Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map",
       "type": "string",
-      "default": "u1.medium"
+      "default": ""
     },
     "resources": {
       "description": "Resource configuration for the virtual machine.",
@@ -180,18 +196,6 @@
         }
       }
     },
-    "runStrategy": {
-      "description": "Requested running state of the VirtualMachineInstance",
-      "type": "string",
-      "default": "Always",
-      "enum": [
-        "Always",
-        "Halted",
-        "Manual",
-        "RerunOnFailure",
-        "Once"
-      ]
-    },
     "sshKeys": {
       "description": "List of SSH public keys for authentication.",
       "type": "array",
@@ -200,19 +204,15 @@
         "type": "string"
       }
     },
-    "subnets": {
-      "description": "Additional subnets",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Subnet name",
-            "type": "string"
-          }
-        }
-      }
+    "cloudInit": {
+      "description": "Cloud-init user data.",
+      "type": "string",
+      "default": ""
+    },
+    "cloudInitSeed": {
+      "description": "Seed string to generate SMBIOS UUID for the VM.",
+      "type": "string",
+      "default": ""
     }
   }
 }

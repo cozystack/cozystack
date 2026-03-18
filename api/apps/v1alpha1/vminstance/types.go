@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,18 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Cloud-init user data.
-	// +kubebuilder:default:=""
-	CloudInit string `json:"cloudInit"`
-	// Seed string to generate SMBIOS UUID for the VM.
-	// +kubebuilder:default:=""
-	CloudInitSeed string `json:"cloudInitSeed"`
-	// Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
-	// +kubebuilder:default:=""
-	CpuModel string `json:"cpuModel"`
-	// List of disks to attach.
-	// +kubebuilder:default:={}
-	Disks []Disk `json:"disks,omitempty"`
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
@@ -40,27 +29,39 @@ type ConfigSpec struct {
 	// Ports to forward from outside the cluster.
 	// +kubebuilder:default:={22}
 	ExternalPorts []int `json:"externalPorts,omitempty"`
-	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
-	// +kubebuilder:default:={}
-	Gpus []GPU `json:"gpus,omitempty"`
-	// Virtual Machine preferences profile.
-	// +kubebuilder:default:="ubuntu"
-	InstanceProfile string `json:"instanceProfile"`
-	// Virtual Machine instance type.
-	// +kubebuilder:default:="u1.medium"
-	InstanceType string `json:"instanceType"`
-	// Resource configuration for the virtual machine.
-	// +kubebuilder:default:={}
-	Resources Resources `json:"resources,omitempty"`
 	// Requested running state of the VirtualMachineInstance
 	// +kubebuilder:default:="Always"
 	RunStrategy RunStrategy `json:"runStrategy"`
-	// List of SSH public keys for authentication.
+	// Virtual Machine instance type.
+	// +kubebuilder:default:="u1.medium"
+	InstanceType string `json:"instanceType"`
+	// Virtual Machine preferences profile.
+	// +kubebuilder:default:="ubuntu"
+	InstanceProfile string `json:"instanceProfile"`
+	// List of disks to attach.
 	// +kubebuilder:default:={}
-	SshKeys []string `json:"sshKeys,omitempty"`
+	Disks []Disk `json:"disks,omitempty"`
 	// Additional subnets
 	// +kubebuilder:default:={}
 	Subnets []Subnet `json:"subnets,omitempty"`
+	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
+	// +kubebuilder:default:={}
+	Gpus []GPU `json:"gpus,omitempty"`
+	// Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
+	// +kubebuilder:default:=""
+	CpuModel string `json:"cpuModel"`
+	// Resource configuration for the virtual machine.
+	// +kubebuilder:default:={}
+	Resources Resources `json:"resources,omitempty"`
+	// List of SSH public keys for authentication.
+	// +kubebuilder:default:={}
+	SshKeys []string `json:"sshKeys,omitempty"`
+	// Cloud-init user data.
+	// +kubebuilder:default:=""
+	CloudInit string `json:"cloudInit"`
+	// Seed string to generate SMBIOS UUID for the VM.
+	// +kubebuilder:default:=""
+	CloudInitSeed string `json:"cloudInitSeed"`
 }
 
 type Disk struct {

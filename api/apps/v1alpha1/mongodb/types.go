@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:root=true
 type Config struct {
 	v1.TypeMeta   `json:",inline"`
 	v1.ObjectMeta `json:"metadata,omitempty"`
@@ -19,18 +20,6 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Backup configuration.
-	// +kubebuilder:default:={}
-	Backup Backup `json:"backup"`
-	// Bootstrap configuration.
-	// +kubebuilder:default:={}
-	Bootstrap Bootstrap `json:"bootstrap"`
-	// Databases configuration map.
-	// +kubebuilder:default:={}
-	Databases map[string]Database `json:"databases,omitempty"`
-	// Enable external access from outside the cluster.
-	// +kubebuilder:default:=false
-	External bool `json:"external"`
 	// Number of MongoDB replicas in replica set.
 	// +kubebuilder:default:=3
 	Replicas int `json:"replicas"`
@@ -40,24 +29,36 @@ type ConfigSpec struct {
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
-	// Enable sharded cluster mode. When disabled, deploys a replica set.
-	// +kubebuilder:default:=false
-	Sharding bool `json:"sharding"`
-	// Configuration for sharded cluster mode.
-	// +kubebuilder:default:={}
-	ShardingConfig ShardingConfig `json:"shardingConfig"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
 	StorageClass string `json:"storageClass"`
-	// Users configuration map.
-	// +kubebuilder:default:={}
-	Users map[string]User `json:"users,omitempty"`
+	// Enable external access from outside the cluster.
+	// +kubebuilder:default:=false
+	External bool `json:"external"`
 	// MongoDB major version to deploy.
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
+	// Enable sharded cluster mode. When disabled, deploys a replica set.
+	// +kubebuilder:default:=false
+	Sharding bool `json:"sharding"`
+	// Configuration for sharded cluster mode.
+	// +kubebuilder:default:={}
+	ShardingConfig ShardingConfig `json:"shardingConfig"`
+	// Users configuration map.
+	// +kubebuilder:default:={}
+	Users map[string]User `json:"users,omitempty"`
+	// Databases configuration map.
+	// +kubebuilder:default:={}
+	Databases map[string]Database `json:"databases,omitempty"`
+	// Backup configuration.
+	// +kubebuilder:default:={}
+	Backup Backup `json:"backup"`
+	// Bootstrap configuration.
+	// +kubebuilder:default:={}
+	Bootstrap Bootstrap `json:"bootstrap"`
 }
 
 type Backup struct {
