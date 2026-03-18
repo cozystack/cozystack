@@ -39,6 +39,11 @@
         "x-kubernetes-int-or-string": true
       }
     },
+    "schedulingClass": {
+      "description": "The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.",
+      "type": "string",
+      "default": ""
+    },
     "seaweedfs": {
       "description": "Deploy own SeaweedFS.",
       "type": "boolean",

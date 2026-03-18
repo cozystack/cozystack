@@ -52,6 +52,12 @@ type ApplicationStatus struct {
 	ExternalIPsCount int32 `json:"externalIPsCount,omitempty"`
 }
 
+// SchedulingClass returns the scheduling class requested by this Application.
+// TODO: read from a dedicated Application field once the struct is extended.
+func (in Application) SchedulingClass() string {
+	return ""
+}
+
 // GetConditions returns the status conditions of the object.
 func (in Application) GetConditions() []metav1.Condition {
 	return in.Status.Conditions
