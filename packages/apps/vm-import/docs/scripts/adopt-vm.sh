@@ -63,7 +63,7 @@ else
     DISK_COUNT=0
     while IFS= read -r disk; do
         if [ -n "$disk" ]; then
-            ((DISK_COUNT++))
+            DISK_COUNT=$((DISK_COUNT + 1))
             echo "  - $disk"
             # Extract disk name without vm- prefix if present
             DISK_REF=$(echo "$disk" | sed "s/^vm-disk-//")
