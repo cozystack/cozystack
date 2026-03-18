@@ -84,5 +84,5 @@
 | `resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`   |
 | `resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`   |
 | `resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`   |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `nano` |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `s1.nano` |
 

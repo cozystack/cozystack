@@ -57,7 +57,6 @@
   {{- include "cozy-lib.resources.preset" (list "s1.nano" $) }}
 */}}
 {{- define "cozy-lib.resources.preset" -}}
-{{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
 {{-   $args := index . 0 }}
 {{-   $global := index . 1 }}
 {{-   $unsanitizedPreset := include "cozy-lib.resources.unsanitizedPreset" $args | fromYaml }}

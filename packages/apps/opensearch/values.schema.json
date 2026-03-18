@@ -58,15 +58,11 @@
         "resourcesPreset": {
           "description": "Default sizing preset for Dashboards.",
           "type": "string",
-          "default": "medium",
+          "default": "s1.medium",
           "enum": [
-            "nano",
-            "micro",
-            "small",
-            "medium",
-            "large",
-            "xlarge",
-            "2xlarge"
+            "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
+            "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
+            "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge"
           ]
         }
       }
@@ -165,15 +161,11 @@
     "resourcesPreset": {
       "description": "Default sizing preset used when `resources` is omitted. OpenSearch requires minimum 2Gi memory.",
       "type": "string",
-      "default": "large",
+      "default": "m1.large",
       "enum": [
-        "nano",
-        "micro",
-        "small",
-        "medium",
-        "large",
-        "xlarge",
-        "2xlarge"
+        "s1.nano", "s1.micro", "s1.small", "s1.medium", "s1.large", "s1.xlarge", "s1.2xlarge", "s1.4xlarge",
+        "u1.nano", "u1.micro", "u1.small", "u1.medium", "u1.large", "u1.xlarge", "u1.2xlarge", "u1.4xlarge",
+        "m1.nano", "m1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m1.2xlarge", "m1.4xlarge"
       ]
     },
     "size": {

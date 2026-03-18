@@ -15,7 +15,7 @@ spec:
   storageClass: ""
   authEnabled: true
   resources: {}
-  resourcesPreset: "nano"
+  resourcesPreset: "m1.nano"
 EOF
   sleep 5
   kubectl -n tenant-test wait hr redis-$name --timeout=20s --for=condition=ready
