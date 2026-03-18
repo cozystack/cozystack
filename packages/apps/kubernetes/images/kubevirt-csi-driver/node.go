@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -32,15 +33,14 @@ func (w *WrappedNodeService) NodeStageVolume(ctx context.Context, req *csi.NodeS
 	return w.NodeService.NodeStageVolume(ctx, req)
 }
 
-// NodePublishVolume for NFS volumes: mounts NFS at the target path.
+// NodePublishVolume for NFS volumes: mounts the /data subdir of the NFS export
+// at the target path, hiding internal artifacts (disk.img, lost+found).
 // For RWO volumes, delegates to upstream (mount block device).
 func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	nfsExport := req.GetPublishContext()[nfsExportKey]
 	if nfsExport == "" {
 		return w.NodeService.NodePublishVolume(ctx, req)
 	}
-
-	klog.V(3).Infof("Publishing NFS volume %s at %s", req.GetVolumeId(), req.GetTargetPath())
 
 	host, port, path, err := parseNFSExport(nfsExport)
 	if err != nil {
@@ -60,13 +60,10 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		}
 		notMnt = true
 	}
-
 	if !notMnt {
-		klog.V(3).Infof("NFS volume %s already mounted at %s", req.GetVolumeId(), targetPath)
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
-	source := fmt.Sprintf("%s:%s", host, path)
 	mountOptions := []string{
 		"nfsvers=4.2",
 		fmt.Sprintf("port=%s", port),
@@ -75,9 +72,51 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		mountOptions = append(mountOptions, "ro")
 	}
 
-	klog.V(3).Infof("Mounting NFS %s at %s with options %v", source, targetPath, mountOptions)
-	if err := w.mounter.Mount(source, targetPath, "nfs", mountOptions); err != nil {
-		return nil, status.Errorf(codes.Internal, "NFS mount of %s at %s failed: %v", source, targetPath, err)
+	// Temp-mount the NFS root to ensure /data subdir exists and migrate any
+	// user files that were written before this fix (backward compatibility).
+	tmpMount := fmt.Sprintf("/tmp/nfs-init-%s", req.GetVolumeId())
+	if err := os.MkdirAll(tmpMount, 0750); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create temp mount: %v", err)
+	}
+
+	rootSource := fmt.Sprintf("%s:%s", host, path)
+	rootOpts := []string{"nfsvers=4.2", fmt.Sprintf("port=%s", port)}
+	if err := w.mounter.Mount(rootSource, tmpMount, "nfs", rootOpts); err != nil {
+		os.Remove(tmpMount)
+		return nil, status.Errorf(codes.Internal, "NFS temp mount failed: %v", err)
+	}
+
+	dataDir := filepath.Join(tmpMount, "data")
+	if err := os.MkdirAll(dataDir, 0777); err != nil {
+		w.mounter.Unmount(tmpMount)
+		os.Remove(tmpMount)
+		return nil, status.Errorf(codes.Internal, "failed to create /data subdir: %v", err)
+	}
+
+	// Auto-migrate: move user files from root into /data (skip internal artifacts).
+	entries, _ := os.ReadDir(tmpMount)
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "data" || name == "disk.img" || name == "lost+found" {
+			continue
+		}
+		src := filepath.Join(tmpMount, name)
+		dst := filepath.Join(dataDir, name)
+		if _, err := os.Stat(dst); err == nil {
+			continue // already exists in /data, skip
+		}
+		klog.Infof("Migrating %s to /data/%s for volume %s", name, name, req.GetVolumeId())
+		os.Rename(src, dst)
+	}
+
+	w.mounter.Unmount(tmpMount)
+	os.Remove(tmpMount)
+
+	// Mount only the /data subdir at the pod's target path.
+	dataSource := fmt.Sprintf("%s:%s/data", host, path)
+	klog.V(3).Infof("Mounting NFS %s at %s with options %v", dataSource, targetPath, mountOptions)
+	if err := w.mounter.Mount(dataSource, targetPath, "nfs", mountOptions); err != nil {
+		return nil, status.Errorf(codes.Internal, "NFS mount of %s at %s failed: %v", dataSource, targetPath, err)
 	}
 
 	return &csi.NodePublishVolumeResponse{}, nil
