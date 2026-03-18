@@ -72,6 +72,33 @@ type BackupSpec struct {
 	DriverMetadata map[string]string `json:"driverMetadata,omitempty"`
 }
 
+// DataVolumeResource describes a dataVolume associated with the backed-up application.
+type DataVolumeResource struct {
+	// DataVolumeName is the name of the dataVolume/PVC (e.g., "vm-disk-ubuntu-source").
+	DataVolumeName string `json:"dataVolumeName"`
+
+	// ApplicationName is the cozystack application name for this disk (e.g., "ubuntu-source").
+	ApplicationName string `json:"applicationName"`
+}
+
+// UnderlyingResources contains information about resources associated with the
+// backed-up application that were discovered at backup time (e.g., VM disks,
+// network configuration). This data is used during restore to correctly
+// reconstruct the application's environment.
+type UnderlyingResources struct {
+	// DataVolumes lists the dataVolume resources used by the application.
+	// +optional
+	DataVolumes []DataVolumeResource `json:"dataVolumes,omitempty"`
+
+	// IP is the OVN IP address assigned to the application at backup time.
+	// +optional
+	IP string `json:"ip,omitempty"`
+
+	// MAC is the OVN MAC address assigned to the application at backup time.
+	// +optional
+	MAC string `json:"mac,omitempty"`
+}
+
 // BackupStatus represents the observed state of a Backup.
 type BackupStatus struct {
 	// Phase is a simple, high-level summary of the backup's state.
@@ -82,6 +109,11 @@ type BackupStatus struct {
 	// Artifact describes the stored backup object, if available.
 	// +optional
 	Artifact *BackupArtifact `json:"artifact,omitempty"`
+
+	// UnderlyingResources contains information about underlying resources
+	// discovered during backup (e.g., VM disks, IP/MAC addresses).
+	// +optional
+	UnderlyingResources *UnderlyingResources `json:"underlyingResources,omitempty"`
 
 	// Conditions represents the latest available observations of a Backup's state.
 	// +optional
