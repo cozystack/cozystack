@@ -35,17 +35,10 @@ VM visible in dashboard ✓
 ### values.yaml
 
 ```yaml
-# Watch interval
 controller:
-  watchInterval: 30  # Check for new VMs every 30 seconds
-
-# Optional: watch specific namespace only
-controller:
-  watchNamespace: "tenant-production"
-
-# Optional: prefix for created VMInstance names
-controller:
-  namePrefix: "imported-"
+  watchInterval: 30          # Check for new VMs every 30 seconds
+  watchNamespace: ""         # Optional: watch specific namespace only (empty = all)
+  namePrefix: ""             # Optional: prefix for created VMInstance names
 ```
 
 ### Disabling adoption
@@ -137,7 +130,7 @@ The controller is a simple Go application that:
 
 ## Deployment
 
-Automatically deployed as a dependency of `vm-import-application`.
+Automatically deployed as part of the IaaS bundle via the `cozystack.vm-adoption-controller` PackageSource.
 
 Or deploy standalone:
 
