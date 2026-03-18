@@ -65,7 +65,7 @@ metadata:
     namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
     namespace.cozystack.io/host: {{ $computedHost | quote }}
     {{- with $schedulingClass }}
-    scheduling.cozystack.io/class: {{ . | quote }}
+    scheduler.cozystack.io/scheduling-class: {{ . | quote }}
     {{- end }}
     alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
   ownerReferences:

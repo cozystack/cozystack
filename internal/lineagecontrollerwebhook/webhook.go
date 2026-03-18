@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
@@ -21,12 +22,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	schedulerapi "github.com/cozystack/cozystack-scheduler/pkg/apis/v1alpha1"
 )
 
 var (
-	NoAncestors       = fmt.Errorf("no managed apps found in lineage")
-	AncestryAmbiguous = fmt.Errorf("object ancestry is ambiguous")
+	NoAncestors       = errors.New("no managed apps found in lineage")
+	AncestryAmbiguous = errors.New("object ancestry is ambiguous")
 )
 
 const (
@@ -34,11 +37,6 @@ const (
 	ManagerGroupKey  = "apps.cozystack.io/application.group"
 	ManagerKindKey   = "apps.cozystack.io/application.kind"
 	ManagerNameKey   = "apps.cozystack.io/application.name"
-
-	// Scheduling constants
-	SchedulingClassLabel      = "scheduling.cozystack.io/class"
-	SchedulingClassAnnotation = "scheduler.cozystack.io/scheduling-class"
-	CozystackSchedulerName    = "cozystack-scheduler"
 )
 
 // getResourceSelectors returns the appropriate ApplicationDefinitionResources for a given GroupKind
@@ -103,27 +101,25 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 		return admission.Errored(400, fmt.Errorf("decode object: %w", err))
 	}
 
-	labels, err := h.computeLabels(ctx, obj)
-	for {
-		if err != nil && errors.Is(err, NoAncestors) {
-			break // not a problem, mark object as unmanaged
-		}
-		if err != nil && errors.Is(err, AncestryAmbiguous) {
-			warn = append(warn, "object ancestry ambiguous, using first ancestor found")
-			break
-		}
-		if err != nil {
-			logger.Error(err, "error computing lineage labels")
-			return admission.Errored(500, fmt.Errorf("error computing lineage labels: %w", err))
-		}
-		if err == nil {
-			break
-		}
+	owner, err := h.getOwner(ctx, obj)
+	switch {
+	case err != nil && errors.Is(err, AncestryAmbiguous):
+		warn = append(warn, "object ancestry ambiguous, using first ancestor found")
+	case err != nil && errors.Is(err, NoAncestors):
+		// not a problem, mark object as unmanaged
+	case err != nil:
+		logger.Error(err, "error computing lineage labels")
+		return admission.Errored(500, fmt.Errorf("error computing lineage labels: %w", err))
+	}
+	labels, err := h.computeLabels(ctx, obj, owner)
+	if err != nil {
+		logger.Error(err, "error computing lineage labels")
+		return admission.Errored(500, fmt.Errorf("error computing lineage labels: %w", err))
 	}
 
 	h.applyLabels(obj, labels)
 
-	if err := h.applySchedulingClass(ctx, obj, req.Namespace); err != nil {
+	if err := h.applySchedulingClass(ctx, obj, owner, req.Namespace); err != nil {
 		logger.Error(err, "error applying scheduling class")
 		return admission.Errored(500, fmt.Errorf("error applying scheduling class: %w", err))
 	}
@@ -136,22 +132,29 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 	return admission.PatchResponseFromRaw(req.Object.Raw, mutated).WithWarnings(warn...)
 }
 
-func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstructured.Unstructured) (map[string]string, error) {
+func (h *LineageControllerWebhook) getOwner(ctx context.Context, o *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	owners := lineage.WalkOwnershipGraph(ctx, h.dynClient, h.mapper, h, o)
 	if len(owners) == 0 {
-		return map[string]string{ManagedObjectKey: "false"}, NoAncestors
+		return nil, NoAncestors
 	}
 	obj, err := owners[0].GetUnstructured(ctx, h.dynClient, h.mapper)
 	if err != nil {
 		return nil, err
 	}
-	gv, err := schema.ParseGroupVersion(obj.GetAPIVersion())
-	if err != nil {
-		// should never happen, we got an APIVersion right from the API
-		return nil, fmt.Errorf("could not parse APIVersion %s to a group and version: %w", obj.GetAPIVersion(), err)
-	}
 	if len(owners) > 1 {
 		err = AncestryAmbiguous
+	}
+	return obj, err
+}
+
+func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstructured.Unstructured, owner *unstructured.Unstructured) (map[string]string, error) {
+	if owner == nil {
+		return nil, nil
+	}
+	gv, err := schema.ParseGroupVersion(owner.GetAPIVersion())
+	if err != nil {
+		// should never happen, we got an APIVersion right from the API
+		return nil, fmt.Errorf("could not parse APIVersion %s to a group and version: %w", owner.GetAPIVersion(), err)
 	}
 	labels := map[string]string{
 		// truncate apigroup to first 63 chars
@@ -166,25 +169,25 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, o *unstruc
 			}
 			return s
 		}(gv.Group),
-		ManagerKindKey: obj.GetKind(),
-		ManagerNameKey: obj.GetName(),
+		ManagerKindKey: owner.GetKind(),
+		ManagerNameKey: owner.GetName(),
 	}
 	templateLabels := map[string]string{
-		"kind":      strings.ToLower(obj.GetKind()),
-		"name":      obj.GetName(),
-		"namespace": o.GetNamespace(),
+		"kind":      strings.ToLower(owner.GetKind()),
+		"name":      owner.GetName(),
+		"namespace": obj.GetNamespace(),
 	}
 	cfg := h.config.Load().(*runtimeConfig)
-	crd := cfg.appCRDMap[appRef{gv.Group, obj.GetKind()}]
-	resourceSelectors := h.getResourceSelectors(o.GroupVersionKind().GroupKind(), crd)
+	crd := cfg.appCRDMap[appRef{gv.Group, owner.GetKind()}]
+	resourceSelectors := h.getResourceSelectors(obj.GroupVersionKind().GroupKind(), crd)
 
 	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
 		if b {
 			return corev1alpha1.TenantResourceLabelValue
 		}
 		return "false"
-	}(matchResourceToExcludeInclude(ctx, o.GetName(), templateLabels, o.GetLabels(), resourceSelectors))
-	return labels, err
+	}(matchResourceToExcludeInclude(ctx, obj.GetName(), templateLabels, obj.GetLabels(), resourceSelectors))
+	return labels, nil
 }
 
 func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, labels map[string]string) {
@@ -199,22 +202,33 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 }
 
 // applySchedulingClass injects schedulerName and scheduling-class annotation
-// into Pods whose namespace carries the scheduling.cozystack.io/class label.
+// into Pods whose namespace carries the scheduler.cozystack.io/scheduling-class label.
 // If the referenced SchedulingClass CR does not exist (e.g. the scheduler
 // package is not installed), the injection is silently skipped so that pods
 // are not left Pending.
-func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj *unstructured.Unstructured, namespace string) error {
+func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj, owner *unstructured.Unstructured, namespace string) error {
 	if obj.GetKind() != "Pod" {
 		return nil
 	}
 
-	ns := &corev1.Namespace{}
-	if err := h.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
-		return fmt.Errorf("getting namespace %s: %w", namespace, err)
+	// Determine scheduling class: owner Application field takes priority,
+	// then fall back to namespace label.
+	var schedulingClass string
+	if owner != nil {
+		var app appsv1alpha1.Application
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(owner.Object, &app); err == nil {
+			schedulingClass = app.SchedulingClass()
+		}
+	}
+	if schedulingClass == "" {
+		ns := &corev1.Namespace{}
+		if err := h.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
+			return fmt.Errorf("getting namespace %s: %w", namespace, err)
+		}
+		schedulingClass = ns.Labels[schedulerapi.SchedulingClassLabel]
 	}
 
-	schedulingClass, ok := ns.Labels[SchedulingClassLabel]
-	if !ok || schedulingClass == "" {
+	if schedulingClass == "" {
 		return nil
 	}
 
@@ -229,7 +243,7 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 		return nil
 	}
 
-	if err := unstructured.SetNestedField(obj.Object, CozystackSchedulerName, "spec", "schedulerName"); err != nil {
+	if err := unstructured.SetNestedField(obj.Object, schedulerapi.SchedulerName, "spec", "schedulerName"); err != nil {
 		return fmt.Errorf("setting schedulerName: %w", err)
 	}
 
@@ -237,16 +251,16 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	annotations[SchedulingClassAnnotation] = schedulingClass
+	annotations[schedulerapi.SchedulingClassAnnotation] = schedulingClass
 	obj.SetAnnotations(annotations)
 
 	return nil
 }
 
 var schedulingClassGVR = schema.GroupVersionResource{
-	Group:    "cozystack.io",
-	Version:  "v1alpha1",
-	Resource: "schedulingclasses",
+	Group:    schedulerapi.Group,
+	Version:  schedulerapi.Version,
+	Resource: schedulerapi.Resource,
 }
 
 func (h *LineageControllerWebhook) decodeUnstructured(req admission.Request, out *unstructured.Unstructured) error {

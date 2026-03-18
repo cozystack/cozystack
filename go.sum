@@ -20,6 +20,8 @@ github.com/coreos/go-systemd/v22 v22.5.0 h1:RrqgGjYQKalulkV8NGVIfkXQf6YYmOyiJKk8
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
 github.com/cozystack/apimachinery v0.0.0-20251219010959-1f91eabae46c h1:C2wIfH/OzhU9XOK/e6Ik9cg7nZ1z6fN4lf6a3yFdik8=
 github.com/cozystack/apimachinery v0.0.0-20251219010959-1f91eabae46c/go.mod h1:/GwIlEcWuTX9zKIg2mbw0LRFIsXwrfoVxn+ef0X13lw=
+github.com/cozystack/cozystack-scheduler/pkg/apis v0.1.1 h1:9uLa/8J4lRx3sNuaVH8UZqgZvnskHATPo5GxEKh0iSM=
+github.com/cozystack/cozystack-scheduler/pkg/apis v0.1.1/go.mod h1:kPeS9YPB4ENbvNINEkkp0SX8FB+gvwoOHGOHMT3Tg9Y=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
