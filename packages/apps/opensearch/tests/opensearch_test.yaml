@@ -250,6 +250,22 @@ tests:
           content: cluster_manager
         documentIndex: 0
 
+  - it: fails when all node roles are disabled
+    release:
+      name: test-os
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      nodeRoles:
+        master: false
+        data: false
+        ingest: false
+        ml: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "At least one node role must be enabled (master, data, ingest, or ml)"
+
   - it: enables ml role when configured
     release:
       name: test-os
