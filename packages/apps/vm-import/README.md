@@ -143,9 +143,10 @@ The adoption happens automatically within ~30 seconds of the import completing.
 If you disable automatic adoption, you can still use `kubectl` and KubeVirt APIs directly:
 
 ```bash
-# Start/stop VM
-kubectl patch vm <vm-name> -n <namespace> --type merge -p '{"spec":{"running":true}}'
-kubectl patch vm <vm-name> -n <namespace> --type merge -p '{"spec":{"running":false}}'
+# Start VM
+kubectl patch vm <vm-name> -n <namespace> --type merge -p '{"spec":{"runStrategy":"Always"}}'
+# Stop VM
+kubectl patch vm <vm-name> -n <namespace> --type merge -p '{"spec":{"runStrategy":"Halted"}}'
 
 # View VM console
 virtctl console <vm-name> -n <namespace>
