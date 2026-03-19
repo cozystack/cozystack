@@ -81,10 +81,11 @@ mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
 
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
 
+# Tidy dependencies for standalone api/apps/v1alpha1 submodule
+(cd "${SCRIPT_ROOT}/api/apps/v1alpha1" && go mod tidy)
+
 # Generate deepcopy for standalone api/apps/v1alpha1 submodule (separate Go module)
 # Use absolute path for headerFile since we cd into the submodule directory
 APPS_API_ROOT="$(cd "${SCRIPT_ROOT}" && pwd)"
 (cd "${APPS_API_ROOT}/api/apps/v1alpha1" && $CONTROLLER_GEN object:headerFile="${APPS_API_ROOT}/hack/boilerplate.go.txt" paths="./...")
 
-# Tidy dependencies for standalone api/apps/v1alpha1 submodule
-(cd "${SCRIPT_ROOT}/api/apps/v1alpha1" && go mod tidy)
