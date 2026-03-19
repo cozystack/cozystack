@@ -4,8 +4,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -89,8 +93,40 @@ func main() {
 		planCache:     make(map[string]*PlanCacheEntry),
 	}
 
+	// Graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		klog.Infof("Received signal %v, shutting down", sig)
+		cancel()
+	}()
+
+	// Health check endpoint
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		})
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		})
+		server := &http.Server{Addr: ":8081", Handler: mux}
+		go func() {
+			<-ctx.Done()
+			server.Shutdown(context.Background())
+		}()
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			klog.Errorf("Health server error: %v", err)
+		}
+	}()
+
 	// Run controller
-	ctx := context.Background()
 	controller.Run(ctx)
 }
 
@@ -129,6 +165,9 @@ func (c *AdoptionController) Run(ctx context.Context) {
 func (c *AdoptionController) reconcile(ctx context.Context) {
 	klog.V(2).Info("Running reconciliation loop...")
 
+	// Purge expired cache entries
+	c.purgeExpiredCache()
+
 	// Get VirtualMachines with Forklift labels
 	vms, err := c.getForkliftVMs(ctx)
 	if err != nil {
@@ -141,6 +180,17 @@ func (c *AdoptionController) reconcile(ctx context.Context) {
 	for _, vm := range vms {
 		if err := c.adoptVM(ctx, vm); err != nil {
 			klog.Errorf("Failed to adopt VM %s/%s: %v", vm.Namespace, vm.Name, err)
+		}
+	}
+}
+
+func (c *AdoptionController) purgeExpiredCache() {
+	c.cacheMutex.Lock()
+	defer c.cacheMutex.Unlock()
+
+	for key, entry := range c.planCache {
+		if time.Since(entry.CachedAt) >= planCacheTTL {
+			delete(c.planCache, key)
 		}
 	}
 }
@@ -190,18 +240,63 @@ func (c *AdoptionController) getForkliftVMs(ctx context.Context) ([]kubevirtv1.V
 			continue
 		}
 
-		// Convert to typed VM (we'll work with unstructured for simplicity)
+		// Check if the Forklift migration is complete before adopting
+		if !c.isMigrationComplete(ctx, item.GetNamespace(), planName) {
+			klog.V(2).Infof("VM %s/%s: migration not complete for plan %s, skipping", item.GetNamespace(), item.GetName(), planName)
+			continue
+		}
+
+		// Convert to typed VM (only name/namespace/labels — full spec fetched in adoptVM)
 		vms = append(vms, kubevirtv1.VirtualMachine{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      item.GetName(),
 				Namespace: item.GetNamespace(),
 				Labels:    item.GetLabels(),
 			},
-			// We'll extract spec when needed
 		})
 	}
 
 	return vms, nil
+}
+
+// isMigrationComplete checks that the Forklift Migration for this plan has
+// finished successfully. This prevents adopting VMs whose DataVolumes are
+// still being transferred.
+func (c *AdoptionController) isMigrationComplete(ctx context.Context, namespace, planName string) bool {
+	migrationGVR := schema.GroupVersionResource{
+		Group:    "forklift.konveyor.io",
+		Version:  "v1beta1",
+		Resource: "migrations",
+	}
+
+	migration, err := c.dynamicClient.Resource(migrationGVR).Namespace(namespace).Get(ctx, planName, metav1.GetOptions{})
+	if err != nil {
+		klog.V(2).Infof("Failed to get Migration %s/%s: %v (skipping adoption)", namespace, planName, err)
+		return false
+	}
+
+	// Check status.conditions for type "Succeeded" with status "True"
+	conditions, found, _ := unstructured.NestedSlice(migration.Object, "status", "conditions")
+	if !found {
+		klog.V(2).Infof("Migration %s/%s has no status conditions yet", namespace, planName)
+		return false
+	}
+
+	for _, cond := range conditions {
+		condMap, ok := cond.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, _, _ := unstructured.NestedString(condMap, "type")
+		condStatus, _, _ := unstructured.NestedString(condMap, "status")
+		if condType == "Succeeded" && condStatus == "True" {
+			klog.V(2).Infof("Migration %s/%s is complete", namespace, planName)
+			return true
+		}
+	}
+
+	klog.V(2).Infof("Migration %s/%s is not yet complete", namespace, planName)
+	return false
 }
 
 func (c *AdoptionController) isAdoptionEnabled(ctx context.Context, namespace, planName string) bool {
@@ -275,17 +370,21 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		return fmt.Errorf("VM %s/%s has no spec field", vm.Namespace, vm.Name)
 	}
 
-	// Extract running state and convert to runStrategy
-	running, _, _ := unstructured.NestedBool(spec, "running")
+	// Extract running state — check runStrategy first (modern), then running (deprecated)
 	runStrategy := "Always"
-	if !running {
-		// Also check runStrategy directly (newer KubeVirt VMs use this)
-		rs, rsFound, _ := unstructured.NestedString(spec, "runStrategy")
-		if rsFound && rs != "" {
-			runStrategy = rs
-		} else {
-			runStrategy = "Halted"
+	rs, rsFound, _ := unstructured.NestedString(spec, "runStrategy")
+	if rsFound && rs != "" {
+		runStrategy = rs
+	} else {
+		running, runningFound, _ := unstructured.NestedBool(spec, "running")
+		if runningFound {
+			if running {
+				runStrategy = "Always"
+			} else {
+				runStrategy = "Halted"
+			}
 		}
+		// If neither found, default remains "Always"
 	}
 
 	// Extract instance type
@@ -302,12 +401,21 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		klog.Infof("VM %s/%s: using default preference=%s", vm.Namespace, vm.Name, defaultPreference)
 	}
 
+	// Extract template.spec — fail if missing to avoid creating a VMInstance with no disks
+	template, templateFound, _ := unstructured.NestedMap(spec, "template")
+	if !templateFound || template == nil {
+		return fmt.Errorf("VM %s/%s has no spec.template", vm.Namespace, vm.Name)
+	}
+	templateSpec, tsFound, _ := unstructured.NestedMap(template, "spec")
+	if !tsFound || templateSpec == nil {
+		return fmt.Errorf("VM %s/%s has no spec.template.spec", vm.Namespace, vm.Name)
+	}
+
 	// Extract disks with safe type assertions
-	template, _, _ := unstructured.NestedMap(spec, "template")
-	templateSpec, _, _ := unstructured.NestedMap(template, "spec")
 	volumes, _, _ := unstructured.NestedSlice(templateSpec, "volumes")
 
 	var disks []interface{}
+	var dvNames []string // Track DataVolume names for Helm labeling
 	diskNames := make(map[string]bool)
 	diskIndex := 0
 	for i, vol := range volumes {
@@ -356,6 +464,7 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 			"dvName": dvName,
 			"bus":    "virtio",
 		})
+		dvNames = append(dvNames, dvName)
 		klog.V(3).Infof("VM %s/%s: added disk %s (dvName=%s)", vm.Namespace, vm.Name, diskName, dvName)
 	}
 
@@ -400,8 +509,8 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		klog.V(3).Infof("VM %s/%s: added subnet %s (from %s)", vm.Namespace, vm.Name, subnetName, networkName)
 	}
 
-	klog.Infof("VM %s/%s: extracted %d disk(s), %d subnet(s), instanceType=%s, preference=%s, running=%v",
-		vm.Namespace, vm.Name, len(disks), len(subnets), instanceType, preference, running)
+	klog.Infof("VM %s/%s: extracted %d disk(s), %d subnet(s), instanceType=%s, preference=%s, runStrategy=%s",
+		vm.Namespace, vm.Name, len(disks), len(subnets), instanceType, preference, runStrategy)
 
 	// Create VMInstance name
 	vmInstanceName := vm.Name
@@ -409,8 +518,17 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		vmInstanceName = namePrefix + vm.Name
 	}
 
+	// Validate Kubernetes name length
+	if len(vmInstanceName) > 63 {
+		return fmt.Errorf("VMInstance name %q exceeds 63 characters", vmInstanceName)
+	}
+
 	// The HelmRelease name is derived from the ApplicationDefinition prefix + VMInstance name
 	helmReleaseName := "vm-instance-" + vmInstanceName
+
+	if len(helmReleaseName) > 63 {
+		return fmt.Errorf("HelmRelease name %q exceeds 63 characters", helmReleaseName)
+	}
 
 	// Check if VMInstance already exists
 	vmInstanceGVR := schema.GroupVersionResource{
@@ -425,10 +543,18 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		return c.labelVMAsAdopted(ctx, vm.Namespace, vm.Name, vmInstanceName, helmReleaseName)
 	}
 
-	// STEP 1: Label the existing Forklift VM with Helm metadata so that
-	// Helm will adopt it instead of trying to create a new one.
+	// STEP 1: Label the existing Forklift VM and its DataVolumes with Helm
+	// metadata so that Helm will adopt them instead of trying to create new ones.
 	if err := c.prepareVMForHelmAdoption(ctx, vm.Namespace, vm.Name, helmReleaseName); err != nil {
 		return fmt.Errorf("failed to prepare VM for Helm adoption: %w", err)
+	}
+
+	if err := c.prepareDataVolumesForHelmAdoption(ctx, vm.Namespace, dvNames, helmReleaseName); err != nil {
+		// Rollback: remove Helm labels from the VM
+		if rbErr := c.removeHelmLabelsFromVM(ctx, vm.Namespace, vm.Name); rbErr != nil {
+			klog.Errorf("Failed to rollback Helm labels from VM %s/%s: %v", vm.Namespace, vm.Name, rbErr)
+		}
+		return fmt.Errorf("failed to prepare DataVolumes for Helm adoption: %w", err)
 	}
 
 	// STEP 2: Create VMInstance CRD which triggers HelmRelease creation.
@@ -458,7 +584,7 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 				"disks":            disks,
 				"external":         false,
 				"externalMethod":   "PortList",
-				"externalPorts":    []int{22},
+				"externalPorts":    []interface{}{int64(22)},
 				"gpus":             []interface{}{},
 				"resources":        map[string]interface{}{},
 				"sshKeys":          []interface{}{},
@@ -471,6 +597,13 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 
 	_, err = c.dynamicClient.Resource(vmInstanceGVR).Namespace(vm.Namespace).Create(ctx, vmInstance, metav1.CreateOptions{})
 	if err != nil {
+		// Rollback: remove Helm labels from VM and DataVolumes
+		if rbErr := c.removeHelmLabelsFromVM(ctx, vm.Namespace, vm.Name); rbErr != nil {
+			klog.Errorf("Failed to rollback Helm labels from VM %s/%s: %v", vm.Namespace, vm.Name, rbErr)
+		}
+		if rbErr := c.removeHelmLabelsFromDataVolumes(ctx, vm.Namespace, dvNames); rbErr != nil {
+			klog.Errorf("Failed to rollback Helm labels from DataVolumes: %v", rbErr)
+		}
 		return fmt.Errorf("failed to create VMInstance: %w", err)
 	}
 
@@ -488,6 +621,14 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 			klog.Errorf("Failed to delete VMInstance %s/%s during rollback: %v", vm.Namespace, vmInstanceName, deleteErr)
 		} else {
 			klog.Infof("Rolled back VMInstance %s/%s", vm.Namespace, vmInstanceName)
+		}
+
+		// Also rollback Helm labels
+		if rbErr := c.removeHelmLabelsFromVM(ctx, vm.Namespace, vm.Name); rbErr != nil {
+			klog.Errorf("Failed to rollback Helm labels from VM %s/%s: %v", vm.Namespace, vm.Name, rbErr)
+		}
+		if rbErr := c.removeHelmLabelsFromDataVolumes(ctx, vm.Namespace, dvNames); rbErr != nil {
+			klog.Errorf("Failed to rollback Helm labels from DataVolumes: %v", rbErr)
 		}
 
 		return fmt.Errorf("adoption failed: could not label VM: %w", err)
@@ -535,6 +676,120 @@ func (c *AdoptionController) prepareVMForHelmAdoption(ctx context.Context, names
 	}
 
 	klog.Infof("Prepared VM %s/%s for Helm adoption (release=%s)", namespace, vmName, helmReleaseName)
+	return nil
+}
+
+// prepareDataVolumesForHelmAdoption adds Helm metadata labels and annotations
+// to existing DataVolumes so that Helm will adopt them.
+func (c *AdoptionController) prepareDataVolumesForHelmAdoption(ctx context.Context, namespace string, dvNames []string, helmReleaseName string) error {
+	dvGVR := schema.GroupVersionResource{
+		Group:    "cdi.kubevirt.io",
+		Version:  "v1beta1",
+		Resource: "datavolumes",
+	}
+
+	for _, dvName := range dvNames {
+		dv, err := c.dynamicClient.Resource(dvGVR).Namespace(namespace).Get(ctx, dvName, metav1.GetOptions{})
+		if err != nil {
+			klog.Warningf("DataVolume %s/%s not found, skipping Helm labeling: %v", namespace, dvName, err)
+			continue
+		}
+
+		labels := dv.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		labels["app.kubernetes.io/managed-by"] = "Helm"
+		dv.SetLabels(labels)
+
+		annotations := dv.GetAnnotations()
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		annotations["meta.helm.sh/release-name"] = helmReleaseName
+		annotations["meta.helm.sh/release-namespace"] = namespace
+		dv.SetAnnotations(annotations)
+
+		_, err = c.dynamicClient.Resource(dvGVR).Namespace(namespace).Update(ctx, dv, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to add Helm metadata to DataVolume %s: %w", dvName, err)
+		}
+
+		klog.Infof("Prepared DataVolume %s/%s for Helm adoption (release=%s)", namespace, dvName, helmReleaseName)
+	}
+
+	return nil
+}
+
+// removeHelmLabelsFromVM removes Helm metadata from a VM (for rollback).
+func (c *AdoptionController) removeHelmLabelsFromVM(ctx context.Context, namespace, vmName string) error {
+	vmGVR := schema.GroupVersionResource{
+		Group:    "kubevirt.io",
+		Version:  "v1",
+		Resource: "virtualmachines",
+	}
+
+	vm, err := c.dynamicClient.Resource(vmGVR).Namespace(namespace).Get(ctx, vmName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get VM for rollback: %w", err)
+	}
+
+	labels := vm.GetLabels()
+	if labels != nil {
+		delete(labels, "app.kubernetes.io/managed-by")
+		vm.SetLabels(labels)
+	}
+
+	annotations := vm.GetAnnotations()
+	if annotations != nil {
+		delete(annotations, "meta.helm.sh/release-name")
+		delete(annotations, "meta.helm.sh/release-namespace")
+		vm.SetAnnotations(annotations)
+	}
+
+	_, err = c.dynamicClient.Resource(vmGVR).Namespace(namespace).Update(ctx, vm, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to remove Helm metadata from VM: %w", err)
+	}
+
+	klog.Infof("Removed Helm metadata from VM %s/%s (rollback)", namespace, vmName)
+	return nil
+}
+
+// removeHelmLabelsFromDataVolumes removes Helm metadata from DataVolumes (for rollback).
+func (c *AdoptionController) removeHelmLabelsFromDataVolumes(ctx context.Context, namespace string, dvNames []string) error {
+	dvGVR := schema.GroupVersionResource{
+		Group:    "cdi.kubevirt.io",
+		Version:  "v1beta1",
+		Resource: "datavolumes",
+	}
+
+	for _, dvName := range dvNames {
+		dv, err := c.dynamicClient.Resource(dvGVR).Namespace(namespace).Get(ctx, dvName, metav1.GetOptions{})
+		if err != nil {
+			klog.Warningf("DataVolume %s/%s not found during rollback: %v", namespace, dvName, err)
+			continue
+		}
+
+		labels := dv.GetLabels()
+		if labels != nil {
+			delete(labels, "app.kubernetes.io/managed-by")
+			dv.SetLabels(labels)
+		}
+
+		annotations := dv.GetAnnotations()
+		if annotations != nil {
+			delete(annotations, "meta.helm.sh/release-name")
+			delete(annotations, "meta.helm.sh/release-namespace")
+			dv.SetAnnotations(annotations)
+		}
+
+		_, err = c.dynamicClient.Resource(dvGVR).Namespace(namespace).Update(ctx, dv, metav1.UpdateOptions{})
+		if err != nil {
+			klog.Warningf("Failed to remove Helm metadata from DataVolume %s/%s: %v", namespace, dvName, err)
+		}
+	}
+
 	return nil
 }
 
