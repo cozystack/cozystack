@@ -8,17 +8,17 @@ rules:
   resources: ["virtualmachines"]
   verbs: ["get", "list", "watch", "update", "patch"]
 
-# Read Forklift Plans
+# Read Forklift Plans and Migrations
 - apiGroups: ["forklift.konveyor.io"]
-  resources: ["plans"]
+  resources: ["plans", "migrations"]
   verbs: ["get", "list", "watch"]
 
-# Create/manage VMInstances and VMDisks
+# Create/manage/delete VMInstances
 - apiGroups: ["apps.cozystack.io"]
-  resources: ["vminstances", "vmdisks"]
-  verbs: ["get", "list", "watch", "create", "update", "patch"]
+  resources: ["vminstances"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
-# Read DataVolumes (to discover disks)
+# Label DataVolumes for Helm adoption
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "update", "patch"]

@@ -236,6 +236,10 @@
       "description": "Seed string to generate SMBIOS UUID for the VM.",
       "type": "string",
       "default": ""
+    },
+    "fullnameOverride": {
+      "description": "Override the VirtualMachine resource name. Used by vm-adoption-controller to match imported VM names.",
+      "type": "string"
     }
   }
 }
