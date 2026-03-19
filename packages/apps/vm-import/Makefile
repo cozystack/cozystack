@@ -4,4 +4,5 @@ include ../../../hack/package.mk
 
 generate:
 	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
+	yq -i -o json '.required = ["sourceUrl", "sourceSecretName"]' values.schema.json
 	../../../hack/update-crd.sh

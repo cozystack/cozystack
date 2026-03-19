@@ -31,6 +31,22 @@ spec:
         {{- end }}
         - --default-instance-type={{ .Values.controller.defaultInstanceType }}
         - --default-preference={{ .Values.controller.defaultPreference }}
+        ports:
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
         securityContext:
