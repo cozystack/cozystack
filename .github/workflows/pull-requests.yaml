@@ -251,7 +251,8 @@ jobs:
                 break
               fi
               attempt=$((attempt + 1))
-              echo "❌ Attempt $attempt failed, retrying..."
+              echo "❌ Attempt $attempt failed, cleaning up before retry..."
+              make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME cleanup-test-app-$app || true
             done
             if [ "$success" = true ]; then
               echo "✅ Test $app completed successfully"

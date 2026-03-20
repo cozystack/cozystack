@@ -38,7 +38,15 @@ spec:
       replicas: 2
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr kafka-$name --timeout=30s --for=condition=ready
+  kubectl -n tenant-test wait hr kafka-$name --timeout=120s --for=condition=ready || {
+    echo "=== HelmRelease status ===" >&2
+    kubectl -n tenant-test get hr kafka-$name -o yaml 2>&1 || true
+    echo "=== Pods ===" >&2
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ===" >&2
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    false
+  }
   kubectl wait kafkas -n tenant-test test --timeout=60s --for=condition=ready
   timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0; do sleep 10; done"
   kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound

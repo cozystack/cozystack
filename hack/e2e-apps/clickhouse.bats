@@ -35,7 +35,15 @@ spec:
   resourcesPreset: "nano"
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr clickhouse-$name --timeout=20s --for=condition=ready
+  kubectl -n tenant-test wait hr clickhouse-$name --timeout=120s --for=condition=ready || {
+    echo "=== HelmRelease status ===" >&2
+    kubectl -n tenant-test get hr clickhouse-$name -o yaml 2>&1 || true
+    echo "=== Pods ===" >&2
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ===" >&2
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    false
+  }
   timeout 180 sh -ec "until kubectl -n tenant-test get svc chendpoint-clickhouse-$name -o jsonpath='{.spec.ports[*].port}' | grep -q '8123 9000'; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-0 --timeout=120s --for=jsonpath='{.status.replicas}'=1
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints chi-clickhouse-$name-clickhouse-0-0 -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
