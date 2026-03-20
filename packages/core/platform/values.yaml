@@ -35,17 +35,13 @@ networking:
   kubeovn:
     MASTER_NODES: ""
 # Gateway configuration
-# ingress and gatewayAPI can be enabled independently;
-# future work will wire gateway.ingress into ingress controller selection
 gateway:
   ingress: true
+  # Enables Gateway API support in cert-manager and external-dns
   gatewayAPI: false
-  # GatewayClass name for all Gateway resources (default: cilium)
-  gatewayClassName: cilium
-  # Gateway name and namespace for system-level Gateway resource
-  # Components reference this Gateway via parentRefs
-  name: cozystack
-  namespace: cozy-gateway
+  # GatewayClass name used by system services (must match the tenant
+  # that has gateway: true, typically tenant-root)
+  gatewayClass: tenant-root
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"

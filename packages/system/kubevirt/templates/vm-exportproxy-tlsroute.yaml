@@ -2,21 +2,45 @@
 {{- $host := index .Values._cluster "root-host" }}
 {{- $hostnames := .Values._cluster.hostnames | default dict }}
 {{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
-{{- $gatewayName := (index .Values._cluster "gateway-name") | default "cozystack" }}
-{{- $gatewayNamespace := (index .Values._cluster "gateway-namespace") | default "cozy-gateway" }}
+{{- $gateway := ((.Values._namespace).gateway) | default (index .Values._cluster "gateway") | default "" }}
+{{- $gatewayClassName := $gateway }}
+
+{{- $vmExportHost := index $hostnames "vm-exportproxy" | default (printf "vm-exportproxy.%s" $host) }}
 
 {{- if and (eq $gatewayAPI "true") (has "vm-exportproxy" $exposeServices) }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: vm-exportproxy
+spec:
+  gatewayClassName: {{ $gatewayClassName }}
+  {{- if $gateway }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ $gateway }}
+  {{- end }}
+  listeners:
+  - name: tls-passthrough
+    protocol: TLS
+    port: 443
+    hostname: {{ $vmExportHost | quote }}
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: TLSRoute
 metadata:
   name: vm-exportproxy
 spec:
   parentRefs:
-  - name: {{ $gatewayName }}
-    namespace: {{ $gatewayNamespace }}
-    sectionName: tls-passthrough-vm-exportproxy
+  - name: vm-exportproxy
+    sectionName: tls-passthrough
   hostnames:
-  - {{ index $hostnames "vm-exportproxy" | default (printf "vm-exportproxy.%s" $host) | quote }}
+  - {{ $vmExportHost | quote }}
   rules:
   - backendRefs:
     - name: vm-exportproxy

@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.gateway-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.cert-manager
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: envoy-gateway-system
+          path: system/envoy-gateway
+        - name: gateway
+          path: extra/gateway
+          libraries: ["cozy-lib"]
+        - name: gateway-rd
+          path: system/gateway-rd
+          install:
+            namespace: cozy-system
+            releaseName: gateway-rd

@@ -1,0 +1,32 @@
+{{- if .Values.gateway }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gateway
+  namespace: {{ include "tenant.name" . }}
+  labels:
+    sharding.fluxcd.io/key: tenants
+    internal.cozystack.io/tenantmodule: "true"
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    apps.cozystack.io/application.kind: Gateway
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: gateway
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-gateway-application-default-gateway
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+{{- end }}

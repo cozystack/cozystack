@@ -1,0 +1,40 @@
+{{- $exposeGateway := (index .Values._cluster "gateway") | default "" }}
+{{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: gateway-proxy
+spec:
+  mergeGateways: true
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2
+      envoyService:
+        {{- if and (eq $exposeGateway .Release.Namespace) $exposeExternalIPs }}
+        type: ClusterIP
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              externalIPs:
+                {{- range splitList "," $exposeExternalIPs }}
+                - {{ . }}
+                {{- end }}
+        {{- else }}
+        type: LoadBalancer
+        {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Release.Namespace }}
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: gateway-proxy
+    namespace: {{ .Release.Namespace }}

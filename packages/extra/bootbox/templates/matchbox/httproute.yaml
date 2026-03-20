@@ -4,7 +4,7 @@
 {{- $host := .Values._namespace.host }}
 {{- $bootboxHost := printf "bootbox.%s" (.Values.host | default $host) }}
 
-{{- $gatewayClassName := (index .Values._cluster "gateway-class-name") | default "cilium" }}
+{{- $gatewayClassName := .Values._namespace.gateway | default "" }}
 
 {{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
 ---

@@ -20,10 +20,6 @@
   "k8sServiceHost" "localhost"
   "k8sServicePort" "7445"
   "cgroup" (dict "autoMount" (dict "enabled" false)) -}}
-{{- if .Values.gateway.gatewayAPI -}}
-{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true "enableAlpn" true) -}}
-{{- $_ := set $ciliumDict "envoy" (dict "streamIdleTimeoutDurationSeconds" 86400) -}}
-{{- end -}}
 {{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
@@ -89,10 +85,6 @@
   "k8sServiceHost" $apiHost
   "k8sServicePort" $apiPort
   "cgroup" (dict "autoMount" (dict "enabled" true)) -}}
-{{- if .Values.gateway.gatewayAPI -}}
-{{- $_ := set $ciliumDict "gatewayAPI" (dict "enabled" true "enableAlpn" true) -}}
-{{- $_ := set $ciliumDict "envoy" (dict "streamIdleTimeoutDurationSeconds" 86400) -}}
-{{- end -}}
 {{- $ciliumValues := dict "cilium" $ciliumDict -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
@@ -135,9 +127,6 @@
 {{- else }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
 {{- end }}
-{{- if .Values.gateway.gatewayAPI }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozystack-gateway" $) }}
-{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.flux-plunger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}
 {{- $tenantComponents := dict -}}
@@ -145,6 +134,7 @@
 {{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
 {{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}

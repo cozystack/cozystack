@@ -42,9 +42,7 @@ stringData:
       {{- end }}
       ingress-enabled: {{ .Values.gateway.ingress | quote }}
       gateway-api: {{ .Values.gateway.gatewayAPI | quote }}
-      gateway-class-name: {{ .Values.gateway.gatewayClassName | quote }}
-      gateway-name: {{ .Values.gateway.name | quote }}
-      gateway-namespace: {{ .Values.gateway.namespace | quote }}
+      gateway: {{ .Values.gateway.gatewayClass | quote }}
       {{- with .Values.publishing.hostnames }}
       hostnames:
         {{- . | toYaml | nindent 8 }}
