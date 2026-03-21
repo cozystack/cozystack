@@ -9,6 +9,7 @@
 ## @typedef {struct} Disk - Disk configuration.
 ## @field {string} name - Disk name.
 ## @field {string} [bus] - Disk bus type (e.g. "sata").
+## @field {string} [dvName] - Explicit DataVolume name to reference. If set, used instead of the default vm-disk-<name> convention.
 
 ## @typedef {struct} Subnet - Additional subnets
 ## @field {string} [name] - Subnet name

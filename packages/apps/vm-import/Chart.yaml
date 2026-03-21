@@ -1,0 +1,10 @@
+apiVersion: v2
+name: vm-import
+description: Import virtual machines from VMware vSphere
+icon: /logos/vm-import.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+appVersion: 0.1.0
+dependencies:
+  - name: cozy-lib
+    version: 0.0.0

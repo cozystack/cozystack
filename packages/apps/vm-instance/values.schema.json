@@ -31,6 +31,10 @@
             "description": "Disk bus type (e.g. \"sata\").",
             "type": "string"
           },
+          "dvName": {
+            "description": "Explicit DataVolume name to reference. If set, used instead of the default vm-disk-<name> convention.",
+            "type": "string"
+          },
           "name": {
             "description": "Disk name.",
             "type": "string"

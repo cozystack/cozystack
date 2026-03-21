@@ -1,0 +1,30 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.forklift
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.kubevirt
+    - cozystack.kubevirt-cdi
+    components:
+    - name: forklift-operator
+      path: system/forklift-operator
+      install:
+        namespace: cozy-forklift
+        releaseName: forklift-operator
+    - name: forklift
+      path: system/forklift
+      install:
+        namespace: cozy-forklift
+        releaseName: forklift
+        dependsOn:
+        - forklift-operator
