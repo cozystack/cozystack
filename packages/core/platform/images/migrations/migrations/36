@@ -1,0 +1,78 @@
+#!/bin/bash
+# Migration 36 --> 37
+# Migrate resourcesPreset values from flat names to instance-type names (s1/u1/m1)
+#
+# Series selection per app type:
+#   m1 (Memory, 1:8)  — memory-intensive: redis, opensearch, qdrant
+#   u1 (Universal, 1:4) — databases & messaging: postgres, mariadb, mongodb,
+#                          clickhouse, foundationdb, kafka, rabbitmq, nats, ferretdb
+#   s1 (Standard, 1:2) — stateless services: harbor, vpn, tcp-balancer,
+#                          http-cache, openbao, ingress, external-dns
+#   u1 — fallback for unknown app types
+
+set -euo pipefail
+
+echo "Migrating HelmReleases: renaming resourcesPreset values to instance-type format"
+
+# Determine the target series based on HelmRelease name prefix
+get_series() {
+  local name="$1"
+  case "$name" in
+    redis-*|opensearch-*|qdrant-*)
+      echo "m1" ;;
+    harbor-*|vpn-*|tcp-balancer-*|http-cache-*|openbao-*|ingress-*|external-dns-*)
+      echo "s1" ;;
+    *)
+      echo "u1" ;;
+  esac
+}
+
+# Find all HelmReleases that have resourcesPreset in their spec.values
+kubectl get helmreleases --all-namespaces -o json | \
+  jq -r '.items[] | select(.spec.values | tostring | test("resourcesPreset")) | "\(.metadata.namespace)|\(.metadata.name)"' | \
+  while IFS='|' read -r namespace name; do
+    echo "Processing HelmRelease $namespace/$name"
+
+    series=$(get_series "$name")
+    echo "  Using series: $series"
+
+    values=$(kubectl get helmrelease -n "$namespace" "$name" -o jsonpath='{.spec.values}')
+
+    # Use jq to find and replace all resourcesPreset fields at any nesting level
+    # Walk the entire values tree and rename any old-style preset
+    new_values=$(echo "$values" | jq --arg series "$series" '
+      def map_preset($s):
+        if . == "nano" then "\($s).nano"
+        elif . == "micro" then "\($s).micro"
+        elif . == "small" then "\($s).small"
+        elif . == "medium" then "\($s).medium"
+        elif . == "large" then "\($s).large"
+        elif . == "xlarge" then "\($s).xlarge"
+        elif . == "2xlarge" then "\($s).2xlarge"
+        else .
+        end;
+
+      walk(
+        if type == "object" and has("resourcesPreset") and (.resourcesPreset | type) == "string" then
+          .resourcesPreset |= map_preset($series)
+        else .
+        end
+      )
+    ')
+
+    # Check if anything changed
+    if [ "$values" = "$new_values" ]; then
+      echo "  Skipping: no old-style presets found"
+      continue
+    fi
+
+    # Patch the HelmRelease
+    kubectl patch helmrelease -n "$namespace" "$name" --type=merge -p "{\"spec\":{\"values\":$new_values}}"
+    echo "  Successfully migrated"
+  done
+
+echo "Resource preset migration completed"
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=37 --dry-run=client -o yaml | kubectl apply -f-

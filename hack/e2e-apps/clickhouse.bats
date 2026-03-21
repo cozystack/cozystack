@@ -29,10 +29,10 @@ spec:
     resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
   clickhouseKeeper:
     enabled: true
-    resourcesPreset: "micro"
+    resourcesPreset: "u1.micro"
     size: "1Gi"
   resources: {}
-  resourcesPreset: "nano"
+  resourcesPreset: "u1.nano"
 EOF
   sleep 5
   kubectl -n tenant-test wait hr clickhouse-$name --timeout=20s --for=condition=ready

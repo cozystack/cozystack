@@ -46,7 +46,7 @@ storage:
 
 ```yaml
 # Use preset sizing
-resourcesPreset: "medium"  # small, medium, large, xlarge, 2xlarge
+resourcesPreset: "u1.small"  # s1 (Standard 1:2), u1 (Universal 1:4), m1 (Memory 1:8) x nano..4xlarge
 
 # Or custom resource configuration
 resources:
@@ -167,7 +167,7 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 | `resources`                                | Explicit CPU and memory configuration for each FoundationDB instance. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`                     |
 | `resources.cpu`                            | CPU available to each instance.                                                                                                         | `quantity` | `""`                     |
 | `resources.memory`                         | Memory (RAM) available to each instance.                                                                                                | `quantity` | `""`                     |
-| `resourcesPreset`                          | Default sizing preset used when `resources` is omitted.                                                                                 | `string`   | `medium`                 |
+| `resourcesPreset`                          | Default sizing preset used when `resources` is omitted.                                                                                 | `string`   | `u1.small`               |
 | `backup`                                   | Backup configuration.                                                                                                                   | `object`   | `{}`                     |
 | `backup.enabled`                           | Enable backups.                                                                                                                         | `bool`     | `false`                  |
 | `backup.s3`                                | S3 configuration for backups.                                                                                                           | `object`   | `{}`                     |

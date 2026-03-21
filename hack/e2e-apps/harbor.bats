@@ -19,18 +19,18 @@ spec:
   storageClass: ""
   core:
     resources: {}
-    resourcesPreset: "nano"
+    resourcesPreset: "s1.nano"
   registry:
     resources: {}
-    resourcesPreset: "nano"
+    resourcesPreset: "s1.nano"
   jobservice:
     resources: {}
-    resourcesPreset: "nano"
+    resourcesPreset: "s1.nano"
   trivy:
     enabled: false
     size: 2Gi
     resources: {}
-    resourcesPreset: "nano"
+    resourcesPreset: "s1.nano"
   database:
     size: 2Gi
     replicas: 1

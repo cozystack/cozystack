@@ -23,16 +23,16 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 
 ### Common parameters
 
-| Name               | Description                                                                                                                          | Type       | Value   |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ------- |
-| `replicas`         | Number of ClickHouse replicas.                                                                                                       | `int`      | `2`     |
-| `shards`           | Number of ClickHouse shards.                                                                                                         | `int`      | `1`     |
-| `resources`        | Explicit CPU and memory configuration for each ClickHouse replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `resources.cpu`    | CPU available to each replica.                                                                                                       | `quantity` | `""`    |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                              | `quantity` | `""`    |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                              | `string`   | `small` |
-| `size`             | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`    |
+| Name               | Description                                                                                                                          | Type       | Value      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ---------- |
+| `replicas`         | Number of ClickHouse replicas.                                                                                                       | `int`      | `2`        |
+| `shards`           | Number of ClickHouse shards.                                                                                                         | `int`      | `1`        |
+| `resources`        | Explicit CPU and memory configuration for each ClickHouse replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
+| `resources.cpu`    | CPU available to each replica.                                                                                                       | `quantity` | `""`       |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                              | `quantity` | `""`       |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                              | `string`   | `u1.micro` |
+| `size`             | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`     |
+| `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`       |
 
 
 ### Application-specific parameters
@@ -63,13 +63,13 @@ For more details, read [Restic: Effective Backup from Stdin](https://blog.aenix.
 
 ### ClickHouse Keeper parameters
 
-| Name                               | Description                                                  | Type       | Value   |
-| ---------------------------------- | ------------------------------------------------------------ | ---------- | ------- |
-| `clickhouseKeeper`                 | ClickHouse Keeper configuration.                             | `object`   | `{}`    |
-| `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination.           | `bool`     | `true`  |
-| `clickhouseKeeper.size`            | Persistent Volume Claim size available for application data. | `quantity` | `1Gi`   |
-| `clickhouseKeeper.resourcesPreset` | Default sizing preset.                                       | `string`   | `micro` |
-| `clickhouseKeeper.replicas`        | Number of Keeper replicas.                                   | `int`      | `3`     |
+| Name                               | Description                                                  | Type       | Value      |
+| ---------------------------------- | ------------------------------------------------------------ | ---------- | ---------- |
+| `clickhouseKeeper`                 | ClickHouse Keeper configuration.                             | `object`   | `{}`       |
+| `clickhouseKeeper.enabled`         | Deploy ClickHouse Keeper for cluster coordination.           | `bool`     | `true`     |
+| `clickhouseKeeper.size`            | Persistent Volume Claim size available for application data. | `quantity` | `1Gi`      |
+| `clickhouseKeeper.resourcesPreset` | Default sizing preset.                                       | `string`   | `s1.micro` |
+| `clickhouseKeeper.replicas`        | Number of Keeper replicas.                                   | `int`      | `3`        |
 
 
 ## Parameter examples and reference
@@ -88,12 +88,41 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-| Preset name | CPU    | memory  |
-|-------------|--------|---------|
-| `nano`      | `250m` | `128Mi` |
-| `micro`     | `500m` | `256Mi` |
-| `small`     | `1`    | `512Mi` |
-| `medium`    | `1`    | `1Gi`   |
-| `large`     | `2`    | `2Gi`   |
-| `xlarge`    | `4`    | `4Gi`   |
-| `2xlarge`   | `8`    | `8Gi`   |
+#### s1 (Standard) — 1:2 CPU:memory ratio
+
+| Preset name  | CPU    | memory  |
+|--------------|--------|---------|
+| `s1.nano`    | `250m` | `512Mi` |
+| `s1.micro`   | `500m` | `1Gi`   |
+| `s1.small`   | `1`    | `2Gi`   |
+| `s1.medium`  | `2`    | `4Gi`   |
+| `s1.large`   | `4`    | `8Gi`   |
+| `s1.xlarge`  | `8`    | `16Gi`  |
+| `s1.2xlarge` | `16`   | `32Gi`  |
+| `s1.4xlarge` | `32`   | `64Gi`  |
+
+#### u1 (Universal) — 1:4 CPU:memory ratio
+
+| Preset name  | CPU    | memory   |
+|--------------|--------|----------|
+| `u1.nano`    | `250m` | `1Gi`    |
+| `u1.micro`   | `500m` | `2Gi`    |
+| `u1.small`   | `1`    | `4Gi`    |
+| `u1.medium`  | `2`    | `8Gi`    |
+| `u1.large`   | `4`    | `16Gi`   |
+| `u1.xlarge`  | `8`    | `32Gi`   |
+| `u1.2xlarge` | `16`   | `64Gi`   |
+| `u1.4xlarge` | `32`   | `128Gi`  |
+
+#### m1 (Memory) — 1:8 CPU:memory ratio
+
+| Preset name  | CPU    | memory   |
+|--------------|--------|----------|
+| `m1.nano`    | `250m` | `2Gi`    |
+| `m1.micro`   | `500m` | `4Gi`    |
+| `m1.small`   | `1`    | `8Gi`    |
+| `m1.medium`  | `2`    | `16Gi`   |
+| `m1.large`   | `4`    | `32Gi`   |
+| `m1.xlarge`  | `8`    | `64Gi`   |
+| `m1.2xlarge` | `16`   | `128Gi`  |
+| `m1.4xlarge` | `32`   | `256Gi`  |

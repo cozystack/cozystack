@@ -173,7 +173,7 @@ tests:
       dashboards:
         enabled: false
         replicas: 1
-        resourcesPreset: "medium"
+        resourcesPreset: "s1.medium"
         resources: {}
     asserts:
       - notExists:
@@ -190,7 +190,7 @@ tests:
       dashboards:
         enabled: true
         replicas: 1
-        resourcesPreset: "medium"
+        resourcesPreset: "s1.medium"
         resources: {}
     asserts:
       - equal:

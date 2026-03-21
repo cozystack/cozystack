@@ -12,7 +12,7 @@ spec:
   replicas: 1
   size: 10Gi
   storageClass: ""
-  resourcesPreset: "nano"
+  resourcesPreset: "m1.nano"
   resources: {}
   external: false
 EOF
