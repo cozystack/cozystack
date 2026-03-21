@@ -58,7 +58,10 @@ manifests:
 cozypkg:
 	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg ./cmd/cozypkg
 
-assets: assets-talos assets-cozypkg
+cozyctl:
+	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozyctl/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozyctl ./cmd/cozyctl
+
+assets: assets-talos assets-cozypkg assets-cozyctl
 
 assets-talos:
 	make -C packages/core/talos assets
@@ -72,6 +75,16 @@ assets-cozypkg-%:
 	GOOS=$(firstword $(subst -, ,$*)) GOARCH=$(lastword $(subst -, ,$*)) go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg-$*/cozypkg$(EXT) ./cmd/cozypkg
 	cp LICENSE _out/bin/cozypkg-$*/LICENSE
 	tar -C _out/bin/cozypkg-$* -czf _out/assets/cozypkg-$*.tar.gz LICENSE cozypkg$(EXT)
+
+assets-cozyctl: assets-cozyctl-linux-amd64 assets-cozyctl-linux-arm64 assets-cozyctl-darwin-amd64 assets-cozyctl-darwin-arm64 assets-cozyctl-windows-amd64 assets-cozyctl-windows-arm64
+	(cd _out/assets/ && sha256sum cozyctl-*.tar.gz) > _out/assets/cozyctl-checksums.txt
+
+assets-cozyctl-%:
+	$(eval EXT := $(if $(filter windows,$(firstword $(subst -, ,$*))),.exe,))
+	mkdir -p _out/assets
+	GOOS=$(firstword $(subst -, ,$*)) GOARCH=$(lastword $(subst -, ,$*)) go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozyctl/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozyctl-$*/cozyctl$(EXT) ./cmd/cozyctl
+	cp LICENSE _out/bin/cozyctl-$*/LICENSE
+	tar -C _out/bin/cozyctl-$* -czf _out/assets/cozyctl-$*.tar.gz LICENSE cozyctl$(EXT)
 
 test:
 	make -C packages/core/testing apply
