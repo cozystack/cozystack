@@ -96,8 +96,10 @@ EOF
 
   # Set up port forwarding to the Kubernetes API server
   bash -c 'timeout 500s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
+  # Wait for port-forward to be ready before using it
+  timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
-  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
+  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 1; done'
 
   # Wait for at least 2 nodes to join (timeout after 8 minutes)
   timeout 8m bash -c '

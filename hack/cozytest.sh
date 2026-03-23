@@ -65,6 +65,7 @@ run_one() {
     echo "----- captured output -----------------------------------------"
     grep -v '^__RC__' "$log"
     echo "$LINE"
+    rm -rf "$tmp"
     exit "$rc"
   fi
 

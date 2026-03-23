@@ -3,6 +3,7 @@
 @test "Create and Verify Seeweedfs Bucket" {
   # Create the bucket resource with readwrite and readonly users
   name='test'
+  kubectl -n tenant-test delete bucket.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Bucket
