@@ -26,14 +26,31 @@
           }
         },
         "image": {
-          "description": "Use image by name.",
+          "description": "Use image by name from default collection.",
           "type": "object",
           "required": [
             "name"
           ],
           "properties": {
             "name": {
-              "description": "Name of the image to use (uploaded as \"golden image\" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, `talos`).",
+              "description": "Name of the image to use.",
+              "type": "string"
+            }
+          }
+        },
+        "pvc": {
+          "description": "Clone an existing PVC.",
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "description": "Name of the PVC to clone.",
+              "type": "string"
+            },
+            "namespace": {
+              "description": "Namespace of the PVC (defaults to current tenant namespace).",
               "type": "string"
             }
           }
