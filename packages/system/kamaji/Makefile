@@ -6,7 +6,7 @@ include ../../../hack/package.mk
 
 update:
 	rm -rf charts
-	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/clastix/kamaji | grep refs/tags/edge- | awk -F'[/^]' 'END{print $$3}') && \
+	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/clastix/kamaji | grep -E 'refs/tags/[0-9]+\.[0-9]+\.[0-9]+-edge$$' | awk -F'[/^]' 'END{print $$3}') && \
 	curl -sSL https://github.com/clastix/kamaji/archive/refs/tags/$${tag}.tar.gz | \
 	tar -xzvf - --strip 1 kamaji-$${tag}/charts && \
 	sed -i "/ARG VERSION/ s|=.*|=$${tag}|g" images/kamaji/Dockerfile
