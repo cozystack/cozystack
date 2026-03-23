@@ -36,7 +36,9 @@ spec:
     resources:
       requests:
         storage: {{ default "5Gi" .storage }}
-    {{- with .storageClass }}
-    storageClassName: {{ . }}
+    {{- if .storageClass }}
+    storageClassName: {{ .storageClass }}
+    {{- else if $.Values.storageClass }}
+    storageClassName: {{ $.Values.storageClass }}
     {{- end }}
 {{- end }}
