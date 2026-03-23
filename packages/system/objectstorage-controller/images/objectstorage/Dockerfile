@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.2
 
 FROM alpine AS source
-ARG COMMIT_REF=f75d47509dae3e4ed0fd18ce0a60474b78e8d29b
+ARG COMMIT_REF=v0.2.2
 RUN apk add --no-cache curl tar
 WORKDIR /src
 
