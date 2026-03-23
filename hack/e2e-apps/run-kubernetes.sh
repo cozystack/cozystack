@@ -216,16 +216,16 @@ EOF
     done
   "
 
-LB_ADDR=$(
-  kubectl get svc --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
-    -n tenant-test \
-    -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'
-)
+  LB_ADDR=$(
+    kubectl get svc --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
+      -n tenant-test \
+      -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'
+  )
 
-if [ -z "$LB_ADDR" ]; then
-  echo "LoadBalancer address is empty" >&2
-  exit 1
-fi
+  if [ -z "$LB_ADDR" ]; then
+    echo "LoadBalancer address is empty" >&2
+    exit 1
+  fi
 
   lb_ok=false
   for i in $(seq 1 20); do
@@ -318,6 +318,6 @@ EOF
     kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
 
   # Clean up by deleting the Kubernetes resource
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name --ignore-not-found
 
 }
