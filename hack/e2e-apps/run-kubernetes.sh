@@ -4,6 +4,9 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
+  # Ensure port-forward and temp files are cleaned up on any exit
+  trap 'pkill -f "port-forward.*${port}:" 2>/dev/null || true; rm -f "tenantkubeconfig-${test_name}"' EXIT
+
   # Clean up stale resources from a previous failed retry to ensure fresh provisioning
   kubectl delete kuberneteses.apps.cozystack.io "${test_name}" \
     -n tenant-test --ignore-not-found --timeout=2m || true
@@ -224,13 +227,17 @@ if [ -z "$LB_ADDR" ]; then
   exit 1
 fi
 
+  lb_ok=false
   for i in $(seq 1 20); do
     echo "Attempt $i"
-    curl --silent --fail "http://${LB_ADDR}" && break
+    if curl --silent --fail "http://${LB_ADDR}"; then
+      lb_ok=true
+      break
+    fi
     sleep 3
   done
 
-  if [ "$i" -eq 20 ]; then
+  if [ "$lb_ok" != true ]; then
     echo "LoadBalancer not reachable" >&2
     exit 1
   fi
