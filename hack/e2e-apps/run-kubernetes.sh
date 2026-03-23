@@ -4,12 +4,14 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
-  # Cleanup helper — called at every exit point and at the end of the test
+  # Cleanup helper — idempotent, safe to call multiple times
   _k8s_test_cleanup() {
     pkill -f "port-forward.*${port}:" 2>/dev/null || true
     rm -f "tenantkubeconfig-${test_name}"
-    kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --timeout=2m 2>/dev/null || true
+    kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --timeout=2m || true
   }
+  # Catch unexpected set -e exits (runs in subshell via cozytest.sh, does not affect parent traps)
+  trap '_k8s_test_cleanup' EXIT
 
   # Clean up stale resources from a previous failed retry to ensure fresh provisioning
   kubectl delete kuberneteses.apps.cozystack.io "${test_name}" \
