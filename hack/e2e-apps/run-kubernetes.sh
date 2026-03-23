@@ -4,6 +4,10 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
+  # Clean up stale resources from a previous failed retry to ensure fresh provisioning
+  kubectl delete kuberneteses.apps.cozystack.io "${test_name}" \
+    -n tenant-test --ignore-not-found --timeout=2m || true
+
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -102,10 +106,11 @@ EOF
     done
   '
   # Verify the nodes are ready
-  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=2m --for=condition=Ready; then
-    # Additional debug messages
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=5m --for=condition=Ready; then
+    # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
     kubectl -n tenant-test get hr
+    exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
 
