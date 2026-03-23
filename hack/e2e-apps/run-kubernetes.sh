@@ -4,8 +4,8 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
-  # Ensure port-forward and temp files are cleaned up on any exit
-  trap 'pkill -f "port-forward.*${port}:" 2>/dev/null || true; rm -f "tenantkubeconfig-${test_name}"' EXIT
+  # Ensure all resources are cleaned up on any exit (port-forward, kubeconfig, k8s resource)
+  trap 'pkill -f "port-forward.*${port}:" 2>/dev/null || true; rm -f "tenantkubeconfig-${test_name}"; kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --timeout=2m 2>/dev/null || true' EXIT
 
   # Clean up stale resources from a previous failed retry to ensure fresh provisioning
   kubectl delete kuberneteses.apps.cozystack.io "${test_name}" \
