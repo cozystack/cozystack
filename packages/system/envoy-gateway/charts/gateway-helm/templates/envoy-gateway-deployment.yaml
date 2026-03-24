@@ -58,7 +58,7 @@ spec:
               apiVersion: v1
               fieldPath: metadata.namespace
         - name: KUBERNETES_CLUSTER_DOMAIN
-          value: {{ .Values.kubernetesClusterDomain }}
+          value: {{ .Values.global.clusterDomain | default .Values.kubernetesClusterDomain }}
         image: {{ include "eg.image" . }}
         imagePullPolicy: {{ include "eg.image.pullPolicy" . }}
         livenessProbe:

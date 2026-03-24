@@ -18,6 +18,8 @@ metadata:
 type: Opaque
 stringData:
   values.yaml: |
+    global:
+      clusterDomain: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
