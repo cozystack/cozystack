@@ -20,13 +20,6 @@ spec:
     labels:
       cozystack.io/gateway: {{ $gateway }}
   listeners:
-  - name: http
-    protocol: HTTP
-    port: 80
-    hostname: {{ $harborHost | quote }}
-    allowedRoutes:
-      namespaces:
-        from: Same
   - name: https
     protocol: HTTPS
     port: 443
@@ -42,28 +35,10 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: {{ .Release.Name }}-harbor-redirect-to-https
-spec:
-  parentRefs:
-  - name: {{ .Release.Name }}-harbor
-    sectionName: http
-  hostnames:
-  - {{ $harborHost | quote }}
-  rules:
-  - filters:
-    - type: RequestRedirect
-      requestRedirect:
-        scheme: https
-        statusCode: 301
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
   name: {{ .Release.Name }}-harbor
 spec:
   parentRefs:
   - name: {{ .Release.Name }}-harbor
-    sectionName: https
   hostnames:
   - {{ $harborHost | quote }}
   rules:
