@@ -274,8 +274,8 @@ spec:
       storage: 1Gi
 EOF
 
-  # Wait for PVC to be bound
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pvc nfs-test-pvc -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Bound
+  # Wait for PVC to be bound (RWX via kubevirt CSI provisions an NFS server pod, needs time)
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pvc nfs-test-pvc -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Bound
 
   # Create Pod that writes and reads data from NFS volume
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
@@ -300,7 +300,12 @@ spec:
 EOF
 
   # Wait for Pod to complete successfully
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded; then
+    echo "=== NFS test pod did not complete ===" >&2
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe pod nfs-test-pod -n tenant-test >&2 || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get events -n tenant-test --sort-by='.lastTimestamp' >&2 || true
+    _k8s_test_cleanup; exit 1
+  fi
 
   # Verify NFS data integrity
   nfs_result=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" logs nfs-test-pod -n tenant-test)
