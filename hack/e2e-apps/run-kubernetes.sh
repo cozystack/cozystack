@@ -104,7 +104,8 @@ EOF
   sleep 1
 
   # Set up port forwarding to the Kubernetes API server
-  bash -c 'timeout 500s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
+  # No timeout — cleanup is handled by EXIT trap (_k8s_test_cleanup) and job-level timeout-minutes
+  kubectl port-forward service/kubernetes-"${test_name}" -n tenant-test "${port}":6443 > /dev/null 2>&1 &
   # Wait for port-forward to be ready before using it
   timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
