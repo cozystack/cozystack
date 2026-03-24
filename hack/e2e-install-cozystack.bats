@@ -215,17 +215,18 @@ EOF
   # Verify GatewayClass created and accepted
   timeout 60 sh -ec 'until [ "$(kubectl get gatewayclass tenant-root -o jsonpath='"'"'{.status.conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'
 
-  # Force reconcile system HelmReleases so they pick up gateway-api: true
-  flux reconcile hr dashboard -n cozy-dashboard --force
-  flux reconcile hr cozystack-api -n cozy-cozystack-api --force || true
+  # Trigger reconcile of system HelmReleases so they pick up gateway-api: true
+  # Use annotation instead of flux reconcile --force to avoid blocking on dependencies
+  kubectl annotate hr dashboard -n cozy-dashboard reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
+  kubectl annotate hr cozystack-api -n cozy-cozystack-api reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite || true
 
   # Wait for a per-component Gateway to get an address (merged Service)
-  timeout 300 sh -ec 'until [ -n "$(kubectl get gateway dashboard -n cozy-dashboard -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
+  timeout 300 sh -ec 'until [ -n "$(kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
 
-  gateway_ip=$(kubectl get gateway dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
+  gateway_ip=$(kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
   if [ -z "$gateway_ip" ]; then
     echo "Gateway has no IP address assigned" >&2
-    kubectl get gateway dashboard -n cozy-dashboard -o yaml >&2
+    kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o yaml >&2
     exit 1
   fi
   echo "Gateway IP: $gateway_ip"
@@ -257,7 +258,7 @@ EOF
 @test "Access services via Gateway API" {
   # With mergeGateways, all per-component Gateways share one Service
   # Get the merged Service IP from any Gateway's address
-  gateway_ip=$(kubectl get gateway dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
+  gateway_ip=$(kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
 
   # HTTP-to-HTTPS redirect (301)
   http_code=$(curl -sS --resolve "dashboard.example.org:80:${gateway_ip}" \
@@ -294,8 +295,8 @@ EOF
   fi
 
   # Wait for Grafana per-component Gateway to be Programmed
-  timeout 120 sh -ec 'until kubectl get gateway grafana -n tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait gateway/grafana -n tenant-root --timeout=2m --for=condition=Programmed
+  timeout 120 sh -ec 'until kubectl get gateways.gateway.networking.k8s.io grafana -n tenant-root >/dev/null 2>&1; do sleep 1; done'
+  kubectl wait gateways.gateway.networking.k8s.io/grafana -n tenant-root --timeout=2m --for=condition=Programmed
 
   # Verify Grafana HTTPRoute is accepted
   if ! timeout 60 sh -ec 'until [ "$(kubectl get httproute grafana -n tenant-root -o jsonpath='"'"'{.status.parents[0].conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'; then
@@ -305,8 +306,8 @@ EOF
   fi
 
   # Access Grafana via tenant Gateway (merged Service)
-  timeout 60 sh -ec 'until [ -n "$(kubectl get gateway grafana -n tenant-root -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
-  grafana_gw_ip=$(kubectl get gateway grafana -n tenant-root -o jsonpath='{.status.addresses[0].value}')
+  timeout 60 sh -ec 'until [ -n "$(kubectl get gateways.gateway.networking.k8s.io grafana -n tenant-root -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
+  grafana_gw_ip=$(kubectl get gateways.gateway.networking.k8s.io grafana -n tenant-root -o jsonpath='{.status.addresses[0].value}')
   if ! curl -sS -k --resolve "grafana.example.org:443:${grafana_gw_ip}" \
     "https://grafana.example.org" --max-time 30 | grep -q Found; then
     echo "Failed to access Grafana via Gateway at ${grafana_gw_ip}" >&2
