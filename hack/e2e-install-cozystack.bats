@@ -215,8 +215,12 @@ EOF
   # Verify GatewayClass created and accepted
   timeout 60 sh -ec 'until [ "$(kubectl get gatewayclass tenant-root -o jsonpath='"'"'{.status.conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'
 
+  # Force reconcile system HelmReleases so they pick up gateway-api: true
+  flux reconcile hr dashboard -n cozy-dashboard --force
+  flux reconcile hr cozystack-api -n cozy-cozystack-api --force || true
+
   # Wait for a per-component Gateway to get an address (merged Service)
-  timeout 120 sh -ec 'until [ -n "$(kubectl get gateway dashboard -n cozy-dashboard -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
+  timeout 300 sh -ec 'until [ -n "$(kubectl get gateway dashboard -n cozy-dashboard -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
 
   gateway_ip=$(kubectl get gateway dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
   if [ -z "$gateway_ip" ]; then
