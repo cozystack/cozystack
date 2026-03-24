@@ -38,3 +38,20 @@ spec:
     kind: EnvoyProxy
     name: gateway-proxy
     namespace: {{ .Release.Namespace }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: acme-challenge
+spec:
+  gatewayClassName: {{ .Release.Namespace }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ .Release.Namespace }}
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All

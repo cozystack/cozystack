@@ -1,11 +1,13 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $ingressEnabled := (index .Values._cluster "ingress-enabled") | default "true" }}
 {{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $gateway := (index .Values._cluster "gateway") | default "" }}
 
 {{- define "cert-manager-issuers.solvers" -}}
 {{- $solver := index . 0 -}}
 {{- $ingressEnabled := index . 1 -}}
-{{- $gatewayAPI := index . 2 }}
+{{- $gatewayAPI := index . 2 -}}
+{{- $gateway := index . 3 }}
 solvers:
 {{- if eq $solver "dns01" }}
 - dns01:
@@ -19,9 +21,13 @@ solvers:
     ingress:
       class: nginx
 {{- end }}
-{{- if eq $gatewayAPI "true" }}
+{{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
 - http01:
-    gatewayHTTPRoute: {}
+    gatewayHTTPRoute:
+      parentRefs:
+      - name: acme-challenge
+        namespace: {{ $gateway }}
+        kind: Gateway
 {{- end }}
 {{- end }}
 {{- end -}}
@@ -35,7 +41,7 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-prod
     server: https://acme-v02.api.letsencrypt.org/directory
-{{ include "cert-manager-issuers.solvers" (list $solver $ingressEnabled $gatewayAPI) | indent 4 }}
+{{ include "cert-manager-issuers.solvers" (list $solver $ingressEnabled $gatewayAPI $gateway) | indent 4 }}
 
 ---
 
@@ -48,7 +54,7 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-stage
     server: https://acme-staging-v02.api.letsencrypt.org/directory
-{{ include "cert-manager-issuers.solvers" (list $solver $ingressEnabled $gatewayAPI) | indent 4 }}  
+{{ include "cert-manager-issuers.solvers" (list $solver $ingressEnabled $gatewayAPI $gateway) | indent 4 }}  
 
 ---  
 
