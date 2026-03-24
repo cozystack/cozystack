@@ -4,15 +4,7 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
-  # Cleanup helper — idempotent, non-blocking
-  _k8s_test_cleanup() {
-    pkill -f "port-forward.*${port}:" 2>/dev/null || true
-    rm -f "tenantkubeconfig-${test_name}"
-    kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
-  }
-  trap '_k8s_test_cleanup' EXIT
-
-  # Clean up stale resources from a previous failed retry and wait for deletion
+  # Clean up stale resources from a previous failed retry
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
 
@@ -103,7 +95,7 @@ EOF
   sleep 1
 
   # Set up port forwarding to the Kubernetes API server
-  # No timeout — cleanup is handled by EXIT trap (_k8s_test_cleanup) and job-level timeout-minutes
+  # No timeout — process is killed at end of test or by job-level timeout-minutes
   kubectl port-forward service/kubernetes-"${test_name}" -n tenant-test "${port}":6443 > /dev/null 2>&1 &
   # Wait for port-forward to be ready before using it
   timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
@@ -121,7 +113,7 @@ EOF
     # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
     kubectl -n tenant-test get hr
-    _k8s_test_cleanup; exit 1
+    exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
 
@@ -145,7 +137,7 @@ EOF
 
   if [ "$node_ok" != true ]; then
     echo "Kubelet versions did not match expected ${k8s_version}" >&2
-    _k8s_test_cleanup; exit 1
+    exit 1
   fi
 
 
@@ -230,7 +222,7 @@ EOF
 
   if [ -z "$LB_ADDR" ]; then
     echo "LoadBalancer address is empty" >&2
-    _k8s_test_cleanup; exit 1
+    exit 1
   fi
 
   lb_ok=false
@@ -245,7 +237,7 @@ EOF
 
   if [ "$lb_ok" != true ]; then
     echo "LoadBalancer not reachable" >&2
-    _k8s_test_cleanup; exit 1
+    exit 1
   fi
 
   # Cleanup
@@ -304,7 +296,7 @@ EOF
     echo "=== NFS test pod did not complete ===" >&2
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe pod nfs-test-pod -n tenant-test >&2 || true
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" get events -n tenant-test --sort-by='.lastTimestamp' >&2 || true
-    _k8s_test_cleanup; exit 1
+    exit 1
   fi
 
   # Verify NFS data integrity
@@ -313,7 +305,7 @@ EOF
     echo "NFS mount test failed: expected 'nfs-mount-ok', got '$nfs_result'" >&2
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod -n tenant-test --wait=false 2>/dev/null || true
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pvc nfs-test-pvc -n tenant-test --wait=false 2>/dev/null || true
-    _k8s_test_cleanup; exit 1
+    exit 1
   fi
 
   # Cleanup NFS test resources in tenant cluster
@@ -328,7 +320,9 @@ EOF
     done
     kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
 
-  # Clean up all test resources (port-forward, kubeconfig, k8s resource)
-  _k8s_test_cleanup
+  # Clean up
+  pkill -f "port-forward.*${port}:" 2>/dev/null || true
+  rm -f "tenantkubeconfig-${test_name}"
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
 }
