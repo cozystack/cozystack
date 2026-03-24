@@ -20,6 +20,9 @@ spec:
       components:
         - name: envoy-gateway-system
           path: system/envoy-gateway
+          install:
+            namespace: cozy-envoy-gateway
+            releaseName: envoy-gateway
         - name: gateway
           path: extra/gateway
           libraries: ["cozy-lib"]
