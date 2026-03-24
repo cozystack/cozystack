@@ -4,18 +4,17 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
-  # Cleanup helper — idempotent, safe to call multiple times
+  # Cleanup helper — idempotent, non-blocking
   _k8s_test_cleanup() {
     pkill -f "port-forward.*${port}:" 2>/dev/null || true
     rm -f "tenantkubeconfig-${test_name}"
-    kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --timeout=2m || true
+    kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
   }
-  # Catch unexpected set -e exits (runs in subshell via cozytest.sh, does not affect parent traps)
   trap '_k8s_test_cleanup' EXIT
 
-  # Clean up stale resources from a previous failed retry to ensure fresh provisioning
-  kubectl delete kuberneteses.apps.cozystack.io "${test_name}" \
-    -n tenant-test --ignore-not-found --timeout=2m || true
+  # Clean up stale resources from a previous failed retry and wait for deletion
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -118,7 +117,7 @@ EOF
     done
   '
   # Verify the nodes are ready
-  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=5m --for=condition=Ready; then
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=3m --for=condition=Ready; then
     # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
     kubectl -n tenant-test get hr
@@ -276,7 +275,7 @@ spec:
 EOF
 
   # Wait for PVC to be bound (RWX via kubevirt CSI provisions an NFS server pod, needs time)
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pvc nfs-test-pvc -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Bound
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pvc nfs-test-pvc -n tenant-test --timeout=3m --for=jsonpath='{.status.phase}'=Bound
 
   # Create Pod that writes and reads data from NFS volume
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
