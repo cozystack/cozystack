@@ -201,8 +201,8 @@ EOF
 }
 
 @test "Enable Gateway API and verify per-tenant Gateway" {
-  # Enable Gateway API on platform
-  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"gateway":{"gatewayAPI":true}}}}}}'
+  # Enable Gateway API on platform with self-signed issuer (example.org can't use ACME)
+  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"gateway":{"gatewayAPI":true},"publishing":{"certificates":{"issuerName":"selfsigned-cluster-issuer"}}}}}}}'
 
   # Enable gateway on root tenant
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"gateway":true}}'
