@@ -150,6 +150,20 @@
       "type": "string",
       "default": ""
     },
+    "networks": {
+      "description": "Networks to attach the VM to.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Network attachment name.",
+            "type": "string"
+          }
+        }
+      }
+    },
     "resources": {
       "description": "Resource configuration for the virtual machine.",
       "type": "object",
@@ -202,6 +216,20 @@
       "default": [],
       "items": {
         "type": "string"
+      }
+    },
+    "subnets": {
+      "description": "Deprecated: use networks instead.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Network attachment name.",
+            "type": "string"
+          }
+        }
       }
     },
     "cloudInit": {

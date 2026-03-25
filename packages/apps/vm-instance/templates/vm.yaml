@@ -7,6 +7,10 @@
 {{- if and (not .Values.instanceType) (not (and .Values.resources .Values.resources.cpu .Values.resources.sockets .Values.resources.memory)) }}
 {{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
 {{- end }}
+{{- if and .Values.networks .Values.subnets }}
+{{-   fail "Both 'networks' and 'subnets' are set. Use only 'networks'; 'subnets' is deprecated." }}
+{{- end }}
+{{- $networks := .Values.networks | default .Values.subnets }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -86,7 +90,6 @@ spec:
           interfaces:
           - name: default
             bridge: {}
-          {{- $networks := .Values.networks | default .Values.subnets }}
           {{- range $i, $net := $networks }}
           - name: {{ $net.name }}
             bridge: {}
@@ -122,7 +125,6 @@ spec:
       networks:
       - name: default
         pod: {}
-      {{- $networks := .Values.networks | default .Values.subnets }}
       {{- range $i, $net := $networks }}
       - name: {{ $net.name }}
         multus:
