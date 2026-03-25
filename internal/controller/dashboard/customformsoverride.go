@@ -61,6 +61,9 @@ func (m *Manager) ensureCustomFormsOverride(ctx context.Context, crd *cozyv1alph
 	// Override specific fields with API-backed dropdowns (listInput type)
 	applyListInputOverrides(schema, kind, openAPIProps)
 
+	// Hide deprecated fields from the UI
+	hidden = append(hidden, hiddenDeprecatedFields(kind)...)
+
 	spec := map[string]any{
 		"customizationId": customizationID,
 		"hidden":          hidden,
@@ -216,6 +219,17 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 			},
 		}
 
+		// Override networks[].name to be an API-backed dropdown listing NetworkAttachmentDefinitions
+		networksItemProps := ensureArrayItemProps(specProps, "networks")
+		networksItemProps["name"] = map[string]any{
+			"type": "listInput",
+			"customProps": map[string]any{
+				"valueUri":    "/api/clusters/{cluster}/k8s/apis/k8s.cni.cncf.io/v1/namespaces/{namespace}/network-attachment-definitions",
+				"keysToValue": []any{"metadata", "name"},
+				"keysToLabel": []any{"metadata", "name"},
+			},
+		}
+
 	case "ClickHouse", "Harbor", "HTTPCache", "Kubernetes", "MariaDB", "MongoDB",
 		"NATS", "OpenBAO", "Postgres", "Qdrant", "RabbitMQ", "Redis", "VMDisk":
 		specProps := ensureSchemaPath(schema, "spec")
@@ -235,6 +249,18 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 		specProps := ensureSchemaPath(schema, "spec")
 		specProps["schedulingClass"] = schedulingClassListInput()
 	}
+}
+
+// hiddenDeprecatedFields returns hidden paths for deprecated fields that should not
+// appear in the dashboard UI for the given kind.
+func hiddenDeprecatedFields(kind string) []any {
+	switch kind {
+	case "VMInstance":
+		return []any{
+			[]any{"spec", "subnets"},
+		}
+	}
+	return nil
 }
 
 // storageClassListInput returns a listInput field config for a storageClass dropdown

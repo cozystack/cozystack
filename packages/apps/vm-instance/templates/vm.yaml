@@ -86,11 +86,10 @@ spec:
           interfaces:
           - name: default
             bridge: {}
-          {{- if .Values.subnets }}
-          {{- range $i, $subnet := .Values.subnets }}
-          - name: {{ $subnet.name }}
+          {{- $networks := .Values.networks | default .Values.subnets }}
+          {{- range $i, $net := $networks }}
+          - name: {{ $net.name }}
             bridge: {}
-          {{- end }}
           {{- end }}
         machine:
           type: ""
@@ -123,10 +122,9 @@ spec:
       networks:
       - name: default
         pod: {}
-      {{- if .Values.subnets }}
-      {{- range $i, $subnet := .Values.subnets }}
-      - name: {{ $subnet.name }}
+      {{- $networks := .Values.networks | default .Values.subnets }}
+      {{- range $i, $net := $networks }}
+      - name: {{ $net.name }}
         multus:
-          networkName: {{ $.Release.Namespace }}/{{ $subnet.name }}
-      {{- end }}
+          networkName: {{ $.Release.Namespace }}/{{ $net.name }}
       {{- end }}

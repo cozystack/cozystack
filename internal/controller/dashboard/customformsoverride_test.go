@@ -234,6 +234,56 @@ func TestApplyListInputOverrides_VMInstance(t *testing.T) {
 	if diskCustomProps["valueUri"] != expectedDiskURI {
 		t.Errorf("expected disks valueUri %s, got %v", expectedDiskURI, diskCustomProps["valueUri"])
 	}
+
+	// Check networks[].name is a listInput
+	networks, ok := specProps["networks"].(map[string]any)
+	if !ok {
+		t.Fatal("networks not found in schema.properties.spec.properties")
+	}
+	netItems, ok := networks["items"].(map[string]any)
+	if !ok {
+		t.Fatal("networks.items not found")
+	}
+	netItemProps, ok := netItems["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("networks.items.properties not found")
+	}
+	netName, ok := netItemProps["name"].(map[string]any)
+	if !ok {
+		t.Fatal("networks.items.properties.name not found")
+	}
+	if netName["type"] != "listInput" {
+		t.Errorf("expected networks name type listInput, got %v", netName["type"])
+	}
+	netCustomProps, ok := netName["customProps"].(map[string]any)
+	if !ok {
+		t.Fatal("networks name customProps not found")
+	}
+	expectedNetURI := "/api/clusters/{cluster}/k8s/apis/k8s.cni.cncf.io/v1/namespaces/{namespace}/network-attachment-definitions"
+	if netCustomProps["valueUri"] != expectedNetURI {
+		t.Errorf("expected networks valueUri %s, got %v", expectedNetURI, netCustomProps["valueUri"])
+	}
+}
+
+func TestHiddenDeprecatedFields_VMInstance(t *testing.T) {
+	hidden := hiddenDeprecatedFields("VMInstance")
+	if len(hidden) != 1 {
+		t.Fatalf("expected 1 hidden path, got %d", len(hidden))
+	}
+	path, ok := hidden[0].([]any)
+	if !ok {
+		t.Fatal("hidden path is not []any")
+	}
+	if len(path) != 2 || path[0] != "spec" || path[1] != "subnets" {
+		t.Errorf("expected [spec subnets], got %v", path)
+	}
+}
+
+func TestHiddenDeprecatedFields_UnknownKind(t *testing.T) {
+	hidden := hiddenDeprecatedFields("SomeOtherKind")
+	if hidden != nil {
+		t.Errorf("expected nil for unknown kind, got %v", hidden)
+	}
 }
 
 func TestApplyListInputOverrides_StorageClassSimple(t *testing.T) {
