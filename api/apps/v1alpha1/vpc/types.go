@@ -19,6 +19,26 @@ type ConfigSpec struct {
 	// Subnets of a VPC
 	// +kubebuilder:default:={}
 	Subnets []Subnet `json:"subnets,omitempty"`
+	// VPC peering connections (bidirectional declaration required)
+	// +kubebuilder:default:={}
+	Peers []Peer `json:"peers,omitempty"`
+	// Static routes for the VPC
+	// +kubebuilder:default:={}
+	Routes []Route `json:"routes,omitempty"`
+}
+
+type Peer struct {
+	// Namespace of the remote tenant
+	TenantNamespace string `json:"tenantNamespace"`
+	// Logical name of the remote VPC (without "virtualprivatecloud-" prefix)
+	VpcName string `json:"vpcName"`
+}
+
+type Route struct {
+	// Destination CIDR
+	Cidr string `json:"cidr"`
+	// Next hop IP address
+	NextHopIP string `json:"nextHopIP"`
 }
 
 type Subnet struct {
