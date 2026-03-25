@@ -21,6 +21,10 @@ solvers:
     ingress:
       class: nginx
 {{- end }}
+{{/* Dual parentRef: acme-challenge accepts system namespaces (Selector),
+     http-redirect accepts the gateway's own namespace (Same). Each challenge
+     HTTPRoute will have one accepted and one rejected parent — this is
+     expected, cert-manager handles partial acceptance correctly. */}}
 {{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
 - http01:
     gatewayHTTPRoute:
@@ -33,9 +37,7 @@ solvers:
         kind: Gateway
 {{- end }}
 {{- if and (ne $ingressEnabled "true") (or (ne $gatewayAPI "true") (eq $gateway "")) }}
-- http01:
-    ingress:
-      class: nginx
+{{- fail "At least one of gateway.ingress or gateway.gatewayAPI must be enabled for ACME HTTP-01 solver" }}
 {{- end }}
 {{- end }}
 {{- end -}}
