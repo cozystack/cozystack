@@ -12,6 +12,7 @@ spec:
             description: |
               LINSTOR Controller is not reachable.
           expr: up{job="linstor-controller"} == 0
+          for: 3m
           labels:
             severity: critical
         - alert: linstorSatelliteErrorRate
