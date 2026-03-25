@@ -28,6 +28,14 @@ solvers:
       - name: acme-challenge
         namespace: {{ $gateway }}
         kind: Gateway
+      - name: http-redirect
+        namespace: {{ $gateway }}
+        kind: Gateway
+{{- end }}
+{{- if and (ne $ingressEnabled "true") (or (ne $gatewayAPI "true") (eq $gateway "")) }}
+- http01:
+    ingress:
+      class: nginx
 {{- end }}
 {{- end }}
 {{- end -}}

@@ -54,7 +54,27 @@ spec:
     port: 80
     allowedRoutes:
       namespaces:
-        from: All
+        from: Selector
+        selector:
+          matchLabels:
+            cozystack.io/system: "true"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: http-redirect
+spec:
+  gatewayClassName: {{ .Release.Namespace }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ .Release.Namespace }}
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -62,7 +82,7 @@ metadata:
   name: redirect-to-https
 spec:
   parentRefs:
-  - name: acme-challenge
+  - name: http-redirect
     sectionName: http
   rules:
   - filters:

@@ -134,7 +134,9 @@
 {{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
 {{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
+{{- if .Values.gateway.gatewayAPI }}
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
@@ -159,7 +161,7 @@
 {{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
 {{- $externalDnsComponents := dict -}}
 {{- if .Values.gateway.gatewayAPI -}}
-{{- $externalDnsValues := dict "external-dns" (dict "sources" (list "service" "ingress" "gateway-httproute")) -}}
+{{- $externalDnsValues := dict "external-dns" (dict "sources" (list "service" "ingress" "gateway-httproute" "gateway-tlsroute")) -}}
 {{- $_ := set $externalDnsComponents "external-dns" (dict "values" $externalDnsValues) -}}
 {{- end -}}
 {{- $disabled := default (list) .Values.bundles.disabledPackages -}}

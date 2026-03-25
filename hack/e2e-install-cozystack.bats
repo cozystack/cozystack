@@ -290,7 +290,7 @@ EOF
 
   # Wait for monitoring to reconcile with gateway config
   if ! kubectl wait hr/monitoring -n tenant-root --timeout=3m --for=condition=ready; then
-    flux reconcile hr monitoring -n tenant-root --force
+    kubectl annotate hr monitoring -n tenant-root reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
     kubectl wait hr/monitoring -n tenant-root --timeout=2m --for=condition=ready
   fi
 
