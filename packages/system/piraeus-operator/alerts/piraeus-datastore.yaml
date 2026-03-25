@@ -7,14 +7,22 @@ spec:
   groups:
     - name: linstor.rules
       rules:
-        - alert: linstorControllerOffline
+        - alert: linstorControllerUnavailable
           annotations:
             description: |
-              LINSTOR Controller is not reachable.
-          expr: up{job="linstor-controller"} == 0
+              LINSTOR Controller deployment has no available replicas.
+          expr: kube_deployment_status_replicas_available{namespace="cozy-linstor",deployment="linstor-controller"} < 1
           for: 3m
           labels:
             severity: critical
+        - alert: linstorControllerMetricsScrapeFailing
+          annotations:
+            description: |
+              LINSTOR Controller metrics endpoint is not being scraped successfully.
+          expr: up{job="linstor-controller"} == 0
+          for: 10m
+          labels:
+            severity: warning
         - alert: linstorSatelliteErrorRate
           annotations:
             description: |
