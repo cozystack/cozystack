@@ -260,7 +260,7 @@ EOF
   # Get the merged Service IP from any Gateway's address
   gateway_ip=$(kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
 
-  # HTTP-to-HTTPS redirect (301)
+  # HTTP-to-HTTPS redirect (301) via system redirect HTTPRoute on acme-challenge Gateway
   http_code=$(curl -sS --resolve "dashboard.example.org:80:${gateway_ip}" \
     "http://dashboard.example.org" --max-time 10 -o /dev/null -w '%{http_code}')
   if [ "$http_code" != "301" ]; then
