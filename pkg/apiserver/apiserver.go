@@ -211,13 +211,19 @@ func (c completedConfig) New() (*CozyServer, error) {
 		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
 		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
 	}
-	appsApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
-	appsApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = appsV1alpha1Storage
-	if err := s.GenericAPIServer.InstallAPIGroup(&appsApiGroupInfo); err != nil {
+	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {
 		return nil, err
 	}
 
 	return s, nil
+}
+
+// InstallAppsAPIGroup registers the apps.cozystack.io API group on the given
+// server using the provided storage map (plural name → rest.Storage).
+func InstallAppsAPIGroup(server *genericapiserver.GenericAPIServer, storage map[string]rest.Storage) error {
+	info := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	info.VersionedResourcesStorageMap["v1alpha1"] = storage
+	return server.InstallAPIGroup(&info)
 }
 
 func mustGetInformers(ctx context.Context, mgr ctrl.Manager, types ...client.Object) error {

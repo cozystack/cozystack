@@ -2,6 +2,19 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "whitelistHTTP": {
+      "description": "Secure HTTP by enabling client networks whitelisting.",
+      "type": "boolean",
+      "default": true
+    },
+    "whitelist": {
+      "description": "List of client networks.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
     "machines": {
       "description": "Configuration of physical machine instances.",
       "type": "array",
@@ -78,19 +91,6 @@
           }
         }
       }
-    },
-    "whitelist": {
-      "description": "List of client networks.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "string"
-      }
-    },
-    "whitelistHTTP": {
-      "description": "Secure HTTP by enabling client networks whitelisting.",
-      "type": "boolean",
-      "default": true
     }
   }
 }

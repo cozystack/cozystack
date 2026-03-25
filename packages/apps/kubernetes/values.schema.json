@@ -2,6 +2,142 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "storageClass": {
+      "description": "StorageClass used to store the data.",
+      "type": "string",
+      "default": "replicated"
+    },
+    "nodeGroups": {
+      "description": "Worker nodes configuration map.",
+      "type": "object",
+      "default": {
+        "md0": {
+          "ephemeralStorage": "20Gi",
+          "gpus": [],
+          "instanceType": "u1.medium",
+          "maxReplicas": 10,
+          "minReplicas": 0,
+          "resources": {},
+          "roles": [
+            "ingress-nginx"
+          ]
+        }
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "ephemeralStorage",
+          "instanceType",
+          "maxReplicas",
+          "minReplicas",
+          "resources"
+        ],
+        "properties": {
+          "ephemeralStorage": {
+            "description": "Ephemeral storage size.",
+            "default": "20Gi",
+            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "x-kubernetes-int-or-string": true
+          },
+          "gpus": {
+            "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\".",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "instanceType": {
+            "description": "Virtual machine instance type.",
+            "type": "string",
+            "default": "u1.medium"
+          },
+          "maxReplicas": {
+            "description": "Maximum number of replicas.",
+            "type": "integer",
+            "default": 10
+          },
+          "minReplicas": {
+            "description": "Minimum number of replicas.",
+            "type": "integer",
+            "default": 0
+          },
+          "resources": {
+            "description": "CPU and memory resources for each worker node.",
+            "type": "object",
+            "properties": {
+              "cpu": {
+                "description": "CPU available.",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              },
+              "memory": {
+                "description": "Memory (RAM) available.",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              }
+            }
+          },
+          "roles": {
+            "description": "List of node roles.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "version": {
+      "description": "Kubernetes major.minor version to deploy",
+      "type": "string",
+      "default": "v1.35",
+      "enum": [
+        "v1.35",
+        "v1.34",
+        "v1.33",
+        "v1.32",
+        "v1.31",
+        "v1.30"
+      ]
+    },
+    "host": {
+      "description": "External hostname for Kubernetes cluster. Defaults to `\u003ccluster-name\u003e.\u003ctenant-host\u003e` if empty.",
+      "type": "string",
+      "default": ""
+    },
     "addons": {
       "description": "Cluster addons configuration.",
       "type": "object",
@@ -494,142 +630,6 @@
           }
         }
       }
-    },
-    "host": {
-      "description": "External hostname for Kubernetes cluster. Defaults to `\u003ccluster-name\u003e.\u003ctenant-host\u003e` if empty.",
-      "type": "string",
-      "default": ""
-    },
-    "nodeGroups": {
-      "description": "Worker nodes configuration map.",
-      "type": "object",
-      "default": {
-        "md0": {
-          "ephemeralStorage": "20Gi",
-          "gpus": [],
-          "instanceType": "u1.medium",
-          "maxReplicas": 10,
-          "minReplicas": 0,
-          "resources": {},
-          "roles": [
-            "ingress-nginx"
-          ]
-        }
-      },
-      "additionalProperties": {
-        "type": "object",
-        "required": [
-          "ephemeralStorage",
-          "instanceType",
-          "maxReplicas",
-          "minReplicas",
-          "resources"
-        ],
-        "properties": {
-          "ephemeralStorage": {
-            "description": "Ephemeral storage size.",
-            "default": "20Gi",
-            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "x-kubernetes-int-or-string": true
-          },
-          "gpus": {
-            "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "name"
-              ],
-              "properties": {
-                "name": {
-                  "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\".",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "instanceType": {
-            "description": "Virtual machine instance type.",
-            "type": "string",
-            "default": "u1.medium"
-          },
-          "maxReplicas": {
-            "description": "Maximum number of replicas.",
-            "type": "integer",
-            "default": 10
-          },
-          "minReplicas": {
-            "description": "Minimum number of replicas.",
-            "type": "integer",
-            "default": 0
-          },
-          "resources": {
-            "description": "CPU and memory resources for each worker node.",
-            "type": "object",
-            "properties": {
-              "cpu": {
-                "description": "CPU available.",
-                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "string"
-                  }
-                ],
-                "x-kubernetes-int-or-string": true
-              },
-              "memory": {
-                "description": "Memory (RAM) available.",
-                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-                "anyOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "string"
-                  }
-                ],
-                "x-kubernetes-int-or-string": true
-              }
-            }
-          },
-          "roles": {
-            "description": "List of node roles.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    },
-    "storageClass": {
-      "description": "StorageClass used to store the data.",
-      "type": "string",
-      "default": "replicated"
-    },
-    "version": {
-      "description": "Kubernetes major.minor version to deploy",
-      "type": "string",
-      "default": "v1.35",
-      "enum": [
-        "v1.35",
-        "v1.34",
-        "v1.33",
-        "v1.32",
-        "v1.31",
-        "v1.30"
-      ]
     }
   }
 }

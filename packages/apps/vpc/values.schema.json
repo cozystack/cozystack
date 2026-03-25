@@ -2,6 +2,27 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "subnets": {
+      "description": "Subnets of a VPC",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "cidr": {
+            "description": "IP address range",
+            "type": "string"
+          },
+          "name": {
+            "description": "Subnet name",
+            "type": "string"
+          }
+        }
+      }
+    },
     "peers": {
       "description": "VPC peering connections (bidirectional declaration required)",
       "type": "array",
@@ -41,27 +62,6 @@
           },
           "nextHopIP": {
             "description": "Next hop IP address",
-            "type": "string"
-          }
-        }
-      }
-    },
-    "subnets": {
-      "description": "Subnets of a VPC",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "cidr": {
-            "description": "IP address range",
-            "type": "string"
-          },
-          "name": {
-            "description": "Subnet name",
             "type": "string"
           }
         }

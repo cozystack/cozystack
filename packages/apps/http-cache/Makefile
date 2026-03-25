@@ -17,7 +17,7 @@ image-nginx:
 	rm -f images/nginx-cache.json
 
 generate:
-	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
+	cozyvalues-gen -m 'httpcache' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/httpcache/types.go
 	../../../hack/update-crd.sh
 
 update:

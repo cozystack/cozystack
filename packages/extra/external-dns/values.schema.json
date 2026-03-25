@@ -2,10 +2,68 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "provider": {
+      "description": "DNS provider name.",
+      "type": "string",
+      "enum": [
+        "cloudflare",
+        "aws",
+        "azure",
+        "google",
+        "digitalocean",
+        "linode",
+        "ovh",
+        "exoscale",
+        "godaddy",
+        "inmemory"
+      ]
+    },
+    "domainFilters": {
+      "description": "List of domains this external-dns instance can manage.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "policy": {
+      "description": "How DNS records are synchronized.",
+      "type": "string",
+      "default": "upsert-only",
+      "enum": [
+        "create-only",
+        "sync",
+        "upsert-only"
+      ]
+    },
+    "extraArgs": {
+      "description": "Extra arguments for external-dns.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "gatewayAPI": {
+      "description": "Enable Gateway API HTTPRoute as a source for DNS records.",
+      "type": "boolean",
+      "default": false
+    },
     "annotationPrefix": {
       "description": "Custom annotation prefix for external-dns (useful for running multiple instances).",
       "type": "string",
       "default": ""
+    },
+    "cloudflare": {
+      "description": "Cloudflare provider credentials.",
+      "type": "object",
+      "default": {
+        "apiEmail": "",
+        "apiKey": "",
+        "apiToken": "",
+        "proxied": false
+      },
+      "x-kubernetes-preserve-unknown-fields": true
     },
     "aws": {
       "description": "AWS Route53 provider credentials.",
@@ -30,14 +88,12 @@
       },
       "x-kubernetes-preserve-unknown-fields": true
     },
-    "cloudflare": {
-      "description": "Cloudflare provider credentials.",
+    "google": {
+      "description": "Google Cloud DNS provider credentials.",
       "type": "object",
       "default": {
-        "apiEmail": "",
-        "apiKey": "",
-        "apiToken": "",
-        "proxied": false
+        "project": "",
+        "serviceAccountKey": ""
       },
       "x-kubernetes-preserve-unknown-fields": true
     },
@@ -46,54 +102,6 @@
       "type": "object",
       "default": {
         "token": ""
-      },
-      "x-kubernetes-preserve-unknown-fields": true
-    },
-    "domainFilters": {
-      "description": "List of domains this external-dns instance can manage.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "string"
-      }
-    },
-    "exoscale": {
-      "description": "Exoscale DNS provider credentials.",
-      "type": "object",
-      "default": {
-        "apiKey": "",
-        "apiSecret": ""
-      },
-      "x-kubernetes-preserve-unknown-fields": true
-    },
-    "extraArgs": {
-      "description": "Extra arguments for external-dns.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "string"
-      }
-    },
-    "gatewayAPI": {
-      "description": "Enable Gateway API HTTPRoute as a source for DNS records.",
-      "type": "boolean",
-      "default": false
-    },
-    "godaddy": {
-      "description": "GoDaddy DNS provider credentials.",
-      "type": "object",
-      "default": {
-        "apiKey": "",
-        "apiSecret": ""
-      },
-      "x-kubernetes-preserve-unknown-fields": true
-    },
-    "google": {
-      "description": "Google Cloud DNS provider credentials.",
-      "type": "object",
-      "default": {
-        "project": "",
-        "serviceAccountKey": ""
       },
       "x-kubernetes-preserve-unknown-fields": true
     },
@@ -116,31 +124,23 @@
       },
       "x-kubernetes-preserve-unknown-fields": true
     },
-    "policy": {
-      "description": "How DNS records are synchronized.",
-      "type": "string",
-      "default": "upsert-only",
-      "enum": [
-        "create-only",
-        "sync",
-        "upsert-only"
-      ]
+    "exoscale": {
+      "description": "Exoscale DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "apiKey": "",
+        "apiSecret": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
     },
-    "provider": {
-      "description": "DNS provider name.",
-      "type": "string",
-      "enum": [
-        "cloudflare",
-        "aws",
-        "azure",
-        "google",
-        "digitalocean",
-        "linode",
-        "ovh",
-        "exoscale",
-        "godaddy",
-        "inmemory"
-      ]
+    "godaddy": {
+      "description": "GoDaddy DNS provider credentials.",
+      "type": "object",
+      "default": {
+        "apiKey": "",
+        "apiSecret": ""
+      },
+      "x-kubernetes-preserve-unknown-fields": true
     },
     "resources": {
       "description": "Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.",

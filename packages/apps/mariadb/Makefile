@@ -4,7 +4,7 @@ include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
 generate:
-	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md
+	cozyvalues-gen -m 'mariadb' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/mariadb/types.go
 	../../../hack/update-crd.sh
 
 update:

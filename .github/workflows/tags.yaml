@@ -16,6 +16,8 @@ jobs:
   prepare-release:
     name: Prepare Release
     runs-on: [self-hosted]
+    outputs:
+      skip: ${{ steps.check_release.outputs.skip }}
     permissions:
       contents: write
       packages: write
@@ -122,6 +124,25 @@ jobs:
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
           git push origin HEAD || true
+
+      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev
+      - name: Tag API submodule
+        if: steps.check_release.outputs.skip == 'false'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          VTAG="${{ steps.tag.outputs.tag }}"
+          SUBTAG="api/apps/v1alpha1/${VTAG}"
+          git config user.name  "cozystack-bot"
+          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
+          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          TARGET="$(git rev-parse "${VTAG}^{}")"
+          if git rev-parse -q --verify "refs/tags/${SUBTAG}" >/dev/null; then
+            test "$(git rev-list -n1 "${SUBTAG}")" = "$TARGET"
+          else
+            git tag "${SUBTAG}" "$TARGET"
+          fi
+          git push origin "${SUBTAG}"
 
       # Create or reuse draft release
       - name: Create / reuse draft release
@@ -370,3 +391,74 @@ jobs:
               
               console.log(`Created PR #${pr.data.number} for changelog`);
             }
+
+  update-website-docs:
+    name: Update Website Docs
+    runs-on: [self-hosted]
+    needs: [generate-changelog, prepare-release]
+    if: needs.generate-changelog.result == 'success' && needs.prepare-release.outputs.skip != 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: Parse tag
+        id: tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ref = context.ref.replace('refs/tags/', '');
+            const m = ref.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);
+            if (!m) {
+              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-(alpha|beta|rc).N'`);
+              return;
+            }
+            const version = m[1] + (m[2] ?? '');
+            core.setOutput('tag',     ref);      // v0.22.0
+            core.setOutput('version', version);  // 0.22.0
+
+      - name: Checkout website repo
+        uses: actions/checkout@v4
+        with:
+          repository: cozystack/website
+          token: ${{ secrets.GH_PAT }}
+          ref: main
+
+      - name: Update docs from release branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: make update-all BRANCH=release-${{ steps.tag.outputs.version }} RELEASE_TAG=${{ steps.tag.outputs.tag }}
+
+      - name: Commit and push
+        id: commit
+        run: |
+          git config user.name  "cozystack-bot"
+          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
+          git add content
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          BRANCH="update-docs-v${{ steps.tag.outputs.version }}"
+          git branch -D "$BRANCH" 2>/dev/null || true
+          git checkout -b "$BRANCH"
+          git commit --signoff -m "[docs] Update managed apps reference for v${{ steps.tag.outputs.version }}"
+          git push --force --set-upstream origin "$BRANCH"
+          echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Open pull request
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          BRANCH="update-docs-v${{ steps.tag.outputs.version }}"
+          pr_state=$(gh pr view "$BRANCH" --repo cozystack/website --json state --jq .state 2>/dev/null || echo "")
+          if [[ "$pr_state" == "OPEN" ]]; then
+            echo "PR already open, skipping creation."
+          else
+            gh pr create \
+              --repo cozystack/website \
+              --title "[docs] Update managed apps reference for v${{ steps.tag.outputs.version }}" \
+              --body "Automated docs update for release \`v${{ steps.tag.outputs.version }}\`." \
+              --head "update-docs-v${{ steps.tag.outputs.version }}" \
+              --base main
+          fi
