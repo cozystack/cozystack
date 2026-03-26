@@ -154,6 +154,14 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createStringColumn("Version", ".status.version"),
 		}),
 
+		// Factory service details endpointslice (Pod serving table)
+		createCustomColumnsOverride("factory-kube-service-details-endpointslice", []any{
+			createStringColumn("Pod", ".targetRef.name"),
+			createArrayColumn("Addresses", ".addresses"),
+			createBoolColumn("Ready", ".conditions.ready"),
+			createStringColumn("Node", ".nodeName"),
+		}),
+
 		// Factory service details port mapping
 		createCustomColumnsOverride("factory-kube-service-details-port-mapping", []any{
 			createStringColumn("Name", ".name"),
