@@ -2,6 +2,7 @@
 
 @test "Create DB PostgreSQL" {
   name='test'
+  kubectl -n tenant-test delete postgreses.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Postgres

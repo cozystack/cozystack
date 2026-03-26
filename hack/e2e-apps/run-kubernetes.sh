@@ -4,6 +4,10 @@ run_kubernetes_test() {
     local port="$3"
     local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
+  # Clean up stale resources from a previous failed retry
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
+
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -91,9 +95,12 @@ EOF
   sleep 1
 
   # Set up port forwarding to the Kubernetes API server
-  bash -c 'timeout 500s kubectl port-forward service/kubernetes-'"${test_name}"' -n tenant-test '"${port}"':6443 > /dev/null 2>&1 &'
+  # No timeout — process is killed at end of test or by job-level timeout-minutes
+  kubectl port-forward service/kubernetes-"${test_name}" -n tenant-test "${port}":6443 > /dev/null 2>&1 &
+  # Wait for port-forward to be ready before using it
+  timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
-  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 5; done'
+  timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 1; done'
 
   # Wait for at least 2 nodes to join (timeout after 8 minutes)
   timeout 8m bash -c '
@@ -102,10 +109,11 @@ EOF
     done
   '
   # Verify the nodes are ready
-  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=2m --for=condition=Ready; then
-    # Additional debug messages
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=3m --for=condition=Ready; then
+    # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
     kubectl -n tenant-test get hr
+    exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
 
@@ -206,24 +214,28 @@ EOF
     done
   "
 
-LB_ADDR=$(
-  kubectl get svc --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
-    -n tenant-test \
-    -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'
-)
+  LB_ADDR=$(
+    kubectl get svc --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
+      -n tenant-test \
+      -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'
+  )
 
-if [ -z "$LB_ADDR" ]; then
-  echo "LoadBalancer address is empty" >&2
-  exit 1
-fi
+  if [ -z "$LB_ADDR" ]; then
+    echo "LoadBalancer address is empty" >&2
+    exit 1
+  fi
 
+  lb_ok=false
   for i in $(seq 1 20); do
     echo "Attempt $i"
-    curl --silent --fail "http://${LB_ADDR}" && break
+    if curl --silent --fail "http://${LB_ADDR}"; then
+      lb_ok=true
+      break
+    fi
     sleep 3
   done
 
-  if [ "$i" -eq 20 ]; then
+  if [ "$lb_ok" != true ]; then
     echo "LoadBalancer not reachable" >&2
     exit 1
   fi
@@ -254,8 +266,8 @@ spec:
       storage: 1Gi
 EOF
 
-  # Wait for PVC to be bound
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pvc nfs-test-pvc -n tenant-test --timeout=2m --for=jsonpath='{.status.phase}'=Bound
+  # Wait for PVC to be bound (RWX via kubevirt CSI provisions an NFS server pod, needs time)
+  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pvc nfs-test-pvc -n tenant-test --timeout=3m --for=jsonpath='{.status.phase}'=Bound
 
   # Create Pod that writes and reads data from NFS volume
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" apply -f - <<EOF
@@ -280,7 +292,12 @@ spec:
 EOF
 
   # Wait for Pod to complete successfully
-  kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded; then
+    echo "=== NFS test pod did not complete ===" >&2
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe pod nfs-test-pod -n tenant-test >&2 || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get events -n tenant-test --sort-by='.lastTimestamp' >&2 || true
+    exit 1
+  fi
 
   # Verify NFS data integrity
   nfs_result=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" logs nfs-test-pod -n tenant-test)
@@ -303,7 +320,9 @@ EOF
     done
     kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
 
-  # Clean up by deleting the Kubernetes resource
-  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io $test_name
+  # Clean up
+  pkill -f "port-forward.*${port}:" 2>/dev/null || true
+  rm -f "tenantkubeconfig-${test_name}"
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
 }

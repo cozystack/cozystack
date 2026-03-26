@@ -2,6 +2,8 @@
 
 @test "Create a VM Disk" {
   name='test'
+  kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test delete vmdisks.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMDisk
@@ -25,6 +27,7 @@ EOF
 @test "Create a VM Instance" {
   diskName='test'
   name='test'
+  kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMInstance
