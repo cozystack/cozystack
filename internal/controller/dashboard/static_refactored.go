@@ -1985,6 +1985,10 @@ func CreateAllNavigations() []*dashboardv1alpha1.Navigation {
 		// Namespaced API resources
 		"base-factory-namespaced-api-networking.k8s.io-v1-ingresses":         "kube-ingress-details",
 		"base-factory-namespaced-api-cozystack.io-v1alpha1-workloadmonitors": "workloadmonitor-details",
+		// Backup resources (not ApplicationDefinitions, so ensureNavigation doesn't cover them)
+		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-plans":      "plan-details",
+		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-backupjobs": "backupjob-details",
+		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-backups":    "backup-details",
 	}
 
 	return []*dashboardv1alpha1.Navigation{
