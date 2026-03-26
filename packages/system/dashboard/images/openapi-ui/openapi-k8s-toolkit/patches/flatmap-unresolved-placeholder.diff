@@ -1,7 +1,7 @@
 diff --git a/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts b/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts
 --- a/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts
 +++ b/src/components/molecules/EnrichedTable/organisms/EnrichedTableProvider/utils.ts
-@@ -185,8 +185,13 @@
+@@ -185,6 +185,11 @@
                  return `['${escaped}']`
                })
              }
