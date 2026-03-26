@@ -194,12 +194,18 @@ rules:
   - buckets
   - clickhouses
   - foos
+  - foundationdbs
+  - harbors
   - httpcaches
   - kafkas
   - kuberneteses
   - mariadbs
+  - mongodbs
   - natses
+  - openbaos
+  - opensearches
   - postgreses
+  - qdrants
   - rabbitmqs
   - redises
   - seaweedfses
@@ -207,6 +213,7 @@ rules:
   - virtualmachines
   - vmdisks
   - vminstances
+  - vpns
   - infos
   - virtualprivateclouds
   verbs:
