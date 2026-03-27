@@ -1,1 +1,1 @@
-ttl.sh/rjfkdsjflsk/ubuntu-container-disk:v1.32@sha256:600d6ce7df4eaa8cc79c7d6d1b01ecac43e7696beb84eafce752d9210a16455f
+ghcr.io/cozystack/cozystack/ubuntu-container-disk:v1.32@sha256:9efb1fe18cffb045530b43ac4b39910f1802d3c16798d733165dcd1c67de9237
