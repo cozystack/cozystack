@@ -11,7 +11,7 @@ spec:
     relabelConfigs:
     - action: labeldrop
       regex: (endpoint|namespace|pod|container)
-    - replacement: linstor-controller
+    - replacement: linstor-satellite
       targetLabel: job
     - sourceLabels: [__meta_kubernetes_pod_node_name]
       targetLabel: node
@@ -34,7 +34,7 @@ spec:
     relabelConfigs:
     - action: labeldrop
       regex: (endpoint|namespace|pod|container)
-    - replacement: linstor-satellite
+    - replacement: linstor-controller
       targetLabel: job
     - sourceLabels: [__meta_kubernetes_pod_node_name]
       targetLabel: controller_node
