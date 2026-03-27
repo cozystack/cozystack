@@ -7,19 +7,31 @@ spec:
   groups:
     - name: linstor.rules
       rules:
-        - alert: linstorControllerOffline
+        - alert: linstorControllerUnavailable
           annotations:
             description: |
-              LINSTOR Controller is not reachable.
-          expr: up{job="linstor-controller"} == 0
+              LINSTOR Controller deployment has no available replicas.
+          expr: kube_deployment_status_replicas_available{namespace="cozy-linstor",deployment="linstor-controller"} < 1
+          for: 3m
           labels:
             severity: critical
+        - alert: linstorControllerMetricsScrapeFailing
+          annotations:
+            description: |
+              LINSTOR Controller metrics endpoint is not being scraped successfully.
+          expr: up{job="linstor-controller"} == 0
+          for: 10m
+          labels:
+            severity: warning
         - alert: linstorSatelliteErrorRate
           annotations:
             description: |
-              LINSTOR Satellite "{{ $labels.name }}" reports {{ $value }} errors in the last 15 minutes.
-              Use "linstor error-reports list --nodes {{ $labels.name }} --since 15minutes" to see them.
-          expr: increase(linstor_error_reports_count{module="SATELLITE"}[15m]) > 0
+              LINSTOR Satellite "{{ $labels.hostname }}" reports {{ $value }} errors in the last 15 minutes.
+              Use "linstor error-reports list --nodes {{ $labels.hostname }}" to inspect the reports.
+          expr: |
+            increase(linstor_error_reports_count{module="SATELLITE"}[15m]) > 0
+            and on(instance, job)
+            min_over_time(up{job="linstor-controller"}[15m]) == 1
           labels:
             severity: warning
         - alert: linstorControllerErrorRate
@@ -33,7 +45,7 @@ spec:
         - alert: linstorSatelliteNotOnline
           annotations:
             description: |
-              LINSTOR Satellite "{{ $labels.name }}" is not ONLINE.
+              LINSTOR Satellite "{{ $labels.hostname }}" is not ONLINE.
               Check that the Satellite is running and reachable from the LINSTOR Controller.
           expr: linstor_node_state{nodetype="SATELLITE"} != 2
           labels:
