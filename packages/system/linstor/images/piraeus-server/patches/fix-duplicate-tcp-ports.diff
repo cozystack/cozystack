@@ -1,80 +1,131 @@
-From 1250abe99d64a0501795e37d3b6af62410002239 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrei Kvapil <kvapss@gmail.com>
-Date: Mon, 12 Jan 2026 13:44:46 +0100
-Subject: [PATCH] fix(drbd): prevent duplicate TCP ports after toggle-disk
- operations
+Date: Fri, 28 Mar 2026 13:00:00 +0100
+Subject: [PATCH] fix(drbd): preserve TCP ports during toggle-disk operations
 
-Remove redundant ensureStackDataExists() call with empty payload from
-resetStoragePools() method that was causing TCP port conflicts after
-toggle-disk operations.
+Prevent TCP port mismatches after toggle-disk operations by preserving
+existing TCP ports when rebuilding DrbdRscData.
 
 Root Cause:
 -----------
-The resetStoragePools() method, introduced in 2019 (commit 95cc17d0b8),
-calls ensureStackDataExists() with an empty LayerPayload. This worked
-correctly when TCP ports were stored at RscDfn level.
+During toggle-disk operations, removeLayerData() deletes DrbdRscData
+(freeing its TCP ports from the number pool), then ensureStackDataExists()
+creates new DrbdRscData. Since the payload has no explicit tcpPorts,
+the controller allocates new ports from the pool -- which may differ from
+the old ports if other resources claimed them in the meantime.
 
-After the TCP port migration to per-node level (commit f754943463, May
-2025), this empty payload results in DrbdRscData being created without
-TCP ports assigned. The controller then sends a Pojo with an empty port
-Set to satellites.
+The controller correctly avoids collisions in its own number pool, but
+the satellite may miss the update (e.g. during controller restart or
+network issues). When this happens, the satellite keeps the old ports
+while peers receive the new ones, causing DRBD connection failures
+(StandAlone/Connecting state).
 
-On satellites, when DrbdRscData is initialized with an empty port list,
-initPorts() uses preferredNewPortsRef from peer resources. Since
-SatelliteDynamicNumberPool.tryAllocate() always returns true (no-op),
-any port from preferredNewPortsRef is accepted without conflict checking,
-leading to duplicate TCP port assignments.
-
-Impact:
--------
-This regression affects toggle-disk operations, particularly:
-- Snapshot creation/restore operations
-- Manual toggle-disk operations
-- Any operation calling resetStoragePools()
-
-Symptoms include:
-- DRBD resources failing to adjust with "port is also used" errors
-- Resources stuck in StandAlone or Connecting states
-- Multiple resources on the same node using identical TCP ports
+Additionally, remove the redundant ensureStackDataExists() call from
+resetStoragePools() -- the caller already invokes it with the correct
+payload.
 
 Solution:
 ---------
-Remove the ensureStackDataExists() call from resetStoragePools() as it
-is redundant. The calling code (e.g., CtrlRscToggleDiskApiCallHandler
-line 1071) already invokes ensureStackDataExists() with the correct
-payload immediately after resetStoragePools().
+1. Add copyDrbdTcpPortsIfExists() to save existing TCP ports into the
+   LayerPayload before removeLayerData() deletes them.
+2. Call it from copyDrbdNodeIdIfExists() (covers both toggle-disk paths)
+   and from the needsDeactivate path (shared storage pool case).
+3. Remove the redundant ensureStackDataExists() from resetStoragePools().
 
-This fix ensures:
-1. resetStoragePools() only resets storage pool assignments
-2. Layer data creation with proper TCP ports happens via the caller's
-   ensureStackDataExists() with correct payload
-3. No DrbdRscData objects are created without TCP port assignments
-
-Related Issues:
----------------
-Fixes #454 - Duplicate TCP ports after backup/restore operations
-Related to user reports of resources stuck in StandAlone after node
-reboots when toggle-disk or backup operations were in progress.
-
-Testing:
---------
-Verified that:
-- Toggle-disk operations no longer create resources without TCP ports
-- Backup/restore operations complete without TCP port conflicts
-- Resources maintain unique TCP ports across toggle-disk cycles
+This ensures the same TCP ports are reused when DrbdRscData is recreated,
+eliminating the window for port mismatch between controller and satellites.
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 Signed-off-by: Andrei Kvapil <kvapss@gmail.com>
 ---
- .../linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java  | 2 --
- 1 file changed, 2 deletions(-)
+ .../controller/CtrlRscToggleDiskApiCallHandler.java | 40 +++++++++++++++++++--
+ .../linstor/layer/resource/CtrlRscLayerDataFactory.java |  2 --
+ 2 files changed, 38 insertions(+), 4 deletions(-)
 
+diff --git a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
+index ccdb0cee5..b0554c2ec 100644
+--- a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
++++ b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
+@@ -58,6 +58,7 @@ import com.linbit.linstor.stateflags.StateFlags;
+ import com.linbit.linstor.storage.StorageException;
+ import com.linbit.linstor.storage.data.adapter.drbd.DrbdRscData;
+ import com.linbit.linstor.storage.interfaces.categories.resource.AbsRscLayerObject;
++import com.linbit.linstor.core.types.TcpPortNumber;
+ import com.linbit.linstor.storage.interfaces.categories.resource.VlmProviderObject;
+ import com.linbit.linstor.storage.kinds.DeviceLayerKind;
+ import com.linbit.linstor.storage.kinds.DeviceProviderKind;
+@@ -88,6 +89,7 @@ import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map.Entry;
+ import java.util.Set;
++import java.util.TreeSet;
+
+ import org.reactivestreams.Publisher;
+ import reactor.core.publisher.Flux;
+@@ -587,8 +589,9 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+
+                 /*
+                  * We also have to remove the currently diskless DrbdRscData and free up the node-id as now we must
+-                 * use the shared resource's node-id
++                 * use the shared resource's node-id. We still need to preserve TCP ports though.
+                  */
++                copyDrbdTcpPortsIfExists(rsc, payload);
+             }
+             else
+             {
+@@ -726,7 +729,7 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+     /**
+      * Although we need to rebuild the layerData as the layerList might have changed, if we do not
+      * deactivate (i.e. down) the current resource, we need to make sure that deleting DrbdRscData
+-     * and recreating a new DrbdRscData ends up with the same node-id as before.
++     * and recreating a new DrbdRscData ends up with the same node-id and TCP ports as before.
+      */
+     private void copyDrbdNodeIdIfExists(Resource rsc, LayerPayload payload) throws ImplementationError
+     {
+@@ -743,6 +746,37 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+             DrbdRscData<Resource> drbdRscData = (DrbdRscData<Resource>) drbdRscDataSet.iterator().next();
+             payload.drbdRsc.nodeId = drbdRscData.getNodeId().value;
+         }
++        copyDrbdTcpPortsIfExists(rsc, payload);
++    }
++
++    /**
++     * Preserves existing TCP ports during toggle-disk operations.
++     *
++     * When removeLayerData() deletes DrbdRscData, the TCP ports are freed from the number pool.
++     * If ensureStackDataExists() then allocates different ports, and the satellite misses the update
++     * (e.g. due to controller restart or connectivity issues), the satellite keeps the old ports
++     * while peers get the new ones, causing DRBD connections to fail with StandAlone state.
++     */
++    private void copyDrbdTcpPortsIfExists(Resource rsc, LayerPayload payload) throws ImplementationError
++    {
++        Set<AbsRscLayerObject<Resource>> drbdRscDataSet = LayerRscUtils.getRscDataByLayer(
++            getLayerData(apiCtx, rsc),
++            DeviceLayerKind.DRBD
++        );
++        if (!drbdRscDataSet.isEmpty())
++        {
++            DrbdRscData<Resource> drbdRscData = (DrbdRscData<Resource>) drbdRscDataSet.iterator().next();
++            Collection<TcpPortNumber> tcpPorts = drbdRscData.getTcpPortList();
++            if (tcpPorts != null && !tcpPorts.isEmpty())
++            {
++                Set<Integer> portInts = new TreeSet<>();
++                for (TcpPortNumber port : tcpPorts)
++                {
++                    portInts.add(port.value);
++                }
++                payload.drbdRsc.tcpPorts = portInts;
++            }
++        }
+     }
+
+     private List<DeviceLayerKind> removeLayerData(Resource rscRef)
 diff --git a/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java b/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
 index 3538b380c..4f589145e 100644
 --- a/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
 +++ b/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
 @@ -276,8 +276,6 @@ public class CtrlRscLayerDataFactory
- 
+
                  rscDataToProcess.addAll(rscData.getChildren());
              }
 -
@@ -82,6 +133,6 @@ index 3538b380c..4f589145e 100644
          }
          catch (AccessDeniedException exc)
          {
--- 
+--
 2.39.5 (Apple Git-154)
 
