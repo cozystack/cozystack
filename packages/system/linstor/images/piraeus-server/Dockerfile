@@ -61,6 +61,8 @@ RUN test -d .gradlehome && echo ".gradlehome found in tarball" || (echo ".gradle
 # Build DEB packages from tarball
 # Override GRADLE_FLAGS to remove --offline flag, allowing Gradle to download missing dependencies
 RUN sed -i 's/GRADLE_FLAGS = --offline/GRADLE_FLAGS =/' debian/rules || true
+# Skip dh_strip_nondeterminism to avoid failures on some JAR files (logback-core)
+RUN printf '\noverride_dh_strip_nondeterminism:\n\ttrue\n' >> debian/rules
 RUN LD_LIBRARY_PATH='' dpkg-buildpackage -rfakeroot -b -uc
 
 # Copy built .deb packages to a location accessible from final image
