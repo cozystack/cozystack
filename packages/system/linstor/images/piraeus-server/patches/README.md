@@ -12,3 +12,5 @@ Custom patches for piraeus-server (linstor-server) v1.32.3.
   - Upstream: [#476](https://github.com/LINBIT/linstor-server/pull/476) (superseded by this expanded fix)
 - **skip-adjust-when-device-inaccessible.diff** — Fix resources stuck in StandAlone after reboot, Unknown state race condition, and encrypted resource deletion
   - Upstream: [#477](https://github.com/LINBIT/linstor-server/pull/477)
+- **fix-conffilebuilder-diskless-flag.diff** — Use DrbdRscData layer flags instead of stale Resource flags for diskless check in .res generation
+  - Upstream: pending PR

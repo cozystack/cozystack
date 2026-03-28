@@ -1,0 +1,33 @@
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java b/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java
+index c0bb7b967..3c48fd722 100644
+--- a/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/ConfFileBuilder.java
+@@ -35,6 +35,7 @@ import com.linbit.linstor.security.AccessContext;
+ import com.linbit.linstor.security.AccessDeniedException;
+ import com.linbit.linstor.storage.StorageException;
+ import com.linbit.linstor.storage.data.adapter.drbd.DrbdRscData;
++import com.linbit.linstor.storage.interfaces.layers.drbd.DrbdRscObject;
+ import com.linbit.linstor.storage.data.adapter.drbd.DrbdRscDfnData;
+ import com.linbit.linstor.storage.data.adapter.drbd.DrbdVlmData;
+ import com.linbit.linstor.storage.interfaces.categories.resource.AbsRscLayerObject;
+@@ -897,16 +898,12 @@ public class ConfFileBuilder
+             // Check if we're in toggle-disk operation (adding disk to diskless resource)
+             boolean isDiskAdding = vlmData.getVolume().getAbsResource().getStateFlags().isSomeSet(
+                 localAccCtx, Resource.Flags.DISK_ADD_REQUESTED, Resource.Flags.DISK_ADDING);
++            boolean isDrbdLayerDiskless = vlmData.getRscLayerObject().getFlags()
++                .isSet(localAccCtx, DrbdRscObject.DrbdRscFlags.DISKLESS);
+             if ((!isPeerRsc && vlmData.getDataDevice() == null) ||
+-                (isPeerRsc &&
+-                // FIXME: vlmData.getRscLayerObject().getFlags should be used here
+-                     vlmData.getVolume().getAbsResource().disklessForDrbdPeers(accCtx)
+-                ) ||
++                (isPeerRsc && isDrbdLayerDiskless) ||
+                 // For toggle-disk: if dataDevice is set and we're adding disk, use the actual device
+-                (!isPeerRsc && !isDiskAdding &&
+-                // FIXME: vlmData.getRscLayerObject().getFlags should be used here
+-                     vlmData.getVolume().getAbsResource().isDrbdDiskless(accCtx)
+-                )
++                (!isPeerRsc && !isDiskAdding && isDrbdLayerDiskless)
+             )
+             {
+                 disk = "none";
