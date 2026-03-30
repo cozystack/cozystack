@@ -1,0 +1,74 @@
+{{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $hostnames := .Values._cluster.hostnames | default dict }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $gateway := ((.Values._namespace).gateway) | default (index .Values._cluster "gateway") | default "" }}
+{{- $gatewayClassName := $gateway }}
+
+{{- $dashboardHost := index $hostnames "dashboard" | default (printf "dashboard.%s" $host) }}
+
+{{- if and (eq $gatewayAPI "true") (has "dashboard" $exposeServices) }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: dashboard
+  annotations:
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+spec:
+  gatewayClassName: {{ $gatewayClassName }}
+  {{- if $gateway }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ $gateway }}
+  {{- end }}
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: {{ $dashboardHost | quote }}
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: dashboard-gateway-tls
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dashboard-redirect-to-https
+spec:
+  parentRefs:
+  - name: acme-challenge
+    namespace: {{ $gateway }}
+    sectionName: http
+  hostnames:
+  - {{ $dashboardHost | quote }}
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dashboard-web
+spec:
+  parentRefs:
+  - name: dashboard
+  hostnames:
+  - {{ $dashboardHost | quote }}
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: incloud-web-gatekeeper
+      port: 8000
+{{- end }}

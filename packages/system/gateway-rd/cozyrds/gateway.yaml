@@ -1,0 +1,35 @@
+apiVersion: cozystack.io/v1alpha1
+kind: ApplicationDefinition
+metadata:
+  name: gateway
+spec:
+  application:
+    kind: Gateway
+    plural: gateways
+    singular: gateway
+    openAPISchema: |-
+      {"title":"Chart Values","type":"object","properties":{}}
+  release:
+    prefix: ""
+    labels:
+      sharding.fluxcd.io/key: tenants
+      internal.cozystack.io/tenantmodule: "true"
+    chartRef:
+      kind: ExternalArtifact
+      name: cozystack-gateway-application-default-gateway
+      namespace: cozy-system
+  dashboard:
+    category: Administration
+    singular: Gateway
+    plural: Gateways
+    name: gateway
+    description: Envoy Gateway API controller
+    module: true
+    icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxNDQiIGhlaWdodD0iMTQ0IiByeD0iMjQiIGZpbGw9IiM2QzNGQzAiLz4KPHBhdGggZD0iTTcyIDMwTDEwNCA3Mkw3MiAxMTRMNDAgNzJMNzIgMzBaIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjYiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGZpbGw9Im5vbmUiLz4KPHBhdGggZD0iTTcyIDUwTDkwIDcyTDcyIDk0TDU0IDcyTDcyIDUwWiIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI0IiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBmaWxsPSJub25lIi8+Cjwvc3ZnPgo=
+    keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "_cluster"], ["spec", "_namespace"]]
+  secrets:
+    exclude: []
+    include: []
+  services:
+    exclude: []
+    include: []

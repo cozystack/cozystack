@@ -34,6 +34,14 @@ networking:
   # Set this to comma-separated list of master node IPs to override.
   kubeovn:
     MASTER_NODES: ""
+# Gateway configuration
+gateway:
+  ingress: true
+  # Enables Gateway API support in cert-manager and external-dns
+  gatewayAPI: false
+  # GatewayClass name used by system services (must match the tenant
+  # that has gateway: true, typically tenant-root)
+  gatewayClass: tenant-root
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
@@ -43,6 +51,15 @@ publishing:
     - dashboard
     - vm-exportproxy
     - cdi-uploadproxy
+  # Hostname overrides for system services
+  # By default, hostname = {service-name}.{host}
+  # Override individual hostnames when the convention doesn't fit
+  #
+  # Example:
+  # hostnames:
+  #   keycloak: "auth.example.org"
+  #   dashboard: "panel.example.org"
+  hostnames: {}
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
   certificates:

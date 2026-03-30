@@ -1,56 +1,83 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $ingressEnabled := (index .Values._cluster "ingress-enabled") | default "true" }}
+{{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $gateway := (index .Values._cluster "gateway") | default "" }}
 
-apiVersion: cert-manager.io/v1 
-kind: ClusterIssuer  
-metadata:  
-  name: letsencrypt-prod  
-spec:  
-  acme:  
-    privateKeySecretRef:  
-      name: letsencrypt-prod  
-    server: https://acme-v02.api.letsencrypt.org/directory  
-    solvers:  
-    - {{- if eq $solver "dns01" }}  
-        dns01:  
-          cloudflare:  
-            apiTokenSecretRef:  
-              name: cloudflare-api-token-secret  
-              key: api-token  
-      {{- else }}  
-        http01:  
-          ingress:  
-            class: nginx  
-      {{- end }}  
+{{- define "cert-manager-issuers.solvers" -}}
+{{- $solver := index . 0 -}}
+{{- $ingressEnabled := index . 1 -}}
+{{- $gatewayAPI := index . 2 -}}
+{{- $gateway := index . 3 }}
+solvers:
+{{- if eq $solver "dns01" }}
+- dns01:
+    cloudflare:
+      apiTokenSecretRef:
+        name: cloudflare-api-token-secret
+        key: api-token
+{{- else }}
+{{- if eq $ingressEnabled "true" }}
+- http01:
+    ingress:
+      class: nginx
+{{- end }}
+{{/* Dual parentRef: acme-challenge accepts system namespaces (Selector),
+     http-redirect accepts the gateway's own namespace (Same). Each challenge
+     HTTPRoute will have one accepted and one rejected parent — this is
+     expected, cert-manager handles partial acceptance correctly.
 
----  
+     Limitation: Gateway API ACME HTTP-01 only works for the root tenant
+     and system services. Child tenants with gateway: true have their own
+     Gateways but the ClusterIssuer always references the root tenant's
+     Gateways. Child tenant challenges will be rejected by both (no system
+     label, different namespace). Child tenants should use dns01 solver or
+     namespace-scoped Issuers. */}}
+{{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
+- http01:
+    gatewayHTTPRoute:
+      parentRefs:
+      - name: acme-challenge
+        namespace: {{ $gateway }}
+        kind: Gateway
+      - name: http-redirect
+        namespace: {{ $gateway }}
+        kind: Gateway
+{{- end }}
+{{- if and (ne $ingressEnabled "true") (or (ne $gatewayAPI "true") (eq $gateway "")) }}
+{{- fail "At least one of gateway.ingress or gateway.gatewayAPI must be enabled for ACME HTTP-01 solver" }}
+{{- end }}
+{{- end }}
+{{- end -}}
 
-apiVersion: cert-manager.io/v1  
-kind: ClusterIssuer  
-metadata:  
-  name: letsencrypt-stage  
-spec:  
-  acme:  
-    privateKeySecretRef:  
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    server: https://acme-v02.api.letsencrypt.org/directory
+{{ include "cert-manager-issuers.solvers" (list $solver $ingressEnabled $gatewayAPI $gateway) | indent 4 }}
+
+---
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-stage
+spec:
+  acme:
+    privateKeySecretRef:
       name: letsencrypt-stage
-    server: https://acme-staging-v02.api.letsencrypt.org/directory  
-    solvers:  
-    - {{- if eq $solver "dns01" }}  
-        dns01:  
-          cloudflare:  
-            apiTokenSecretRef:  
-              name: cloudflare-api-token-secret  
-              key: api-token  
-      {{- else }}  
-        http01:  
-          ingress:  
-            class: nginx  
-      {{- end }}  
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+{{ include "cert-manager-issuers.solvers" (list $solver $ingressEnabled $gatewayAPI $gateway) | indent 4 }}
 
----  
+---
 
-apiVersion: cert-manager.io/v1  
-kind: ClusterIssuer  
-metadata:  
-  name: selfsigned-cluster-issuer  
-spec:  
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-cluster-issuer
+spec:
   selfSigned: {}

@@ -1,0 +1,115 @@
+{{- $exposeGateway := (index .Values._cluster "gateway") | default "" }}
+{{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: gateway-proxy
+spec:
+  mergeGateways: true
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2
+      envoyService:
+        {{- if and (eq $exposeGateway .Release.Namespace) $exposeExternalIPs }}
+        type: ClusterIP
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              externalIPs:
+                {{- range splitList "," $exposeExternalIPs }}
+                - {{ . }}
+                {{- end }}
+        {{- else }}
+        type: LoadBalancer
+        {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Release.Namespace }}
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: gateway-proxy
+    namespace: {{ .Release.Namespace }}
+---
+{{/*
+  HTTP port 80 architecture — two Gateways with mergeGateways:
+
+  1. acme-challenge (from: Selector, cozystack.io/system label)
+     Accepts ACME HTTP-01 challenge HTTPRoutes from system namespaces
+     (cozy-dashboard, cozy-keycloak, etc.) and per-hostname redirect
+     HTTPRoutes created by system service charts.
+
+  2. http-redirect (from: Same)
+     Accepts the catch-all redirect-to-https HTTPRoute and ACME
+     challenges from this tenant namespace (e.g., bucket certificates).
+
+  Both Gateways declare port 80 HTTP with no hostname filter. This
+  relies on Envoy Gateway's mergeGateways to combine them into one
+  Envoy listener. Standard Gateway API conformance tests may flag this
+  as a conflict — if a future Envoy Gateway release tightens spec
+  compliance, consolidation into a single Gateway will be needed
+  (requires OR logic in label selectors or operator-managed labels).
+
+  cert-manager solver references both Gateways as parentRefs. Each
+  challenge HTTPRoute will have one accepted and one rejected parent —
+  this is expected and cert-manager handles partial acceptance correctly.
+*/}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: acme-challenge
+spec:
+  gatewayClassName: {{ .Release.Namespace }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ .Release.Namespace }}
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            cozystack.io/system: "true"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: http-redirect
+spec:
+  gatewayClassName: {{ .Release.Namespace }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ .Release.Namespace }}
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: redirect-to-https
+spec:
+  parentRefs:
+  - name: http-redirect
+    sectionName: http
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301

@@ -1,0 +1,52 @@
+{{- $gatewayAPI := (index .Values._cluster "gateway-api") | default "false" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $gateway := .Values._namespace.gateway | default "" }}
+{{- $host := .Values._namespace.host }}
+{{- $alertaHost := printf "alerta.%s" (.Values.host | default $host) }}
+
+{{- $gatewayClassName := .Values._namespace.gateway | default "" }}
+
+{{- if and (eq $gatewayAPI "true") (ne $gateway "") }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: alerta
+  annotations:
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+spec:
+  gatewayClassName: {{ $gatewayClassName }}
+  infrastructure:
+    labels:
+      cozystack.io/gateway: {{ $gateway }}
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: {{ $alertaHost | quote }}
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: alerta-gateway-tls
+    allowedRoutes:
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: alerta
+spec:
+  parentRefs:
+  - name: alerta
+  hostnames:
+  - {{ $alertaHost | quote }}
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: alerta
+      port: 80
+{{- end }}

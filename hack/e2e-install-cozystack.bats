@@ -200,6 +200,130 @@ EOF
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
 }
 
+@test "Enable Gateway API and verify per-tenant Gateway" {
+  # Enable Gateway API on platform with self-signed issuer (example.org can't use ACME)
+  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"gateway":{"gatewayAPI":true},"publishing":{"certificates":{"issuerName":"selfsigned-cluster-issuer"}}}}}}}'
+
+  # Enable gateway on root tenant
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"gateway":true}}'
+  kubectl wait hr/tenant-root -n tenant-root --timeout=2m --for=condition=ready
+
+  # Wait for per-tenant gateway HelmRelease to appear and become ready
+  timeout 120 sh -ec 'until kubectl get hr -n tenant-root gateway >/dev/null 2>&1; do sleep 1; done'
+  kubectl wait hr/gateway -n tenant-root --timeout=5m --for=condition=ready
+
+  # Verify GatewayClass created and accepted
+  timeout 60 sh -ec 'until [ "$(kubectl get gatewayclass tenant-root -o jsonpath='"'"'{.status.conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'
+
+  # Trigger reconcile of system HelmReleases so they pick up gateway-api: true
+  # Use annotation instead of flux reconcile --force to avoid blocking on dependencies
+  kubectl annotate hr dashboard -n cozy-dashboard reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
+  kubectl annotate hr cozystack-api -n cozy-cozystack-api reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite || true
+
+  # Wait for a per-component Gateway to get an address (merged Service)
+  timeout 300 sh -ec 'until [ -n "$(kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
+
+  gateway_ip=$(kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
+  if [ -z "$gateway_ip" ]; then
+    echo "Gateway has no IP address assigned" >&2
+    kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o yaml >&2
+    exit 1
+  fi
+  echo "Gateway IP: $gateway_ip"
+}
+
+@test "Verify system HTTPRoutes and TLSRoutes via Gateway" {
+  # Dashboard HTTPRoute
+  if ! timeout 60 sh -ec 'until [ "$(kubectl get httproute dashboard-web -n cozy-dashboard -o jsonpath='"'"'{.status.parents[0].conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'; then
+    echo "Dashboard HTTPRoute not accepted by Gateway" >&2
+    kubectl get httproute dashboard-web -n cozy-dashboard -o yaml >&2
+    exit 1
+  fi
+
+  # Keycloak HTTPRoute
+  if ! timeout 60 sh -ec 'until [ "$(kubectl get httproute keycloak -n cozy-keycloak -o jsonpath='"'"'{.status.parents[0].conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'; then
+    echo "Keycloak HTTPRoute not accepted by Gateway" >&2
+    kubectl get httproute keycloak -n cozy-keycloak -o yaml >&2
+    exit 1
+  fi
+
+  # Kubernetes API TLSRoute
+  if ! timeout 60 sh -ec 'until [ "$(kubectl get tlsroute kubernetes-api -n default -o jsonpath='"'"'{.status.parents[0].conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'; then
+    echo "API TLSRoute not accepted by Gateway" >&2
+    kubectl get tlsroute kubernetes-api -n default -o yaml >&2
+    exit 1
+  fi
+}
+
+@test "Access services via Gateway API" {
+  # With mergeGateways, all per-component Gateways share one Service
+  # Get the merged Service IP from any Gateway's address
+  gateway_ip=$(kubectl get gateways.gateway.networking.k8s.io dashboard -n cozy-dashboard -o jsonpath='{.status.addresses[0].value}')
+
+  # HTTP-to-HTTPS redirect (301) via system redirect HTTPRoute on acme-challenge Gateway
+  http_code=$(curl -sS --resolve "dashboard.example.org:80:${gateway_ip}" \
+    "http://dashboard.example.org" --max-time 10 -o /dev/null -w '%{http_code}')
+  if [ "$http_code" != "301" ]; then
+    echo "Expected HTTP 301 redirect, got ${http_code}" >&2
+    exit 1
+  fi
+
+  # Dashboard via HTTPS (302/303 redirect to Keycloak is expected when OIDC is enabled)
+  http_code=$(curl -sS -k --resolve "dashboard.example.org:443:${gateway_ip}" \
+    "https://dashboard.example.org" --max-time 30 -o /dev/null -w '%{http_code}')
+  if [ "$http_code" != "200" ] && [ "$http_code" != "302" ] && [ "$http_code" != "303" ]; then
+    echo "Failed to access Dashboard via Gateway, got HTTP ${http_code}" >&2
+    exit 1
+  fi
+
+  # Kubernetes API via TLS passthrough (401/403 expected without credentials)
+  http_code=$(curl -sS -k --resolve "api.example.org:443:${gateway_ip}" \
+    "https://api.example.org" --max-time 30 -o /dev/null -w '%{http_code}')
+  if [ "$http_code" != "401" ] && [ "$http_code" != "403" ]; then
+    echo "Expected HTTP 401 or 403 from API server via Gateway, got ${http_code}" >&2
+    exit 1
+  fi
+}
+
+@test "Verify Grafana via tenant Gateway" {
+  # gateway: true already set in previous test
+
+  # Wait for monitoring to reconcile with gateway config
+  if ! kubectl wait hr/monitoring -n tenant-root --timeout=3m --for=condition=ready; then
+    kubectl annotate hr monitoring -n tenant-root reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
+    kubectl wait hr/monitoring -n tenant-root --timeout=2m --for=condition=ready
+  fi
+
+  # Wait for Grafana per-component Gateway to be Programmed
+  timeout 120 sh -ec 'until kubectl get gateways.gateway.networking.k8s.io grafana -n tenant-root >/dev/null 2>&1; do sleep 1; done'
+  kubectl wait gateways.gateway.networking.k8s.io/grafana -n tenant-root --timeout=2m --for=condition=Programmed
+
+  # Verify Grafana HTTPRoute is accepted
+  if ! timeout 60 sh -ec 'until [ "$(kubectl get httproute grafana -n tenant-root -o jsonpath='"'"'{.status.parents[0].conditions[?(@.type=="Accepted")].status}'"'"' 2>/dev/null)" = "True" ]; do sleep 1; done'; then
+    echo "Grafana HTTPRoute not accepted" >&2
+    kubectl get httproute grafana -n tenant-root -o yaml >&2
+    exit 1
+  fi
+
+  # Access Grafana via tenant Gateway (merged Service)
+  timeout 60 sh -ec 'until [ -n "$(kubectl get gateways.gateway.networking.k8s.io grafana -n tenant-root -o jsonpath='"'"'{.status.addresses[0].value}'"'"' 2>/dev/null)" ]; do sleep 1; done'
+  grafana_gw_ip=$(kubectl get gateways.gateway.networking.k8s.io grafana -n tenant-root -o jsonpath='{.status.addresses[0].value}')
+  if ! curl -sS -k --resolve "grafana.example.org:443:${grafana_gw_ip}" \
+    "https://grafana.example.org" --max-time 30 | grep -q Found; then
+    echo "Failed to access Grafana via Gateway at ${grafana_gw_ip}" >&2
+    exit 1
+  fi
+}
+
+@test "Ingress still works alongside Gateway API" {
+  ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  if ! curl -sS -k --resolve "grafana.example.org:443:${ingress_ip}" \
+    "https://grafana.example.org" --max-time 30 | grep -q Found; then
+    echo "Ingress broken after enabling Gateway API" >&2
+    exit 1
+  fi
+}
+
 @test "Create tenant with isolated mode enabled" {
   kubectl -n tenant-root get tenants.apps.cozystack.io test || 
   kubectl apply -f - <<EOF

@@ -18,6 +18,8 @@ metadata:
 type: Opaque
 stringData:
   values.yaml: |
+    global:
+      clusterDomain: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
@@ -38,6 +40,13 @@ stringData:
       {{- end }}
       {{- with .Values.scheduling }}
       scheduling:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
+      ingress-enabled: {{ .Values.gateway.ingress | quote }}
+      gateway-api: {{ .Values.gateway.gatewayAPI | quote }}
+      gateway: {{ .Values.gateway.gatewayClass | quote }}
+      {{- with .Values.publishing.hostnames }}
+      hostnames:
         {{- . | toYaml | nindent 8 }}
       {{- end }}
       {{- with $kubeRootCa.data }}
