@@ -20,17 +20,12 @@ network issues). When this happens, the satellite keeps the old ports
 while peers receive the new ones, causing DRBD connection failures
 (StandAlone/Connecting state).
 
-Additionally, remove the redundant ensureStackDataExists() call from
-resetStoragePools() -- the caller already invokes it with the correct
-payload.
-
 Solution:
 ---------
-1. Add copyDrbdTcpPortsIfExists() to save existing TCP ports into the
-   LayerPayload before removeLayerData() deletes them.
-2. Call it from copyDrbdNodeIdIfExists() (covers both toggle-disk paths)
-   and from the needsDeactivate path (shared storage pool case).
-3. Remove the redundant ensureStackDataExists() from resetStoragePools().
+1. Add copyDrbdSettings() wrapper that preserves both node-id and TCP
+   ports into the LayerPayload before removeLayerData() deletes them.
+2. Make ensureStackDataExists() in resetStoragePools() optional so the
+   caller can invoke it with the correct payload instead.
 
 This ensures the same TCP ports are reused when DrbdRscData is recreated,
 eliminating the window for port mismatch between controller and satellites.
@@ -38,12 +33,12 @@ eliminating the window for port mismatch between controller and satellites.
 Co-Authored-By: Claude <noreply@anthropic.com>
 Signed-off-by: Andrei Kvapil <kvapss@gmail.com>
 ---
- .../controller/CtrlRscToggleDiskApiCallHandler.java | 40 +++++++++++++++++++--
- .../linstor/layer/resource/CtrlRscLayerDataFactory.java |  2 --
- 2 files changed, 38 insertions(+), 4 deletions(-)
+ .../controller/CtrlRscToggleDiskApiCallHandler.java | 53 ++++++++++++++++++---
+ .../layer/resource/CtrlRscLayerDataFactory.java     |  9 +++-
+ 2 files changed, 55 insertions(+), 7 deletions(-)
 
 diff --git a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
-index ccdb0cee5..b0554c2ec 100644
+index ccdb0ce..2a1a2ef 100644
 --- a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
 +++ b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
 @@ -58,6 +58,7 @@ import com.linbit.linstor.stateflags.StateFlags;
@@ -59,11 +54,11 @@ index ccdb0cee5..b0554c2ec 100644
  import java.util.Map.Entry;
  import java.util.Set;
 +import java.util.TreeSet;
-
+ 
  import org.reactivestreams.Publisher;
  import reactor.core.publisher.Flux;
-@@ -587,8 +589,9 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
-
+@@ -587,12 +589,13 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+ 
                  /*
                   * We also have to remove the currently diskless DrbdRscData and free up the node-id as now we must
 -                 * use the shared resource's node-id
@@ -73,30 +68,39 @@ index ccdb0cee5..b0554c2ec 100644
              }
              else
              {
-@@ -726,7 +729,7 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+-                copyDrbdNodeIdIfExists(rsc, payload);
++                copyDrbdSettings(rsc, payload);
+             }
+             /*
+              * rebuilds the layerdata in case we just removed it..
+@@ -724,10 +727,20 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+     }
+ 
      /**
-      * Although we need to rebuild the layerData as the layerList might have changed, if we do not
-      * deactivate (i.e. down) the current resource, we need to make sure that deleting DrbdRscData
+-     * Although we need to rebuild the layerData as the layerList might have changed, if we do not
+-     * deactivate (i.e. down) the current resource, we need to make sure that deleting DrbdRscData
 -     * and recreating a new DrbdRscData ends up with the same node-id as before.
-+     * and recreating a new DrbdRscData ends up with the same node-id and TCP ports as before.
++     * Copies DRBD settings (node-id and TCP ports) from the existing DrbdRscData into the payload
++     * before removeLayerData() deletes them. This ensures that recreated DrbdRscData ends up with
++     * the same node-id and TCP ports as before.
++     *
++     * TCP ports must be preserved because if the satellite misses the update (e.g. due to controller
++     * restart or connectivity issues), it will keep the old ports while peers receive the new ones,
++     * causing DRBD connections to fail with StandAlone state.
       */
-     private void copyDrbdNodeIdIfExists(Resource rsc, LayerPayload payload) throws ImplementationError
-     {
-@@ -743,6 +746,37 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
-             DrbdRscData<Resource> drbdRscData = (DrbdRscData<Resource>) drbdRscDataSet.iterator().next();
-             payload.drbdRsc.nodeId = drbdRscData.getNodeId().value;
-         }
++    private void copyDrbdSettings(Resource rsc, LayerPayload payload) throws ImplementationError
++    {
++        copyDrbdNodeIdIfExists(rsc, payload);
 +        copyDrbdTcpPortsIfExists(rsc, payload);
 +    }
 +
-+    /**
-+     * Preserves existing TCP ports during toggle-disk operations.
-+     *
-+     * When removeLayerData() deletes DrbdRscData, the TCP ports are freed from the number pool.
-+     * If ensureStackDataExists() then allocates different ports, and the satellite misses the update
-+     * (e.g. due to controller restart or connectivity issues), the satellite keeps the old ports
-+     * while peers get the new ones, causing DRBD connections to fail with StandAlone state.
-+     */
+     private void copyDrbdNodeIdIfExists(Resource rsc, LayerPayload payload) throws ImplementationError
+     {
+         Set<AbsRscLayerObject<Resource>> drbdRscDataSet = LayerRscUtils.getRscDataByLayer(
+@@ -745,6 +758,28 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+         }
+     }
+ 
 +    private void copyDrbdTcpPortsIfExists(Resource rsc, LayerPayload payload) throws ImplementationError
 +    {
 +        Set<AbsRscLayerObject<Resource>> drbdRscDataSet = LayerRscUtils.getRscDataByLayer(
@@ -117,22 +121,57 @@ index ccdb0cee5..b0554c2ec 100644
 +                payload.drbdRsc.tcpPorts = portInts;
 +            }
 +        }
-     }
-
++    }
++
      private List<DeviceLayerKind> removeLayerData(Resource rscRef)
+     {
+         List<DeviceLayerKind> layerList;
+@@ -999,15 +1034,17 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+             /*
+              * We also have to remove the possible meta-children of previous StorageRscData.
+              * LayerData will be recreated with ensureStackDataExists.
+-             * However, we still need to remember our node-id if we had / have DRBD in the list
++             * However, we still need to remember our DRBD settings if we had / have DRBD in the list
+              */
+-            copyDrbdNodeIdIfExists(rsc, payload);
++            copyDrbdSettings(rsc, payload);
+             layerList = removeLayerData(rsc);
+         }
+         else
+         {
+             markDiskAdded(rsc);
+-            ctrlLayerStackHelper.resetStoragePools(rsc);
++            // Pass false to skip redundant ensureStackDataExists call within resetStoragePools,
++            // since we call it explicitly below with the correct payload
++            ctrlLayerStackHelper.resetStoragePools(rsc, false);
+         }
+         ctrlLayerStackHelper.ensureStackDataExists(rsc, layerList, payload);
+ 
 diff --git a/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java b/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
-index 3538b380c..4f589145e 100644
+index 3538b38..2f0747e 100644
 --- a/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
 +++ b/controller/src/main/java/com/linbit/linstor/layer/resource/CtrlRscLayerDataFactory.java
-@@ -276,8 +276,6 @@ public class CtrlRscLayerDataFactory
-
+@@ -263,6 +263,11 @@ public class CtrlRscLayerDataFactory
+     }
+ 
+     public void resetStoragePools(Resource rscRef)
++    {
++        resetStoragePools(rscRef, true);
++    }
++
++    public void resetStoragePools(Resource rscRef, boolean callEnsureStackDataExistsRef)
+     {
+         try
+         {
+@@ -277,7 +282,10 @@ public class CtrlRscLayerDataFactory
                  rscDataToProcess.addAll(rscData.getChildren());
              }
--
+ 
 -            ensureStackDataExists(rscRef, null, new LayerPayload());
++            if (callEnsureStackDataExistsRef)
++            {
++                ensureStackDataExists(rscRef, null, new LayerPayload());
++            }
          }
          catch (AccessDeniedException exc)
          {
---
-2.39.5 (Apple Git-154)
-
