@@ -13,6 +13,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: Package
 metadata:
   name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   variant: {{ $variant }}
 {{- if $components }}
@@ -40,6 +42,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: Package
 metadata:
   name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   variant: {{ $variant }}
 {{- end }}
