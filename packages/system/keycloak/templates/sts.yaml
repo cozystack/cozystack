@@ -1,3 +1,7 @@
+{{- define "keycloak.theme.sanitizedName" -}}
+{{- regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (. | lower) "-") "-" | trimPrefix "-" | trimSuffix "-" -}}
+{{- end -}}
+
 {{- $host := index .Values._cluster "root-host" }}
 {{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
@@ -39,8 +43,48 @@ spec:
         app: keycloak-ha
     spec:
       restartPolicy: Always
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         fsGroup: 1000
+      {{- if .Values.themes }}
+      {{- $themeNames := list }}
+      {{- range .Values.themes }}
+      {{- if not .name }}{{ fail "theme entry missing required field: name" }}{{- end }}
+      {{- if not .image }}{{ fail "theme entry missing required field: image" }}{{- end }}
+      {{- $sanitized := include "keycloak.theme.sanitizedName" .name }}
+      {{- if not $sanitized }}{{ fail (printf "theme name %q produces empty container name after sanitization" .name) }}{{- end }}
+      {{- if gt (len (printf "theme-%s" $sanitized)) 63 }}{{ fail (printf "theme name %q produces container name exceeding 63 characters" .name) }}{{- end }}
+      {{- if has $sanitized $themeNames }}{{ fail (printf "duplicate theme name after sanitization: %s (from %s)" $sanitized .name) }}{{- end }}
+      {{- $themeNames = append $themeNames $sanitized }}
+      {{- end }}
+      initContainers:
+        {{- range .Values.themes }}
+        - name: theme-{{ include "keycloak.theme.sanitizedName" .name }}
+          image: "{{ .image }}"
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "[ -d /themes ] && cp -r /themes/. /opt/keycloak/themes/ || { echo 'ERROR: /themes directory not found in image'; exit 1; }"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: themes
+              mountPath: /opt/keycloak/themes
+        {{- end }}
+      {{- end }}
       containers:
         - name: keycloak
           image: {{ .Values.image }}
@@ -128,6 +172,11 @@ spec:
               value: https://{{ $ingressHost }}
             - name: JAVA_OPTS_APPEND
               value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
+          {{- if .Values.themes }}
+          volumeMounts:
+            - name: themes
+              mountPath: /opt/keycloak/themes
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -155,4 +204,10 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+      {{- if .Values.themes }}
+      volumes:
+        - name: themes
+          emptyDir:
+            sizeLimit: 256Mi
+      {{- end }}
       terminationGracePeriodSeconds: 60
