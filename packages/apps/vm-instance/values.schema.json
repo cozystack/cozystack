@@ -114,15 +114,29 @@
         }
       }
     },
-    "subnets": {
-      "description": "Additional subnets",
+    "networks": {
+      "description": "Networks to attach the VM to.",
       "type": "array",
       "default": [],
       "items": {
         "type": "object",
         "properties": {
           "name": {
-            "description": "Subnet name",
+            "description": "Network attachment name.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "subnets": {
+      "description": "Deprecated: use networks instead.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Network attachment name.",
             "type": "string"
           }
         }

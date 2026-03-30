@@ -47,8 +47,10 @@ virtctl ssh <user>@<vm>
 | `disks`             | List of disks to attach.                                                                                                          | `[]object` | `[]`        |
 | `disks[i].name`     | Disk name.                                                                                                                        | `string`   | `""`        |
 | `disks[i].bus`      | Disk bus type (e.g. "sata").                                                                                                      | `string`   | `""`        |
-| `subnets`           | Additional subnets                                                                                                                | `[]object` | `[]`        |
-| `subnets[i].name`   | Subnet name                                                                                                                       | `string`   | `""`        |
+| `networks`          | Networks to attach the VM to.                                                                                                     | `[]object` | `[]`        |
+| `networks[i].name`  | Network attachment name.                                                                                                          | `string`   | `""`        |
+| `subnets`           | Deprecated: use networks instead.                                                                                                 | `[]object` | `[]`        |
+| `subnets[i].name`   | Network attachment name.                                                                                                          | `string`   | `""`        |
 | `gpus`              | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                                                               | `[]object` | `[]`        |
 | `gpus[i].name`      | The name of the GPU resource to attach.                                                                                           | `string`   | `""`        |
 | `cpuModel`          | Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map | `string`   | `""`        |
