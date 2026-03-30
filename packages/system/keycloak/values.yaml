@@ -18,3 +18,9 @@ resources:
 themes: []
 # - name: my-theme
 #   image: my-registry/my-keycloak-theme:v1.0
+# Theme images must contain theme files under /themes/ directory.
+# Each theme is copied into Keycloak's /opt/keycloak/themes/ via init container.
+# If multiple themes contain files with the same path, later entries take precedence.
+
+imagePullSecrets: []
+# - name: my-registry-secret
