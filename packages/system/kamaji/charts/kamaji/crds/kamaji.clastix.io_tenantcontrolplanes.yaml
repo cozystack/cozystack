@@ -6173,6 +6173,397 @@ spec:
                                 type: string
                               type: object
                           type: object
+                        probes:
+                          description: |-
+                            Probes defines the probe configuration for the Control Plane components
+                            (kube-apiserver, controller-manager, and scheduler).
+                            Override TimeoutSeconds, PeriodSeconds, and FailureThreshold for resource-constrained environments.
+                          properties:
+                            apiServer:
+                              description: APIServer defines probe overrides for kube-apiserver, taking precedence over global probe settings.
+                              properties:
+                                liveness:
+                                  description: Liveness defines parameters for the liveness probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                                readiness:
+                                  description: Readiness defines parameters for the readiness probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                                startup:
+                                  description: Startup defines parameters for the startup probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                              type: object
+                            controllerManager:
+                              description: ControllerManager defines probe overrides for kube-controller-manager, taking precedence over global probe settings.
+                              properties:
+                                liveness:
+                                  description: Liveness defines parameters for the liveness probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                                readiness:
+                                  description: Readiness defines parameters for the readiness probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                                startup:
+                                  description: Startup defines parameters for the startup probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                              type: object
+                            liveness:
+                              description: Liveness defines default parameters for liveness probes of all Control Plane components.
+                              properties:
+                                failureThreshold:
+                                  description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                initialDelaySeconds:
+                                  description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                  format: int32
+                                  minimum: 0
+                                  type: integer
+                                periodSeconds:
+                                  description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                successThreshold:
+                                  description: |-
+                                    SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                    Must be 1 for liveness and startup probes.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                timeoutSeconds:
+                                  description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                              type: object
+                            readiness:
+                              description: Readiness defines default parameters for the readiness probe of kube-apiserver.
+                              properties:
+                                failureThreshold:
+                                  description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                initialDelaySeconds:
+                                  description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                  format: int32
+                                  minimum: 0
+                                  type: integer
+                                periodSeconds:
+                                  description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                successThreshold:
+                                  description: |-
+                                    SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                    Must be 1 for liveness and startup probes.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                timeoutSeconds:
+                                  description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                              type: object
+                            scheduler:
+                              description: Scheduler defines probe overrides for kube-scheduler, taking precedence over global probe settings.
+                              properties:
+                                liveness:
+                                  description: Liveness defines parameters for the liveness probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                                readiness:
+                                  description: Readiness defines parameters for the readiness probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                                startup:
+                                  description: Startup defines parameters for the startup probe.
+                                  properties:
+                                    failureThreshold:
+                                      description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    initialDelaySeconds:
+                                      description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                      format: int32
+                                      minimum: 0
+                                      type: integer
+                                    periodSeconds:
+                                      description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    successThreshold:
+                                      description: |-
+                                        SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                        Must be 1 for liveness and startup probes.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    timeoutSeconds:
+                                      description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                  type: object
+                              type: object
+                            startup:
+                              description: Startup defines default parameters for startup probes of all Control Plane components.
+                              properties:
+                                failureThreshold:
+                                  description: FailureThreshold is the consecutive failure count required to consider the probe failed.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                initialDelaySeconds:
+                                  description: InitialDelaySeconds is the number of seconds after the container has started before the probe is initiated.
+                                  format: int32
+                                  minimum: 0
+                                  type: integer
+                                periodSeconds:
+                                  description: PeriodSeconds is how often (in seconds) to perform the probe.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                successThreshold:
+                                  description: |-
+                                    SuccessThreshold is the minimum consecutive successes for the probe to be considered successful.
+                                    Must be 1 for liveness and startup probes.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                                timeoutSeconds:
+                                  description: TimeoutSeconds is the number of seconds after which the probe times out.
+                                  format: int32
+                                  minimum: 1
+                                  type: integer
+                              type: object
+                          type: object
                         registrySettings:
                           default:
                             apiServerImage: kube-apiserver
@@ -6904,9 +7295,6 @@ spec:
                             type: object
                           type: array
                       type: object
-                      x-kubernetes-validations:
-                        - message: parentRefs must not specify port or sectionName, these are set automatically by Kamaji
-                          rule: '!has(self.parentRefs) || size(self.parentRefs) == 0 || self.parentRefs.all(ref, !has(ref.port) && !has(ref.sectionName))'
                     ingress:
                       description: Defining the options for an Optional Ingress which will expose API Server of the Tenant Control Plane
                       properties:
@@ -7196,8 +7584,8 @@ spec:
                   properties:
                     address:
                       description: |-
-                        Address where API server of will be exposed.
-                        In case of LoadBalancer Service, this can be empty in order to use the exposed IP provided by the cloud controller manager.
+                        Address where API server will be exposed.
+                        In the case of LoadBalancer Service, this can be empty in order to use the exposed IP provided by the cloud controller manager.
                       type: string
                     allowAddressAsExternalIP:
                       description: |-
@@ -7227,6 +7615,7 @@ spec:
                         for IPv6 from the CIDR 2001:db8:abcd::/64 the resulting DNS Service IP will be 2001:db8:abcd::10.
                       items:
                         type: string
+                      maxItems: 8
                       type: array
                     loadBalancerClass:
                       description: |-
@@ -7248,21 +7637,34 @@ spec:
                         Example: {"192.168.1.0/24", "10.0.0.0/8"}
                       items:
                         type: string
+                      maxItems: 16
                       type: array
+                      x-kubernetes-validations:
+                        - message: all LoadBalancer source range entries must be valid CIDR
+                          rule: self.all(r, isCIDR(r))
                     podCidr:
                       default: 10.244.0.0/16
                       description: 'CIDR for Kubernetes Pods: if empty, defaulted to 10.244.0.0/16.'
                       type: string
+                      x-kubernetes-validations:
+                        - message: podCidr must be empty or a valid CIDR
+                          rule: self == '' || isCIDR(self)
                     port:
                       default: 6443
-                      description: Port where API server of will be exposed
+                      description: Port where API server will be exposed
                       format: int32
                       type: integer
                     serviceCidr:
                       default: 10.96.0.0/16
                       description: 'CIDR for Kubernetes Services: if empty, defaulted to 10.96.0.0/16.'
                       type: string
+                      x-kubernetes-validations:
+                        - message: serviceCidr must be empty or a valid CIDR
+                          rule: self == '' || isCIDR(self)
                   type: object
+                  x-kubernetes-validations:
+                    - message: all DNS service IPs must be part of the Service CIDR
+                      rule: '!has(self.dnsServiceIPs) || self.dnsServiceIPs.all(r, cidr(self.serviceCidr).containsIP(r))'
                 writePermissions:
                   description: |-
                     WritePermissions allows to select which operations (create, delete, update) must be blocked:

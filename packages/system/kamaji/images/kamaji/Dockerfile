@@ -1,7 +1,7 @@
 # Build the manager binary
 FROM golang:1.26 AS builder
 
-ARG VERSION=edge-26.2.4
+ARG VERSION=26.3.5-edge
 ARG TARGETOS
 ARG TARGETARCH
 
