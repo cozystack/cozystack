@@ -20,6 +20,8 @@ spec:
   - name: DrbdOptions/auto-diskful-allow-cleanup
     value: {{ .Values.linstor.autoDiskful.allowCleanup | quote }}
   {{- end }}
+  - name: DrbdOptions/Net/verify-alg
+    value: "crc32c"
   - name: DrbdOptions/Net/connect-int
     value: "15"
   - name: DrbdOptions/Net/ping-int
