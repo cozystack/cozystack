@@ -114,15 +114,29 @@
         }
       }
     },
-    "subnets": {
-      "description": "Additional subnets",
+    "networks": {
+      "description": "Networks to attach the VM to.",
       "type": "array",
       "default": [],
       "items": {
         "type": "object",
         "properties": {
           "name": {
-            "description": "Subnet name",
+            "description": "Network attachment name.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "subnets": {
+      "description": "Deprecated: use networks instead.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Network attachment name.",
             "type": "string"
           }
         }
@@ -149,20 +163,6 @@
       "description": "Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map",
       "type": "string",
       "default": ""
-    },
-    "networks": {
-      "description": "Networks to attach the VM to.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Network attachment name.",
-            "type": "string"
-          }
-        }
-      }
     },
     "resources": {
       "description": "Resource configuration for the virtual machine.",
@@ -216,20 +216,6 @@
       "default": [],
       "items": {
         "type": "string"
-      }
-    },
-    "subnets": {
-      "description": "Deprecated: use networks instead.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Network attachment name.",
-            "type": "string"
-          }
-        }
       }
     },
     "cloudInit": {

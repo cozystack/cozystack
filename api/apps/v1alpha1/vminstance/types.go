@@ -38,9 +38,12 @@ type ConfigSpec struct {
 	// List of disks to attach.
 	// +kubebuilder:default:={}
 	Disks []Disk `json:"disks,omitempty"`
-	// Additional subnets
+	// Networks to attach the VM to.
 	// +kubebuilder:default:={}
-	Subnets []Subnet `json:"subnets,omitempty"`
+	Networks []Network `json:"networks,omitempty"`
+	// Deprecated: use networks instead.
+	// +kubebuilder:default:={}
+	Subnets []Network `json:"subnets,omitempty"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	// +kubebuilder:default:={}
 	Gpus []GPU `json:"gpus,omitempty"`
@@ -73,6 +76,11 @@ type GPU struct {
 	Name string `json:"name"`
 }
 
+type Network struct {
+	// Network attachment name.
+	Name string `json:"name,omitempty"`
+}
+
 type Resources struct {
 	// Number of CPU cores allocated.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
@@ -80,11 +88,6 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 	// Number of CPU sockets (vCPU topology).
 	Sockets resource.Quantity `json:"sockets,omitempty"`
-}
-
-type Subnet struct {
-	// Subnet name
-	Name string `json:"name,omitempty"`
 }
 
 // +kubebuilder:validation:Enum="PortList";"WholeIP"
