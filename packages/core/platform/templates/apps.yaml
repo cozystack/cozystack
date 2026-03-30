@@ -36,6 +36,9 @@ stringData:
       branding:
         {{- . | toYaml | nindent 8 }}
       {{- end }}
+      cpu-allocation-ratio: {{ .Values.resources.cpuAllocationRatio | quote }}
+      memory-allocation-ratio: {{ .Values.resources.memoryAllocationRatio | quote }}
+      ephemeral-storage-allocation-ratio: {{ .Values.resources.ephemeralStorageAllocationRatio | quote }}
       {{- with .Values.scheduling }}
       scheduling:
         {{- . | toYaml | nindent 8 }}
