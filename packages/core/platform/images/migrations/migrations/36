@@ -7,12 +7,16 @@
 
 set -e
 
+if ! kubectl get crd vminstances.apps.cozystack.io >/dev/null 2>&1; then
+  echo "VMInstance CRD not found, skipping migration"
+else
 kubectl get vminstances.apps.cozystack.io -A -o json | jq -r '
   .items[]
   | select(.spec.subnets != null and (.spec.subnets | length) > 0)
   | select(.spec.networks == null or (.spec.networks | length) == 0)
   | "kubectl -n \(.metadata.namespace) patch vminstances.apps.cozystack.io \(.metadata.name) --type=json -p '\''[{\"op\":\"add\",\"path\":\"/spec/networks\",\"value\":\(.spec.subnets|tojson)}]'\''"
 ' | sh -ex
+fi
 
 # Write version to cozystack-version config
 kubectl create configmap -n cozy-system cozystack-version --from-literal=version=37 --dry-run=client -o yaml | kubectl apply -f-
