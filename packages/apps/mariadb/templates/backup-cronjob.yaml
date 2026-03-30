@@ -14,9 +14,6 @@ spec:
     spec:
       backoffLimit: 2
       template:
-        spec:
-          restartPolicy: OnFailure
-      template:
         metadata:
           annotations:
             checksum/config: {{ include (print $.Template.BasePath "/backup-script.yaml") . | sha256sum }}
@@ -44,7 +41,7 @@ spec:
                   name: {{ .Release.Name }}
                   key: root-password
             - name: MYSQL_HOST
-              value: {{ .Release.Name }}-secondary
+              value: "{{ .Release.Name }}-{{ if eq (int .Values.replicas) 1 }}primary{{ else }}secondary{{ end }}"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
