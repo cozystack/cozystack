@@ -136,12 +136,8 @@ jobs:
           git config user.email "217169706+cozystack-bot@users.noreply.github.com"
           git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
           TARGET="$(git rev-parse "${VTAG}^{}")"
-          if git rev-parse -q --verify "refs/tags/${SUBTAG}" >/dev/null; then
-            test "$(git rev-list -n1 "${SUBTAG}")" = "$TARGET"
-          else
-            git tag "${SUBTAG}" "$TARGET"
-          fi
-          git push origin "refs/tags/${SUBTAG}" 2>&1 || echo "Tag ${SUBTAG} already exists on remote"
+          git tag -f "${SUBTAG}" "$TARGET"
+          git push -f origin "refs/tags/${SUBTAG}"
 
       # Create or reuse draft release
       - name: Create / reuse draft release
