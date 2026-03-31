@@ -123,7 +123,6 @@ jobs:
           git config --unset-all http.https://github.com/.extraheader || true
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
-          git push origin HEAD || true
 
       # Tag the api/apps/v1alpha1 submodule for pkg.go.dev
       - name: Tag API submodule
@@ -142,7 +141,7 @@ jobs:
           else
             git tag "${SUBTAG}" "$TARGET"
           fi
-          git push origin "${SUBTAG}"
+          git push origin "refs/tags/${SUBTAG}" 2>&1 || echo "Tag ${SUBTAG} already exists on remote"
 
       # Create or reuse draft release
       - name: Create / reuse draft release
