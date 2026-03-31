@@ -70,6 +70,8 @@ spec:
             memory:
               guest: {{ .group.resources.memory }}
             {{- end }}
+            resources:
+              {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" .group.ephemeralStorage) $) | nindent 14 }}
           evictionStrategy: External
           volumes:
           - name: system
