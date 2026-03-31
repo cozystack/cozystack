@@ -119,6 +119,7 @@ data:
         "cniConfigDir": "/host/etc/cni/net.d",
         "multusAutoconfigDir": "/host/etc/cni/net.d",
         "multusConfigFile": "auto",
+        "multusMasterCNI": "05-cilium.conflist",
         "socketDir": "/host/run/multus/"
     }
 ---
