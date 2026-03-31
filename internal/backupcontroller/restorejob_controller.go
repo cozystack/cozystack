@@ -17,11 +17,15 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
+
+const restoreJobFinalizer = "backups.cozystack.io/cleanup-velero-restore"
 
 // RestoreJobReconciler reconciles RestoreJob objects.
 // It routes RestoreJobs to strategy-specific handlers based on the strategy
@@ -47,6 +51,27 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		logger.Error(err, "failed to get RestoreJob")
 		return ctrl.Result{}, err
+	}
+
+	// Handle deletion: clean up Velero Restore
+	if !restoreJob.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(restoreJob, restoreJobFinalizer) {
+			r.cleanupVeleroRestore(ctx, restoreJob)
+			controllerutil.RemoveFinalizer(restoreJob, restoreJobFinalizer)
+			if err := r.Update(ctx, restoreJob); err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.V(1).Info("removed finalizer and cleaned up Velero Restore", "restoreJob", restoreJob.Name)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Ensure finalizer is present
+	if !controllerutil.ContainsFinalizer(restoreJob, restoreJobFinalizer) {
+		controllerutil.AddFinalizer(restoreJob, restoreJobFinalizer)
+		if err := r.Update(ctx, restoreJob); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// If already completed, no need to reconcile
@@ -103,17 +128,6 @@ func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// getTargetApplicationRef determines the effective target application reference.
-// According to DESIGN.md, if spec.targetApplicationRef is omitted, drivers SHOULD
-// restore into backup.spec.applicationRef.
-// The returned reference is normalized to ensure APIGroup has a default value.
-func (r *RestoreJobReconciler) getTargetApplicationRef(restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup) corev1.TypedLocalObjectReference {
-	if restoreJob.Spec.TargetApplicationRef != nil {
-		return backupsv1alpha1.NormalizeApplicationRef(*restoreJob.Spec.TargetApplicationRef)
-	}
-	return backup.Spec.ApplicationRef
-}
-
 // markRestoreJobFailed updates the RestoreJob status to Failed with the given message.
 func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
@@ -137,4 +151,27 @@ func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restore
 	}
 	logger.Debug("RestoreJob failed", "message", message)
 	return ctrl.Result{}, nil
+}
+
+// cleanupVeleroRestore deletes all Velero Restores and resourceModifier
+// ConfigMaps owned by this RestoreJob (identified by labels).
+func (r *RestoreJobReconciler) cleanupVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob) {
+	logger := log.FromContext(ctx)
+	opts := []client.DeleteAllOfOption{
+		client.InNamespace(veleroNamespace),
+		client.MatchingLabels{
+			backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
+			backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
+		},
+	}
+
+	if err := r.DeleteAllOf(ctx, &velerov1.Restore{}, opts...); err != nil {
+		logger.Error(err, "failed to delete Velero Restore(s)")
+		r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "CleanupFailed",
+			fmt.Sprintf("Failed to delete Velero Restore: %v", err))
+	}
+
+	if err := r.DeleteAllOf(ctx, &corev1.ConfigMap{}, opts...); err != nil {
+		logger.Error(err, "failed to delete resourceModifiers ConfigMap(s)")
+	}
 }

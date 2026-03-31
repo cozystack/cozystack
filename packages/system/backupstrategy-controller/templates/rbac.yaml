@@ -11,25 +11,60 @@ rules:
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupclasses"]
   verbs: ["get", "list", "watch"]
-# BackupJob / RestoreJob: reconcile and update status
+# BackupJob / RestoreJob: reconcile; update for RestoreJob finalizers
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupjobs", "restorejobs"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "update", "patch"]
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backupjobs/status", "restorejobs/status"]
   verbs: ["get", "update", "patch"]
-# Backup: create after Velero backup completes
+# Backup: create after Velero job completes; update/patch for BackupReconciler finalizers
 - apiGroups: ["backups.cozystack.io"]
   resources: ["backups"]
-  verbs: ["create", "get", "list", "watch"]
-# Application refs (e.g. VMInstance, VirtualMachine) for backup/restore scope
+  verbs: ["create", "get", "list", "watch", "update", "patch"]
+# Pods: BackupJob lists virt-launcher pods by label (manager cache uses cluster-scoped list/watch)
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+# ConfigMaps: controller-runtime cache requires cluster-scoped list/watch;
+# create/update/delete is scoped to cozy-velero via the Role below.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+# Application refs (e.g. VMInstance) for backup/restore scope
 - apiGroups: ["apps.cozystack.io"]
   resources: ["*"]
   verbs: ["get", "list", "watch"]
-# Velero Backup/Restore in cozy-velero namespace
+# KubeVirt: pre-restore halts VMs and checks VMI shutdown
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines"]
+  verbs: ["get", "update"]
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachineinstances"]
+  verbs: ["get"]
+# CDI DataVolumes: pre-restore deletes DVs so CDI doesn't recreate PVCs after rename
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
+  verbs: ["delete"]
+# HelmReleases: pre-restore suspends HRs to prevent Flux interference
+- apiGroups: ["helm.toolkit.fluxcd.io"]
+  resources: ["helmreleases"]
+  verbs: ["get", "update"]
+# PVCs and PVs: pre-restore renames PVCs (delete old, create new) and patches PV reclaim policy
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "update"]
+# Velero Backup/Restore/DataUpload in cozy-velero namespace (DataUpload: enrich BackupJob failure messages)
 - apiGroups: ["velero.io"]
-  resources: ["backups", "restores"]
-  verbs: ["create", "get", "list", "watch", "update", "patch"]
+  resources: ["backups", "restores", "datauploads"]
+  verbs: ["create", "get", "list", "watch", "update", "patch", "delete", "deletecollection"]
+# Velero DeleteBackupRequest: used by BackupReconciler to delete Velero backups with their storage data
+- apiGroups: ["velero.io"]
+  resources: ["deletebackuprequests"]
+  verbs: ["create", "get", "list", "watch"]
 # Events from Recorder.Event() calls
 - apiGroups: [""]
   resources: ["events"]
@@ -38,3 +73,14 @@ rules:
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+# To create ResourceModifiers in ConfigMaps for Restore in Velero install namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backups.cozystack.io:strategy-controller:velero-configmaps
+  namespace: cozy-velero
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "get", "list", "delete", "deletecollection", "patch", "update"]
