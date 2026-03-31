@@ -37,6 +37,15 @@ spec:
   displayHtmlName: {{ $brandingConfig.branding }}
   {{- end }}
   {{- end }}
+  {{- if or .Values.login.userRegistration .Values.login.verifyEmail }}
+  login:
+    userRegistration: {{ .Values.login.userRegistration }}
+    verifyEmail: {{ .Values.login.verifyEmail }}
+  {{- end }}
+  {{- with .Values.smtp }}
+  smtp:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   sessions:
     ssoSessionSettings:
       idleTimeout: 86400

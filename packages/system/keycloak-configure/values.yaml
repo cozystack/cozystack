@@ -1,0 +1,23 @@
+login:
+  userRegistration: false
+  verifyEmail: false
+
+smtp: {}
+#  template:
+#    from: "noreply@example.com"
+#    fromDisplayName: ""
+#    replyTo: ""
+#    replyToDisplayName: ""
+#    envelopeFrom: ""
+#  connection:
+#    host: "smtp.example.com"
+#    port: 587
+#    enableSSL: false
+#    enableStartTLS: true
+#    authentication:
+#      username:
+#        value: "user"
+#      password:
+#        secretKeyRef:
+#          name: "smtp-credentials"
+#          key: "password"
