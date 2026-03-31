@@ -37,10 +37,9 @@ spec:
   displayHtmlName: {{ $brandingConfig.branding }}
   {{- end }}
   {{- end }}
-  {{- if or .Values.login.userRegistration .Values.login.verifyEmail }}
+  {{- with .Values.login }}
   login:
-    userRegistration: {{ .Values.login.userRegistration }}
-    verifyEmail: {{ .Values.login.verifyEmail }}
+    {{- toYaml . | nindent 4 }}
   {{- end }}
   {{- with .Values.smtp }}
   smtp:
