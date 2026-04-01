@@ -75,7 +75,7 @@ spec:
             - --cookie-secure=true
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
             - --skip-provider-button
-            - --scope=openid email profile offline_access
+            - --scope=openid email profile offline_access kubernetes-client
             {{- if eq $oidcInsecureSkipVerify "true" }}
             - --ssl-insecure-skip-verify=true
             {{- end }}
