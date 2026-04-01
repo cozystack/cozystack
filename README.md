@@ -6,7 +6,8 @@
 [![Support](https://img.shields.io/badge/$-support-12a0df.svg?style=flat)](https://cozystack.io/support/)
 [![Active](http://img.shields.io/badge/Status-Active-green.svg)](https://github.com/cozystack/cozystack)
 [![GitHub Release](https://img.shields.io/github/release/cozystack/cozystack.svg?style=flat)](https://github.com/cozystack/cozystack/releases/latest)
-[![GitHub Commit](https://img.shields.io/github/commit-activity/y/cozystack/cozystack)](https://github.com/cozystack/cozystack/graphs/contributors) 
+[![GitHub Commit](https://img.shields.io/github/commit-activity/y/cozystack/cozystack)](https://github.com/cozystack/cozystack/graphs/contributors)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/10177/badge)](https://www.bestpractices.dev/projects/10177)
 
 # Cozystack
 
