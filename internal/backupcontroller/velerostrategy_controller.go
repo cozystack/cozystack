@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -72,6 +73,41 @@ const (
 
 func stringPtr(s string) *string {
 	return &s
+}
+
+// vmInstanceResources contains VM-specific underlying resources discovered during backup.
+type vmInstanceResources struct {
+	DataVolumes []backupsv1alpha1.DataVolumeResource `json:"dataVolumes,omitempty"`
+	IP          string                                `json:"ip,omitempty"`
+	MAC         string                                `json:"mac,omitempty"`
+}
+
+// marshalUnderlyingResources serializes application-specific data into a
+// runtime.RawExtension suitable for Backup.Status.UnderlyingResources.
+func marshalUnderlyingResources(data interface{}) (*runtime.RawExtension, error) {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	return &runtime.RawExtension{Raw: raw}, nil
+}
+
+// getVMInstanceResources extracts VMInstance-specific resources from the opaque blob.
+// The caller is responsible for checking that the application kind is VMInstance
+// (via backup.Spec.ApplicationRef.Kind) before calling this function.
+// Returns nil if ur is nil or has no VM-specific data.
+func getVMInstanceResources(ur *runtime.RawExtension) *vmInstanceResources {
+	if ur == nil || len(ur.Raw) == 0 {
+		return nil
+	}
+	var res vmInstanceResources
+	if err := json.Unmarshal(ur.Raw, &res); err != nil {
+		return nil
+	}
+	if len(res.DataVolumes) == 0 && res.IP == "" && res.MAC == "" {
+		return nil
+	}
+	return &res
 }
 
 func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1alpha1.BackupJob, resolved *ResolvedBackupConfig) (ctrl.Result, error) {
@@ -218,10 +254,10 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-// collectUnderlyingResources discovers resources associated with a VM application
-// (dataVolumes, IP/MAC addresses) that need to be backed up and restored.
-// Returns nil if the application is not a VM type or has no underlying resources.
-func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, app *unstructured.Unstructured, appKind, ns string) (*backupsv1alpha1.UnderlyingResources, error) {
+// collectUnderlyingResources discovers resources associated with an application
+// that need to be backed up and restored. Returns a map keyed by application kind.
+// Returns nil if the application type has no underlying resources to collect.
+func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, app *unstructured.Unstructured, appKind, ns string) (*runtime.RawExtension, error) {
 	logger := getLogger(ctx)
 
 	if appKind != vmInstanceKind {
@@ -281,11 +317,11 @@ func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, ap
 		return nil, nil
 	}
 
-	return &backupsv1alpha1.UnderlyingResources{
+	return marshalUnderlyingResources(vmInstanceResources{
 		DataVolumes: dataVolumes,
 		IP:          ip,
 		MAC:         mac,
-	}, nil
+	})
 }
 
 func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, strategy *strategyv1alpha1.Velero, resolved *ResolvedBackupConfig) error {
@@ -323,8 +359,8 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 	}
 
 	// Add label selectors for underlying VMDisk HelmReleases
-	if underlyingResources != nil {
-		for _, dv := range underlyingResources.DataVolumes {
+	if vmRes := getVMInstanceResources(underlyingResources); vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
 			veleroBackupSpec.OrLabelSelectors = append(veleroBackupSpec.OrLabelSelectors, &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					appKindLabel: vmDiskAppKind,
@@ -332,20 +368,15 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 				},
 			})
 		}
-		if len(underlyingResources.DataVolumes) > 0 {
-			logger.Debug("added VMDisk label selectors to Velero backup", "count", len(underlyingResources.DataVolumes))
+		if len(vmRes.DataVolumes) > 0 {
+			logger.Debug("added VMDisk label selectors to Velero backup", "count", len(vmRes.DataVolumes))
 		}
 	}
 
 	// Serialize underlying resources as annotation to persist across reconcile cycles
 	annotations := map[string]string{}
-	if underlyingResources != nil {
-		urJSON, err := json.Marshal(underlyingResources)
-		if err != nil {
-			logger.Error(err, "failed to marshal underlying resources annotation")
-		} else {
-			annotations[underlyingResourcesAnnotation] = string(urJSON)
-		}
+	if underlyingResources != nil && len(underlyingResources.Raw) > 0 {
+		annotations[underlyingResourcesAnnotation] = string(underlyingResources.Raw)
 	}
 
 	veleroBackup := &velerov1.Backup{
@@ -400,13 +431,9 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 	}
 
 	// Read underlying resources from Velero Backup annotation
-	var underlyingResources *backupsv1alpha1.UnderlyingResources
+	var underlyingResources *runtime.RawExtension
 	if urJSON, ok := veleroBackup.Annotations[underlyingResourcesAnnotation]; ok && urJSON != "" {
-		underlyingResources = &backupsv1alpha1.UnderlyingResources{}
-		if err := json.Unmarshal([]byte(urJSON), underlyingResources); err != nil {
-			logger.Error(err, "failed to unmarshal underlying resources from Velero Backup annotation")
-			underlyingResources = nil
-		}
+		underlyingResources = &runtime.RawExtension{Raw: []byte(urJSON)}
 	}
 
 	// Note: No OwnerReferences set on Backup. The Backup must survive BackupJob deletion
@@ -498,8 +525,11 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 	}
 
 	if len(veleroRestoreList.Items) == 0 {
+		// Resolve underlying resources once; prefer Backup status, fall back to Velero annotation.
+		ur := r.resolveUnderlyingResourcesForRestore(ctx, backup, veleroBackupName)
+
 		// Pre-restore: graceful shutdown, suspend HRs, rename PVCs
-		ready, result, err := r.prepareForRestore(ctx, restoreJob, backup)
+		ready, result, err := r.prepareForRestore(ctx, restoreJob, backup, ur)
 		if err != nil {
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("pre-restore preparation failed: %v", err))
 		}
@@ -510,7 +540,7 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 
 		// Create Velero Restore
 		logger.Debug("Velero Restore not found, creating new one")
-		if err := r.createVeleroRestore(ctx, restoreJob, backup, veleroStrategy, veleroBackupName); err != nil {
+		if err := r.createVeleroRestore(ctx, restoreJob, backup, veleroStrategy, veleroBackupName, ur); err != nil {
 			logger.Error(err, "failed to create Velero Restore")
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to create Velero Restore: %v", err))
 		}
@@ -597,10 +627,9 @@ func marshalPatchData(v interface{}) (string, error) {
 //   - PVC adoption: always adds cdi.kubevirt.io/allowClaimAdoption=true to all
 //     restored PVCs so CDI can adopt them when a HelmRelease of VMDisk recreates a DV.
 //   - OVN IP/MAC: sets OVN annotations on the VirtualMachine for correct ssh access to restored VM.
-func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup) (*corev1.ConfigMap, error) {
+func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension) (*corev1.ConfigMap, error) {
 	logger := getLogger(ctx)
 
-	ur := backup.Status.UnderlyingResources
 	targetNS := backup.Namespace
 
 	var rules []resourceModifierRule
@@ -626,13 +655,13 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 	})
 
 	// OVN IP/MAC annotations on VirtualMachine for correct network identity after restore.
-	if ur != nil && (ur.IP != "" || ur.MAC != "") {
+	if vmRes := getVMInstanceResources(ur); vmRes != nil && (vmRes.IP != "" || vmRes.MAC != "") {
 		ovnAnnotations := map[string]string{}
-		if ur.IP != "" {
-			ovnAnnotations[ovnIPAnnotation] = ur.IP
+		if vmRes.IP != "" {
+			ovnAnnotations[ovnIPAnnotation] = vmRes.IP
 		}
-		if ur.MAC != "" {
-			ovnAnnotations[ovnMACAnnotation] = ur.MAC
+		if vmRes.MAC != "" {
+			ovnAnnotations[ovnMACAnnotation] = vmRes.MAC
 		}
 		vmPatch, err := marshalPatchData(map[string]interface{}{
 			"spec": map[string]interface{}{
@@ -706,11 +735,11 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 	return cm, nil
 }
 
-// resolveUnderlyingResourcesForRestore returns disk (and network) metadata for symmetric
+// resolveUnderlyingResourcesForRestore returns underlying resources for symmetric
 // restore label selectors. Velero Backup annotation is used when Backup.status was empty
 // (e.g. CRD without underlyingResources in schema).
-func (r *RestoreJobReconciler) resolveUnderlyingResourcesForRestore(ctx context.Context, backup *backupsv1alpha1.Backup, veleroBackupName string) *backupsv1alpha1.UnderlyingResources {
-	if backup.Status.UnderlyingResources != nil && len(backup.Status.UnderlyingResources.DataVolumes) > 0 {
+func (r *RestoreJobReconciler) resolveUnderlyingResourcesForRestore(ctx context.Context, backup *backupsv1alpha1.Backup, veleroBackupName string) *runtime.RawExtension {
+	if backup.Status.UnderlyingResources != nil && len(backup.Status.UnderlyingResources.Raw) > 0 {
 		return backup.Status.UnderlyingResources
 	}
 	vb := &velerov1.Backup{}
@@ -718,11 +747,7 @@ func (r *RestoreJobReconciler) resolveUnderlyingResourcesForRestore(ctx context.
 		return backup.Status.UnderlyingResources
 	}
 	if urJSON, ok := vb.Annotations[underlyingResourcesAnnotation]; ok && urJSON != "" {
-		ur := &backupsv1alpha1.UnderlyingResources{}
-		if err := json.Unmarshal([]byte(urJSON), ur); err != nil {
-			return backup.Status.UnderlyingResources
-		}
-		return ur
+		return &runtime.RawExtension{Raw: []byte(urJSON)}
 	}
 	return backup.Status.UnderlyingResources
 }
@@ -755,19 +780,20 @@ func shortHash(input string) string {
 //
 // Returns true when preparation is complete and the Velero Restore can be created.
 // Returns false (with a requeue) when still waiting for VM shutdown.
-func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup) (ready bool, result ctrl.Result, err error) {
+func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension) (ready bool, result ctrl.Result, err error) {
 	ns := restoreJob.Namespace
 	appName := backup.Spec.ApplicationRef.Name
 	appKind := backup.Spec.ApplicationRef.Kind
 	origSuffix := "-orig-" + shortHash(restoreJob.Name)
 
 	// --- Step 1: Suspend HelmReleases ---
+	vmRes := getVMInstanceResources(ur)
 	hrNames := []string{}
 	if appKind == vmInstanceKind {
 		hrNames = append(hrNames, vmNamePrefix+appName)
 	}
-	if backup.Status.UnderlyingResources != nil {
-		for _, dv := range backup.Status.UnderlyingResources.DataVolumes {
+	if vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
 			hrNames = append(hrNames, dv.DataVolumeName)
 		}
 	}
@@ -802,8 +828,8 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 	// --- Step 3: Rename PVCs to <name>-orig-<hash> ---
 	// Must happen BEFORE deleting DVs: the PVC has an ownerReference to the DV,
 	// so deleting the DV first would cascade-delete the PVC via garbage collection.
-	if backup.Status.UnderlyingResources != nil {
-		for _, dv := range backup.Status.UnderlyingResources.DataVolumes {
+	if vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
 			if err := r.renamePVC(ctx, restoreJob, ns, dv.DataVolumeName, dv.DataVolumeName+origSuffix); err != nil {
 				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
 					fmt.Sprintf("Failed to keep old PVC %s: %v", dv.DataVolumeName, err))
@@ -812,8 +838,8 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 	}
 
 	// --- Step 4: Delete DataVolumes so CDI doesn't recreate PVCs ---
-	if backup.Status.UnderlyingResources != nil {
-		for _, dv := range backup.Status.UnderlyingResources.DataVolumes {
+	if vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
 			if err := r.deleteDataVolume(ctx, ns, dv.DataVolumeName); err != nil {
 				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
 					fmt.Sprintf("Failed to delete DataVolume %s: %v", dv.DataVolumeName, err))
@@ -978,7 +1004,7 @@ func (r *RestoreJobReconciler) renamePVC(ctx context.Context, restoreJob *backup
 }
 
 // createVeleroRestore creates a Velero Restore resource.
-func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, strategy *strategyv1alpha1.Velero, veleroBackupName string) error {
+func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, strategy *strategyv1alpha1.Velero, veleroBackupName string, ur *runtime.RawExtension) error {
 	logger := getLogger(ctx)
 	logger.Debug("createVeleroRestore called", "strategy", strategy.Name, "veleroBackupName", veleroBackupName)
 
@@ -1009,11 +1035,9 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 	veleroRestoreSpec.BackupName = veleroBackupName
 
 	// Match backup: add OR selectors for each underlying VMDisk so restore applies the same
-	// scope as the intended backup (see createVeleroBackup). Prefer Backup status; fall back
-	// to Velero Backup annotation when status was pruned by an older CRD.
-	ur := r.resolveUnderlyingResourcesForRestore(ctx, backup, veleroBackupName)
-	if ur != nil {
-		for _, dv := range ur.DataVolumes {
+	// scope as the intended backup (see createVeleroBackup).
+	if vmRes := getVMInstanceResources(ur); vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
 			veleroRestoreSpec.OrLabelSelectors = append(veleroRestoreSpec.OrLabelSelectors, &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					appKindLabel: vmDiskAppKind,
@@ -1021,13 +1045,13 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 				},
 			})
 		}
-		if len(ur.DataVolumes) > 0 {
-			logger.Debug("added VMDisk label selectors to Velero restore", "count", len(ur.DataVolumes))
+		if len(vmRes.DataVolumes) > 0 {
+			logger.Debug("added VMDisk label selectors to Velero restore", "count", len(vmRes.DataVolumes))
 		}
 	}
 
 	// Create resourceModifiers ConfigMap
-	resourceModifierCM, err := r.createResourceModifiersConfigMap(ctx, restoreJob, backup)
+	resourceModifierCM, err := r.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur)
 	if err != nil {
 		return fmt.Errorf("failed to create resourceModifiers ConfigMap: %w", err)
 	}
