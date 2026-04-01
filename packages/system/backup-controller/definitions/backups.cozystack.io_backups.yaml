@@ -144,27 +144,12 @@ spec:
                 type: object
               underlyingResources:
                 description: |-
-                  UnderlyingResources contains information about underlying resources
-                  discovered during backup (e.g., VM disks, IP/MAC addresses).
-                properties:
-                  dataVolumes:
-                    items:
-                      properties:
-                        applicationName:
-                          description: Cozystack application name for this disk (e.g. ubuntu-source).
-                          type: string
-                        dataVolumeName:
-                          description: Name of the DataVolume/PVC (e.g. vm-disk-ubuntu-source).
-                          type: string
-                      type: object
-                    type: array
-                  ip:
-                    description: OVN IP address assigned to the application at backup time.
-                    type: string
-                  mac:
-                    description: OVN MAC address assigned to the application at backup time.
-                    type: string
+                  Holds application-specific resource metadata discovered during backup.
+                  The payload is a self-typed JSON object carrying an inlined TypeMeta
+                  (kind/apiVersion) so the consuming controller can dispatch on the
+                  application kind.
                 type: object
+                x-kubernetes-preserve-unknown-fields: true
               conditions:
                 description: Conditions represents the latest available observations
                   of a Backup's state.
