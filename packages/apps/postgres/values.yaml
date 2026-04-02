@@ -43,7 +43,7 @@ external: false
 ## @value v13
 
 ## @param {Version} version - PostgreSQL major version to deploy
-version: v18
+version: v17
 
 ## @section Application-specific parameters
 ##

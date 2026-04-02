@@ -81,7 +81,7 @@
     "version": {
       "description": "PostgreSQL major version to deploy",
       "type": "string",
-      "default": "v18",
+      "default": "v17",
       "enum": [
         "v18",
         "v17",
