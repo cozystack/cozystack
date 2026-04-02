@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrei Kvapil <kvapss@gmail.com>
+Date: Thu, 03 Apr 2026 01:00:00 +0100
+Subject: [PATCH] fix(drbd): handle stale bitmap on diskful-to-diskless transition
+
+When a DRBD peer transitions from diskful to diskless (e.g. during
+toggle-disk or resource deletion), drbdadm adjust may fail with:
+  "Can not drop the bitmap when both sides have a disk"
+
+Fix: catch this error in DrbdLayer, del-peer + forget-peer to clear
+stale bitmap from kernel and metadata, then retry adjust.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+Signed-off-by: Andrei Kvapil <kvapss@gmail.com>
+---
+
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java b/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java
+index 78b8195..cece31c 100644
+--- a/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/drbd/DrbdLayer.java
+@@ -29,6 +29,10 @@ import com.linbit.linstor.core.objects.Snapshot;
+ import com.linbit.linstor.core.objects.Volume;
+ import com.linbit.linstor.core.pojos.LocalPropsChangePojo;
+ import com.linbit.linstor.core.types.TcpPortNumber;
++
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
+ import com.linbit.linstor.dbdrivers.DatabaseException;
+ import com.linbit.linstor.layer.DeviceLayer;
+ import com.linbit.linstor.layer.drbd.drbdstate.DiskState;
+@@ -847,8 +851,73 @@ public class DrbdLayer implements DeviceLayer
+                         }
+                         catch (ExtCmdFailedException extCmdExc)
+                         {
+-                            restoreBackupResFile(drbdRscData);
+-                            throw extCmdExc;
++                            if (isBitmapDropError(extCmdExc))
++                            {
++                                int peerNodeId = parseBitmapDropPeerNodeId(extCmdExc);
++                                if (peerNodeId >= 0)
++                                {
++                                    errorReporter.logWarning(
++                                        "DRBD adjust failed with stale bitmap for peer node-id %d " +
++                                            "on resource %s, removing peer and clearing bitmap",
++                                        peerNodeId,
++                                        drbdRscData.getSuffixedResourceName()
++                                    );
++                                    try
++                                    {
++                                        drbdUtils.deletePeer(
++                                            drbdRscData.getSuffixedResourceName(),
++                                            peerNodeId
++                                        );
++                                    }
++                                    catch (ExtCmdFailedException delPeerExc)
++                                    {
++                                        errorReporter.logDebug(
++                                            "del-peer for node-id %d failed: %s",
++                                            peerNodeId,
++                                            delPeerExc.getMessage()
++                                        );
++                                    }
++                                    try
++                                    {
++                                        drbdUtils.forgetPeer(
++                                            drbdRscData.getSuffixedResourceName(),
++                                            peerNodeId
++                                        );
++                                    }
++                                    catch (ExtCmdFailedException forgetExc)
++                                    {
++                                        errorReporter.logDebug(
++                                            "forget-peer for node-id %d failed (resource may be diskless): %s",
++                                            peerNodeId,
++                                            forgetExc.getMessage()
++                                        );
++                                    }
++                                    try
++                                    {
++                                        drbdUtils.adjust(
++                                            drbdRscData,
++                                            false,
++                                            skipDisk,
++                                            false
++                                        );
++                                    }
++                                    catch (ExtCmdFailedException retryExc)
++                                    {
++                                        restoreBackupResFile(drbdRscData);
++                                        throw retryExc;
++                                    }
++                                }
++                                else
++                                {
++                                    restoreBackupResFile(drbdRscData);
++                                    throw extCmdExc;
++                                }
++                            }
++                            else
++                            {
++                                restoreBackupResFile(drbdRscData);
++                                throw extCmdExc;
++                            }
+                         }
+                     }
+                     else
+@@ -2277,6 +2346,37 @@ public class DrbdLayer implements DeviceLayer
+         }
+     }
+ 
++    private static final Pattern BITMAP_DROP_PATTERN = Pattern.compile(
++        "peer-device-options\\s+\\S+\\s+(\\d+)\\s+(\\d+)\\s+.*--bitmap=no"
++    );
++
++    private boolean isBitmapDropError(ExtCmdFailedException exc)
++    {
++        String message = exc.getMessage();
++        return message != null && message.contains("Can not drop the bitmap");
++    }
++
++    private int parseBitmapDropPeerNodeId(ExtCmdFailedException exc)
++    {
++        int nodeId = -1;
++        String message = exc.getMessage();
++        if (message != null)
++        {
++            Matcher matcher = BITMAP_DROP_PATTERN.matcher(message);
++            if (matcher.find())
++            {
++                try
++                {
++                    nodeId = Integer.parseInt(matcher.group(2));
++                }
++                catch (NumberFormatException ignored)
++                {
++                }
++            }
++        }
++        return nodeId;
++    }
++
+     @Override
+     public DeviceLayerKind getKind()
+     {
