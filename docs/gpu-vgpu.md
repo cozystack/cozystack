@@ -78,25 +78,25 @@ gpu-operator:
 
 ## NVIDIA License Server (NLS) Configuration
 
-vGPU requires a license server. Configure NLS by passing the license server address via a ConfigMap:
+vGPU requires a license server. Configure NLS by passing the license server address via a Secret:
 
-1. Create a ConfigMap with the NLS client configuration in the `cozy-gpu-operator` namespace:
+1. Create a Secret with the NLS client configuration in the `cozy-gpu-operator` namespace:
 
 ```yaml
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
   name: licensing-config
   namespace: cozy-gpu-operator
-data:
+stringData:
   gridd.conf: |
     ServerAddress=nls.example.com
     ServerPort=443
-    FeatureType=1
+    FeatureType=1  # 1 for vGPU (vPC/vWS), 2 for Virtual Compute Server (vCS)
     # ServerPort depends on your NLS deployment (commonly 443 for DLS or 7070 for legacy NLS)
 ```
 
-2. Reference the ConfigMap in the Package values:
+2. Reference the Secret in the Package values:
 
 ```yaml
 gpu-operator:
@@ -105,7 +105,7 @@ gpu-operator:
     version: "550.90.05"
   driver:
     licensingConfig:
-      configMapName: licensing-config
+      secretName: licensing-config
 ```
 
 ## vGPU Profiles
