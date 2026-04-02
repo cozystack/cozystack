@@ -1,23 +1,39 @@
-login:
-  userRegistration: false
-  verifyEmail: false
+# login:
+#   userRegistration: false
+#   verifyEmail: false
+#   duplicateEmails: false
+#   editUsername: false
+#   emailAsUsername: false
+#   forgotPassword: false
+#   loginWithEmail: true
+#   rememberMe: false
 
-smtp: {}
-#  template:
-#    from: "noreply@example.com"
-#    fromDisplayName: ""
-#    replyTo: ""
-#    replyToDisplayName: ""
-#    envelopeFrom: ""
-#  connection:
-#    host: "smtp.example.com"
-#    port: 587
-#    enableSSL: false
-#    enableStartTLS: true
-#    authentication:
-#      username:
-#        value: "user"
-#      password:
-#        secretKeyRef:
-#          name: "smtp-credentials"
-#          key: "password"
+# smtp:
+#   template:
+#     from: "noreply@example.com"
+#     fromDisplayName: ""
+#     replyTo: ""
+#     replyToDisplayName: ""
+#     envelopeFrom: ""
+#   connection:
+#     host: "smtp.example.com"
+#     port: 587
+#     enableSSL: false
+#     enableStartTLS: true
+#     authentication:
+#       username:
+#         value: "user"
+#         # secretKeyRef:
+#         #   name: "secret-name"
+#         #   key: "key"
+#         # configMapKeyRef:
+#         #   name: "configmap-name"
+#         #   key: "key"
+#       password:
+#         secretKeyRef:
+#           name: "smtp-credentials"
+#           key: "password"
+#         # value: "plaintext-password"
+#         # configMapKeyRef:
+#         #   name: "configmap-name"
+#         #   key: "key"
