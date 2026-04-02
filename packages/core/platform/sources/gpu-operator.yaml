@@ -23,3 +23,16 @@ spec:
         privileged: true
         namespace: cozy-gpu-operator
         releaseName: gpu-operator
+  - name: vgpu
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: gpu-operator
+      path: system/gpu-operator
+      valuesFiles:
+      - values.yaml
+      - values-talos-vgpu.yaml
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-operator
