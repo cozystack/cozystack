@@ -1,14 +1,17 @@
 # LINSTOR Server Patches
 
-Custom patches for piraeus-server (linstor-server) v1.32.3.
+Custom patches for piraeus-server (linstor-server) v1.33.1.
 
-- **adjust-on-resfile-change.diff** — Use actual device path in res file during toggle-disk; fix LUKS data offset
-  - Upstream: [#473](https://github.com/LINBIT/linstor-server/pull/473), [#472](https://github.com/LINBIT/linstor-server/pull/472)
-- **allow-toggle-disk-retry.diff** — Allow retry and cancellation of failed toggle-disk operations
-  - Upstream: [#475](https://github.com/LINBIT/linstor-server/pull/475)
-- **force-metadata-check-on-disk-add.diff** — Create metadata during toggle-disk from diskless to diskful
-  - Upstream: [#474](https://github.com/LINBIT/linstor-server/pull/474)
-- **fix-duplicate-tcp-ports.diff** — Preserve TCP ports during toggle-disk to prevent port mismatch between controller and satellites
-  - Upstream: [#476](https://github.com/LINBIT/linstor-server/pull/476) (superseded by this expanded fix)
-- **skip-adjust-when-device-inaccessible.diff** — Fix resources stuck in StandAlone after reboot, Unknown state race condition, and encrypted resource deletion
-  - Upstream: [#477](https://github.com/LINBIT/linstor-server/pull/477)
+- **allow-toggle-disk-retry.diff** — Backport maintainer implementation of toggle-disk retry/abort
+  - Source PR/comment: [#475](https://github.com/LINBIT/linstor-server/pull/475), [maintainer note](https://github.com/LINBIT/linstor-server/pull/475#issuecomment-3949630419)
+  - Backported from upstream commit: [`3d97f71c9`](https://github.com/LINBIT/linstor-server/commit/3d97f71c95a493588d3d521c63eac4d846935fb3)
+- **fix-duplicate-tcp-ports.diff** — Preserve DRBD TCP ports during toggle-disk and avoid redundant `ensureStackDataExists()`
+  - Source PR/review: [#476](https://github.com/LINBIT/linstor-server/pull/476), [review suggestion](https://github.com/LINBIT/linstor-server/pull/476#discussion_r3007725079)
+  - Backported from commits: [`79d6375c5`](https://github.com/kvaps/linstor-server/commit/79d6375c55d6181b35a7b7f0fe8dbdfb86e126cd), [`bcc89902f`](https://github.com/kvaps/linstor-server/commit/bcc89902f4f61ac1589dd07ebb7f5aae1935370d)
+- **fix-luks-header-size.diff** — Account for LUKS2 `--offset`, metadata/keyslots sizing, and device `optimal_io_size`
+  - Source PR/comment: [#472](https://github.com/LINBIT/linstor-server/pull/472), [maintainer note](https://github.com/LINBIT/linstor-server/pull/472#issuecomment-3949687603)
+  - Backported from commits: [`ccc85fbd2`](https://github.com/LINBIT/linstor-server/commit/ccc85fbd2c65f0b97c52403fa80f1efdb886ec4e), [`71b601554`](https://github.com/LINBIT/linstor-server/commit/71b601554f41bcb50cd5bd06989c5b0d3a814acd)
+  - Note: upstream commit [`3d0402a0c`](https://github.com/LINBIT/linstor-server/commit/3d0402a0c25f0a4b57b380321f10e89982f26e7a) is already included in `v1.33.1`
+- **retry-adjust-after-stale-bitmap.diff** — Retry `drbdadm adjust` after detaching a stale local bitmap state
+  - Source PR: [#491](https://github.com/LINBIT/linstor-server/pull/491)
+  - Backported from commit: [`51ae50a84`](https://github.com/kvaps/linstor-server/commit/51ae50a84dcb98093f543b819652c750a94d96c9)
