@@ -1,0 +1,26 @@
+{{/*
+  Exposes the linstor-scheduler-extender sidecar (port 8099) as a
+  cluster-internal Service so that other schedulers (e.g. cozystack-scheduler)
+  can use it as a scheduler extender.
+
+  The selector labels match the subchart's deployment pods. They are
+  hardcoded here because the subchart helpers expect a subchart rendering
+  context that is unavailable in the wrapper chart.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: linstor-scheduler-extender
+  labels:
+    app.kubernetes.io/component: extender
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8099
+      targetPort: 8099
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: linstor-scheduler
+    app.kubernetes.io/instance: linstor-scheduler
+    app.kubernetes.io/component: scheduler

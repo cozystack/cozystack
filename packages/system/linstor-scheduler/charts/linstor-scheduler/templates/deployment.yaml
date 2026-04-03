@@ -20,6 +20,7 @@ spec:
       {{- end }}
       labels:
         {{- include "linstor-scheduler.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scheduler
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:

@@ -3,6 +3,9 @@ export NAMESPACE=kube-system
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/cozystack/cozystack-scheduler | awk -F'[/^]' 'END{print $$3}') && \
