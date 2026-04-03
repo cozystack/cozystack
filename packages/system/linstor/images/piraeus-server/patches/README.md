@@ -12,3 +12,6 @@ Custom patches for piraeus-server (linstor-server) v1.33.1.
   - Source PR/comment: [#472](https://github.com/LINBIT/linstor-server/pull/472), [maintainer note](https://github.com/LINBIT/linstor-server/pull/472#issuecomment-3949687603)
   - Backported from commits: [`ccc85fbd2`](https://github.com/LINBIT/linstor-server/commit/ccc85fbd2c65f0b97c52403fa80f1efdb886ec4e), [`71b601554`](https://github.com/LINBIT/linstor-server/commit/71b601554f41bcb50cd5bd06989c5b0d3a814acd)
   - Note: upstream commit [`3d0402a0c`](https://github.com/LINBIT/linstor-server/commit/3d0402a0c25f0a4b57b380321f10e89982f26e7a) is already included in `v1.33.1`
+- **retry-adjust-after-stale-bitmap.diff** — Retry `drbdadm adjust` after detaching a stale local bitmap state
+  - Source PR: [#491](https://github.com/LINBIT/linstor-server/pull/491)
+  - Backported from commit: [`51ae50a84`](https://github.com/kvaps/linstor-server/commit/51ae50a84dcb98093f543b819652c750a94d96c9)
