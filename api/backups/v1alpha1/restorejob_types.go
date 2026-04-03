@@ -42,6 +42,12 @@ type RestoreJobSpec struct {
 	// application as referenced by backup.spec.applicationRef.
 	// +optional
 	TargetApplicationRef *corev1.TypedLocalObjectReference `json:"targetApplicationRef,omitempty"`
+
+	// Options is a driver-specific blob of restore options, typed based on
+	// targetApplicationRef and the current controller implementation.
+	// +optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Options *runtime.RawExtension `json:"options,omitempty"`
 }
 
 // RestoreJobStatus represents the observed state of a RestoreJob.

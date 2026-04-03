@@ -46,10 +46,10 @@ rules:
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
   verbs: ["delete"]
-# HelmReleases: pre-restore suspends HRs to prevent Flux interference
+# HelmReleases: pre-restore suspends HRs; post-restore rename creates new HR and deletes old
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
-  verbs: ["get", "update"]
+  verbs: ["get", "create", "update", "delete"]
 # PVCs and PVs: pre-restore renames PVCs (delete old, create new) and patches PV reclaim policy
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
@@ -65,6 +65,11 @@ rules:
 - apiGroups: ["velero.io"]
   resources: ["deletebackuprequests"]
   verbs: ["create", "get", "list", "watch"]
+# Namespaces: validate target namespace exists for cross-namespace restore
+# controller-runtime cache requires list/watch for any resource accessed via r.Get()
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
 # Events from Recorder.Event() calls
 - apiGroups: [""]
   resources: ["events"]
