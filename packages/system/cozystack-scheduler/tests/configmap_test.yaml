@@ -1,0 +1,35 @@
+suite: scheduler configmap tests
+
+templates:
+  - charts/cozy-cozystack-scheduler/templates/configmap.yaml
+
+tests:
+  - it: renders extenders when configured
+    set:
+      cozy-cozystack-scheduler:
+        extenders:
+          - urlPrefix: http://linstor-scheduler-extender.cozy-linstor.svc:8099
+            filterVerb: filter
+            prioritizeVerb: prioritize
+            weight: 5
+            enableHTTPS: false
+            httpTimeout: 10s
+            nodeCacheCapable: false
+            ignorable: true
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["scheduler-config.yaml"]
+          pattern: "urlPrefix: http://linstor-scheduler-extender"
+      - matchRegex:
+          path: data["scheduler-config.yaml"]
+          pattern: "ignorable: true"
+
+  - it: omits extenders when not configured
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - notMatchRegex:
+          path: data["scheduler-config.yaml"]
+          pattern: "extenders:"
