@@ -38,11 +38,10 @@ spec:
     kind: VMInstance
     name: test
   options: # runtime.RawExtension, typed based on targetApplicationRef and current controller implementation (for additional restore options)
-    restoreToCopy: true # true - restore to a copy in a different namespace
-    targetNamespace: ${TARGET_NAMESPACE} # required for restore-to-copy
-    failIfTargetExists: true # true - if the target resource already exists, the restore will fail and not overwrite it
-    keepOriginalPVC: true # true - keep the original PVC of the VMI before restore and rename it to `<name>-orig-<hash>`, actual with restoreToCopy = false
-    keepOriginaIpAndMac: true # true - keep the original IP and MAC address of the VMI through OVN annotations
+    targetNamespace: ${TARGET_NAMESPACE} # when set to a different namespace, triggers cross-namespace restore via Velero namespaceMapping
+    failIfTargetExists: true # if true, restore will fail when the target resource already exists
+    keepOriginalPVC: false # renames original VMI PVC before restore to `<name>-orig-<hash>`, only for in-place restore
+    keepOriginaIpAndMac: false # restores original IP and MAC address of VMI via OVN annotations
 EOF
 
 log_success "RestoreJob created"

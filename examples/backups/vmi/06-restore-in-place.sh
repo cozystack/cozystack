@@ -24,6 +24,10 @@ spec:
     apiGroup: apps.cozystack.io
     kind: VMInstance
     name: test
+  options:
+    failIfTargetExists: true # if true, restore will fail when the target resource already exists
+    keepOriginalPVC: true # renames original VMI PVC before restore to `<name>-orig-<hash>`, only for in-place restore
+    keepOriginaIpAndMac: true # restores original IP and MAC address of VMI via OVN annotations
 EOF
 
 log_success "RestoreJob created"
