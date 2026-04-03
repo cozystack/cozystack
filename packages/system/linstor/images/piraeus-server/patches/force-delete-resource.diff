@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrei Kvapil <kvapss@gmail.com>
+Date: Thu, 03 Apr 2026 03:00:00 +0100
+Subject: [PATCH] feat(controller): add force-delete for stuck resources
+
+Add support for force-deleting a resource by setting the Aux/force-delete
+property. When set, linstor r d skips all satellite cleanup and removes
+the resource directly from the database (similar to node-lost but scoped
+to a single resource). Remaining peers are notified to update their
+.res files.
+
+Usage:
+  linstor r sp <node> <resource> Aux/force-delete true
+  linstor r d <node> <resource>
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+Signed-off-by: Andrei Kvapil <kvapss@gmail.com>
+---
+
+diff --git a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscDeleteApiCallHandler.java b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscDeleteApiCallHandler.java
+index d337357..4b0c62c 100644
+--- a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscDeleteApiCallHandler.java
++++ b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscDeleteApiCallHandler.java
+@@ -60,6 +60,7 @@ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Set;
+ import java.util.TreeSet;
++import java.util.UUID;
+ import java.util.concurrent.locks.ReadWriteLock;
+ 
+ import reactor.core.publisher.Flux;
+@@ -212,6 +213,30 @@ public class CtrlRscDeleteApiCallHandler implements CtrlSatelliteConnectionListe
+ 
+         errorReporter.logInfo("Activate resource if last before delete resource %s/%s", nodeNameStr, rscNameStr);
+ 
++        /*
++         * If the resource has the Aux/force-delete property set, skip all checks and satellite
++         * cleanup -- just remove the resource from the database (similar to node-lost behavior
++         * but scoped to a single resource). This is useful when a resource is stuck in DELETING
++         * state and satellite cannot clean it up (e.g. due to bitmap mismatch).
++         */
++        try
++        {
++            Props rscProps = rsc.getProps(peerAccCtx.get());
++            String forceDelete = rscProps.getProp("force-delete", ApiConsts.NAMESPC_AUXILIARY);
++            if (forceDelete != null)
++            {
++                errorReporter.logWarning(
++                    "Force-deleting resource %s/%s (Aux/force-delete property set)",
++                    nodeNameStr, rscNameStr
++                );
++                return forceDeleteResourceInTransaction(rsc, nodeNameStr, rscNameStr, context);
++            }
++        }
++        catch (InvalidKeyException | AccessDeniedException exc)
++        {
++            // ignore - proceed with normal delete
++        }
++
+         ctrlRscDeleteApiHelper.ensureNotInUse(rsc);
+         ctrlRscDeleteApiHelper.ensureNotLastDisk(rsc);
+ 
+@@ -224,6 +249,44 @@ public class CtrlRscDeleteApiCallHandler implements CtrlSatelliteConnectionListe
+         );
+     }
+ 
++    private Flux<ApiCallRc> forceDeleteResourceInTransaction(
++        Resource rsc,
++        String nodeNameStr,
++        String rscNameStr,
++        ResponseContext context
++    )
++    {
++        UUID rscUuid = rsc.getUuid();
++        ResourceDefinition rscDfn = rsc.getResourceDefinition();
++        String descriptionFirstLetterCaps = firstLetterCaps(getRscDescription(rsc));
++
++        // Delete the resource from database without satellite cleanup
++        ctrlRscDeleteApiHelper.cleanupAndDelete(rsc);
++
++        ctrlTransactionHelper.commit();
++
++        ApiCallRcImpl responses = new ApiCallRcImpl();
++        responses.addEntry(
++            ApiCallRcImpl
++                .entryBuilder(ApiConsts.DELETED, descriptionFirstLetterCaps + " force-deleted.")
++                .setDetails(descriptionFirstLetterCaps + " UUID was: " + rscUuid)
++                .build()
++        );
++
++        // Notify remaining peers so they update their .res files (remove connection to deleted node)
++        Flux<ApiCallRc> satelliteUpdateResponses =
++            ctrlSatelliteUpdateCaller.updateSatellites(rscDfn, null)
++                .transform(updateResponses -> CtrlResponseUtils.combineResponses(
++                    errorReporter,
++                    updateResponses,
++                    rscDfn.getName(),
++                    "Notified {0} that resource on ''" + nodeNameStr + "'' has been force-deleted"
++                ))
++                .onErrorResume(CtrlResponseUtils.DelayedApiRcException.class, ignored -> Flux.empty());
++
++        return Flux.just((ApiCallRc) responses).concatWith(satelliteUpdateResponses);
++    }
++
+     private Flux<ApiCallRc> prepareResourceDeleteInTransaction(
+         String nodeNameStr,
+         String rscNameStr,

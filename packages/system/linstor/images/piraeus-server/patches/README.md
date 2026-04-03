@@ -14,5 +14,7 @@ Custom patches for piraeus-server (linstor-server) v1.32.3.
   - Upstream: [#477](https://github.com/LINBIT/linstor-server/pull/477)
 - **fix-conffilebuilder-diskless-flag.diff** — Use DrbdRscData layer flags instead of stale Resource flags for diskless check in .res generation
   - Upstream: [#490](https://github.com/LINBIT/linstor-server/pull/490)
-- **zz-fix-drbd-bitmap-drop-error.diff** — Handle stale bitmap when peer transitions from diskful to diskless (del-peer + retry adjust)
+- **force-delete-resource.diff** — Force-delete stuck resources via `Aux/force-delete` property (node-lost behavior for single resource)
+  - Upstream: pending PR
+- **zz-fix-drbd-bitmap-drop-error.diff** — Handle stale bitmap when peer transitions from diskful to diskless (del-peer + forget-peer + retry adjust)
   - Upstream: pending PR
