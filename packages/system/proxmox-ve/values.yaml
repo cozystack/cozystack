@@ -1,0 +1,44 @@
+# Default values for proxmox-ve
+# This chart provides basic Proxmox VE integration components
+# All major components (Cluster API, CSI, Networking, Monitoring) are managed by CozyStack platform
+
+# Global configuration
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# Basic Proxmox configuration
+proxmox:
+  # Proxmox server configuration
+  server:
+    host: "proxmox.example.com"
+    port: 8006
+    insecure: false
+    
+  # Credentials
+  credentials:
+    secretName: "proxmox-credentials"
+    username: ""
+    password: ""
+
+# Security configuration
+security:
+  # Network policies
+  networkPolicies:
+    enabled: true
+    
+  # RBAC
+  rbac:
+    enabled: true
+
+# Resource configuration
+resources:
+  # Default resource requests and limits
+  default:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"

@@ -1,0 +1,250 @@
+{{- if .Values.kubernetes.kubeadm.token }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-daemonset
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxmox-worker
+spec:
+  selector:
+    matchLabels:
+      {{- include "proxmox-worker.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: proxmox-worker
+  template:
+    metadata:
+      labels:
+        {{- include "proxmox-worker.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: proxmox-worker
+    spec:
+      hostNetwork: true
+      hostPID: true
+      hostIPC: true
+      serviceAccountName: {{ include "proxmox-worker.serviceAccountName" . }}
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      - operator: Exists
+        effect: NoExecute
+      - operator: Exists
+        effect: CriticalAddonsOnly
+      containers:
+      - name: proxmox-worker-setup
+        image: "{{ if .Values.global.imageRegistry }}{{ .Values.global.imageRegistry }}/{{ end }}ubuntu:22.04"
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
+          runAsUser: 0
+        env:
+        - name: PROXMOX_SERVER
+          value: {{ .Values.proxmox.server.host | quote }}
+        - name: PROXMOX_PORT
+          value: {{ .Values.proxmox.server.port | toString | quote }}
+        - name: PROXMOX_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.proxmox.credentials.secretName }}
+              key: username
+        - name: PROXMOX_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.proxmox.credentials.secretName }}
+              key: password
+        - name: KUBERNETES_CONTROL_PLANE_ENDPOINT
+          value: {{ .Values.kubernetes.controlPlaneEndpoint | quote }}
+        - name: KUBERNETES_TOKEN
+          value: {{ .Values.kubernetes.kubeadm.token | quote }}
+        - name: KUBERNETES_CA_CERT_HASH
+          value: {{ .Values.kubernetes.kubeadm.caCertHash | quote }}
+        - name: NODE_NAME
+          value: {{ .Values.kubernetes.kubeadm.joinConfig.nodeName | default "proxmox-worker" | quote }}
+        - name: POD_CIDR
+          value: {{ .Values.networking.podCIDR | quote }}
+        - name: SERVICE_CIDR
+          value: {{ .Values.networking.serviceCIDR | quote }}
+        - name: CLUSTER_DOMAIN
+          value: {{ .Values.networking.dns.domain | quote }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          
+          # Install required packages
+          apt-get update
+          apt-get install -y curl wget gnupg2 software-properties-common apt-transport-https ca-certificates
+          
+          # Install containerd
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+          apt-get update
+          apt-get install -y containerd.io
+          
+          # Configure containerd
+          mkdir -p /etc/containerd
+          cp /etc/containerd/config.toml /etc/containerd/config.toml.bak
+          cat > /etc/containerd/config.toml << 'EOF'
+          {{- include "proxmox-worker.containerdConfig" . | nindent 10 }}
+          EOF
+          
+          # Start containerd
+          systemctl enable containerd
+          systemctl start containerd
+          
+          # Install kubeadm, kubelet, kubectl
+          curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /" | tee /etc/apt/sources.list.d/kubernetes.list
+          apt-get update
+          apt-get install -y kubelet kubeadm kubectl
+          
+          # Configure kubelet
+          mkdir -p /etc/kubernetes
+          cat > /etc/kubernetes/kubelet-config.yaml << 'EOF'
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          authentication:
+            anonymous:
+              enabled: false
+            webhook:
+              enabled: true
+              cacheTTL: 0s
+            x509:
+              clientCAFile: /etc/kubernetes/pki/ca.crt
+          authorization:
+            mode: Webhook
+            webhook:
+              cacheAuthorizedTTL: 0s
+              cacheUnauthorizedTTL: 0s
+          clusterDomain: {{ .Values.networking.dns.domain }}
+          clusterDNS:
+            - "10.96.0.10"
+          cpuManagerPolicy: none
+          cgroupDriver: systemd
+          containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
+          evictionHard:
+            imagefs.available: 15%
+            memory.available: 100Mi
+            nodefs.available: 10%
+            nodefs.inodesFree: 5%
+          evictionSoft:
+            imagefs.available: 15%
+            memory.available: 100Mi
+            nodefs.available: 10%
+            nodefs.inodesFree: 5%
+          evictionSoftGracePeriod:
+            imagefs.available: 1m
+            memory.available: 1m
+            nodefs.available: 1m
+            nodefs.inodesFree: 1m
+          evictionMaxPodGracePeriod: 0
+          evictionPressureTransitionPeriod: 0s
+          fileCheckFrequency: 20s
+          healthzBindAddress: 127.0.0.1
+          healthzPort: 10248
+          httpCheckFrequency: 20s
+          imageMinimumGCAge: 0s
+          imageGCHighThresholdPercent: 85
+          imageGCLowThresholdPercent: 80
+          logging:
+            format: json
+            flushFrequency: 0
+            options:
+              json:
+                infoBufferSize: "0"
+            verbosity: 0
+          memorySwap: {}
+          nodeStatusReportFrequency: 0s
+          nodeStatusUpdateFrequency: 0s
+          rotateCertificates: true
+          runtimeRequestTimeout: 2m
+          staticPodPath: /etc/kubernetes/manifests
+          streamingConnectionIdleTimeout: 4h0m0s
+          syncFrequency: 1m0s
+          volumeStatsAggPeriod: 1m0s
+          serverTLSBootstrap: true
+          {{- range $key, $value := .Values.kubernetes.kubeadm.joinConfig.kubeletExtraArgs }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+          EOF
+          
+          # Create kubeadm join configuration
+          cat > /etc/kubernetes/join-config.yaml << 'EOF'
+          {{- include "proxmox-worker.kubeadmJoinConfig" . | nindent 10 }}
+          EOF
+          
+          # Join the cluster
+          kubeadm join --config /etc/kubernetes/join-config.yaml
+          
+          # Wait for node to be ready
+          while ! kubectl get nodes | grep -q "Ready"; do
+            echo "Waiting for node to be ready..."
+            sleep 10
+          done
+          
+          echo "Proxmox worker node successfully joined the cluster!"
+          
+          # Keep the container running
+          while true; do
+            sleep 3600
+          done
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: dev
+          mountPath: /host/dev
+        - name: var-lib-docker
+          mountPath: /var/lib/docker
+        - name: var-lib-containerd
+          mountPath: /var/lib/containerd
+        - name: run-containerd
+          mountPath: /run/containerd
+        - name: etc-kubernetes
+          mountPath: /etc/kubernetes
+        - name: etc-cni
+          mountPath: /etc/cni
+        - name: opt-cni
+          mountPath: /opt/cni
+        - name: var-log
+          mountPath: /var/log
+        resources:
+          {{- toYaml .Values.resources.kubelet | nindent 10 }}
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: dev
+        hostPath:
+          path: /dev
+      - name: var-lib-docker
+        hostPath:
+          path: /var/lib/docker
+      - name: var-lib-containerd
+        hostPath:
+          path: /var/lib/containerd
+      - name: run-containerd
+        hostPath:
+          path: /run/containerd
+      - name: etc-kubernetes
+        hostPath:
+          path: /etc/kubernetes
+      - name: etc-cni
+        hostPath:
+          path: /etc/cni
+      - name: opt-cni
+        hostPath:
+          path: /opt/cni
+      - name: var-log
+        hostPath:
+          path: /var/log
+      - name: kubeadm-config
+        configMap:
+          name: {{ include "proxmox-worker.fullname" . }}-kubeadm-config
+{{- end }}
