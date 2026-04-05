@@ -181,7 +181,7 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 
 	for resourceName, resourceQuantity := range pvc.Status.Capacity {
 		storageClass := "default"
-		if pvc.Spec.StorageClassName != nil || *pvc.Spec.StorageClassName == "" {
+		if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
 			storageClass = *pvc.Spec.StorageClassName
 		}
 		resourceLabel := fmt.Sprintf("%s.storageclass.storage.k8s.io/requests.%s", storageClass, resourceName.String())
@@ -389,9 +389,9 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		fresh.Status.AvailableReplicas = availableReplicas
 
 		// Default to operational = true, but check MinReplicas if set
-		monitor.Status.Operational = pointer.Bool(true)
-		if monitor.Spec.MinReplicas != nil && availableReplicas < *monitor.Spec.MinReplicas {
-			monitor.Status.Operational = pointer.Bool(false)
+		fresh.Status.Operational = pointer.Bool(true)
+		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
+			fresh.Status.Operational = pointer.Bool(false)
 		}
 		return r.Status().Update(ctx, fresh)
 	})
