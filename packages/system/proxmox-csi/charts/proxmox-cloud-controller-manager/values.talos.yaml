@@ -1,0 +1,8 @@
+
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+
+logVerbosityLevel: 4
+
+enabledControllers:
+  - cloud-node-lifecycle
