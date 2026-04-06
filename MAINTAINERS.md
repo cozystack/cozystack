@@ -11,3 +11,4 @@
 | Kirill Klinchenkov | [@klinch0](https://github.com/klinch0) | Ænix | Core Maintainer |
 | Nikita Bykov | [@nbykov0](https://github.com/nbykov0) | Ænix | Maintainer of ARM and stuff |
 | Matthieu Robin | [@matthieu-robin](https://github.com/matthieu-robin) | Hidora | Managed Applications, Platform Quality & Benchmarking |
+| Mattia Eleuteri | [@mattia-eleuteri](https://github.com/mattia-eleuteri) | Hidora | CSI, Storage, Networking & Security |
