@@ -32,9 +32,9 @@ The preferred way to report a vulnerability is through **GitHub Private Vulnerab
 2. Click **"Report a vulnerability"** and fill in the details.
 3. The report will be visible only to the repository maintainers.
 
-If you cannot use GitHub Private Vulnerability Reporting, you may contact a project maintainer listed in `CODEOWNERS` through an existing private channel. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
+Alternatively, you can email the security team directly at **cncf-cozystack-security@lists.cncf.io**. This is a private mailing list monitored by project maintainers.
 
-A dedicated security email address is being set up and will be published here when available.
+If neither GitHub nor email works for you, you may contact a project maintainer listed in `CODEOWNERS` through an existing private channel. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
 
 Please do not include exploit details, credentials, tokens, private keys, customer data, or other sensitive material in any public message.
 
