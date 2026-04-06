@@ -64,6 +64,7 @@ spec:
       - appendonly no
       - save ""
       {{- end }}
+      - maxmemory-policy {{ .Values.maxmemoryPolicy }}
   {{- if .Values.authEnabled }}
   auth:
     secretPath: {{ .Release.Name }}-auth
