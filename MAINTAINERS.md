@@ -10,3 +10,4 @@
 | Timur Tukaev | [@tym83](https://github.com/tym83) | Ænix | Cozystack Website, Marketing, Community Management |
 | Kirill Klinchenkov | [@klinch0](https://github.com/klinch0) | Ænix | Core Maintainer |
 | Nikita Bykov | [@nbykov0](https://github.com/nbykov0) | Ænix | Maintainer of ARM and stuff |
+| Matthieu Robin | [@matthieu-robin](https://github.com/matthieu-robin) | Hidora | Managed Applications, Platform Quality & Benchmarking |
