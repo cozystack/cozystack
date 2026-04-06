@@ -26,10 +26,15 @@ Supported versions may change over time as new release lines are cut. The author
 
 Please do **not** report security vulnerabilities through public GitHub issues, discussions, pull requests, Telegram, Slack, or other public community channels.
 
-At the moment, this repository does not publish a dedicated private security mailbox in-tree. If you need to report a vulnerability:
+The preferred way to report a vulnerability is through **GitHub Private Vulnerability Reporting**:
 
-1. Contact one of the project maintainers listed in `CODEOWNERS` using an existing private channel you already have.
-2. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
+1. Go to the **Security** tab of the affected repository (or use [this link for the main repository](https://github.com/cozystack/cozystack/security/advisories/new)).
+2. Click **"Report a vulnerability"** and fill in the details.
+3. The report will be visible only to the repository maintainers.
+
+If you cannot use GitHub Private Vulnerability Reporting, you may contact a project maintainer listed in `CODEOWNERS` through an existing private channel. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
+
+A dedicated security email address is being set up and will be published here when available.
 
 Please do not include exploit details, credentials, tokens, private keys, customer data, or other sensitive material in any public message.
 
