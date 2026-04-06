@@ -45,7 +45,7 @@ RUN qemu-img resize image.img 5G \
  && guestfish --remote command "sed -i '/SystemdCgroup/ s/=.*/= true/' /etc/containerd/config.toml" \
  && guestfish --remote command "containerd config dump >/dev/null" \
 # install kubernetes
- && guestfish --remote command "apt-get install -yq kubelet kubeadm" \
+ && guestfish --remote command "apt-get install -yq kubelet kubeadm conntrack" \
 # clean apt cache
  && guestfish --remote sh 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
 # write system configuration
