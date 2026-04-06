@@ -1,0 +1,377 @@
+# nameOverride is the short name for the deployment. Leave empty to let Helm generate a name using chart values.
+nameOverride: "elastic-operator"
+
+# fullnameOverride is the full name for the deployment. Leave empty to let Helm generate a name using chart values.
+fullnameOverride: "elastic-operator"
+
+# managedNamespaces is the set of namespaces that the operator manages. Leave empty to manage all namespaces.
+managedNamespaces: []
+
+# installCRDs determines whether Custom Resource Definitions (CRD) are installed by the chart.
+# Note that CRDs are global resources and require cluster admin privileges to install.
+# If you are sharing a cluster with other users who may want to install ECK on their own namespaces, setting this to true can have unintended consequences.
+# 1. Upgrades will overwrite the global CRDs and could disrupt the other users of ECK who may be running a different version.
+# 2. Uninstalling the chart will delete the CRDs and potentially cause Elastic resources deployed by other users to be removed as well.
+installCRDs: true
+
+# replicaCount is the number of operator pods to run.
+replicaCount: 1
+
+image:
+  # repository is the container image prefixed by the registry name.
+  repository: docker.elastic.co/eck/eck-operator
+  # pullPolicy is the container image pull policy.
+  pullPolicy: IfNotPresent
+  # tag is the container image tag. If not defined, defaults to chart appVersion.
+  tag: null
+  # fips specifies whether the operator will use a FIPS compliant container image for its own StatefulSet image.
+  # This setting does not apply to Elastic Stack applications images.
+  # Can be combined with config.ubiOnly.
+  fips: false
+
+# priorityClassName defines the PriorityClass to be used by the operator pods.
+priorityClassName: ""
+
+# imagePullSecrets defines the secrets to use when pulling the operator container image.
+imagePullSecrets: []
+
+# resources define the container resource limits for the operator.
+resources:
+  limits:
+    cpu: 1
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 150Mi
+
+# statefulsetAnnotations define the annotations that should be added to the operator StatefulSet.
+statefulsetAnnotations: {}
+
+# statefulsetLabels define additional labels that should be added to the operator StatefulSet.
+statefulsetLabels: {}
+
+# podAnnotations define the annotations that should be added to the operator pod.
+podAnnotations: {}
+
+## podLabels define additional labels that should be added to the operator pod.
+podLabels: {}
+
+# podSecurityContext defines the pod security context for the operator pod.
+podSecurityContext:
+  runAsNonRoot: true
+
+# securityContext defines the security context of the operator container.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+# nodeSelector defines the node selector for the operator pod.
+nodeSelector: {}
+
+# tolerations defines the node tolerations for the operator pod.
+tolerations: []
+
+# affinity defines the node affinity rules for the operator pod.
+affinity: {}
+
+# podDisruptionBudget configures the minimum or the maxium available pods for voluntary disruptions,
+# set to either an integer (e.g. 1) or a percentage value (e.g. 25%).
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 3
+
+# additional environment variables for the operator container.
+env: []
+
+# additional volume mounts for the operator container.
+volumeMounts: []
+
+# additional volumes to add to the operator pod.
+volumes: []
+
+# createClusterScopedResources determines whether cluster-scoped resources (ClusterRoles, ClusterRoleBindings) should be created.
+createClusterScopedResources: true
+
+# Automount API credentials for the Service Account into the pod.
+automountServiceAccountToken: true
+
+serviceAccount:
+  # create specifies whether a service account should be created for the operator.
+  create: true
+  # Specifies whether a service account should automount API credentials.
+  automountServiceAccountToken: true
+  # annotations to add to the service account
+  annotations: {}
+  # name of the service account to use. If not set and create is true, a name is generated using the fullname template.
+  name: ""
+
+tracing:
+  # enabled specifies whether APM tracing is enabled for the operator.
+  enabled: false
+  # config is a map of APM Server configuration variables that should be set in the environment.
+  config:
+    ELASTIC_APM_SERVER_URL: http://localhost:8200
+    ELASTIC_APM_SERVER_TIMEOUT: 30s
+
+refs:
+  # enforceRBAC specifies whether RBAC should be enforced for cross-namespace associations between resources.
+  enforceRBAC: false
+
+webhook:
+  # enabled determines whether the webhook is installed.
+  enabled: true
+  # caBundle is the PEM-encoded CA trust bundle for the webhook certificate. Only required if manageCerts is false and certManagerCert is null.
+  caBundle: Cg==
+  # certManagerCert is the name of the cert-manager certificate to use with the webhook.
+  certManagerCert: null
+  # certsDir is the directory to mount the certificates.
+  certsDir: "/tmp/k8s-webhook-server/serving-certs"
+  # failurePolicy of the webhook.
+  failurePolicy: Ignore
+  # manageCerts determines whether the operator manages the webhook certificates automatically.
+  manageCerts: true
+  # namespaceSelector corresponds to the namespaceSelector property of the webhook.
+  # Setting this restricts the webhook to act only on objects submitted to namespaces that match the selector.
+  namespaceSelector: {}
+  # objectSelector corresponds to the objectSelector property of the webhook.
+  # Setting this restricts the webhook to act only on objects that match the selector.
+  objectSelector: {}
+  # port is the port that the validating webhook binds to.
+  port: 9443
+  # secret specifies the Kubernetes secret to be mounted into the path designated by the certsDir value to be used for webhook certificates.
+  certsSecret: ""
+
+# hostNetwork allows a Pod to use the Node network namespace.
+# This is required to allow for communication with the kube API when using some alternate CNIs in conjunction with webhook enabled.
+# If hostNetwork is enabled, dnsPolicy defaults to ClusterFirstWithHostNet unless explicitly set.
+# CAUTION: Proceed at your own risk. This setting has security concerns such as allowing malicious users to access workloads running on the host.
+hostNetwork: false
+
+# dnsPolicy defines the DNS policy for the operator pod.
+# Check https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy for more details.
+dnsPolicy: ""
+
+# dnsConfig defines the DNS configuration for the operator pod.
+# Check https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config for more details.
+# dnsConfig:
+#   nameservers:
+#     - 169.254.20.10
+#   searches:
+#     - svc.cluster.local
+#   options:
+#     - name: ndots
+#       value: "2"
+dnsConfig: {}
+
+softMultiTenancy:
+  # enabled determines whether the operator is installed with soft multi-tenancy extensions.
+  # This requires network policies to be enabled on the Kubernetes cluster.
+  enabled: false
+
+# kubeAPIServerIP is required when softMultiTenancy is enabled.
+kubeAPIServerIP: null
+
+telemetry:
+  # disabled determines whether the operator periodically updates ECK telemetry data for Kibana to consume.
+  disabled: false
+  # distributionChannel denotes which distribution channel was used to install the operator.
+  distributionChannel: "helm"
+
+# config values for the operator.
+config:
+  # logVerbosity defines the logging level. Valid values are as follows:
+  # -2: Errors only
+  # -1: Errors and warnings
+  #  0: Errors, warnings, and information
+  #  number greater than 0: Errors, warnings, information, and debug details.
+  logVerbosity: "0"
+
+  # (Deprecated: use metrics.port: will be removed in v2.14.0) metricsPort defines the port to expose operator metrics. Set to 0 to disable metrics reporting.
+  metricsPort: 0
+
+  metrics:
+    # port defines the port to expose operator metrics. Set to 0 to disable metrics reporting.
+    port: "0"
+    # secureMode contains the options for enabling and configuring RBAC and TLS/HTTPs for the metrics endpoint.
+    secureMode:
+      # secureMode.enabled specifies whether to enable RBAC and TLS/HTTPs for the metrics endpoint.
+      # * This option makes most sense when using a ServiceMonitor to scrape the metrics and is therefore mutually exclusive with the podMonitor.enabled option.
+      # * This option also requires using cluster scoped resources (ClusterRole, ClusterRoleBinding) to
+      #   grant access to the /metrics endpoint. (createClusterScopedResources: true is required)
+      #
+      enabled: false
+      tls:
+        # certificateSecret is the name of the tls secret containing the custom TLS certificate and key for the secure metrics endpoint.
+        #
+        # * This is an optional setting and is only required if you are using a custom TLS certificate. A self-signed certificate will be generated by default.
+        # * TLS secret key must be named tls.crt.
+        # * TLS key's secret key must be named tls.key.
+        # * It is assumed to be in the same namespace as the ServiceMonitor.
+        #
+        # example: kubectl create secret tls eck-metrics-tls-certificate -n elastic-system \
+        #            --cert=/path/to/tls.crt --key=/path/to/tls.key
+        certificateSecret: ""
+
+  # containerRegistry to use for pulling Elasticsearch and other application container images.
+  containerRegistry: docker.elastic.co
+
+  # containerRepository to use for pulling Elasticsearch and other application container images.
+  # containerRepository: ""
+
+  # containerSuffix suffix to be appended to container images by default. Cannot be combined with -ubiOnly flag
+  # containerSuffix: ""
+
+  # maxConcurrentReconciles is the number of concurrent reconciliation operations to perform per controller.
+  maxConcurrentReconciles: "3"
+
+  # caValidity defines the validity period of the CA certificates generated by the operator.
+  caValidity: 8760h
+
+  # caRotateBefore defines when to rotate a CA certificate that is due to expire.
+  caRotateBefore: 24h
+
+  # caDir defines the directory containing a CA certificate (tls.crt) and its associated private key (tls.key) to be used for all managed resources.
+  # Setting this makes caRotateBefore and caValidity values ineffective.
+  caDir: ""
+
+  # certificatesValidity defines the validity period of certificates generated by the operator.
+  certificatesValidity: 8760h
+
+  # certificatesRotateBefore defines when to rotate a certificate that is due to expire.
+  certificatesRotateBefore: 24h
+
+  # disableConfigWatch specifies whether the operator watches the configuration file for changes.
+  disableConfigWatch: false
+
+  # exposedNodeLabels is an array of regular expressions of node labels which are allowed to be copied as annotations on Elasticsearch Pods.
+  exposedNodeLabels:
+    ["topology.kubernetes.io/.*", "failure-domain.beta.kubernetes.io/.*"]
+
+  # ipFamily specifies the IP family to use. Possible values: IPv4, IPv6 and "" (auto-detect)
+  ipFamily: ""
+
+  # setDefaultSecurityContext determines whether a default security context is set on application containers created by the operator.
+  # *note* that the default option now is "auto-detect" to attempt to set this properly automatically when both running
+  # in an openshift cluster, and a standard kubernetes cluster.  Valid values are as follows:
+  # "auto-detect" : auto detect
+  # "true"        : set pod security context when creating resources.
+  # "false"       : do not set pod security context when creating resources.
+  setDefaultSecurityContext: "auto-detect"
+
+  # kubeClientTimeout sets the request timeout for Kubernetes API calls made by the operator.
+  kubeClientTimeout: 60s
+
+  # elasticsearchClientTimeout sets the request timeout for Elasticsearch API calls made by the operator.
+  elasticsearchClientTimeout: 180s
+
+  # policies contains policies for the operator, currently only password generation policies are supported.
+  policies: {}
+    # passwords:
+    #   length: 24
+
+  # validateStorageClass specifies whether storage classes volume expansion support should be verified.
+  # Can be disabled if cluster-wide storage class RBAC access is not available.
+  validateStorageClass: true
+
+  # enableLeaderElection specifies whether leader election should be enabled
+  enableLeaderElection: true
+
+  # Interval between observations of Elasticsearch health, non-positive values disable asynchronous observation.
+  elasticsearchObservationInterval: 10s
+
+  # ubiOnly specifies whether the operator will use only UBI container images to deploy Elastic Stack applications as well as for its own StatefulSet image. UBI images are only available from 7.10.0 onward.
+  # Cannot be combined with the containerSuffix value.
+  ubiOnly: false
+
+# Prometheus PodMonitor configuration
+# Reference: https://github.com/prometheus-operator/prometheus-operator/blob/master/Documentation/api.md#podmonitor
+podMonitor:
+  # enabled determines whether a podMonitor should deployed to scrape the eck metrics.
+  # This requires the prometheus operator and the config.metrics.port not to be 0
+  enabled: false
+
+  # labels adds additional labels to the podMonitor
+  labels: {}
+
+  # annotations adds additional annotations to the podMonitor
+  annotations: {}
+
+  # namespace determines in which namespace the podMonitor will be deployed.
+  # If not set the podMonitor will be created in the namespace where the Helm release is installed into
+  # namespace: monitoring
+
+  # interval specifies the interval at which metrics should be scraped
+  interval: 5m
+
+  # scrapeTimeout specifies the timeout after which the scrape is ended
+  scrapeTimeout: 30s
+
+  # podTargetLabels transfers labels on the Kubernetes Pod onto the target.
+  podTargetLabels: []
+
+  # podMetricsEndpointConfig allows to add an extended configuration to the podMonitor
+  podMetricsEndpointConfig: {}
+  # honorTimestamps: true
+
+# Prometheus ServiceMonitor configuration
+# Only used when config.enableSecureMetrics is true
+# Reference: https://github.com/prometheus-operator/prometheus-operator/blob/master/Documentation/api.md#servicemonitor
+serviceMonitor:
+  # This option requires the following settings within Prometheus to function:
+  # 1. RBAC settings for the Prometheus instance to access the metrics endpoint.
+  #
+  # - nonResourceURLs:
+  #   - /metrics
+  #   verbs:
+  #   - get
+  #
+  # 2. If using the Prometheus Operator and your Prometheus instance is not in the same namespace as the operator you will need
+  #    the Prometheus Operator configured with the following Helm values:
+  #
+  #   prometheus:
+  #     prometheusSpec:
+  #       serviceMonitorNamespaceSelector: {}
+  #       serviceMonitorSelectorNilUsesHelmValues: false
+  #
+  # allows to disable the serviceMonitor, enabled by default for backwards compatibility
+  enabled: true
+  # namespace determines in which namespace the serviceMonitor will be deployed.
+  # If not set the serviceMonitor will be created in the namespace where the Helm release is installed into
+  # namespace: monitoring
+  # caSecret is the name of the secret containing the custom CA certificate used to generate the custom TLS certificate for the secure metrics endpoint.
+  #
+  # * This *must* be the name of the secret containing the CA certificate used to sign the custom TLS certificate for the metrics endpoint.
+  # * This secret *must* be in the same namespace as the Prometheus instance that will scrape the metrics.
+  # * If using the Prometheus operator this secret must be within the `spec.secrets` field of the `Prometheus` custom resource such that it is mounted into the Prometheus pod at `caMountDirectory`, which defaults to /etc/prometheus/secrets/{secret-name}.
+  # * This is an optional setting and is only required if you are using a custom TLS certificate.
+  # * Key must be named ca.crt.
+  #
+  # example: kubectl create secret generic eck-metrics-tls-ca -n monitoring \
+  #            --from-file=ca.crt=/path/to/ca.pem
+  caSecret: ""
+  # caMountDirectory is the directory at which the CA certificate is mounted within the Prometheus pod.
+  #
+  # * You should only need to adjust this if you are *not* using the Prometheus operator.
+  caMountDirectory: "/etc/prometheus/secrets/"
+  # insecureSkipVerify specifies whether to skip verification of the TLS certificate for the secure metrics endpoint.
+  #
+  # * If this setting is set to false, then the following settings are required:
+  #   - certificateSecret
+  #   - caSecret
+  insecureSkipVerify: true
+
+# Globals meant for internal use only
+global:
+  # manifestGen specifies whether the chart is running under manifest generator.
+  # This is used for tasks specific to generating the all-in-one.yaml file.
+  manifestGen: false
+  # createOperatorNamespace defines whether the operator namespace manifest should be generated when in manifestGen mode.
+  # Usually we do want that to happen (e.g. all-in-one.yaml) but, sometimes we don't (e.g. E2E tests).
+  createOperatorNamespace: true
+  # kubeVersion is the effective Kubernetes version we target when generating the all-in-one.yaml.
+  kubeVersion: 1.21.0
