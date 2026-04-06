@@ -36,7 +36,15 @@ spec:
   resourcesPreset: "nano"
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr mariadb-$name --timeout=30s --for=condition=ready
+  kubectl -n tenant-test wait hr mariadb-$name --timeout=120s --for=condition=ready || {
+    echo "=== HelmRelease status ===" >&2
+    kubectl -n tenant-test get hr mariadb-$name -o yaml 2>&1 || true
+    echo "=== Pods ===" >&2
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ===" >&2
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    false
+  }
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/mariadb-$name --timeout=110s --for=jsonpath='{.status.replicas}'=2

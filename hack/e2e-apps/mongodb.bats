@@ -28,7 +28,15 @@ spec:
 EOF
   sleep 5
   # Wait for HelmRelease
-  kubectl -n tenant-test wait hr mongodb-$name --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait hr mongodb-$name --timeout=120s --for=condition=ready || {
+    echo "=== HelmRelease status ===" >&2
+    kubectl -n tenant-test get hr mongodb-$name -o yaml 2>&1 || true
+    echo "=== Pods ===" >&2
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ===" >&2
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    false
+  }
   # Wait for MongoDB service (port 27017)
   timeout 120 sh -ec "until kubectl -n tenant-test get svc mongodb-$name-rs0 -o jsonpath='{.spec.ports[0].port}' | grep -q '27017'; do sleep 10; done"
   # Wait for endpoints

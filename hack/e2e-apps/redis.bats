@@ -19,7 +19,15 @@ spec:
   resourcesPreset: "nano"
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr redis-$name --timeout=20s --for=condition=ready
+  kubectl -n tenant-test wait hr redis-$name --timeout=120s --for=condition=ready || {
+    echo "=== HelmRelease status ===" >&2
+    kubectl -n tenant-test get hr redis-$name -o yaml 2>&1 || true
+    echo "=== Pods ===" >&2
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ===" >&2
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    false
+  }
   kubectl -n tenant-test wait pvc redisfailover-persistent-data-rfr-redis-$name-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
   kubectl -n tenant-test wait deploy rfs-redis-$name --timeout=90s --for=condition=available
   kubectl -n tenant-test wait sts rfr-redis-$name --timeout=90s --for=jsonpath='{.status.replicas}'=2

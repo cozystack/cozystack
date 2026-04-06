@@ -42,6 +42,9 @@ test-openapi:
 test-apps-%:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
 
+cleanup-test-app-%:
+	docker exec "${SANDBOX_NAME}" hack/e2e-cleanup-app.sh "$*"
+
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
 	mkdir -p ../../../_out

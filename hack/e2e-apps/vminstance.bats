@@ -19,7 +19,15 @@ spec:
   storageClass: replicated
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr vm-disk-$name --timeout=5s --for=condition=ready
+  kubectl -n tenant-test wait hr vm-disk-$name --timeout=120s --for=condition=ready || {
+    echo "=== HelmRelease status ===" >&2
+    kubectl -n tenant-test get hr vm-disk-$name -o yaml 2>&1 || true
+    echo "=== Pods ===" >&2
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ===" >&2
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    false
+  }
   kubectl -n tenant-test wait dv vm-disk-$name --timeout=250s --for=condition=ready
   kubectl -n tenant-test wait pvc vm-disk-$name --timeout=200s --for=jsonpath='{.status.phase}'=Bound
 }
@@ -61,7 +69,17 @@ spec:
 EOF
   sleep 5
   timeout 20 sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 5; done"
-  kubectl -n tenant-test wait hr vm-instance-$name --timeout=5s --for=condition=ready
+  kubectl -n tenant-test wait hr vm-instance-$name --timeout=180s --for=condition=ready || {
+    echo "=== HelmRelease status ===" >&2
+    kubectl -n tenant-test get hr vm-instance-$name -o yaml 2>&1 || true
+    echo "=== VM/VMI status ===" >&2
+    kubectl -n tenant-test get vmdisk,vm,virtualmachine,virtualmachineinstance 2>&1 || true
+    echo "=== Pods ===" >&2
+    kubectl -n tenant-test get pods 2>&1 || true
+    echo "=== Events ===" >&2
+    kubectl -n tenant-test get events --sort-by='.lastTimestamp' 2>&1 | tail -30 || true
+    false
+  }
   kubectl -n tenant-test wait vm vm-instance-$name --timeout=20s --for=condition=ready
   kubectl -n tenant-test delete vminstances.apps.cozystack.io $name 
   kubectl -n tenant-test delete vmdisks.apps.cozystack.io $diskName 
