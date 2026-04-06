@@ -44,5 +44,14 @@ version: v8
 ## @section Application-specific parameters
 ##
 
+## @enum {string} PersistenceMode - Redis data persistence strategy.
+## @value rdb
+## @value aof
+## @value both
+## @value none
+
+## @param {PersistenceMode} persistenceMode="rdb" - Persistence strategy. rdb uses periodic snapshots (operator defaults), aof uses append-only file with everysec fsync, both enables both strategies, none disables persistence entirely.
+persistenceMode: "rdb"
+
 ## @param {bool} authEnabled - Enable password generation.
 authEnabled: true
