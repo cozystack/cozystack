@@ -5,7 +5,6 @@ metadata:
   name: seaweedfs-db
 spec:
   instances: {{ .Values.db.replicas }}
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.7
   storage:
     size: {{ .Values.db.size }}
     {{- with .Values.db.storageClass }}

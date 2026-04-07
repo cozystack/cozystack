@@ -5,7 +5,6 @@ metadata:
   name: alerta-db
 spec:
   instances: 2
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.7
   {{- if .Values._cluster.scheduling }}
   {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}

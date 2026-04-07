@@ -4,7 +4,6 @@ metadata:
   name: keycloak-db
 spec:
   instances: 2
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.7
   storage:
     size: 20Gi
   {{- if .Values._cluster.scheduling }}
