@@ -5,6 +5,9 @@
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @param {string} version - Kafka version to deploy.
+version: "v3.9"
+
 ##
 ## @section Application-specific parameters
 ##

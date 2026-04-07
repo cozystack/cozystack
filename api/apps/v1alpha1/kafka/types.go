@@ -21,6 +21,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// Kafka version to deploy.
+	// +kubebuilder:default:="v3.9"
+	Version string `json:"version"`
 	// Topics configuration.
 	// +kubebuilder:default:={}
 	Topics []Topic `json:"topics,omitempty"`
