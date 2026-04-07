@@ -82,6 +82,11 @@ Security is part of the normal Cozystack development and release process. Curren
 - automated pull request checks, including pre-commit validation, unit tests, builds, and end-to-end testing
 - release automation with patch releases, release branches, and backport workflows
 - ongoing maintenance of packaged dependencies and platform integrations across supported release lines
+- automated vulnerability scanning of all organization repositories and container images using Trivy
+- GitHub Private Vulnerability Reporting enabled on all public repositories
+- GitHub Secret Scanning and Push Protection enabled on all repositories
+- two-factor authentication required for all organization members
+- monthly public security summaries covering triaged findings
 
 Because Cozystack is an integration-heavy platform, some vulnerabilities may require coordination across multiple repositories or with upstream maintainers before a public fix can be released.
 
