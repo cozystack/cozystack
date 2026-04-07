@@ -1,6 +1,5 @@
 #
-# Copyright © contributors to CloudNativePG, established as
-# CloudNativePG a Series of LF Projects, LLC.
+# Copyright The CloudNativePG Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,8 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
 #
 {{- if .Values.serviceAccount.create }}
 ---
@@ -70,7 +67,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: {{ include "cloudnative-pg.serviceAccountName" . }}
-  namespace: {{ include "cloudnative-pg.namespace" . }}
+  namespace: {{ .Release.Namespace }}
 {{/*
 If we're doing a single-namespace installation
 we create a Role with the common rules for the operator,
@@ -111,7 +108,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: {{ include "cloudnative-pg.serviceAccountName" . }}
-  namespace: {{ include "cloudnative-pg.namespace" . }}
+  namespace: {{ .Release.Namespace }}
 {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -131,14 +128,10 @@ rules:
   resources:
   - backups
   - clusters
-  - clusters/status
   - databases
-  - failoverquorums
   - poolers
   - publications
   - scheduledbackups
-  - imagecatalogs
-  - clusterimagecatalogs
   - subscriptions
   verbs:
   - get
@@ -161,14 +154,10 @@ rules:
   resources:
   - backups
   - clusters
-  - clusters/status
   - databases
-  - failoverquorums
   - poolers
   - publications
   - scheduledbackups
-  - imagecatalogs
-  - clusterimagecatalogs
   - subscriptions
   verbs:
   - create

@@ -1,6 +1,5 @@
 #
-# Copyright © contributors to CloudNativePG, established as
-# CloudNativePG a Series of LF Projects, LLC.
+# Copyright The CloudNativePG Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,8 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
 #
 {{- if .Values.webhook.mutating.create }}
 ---
@@ -34,7 +31,7 @@ webhooks:
   clientConfig:
     service:
       name: {{ .Values.service.name }}
-      namespace: {{ include "cloudnative-pg.namespace" . }}
+      namespace: {{ .Release.Namespace }}
       path: /mutate-postgresql-cnpg-io-v1-backup
       port: {{ .Values.service.port }}
   failurePolicy: {{ .Values.webhook.mutating.failurePolicy }}
@@ -55,7 +52,7 @@ webhooks:
   clientConfig:
     service:
       name: {{ .Values.service.name }}
-      namespace: {{ include "cloudnative-pg.namespace" . }}
+      namespace: {{ .Release.Namespace }}
       path: /mutate-postgresql-cnpg-io-v1-cluster
       port: {{ .Values.service.port }}
   failurePolicy: {{ .Values.webhook.mutating.failurePolicy }}
@@ -76,28 +73,7 @@ webhooks:
   clientConfig:
     service:
       name: {{ .Values.service.name }}
-      namespace: {{ include "cloudnative-pg.namespace" . }}
-      path: /mutate-postgresql-cnpg-io-v1-database
-      port: {{ .Values.service.port }}
-  failurePolicy: {{ .Values.webhook.mutating.failurePolicy }}
-  name: mdatabase.cnpg.io
-  rules:
-  - apiGroups:
-    - postgresql.cnpg.io
-    apiVersions:
-    - v1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - databases
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: {{ .Values.service.name }}
-      namespace: {{ include "cloudnative-pg.namespace" . }}
+      namespace: {{ .Release.Namespace }}
       path: /mutate-postgresql-cnpg-io-v1-scheduledbackup
       port: {{ .Values.service.port }}
   failurePolicy: {{ .Values.webhook.mutating.failurePolicy }}

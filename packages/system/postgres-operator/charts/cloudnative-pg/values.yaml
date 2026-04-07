@@ -1,6 +1,5 @@
 #
-# Copyright © contributors to CloudNativePG, established as
-# CloudNativePG a Series of LF Projects, LLC.
+# Copyright The CloudNativePG Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,8 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# SPDX-License-Identifier: Apache-2.0
 #
 # Default values for CloudNativePG.
 # This is a YAML-formatted file.
@@ -36,15 +33,6 @@ namespaceOverride: ""
 hostNetwork: false
 dnsPolicy: ""
 
-# -- Update strategy for the operator.
-# ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
-# For example:
-#  type: RollingUpdate
-#  rollingUpdate:
-#    maxSurge: 25%
-#    maxUnavailable: 25%
-updateStrategy: {}
-
 crds:
   # -- Specifies whether the CRDs should be created when installing the chart.
   create: true
@@ -62,9 +50,6 @@ webhook:
     initialDelaySeconds: 3
   readinessProbe:
     initialDelaySeconds: 3
-  startupProbe:
-    failureThreshold: 6
-    periodSeconds: 5
 
 # Operator configuration.
 config:
@@ -88,7 +73,7 @@ config:
   # -- The maximum number of concurrent reconciles. Defaults to 10.
   maxConcurrentReconciles: 10
 
-# -- Additional arguments to be added to the operator's args list.
+# -- Additinal arguments to be added to the operator's args list.
 additionalArgs: []
 
 # -- Array containing extra environment variables which can be templated.
@@ -166,9 +151,6 @@ resources: {}
 
 # -- Nodeselector for the operator to be installed.
 nodeSelector: {}
-
-# -- Topology Spread Constraints for the operator to be installed.
-topologySpreadConstraints: []
 
 # -- Tolerations for the operator to be installed.
 tolerations: []
@@ -655,35 +637,3 @@ monitoringQueriesConfigMap:
         - setting:
             usage: "GAUGE"
             description: "Setting value"
-
-    pg_extensions:
-      query: |
-        SELECT
-         current_database() as datname,
-         name as extname,
-         default_version,
-         installed_version,
-         CASE
-           WHEN default_version = installed_version THEN 0
-           ELSE 1
-        END AS update_available
-        FROM pg_catalog.pg_available_extensions
-        WHERE installed_version IS NOT NULL
-      metrics:
-        - datname:
-            usage: "LABEL"
-            description: "Name of the database"
-        - extname:
-            usage: "LABEL"
-            description: "Extension name"
-        - default_version:
-            usage: "LABEL"
-            description: "Default version"
-        - installed_version:
-            usage: "LABEL"
-            description: "Installed version"
-        - update_available:
-            usage: "GAUGE"
-            description: "An update is available"
-      target_databases:
-        - '*'

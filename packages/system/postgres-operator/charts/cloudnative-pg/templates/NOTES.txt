@@ -1,5 +1,5 @@
 
-CloudNativePG operator should be installed in namespace "{{ include "cloudnative-pg.namespace" . }}".
+CloudNativePG operator should be installed in namespace "{{ .Release.Namespace }}".
 You can now create a PostgreSQL cluster with 3 nodes as follows:
 
 cat <<EOF | kubectl apply -f -
@@ -9,7 +9,7 @@ kind: Cluster
 metadata:
   name: cluster-example
   {{if not .Values.config.clusterWide  -}}
-  namespace: {{ include "cloudnative-pg.namespace" . }}
+  namespace: {{ .Release.Namespace }}
   {{- end }}
 spec:
   instances: 3
