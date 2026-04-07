@@ -7,6 +7,11 @@
       "type": "boolean",
       "default": false
     },
+    "version": {
+      "description": "Kafka version to deploy.",
+      "type": "string",
+      "default": "v3.9"
+    },
     "topics": {
       "description": "Topics configuration.",
       "type": "array",

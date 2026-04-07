@@ -1,3 +1,11 @@
+{{- $kafkaVersion := include "kafka.versionMap" . }}
+{{- $existingKafka := lookup "kafka.strimzi.io/v1beta2" "Kafka" .Release.Namespace .Release.Name }}
+{{- $isExisting := not (empty $existingKafka) }}
+{{- $metadataState := "" }}
+{{- if $isExisting }}
+  {{- $metadataState = dig "status" "kafkaMetadataState" "ZooKeeper" $existingKafka }}
+{{- end }}
+{{- $isKRaft := or (not $isExisting) (eq $metadataState "KRaft") }}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -5,10 +13,16 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    strimzi.io/node-pools: enabled
+    {{- if $isKRaft }}
+    strimzi.io/kraft: enabled
+    {{- else }}
+    strimzi.io/kraft: migration
+    {{- end }}
 spec:
   kafka:
-    replicas: {{ .Values.kafka.replicas }}
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 6 }}
+    version: {{ $kafkaVersion }}
     listeners:
       - name: plain
         port: 9092
@@ -46,24 +60,13 @@ spec:
       default.replication.factor: 3
       min.insync.replicas: 2
       {{- end }}
-    storage:
-      type: jbod
-      volumes:
-      - id: 0
-        type: persistent-claim
-        {{- with .Values.kafka.size }}
-        size: {{ . }}
-        {{- end }}
-        {{- with .Values.kafka.storageClass }}
-        class: {{ . }}
-        {{- end }}
-        deleteClaim: true
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
         configMapKeyRef:
           name: {{ .Release.Name }}-metrics
           key: kafka-metrics-config.yml
+  {{- if not $isKRaft }}
   zookeeper:
     replicas: {{ .Values.zookeeper.replicas }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.zookeeper.resourcesPreset .Values.zookeeper.resources $) | nindent 6 }}
@@ -72,7 +75,7 @@ spec:
       {{- with .Values.zookeeper.size }}
       size: {{ . }}
       {{- end }}
-      {{- with .Values.kafka.storageClass }}
+      {{- with .Values.zookeeper.storageClass }}
       class: {{ . }}
       {{- end }}
       deleteClaim: false
@@ -81,7 +84,8 @@ spec:
       valueFrom:
         configMapKeyRef:
           name: {{ .Release.Name }}-metrics
-          key: kafka-metrics-config.yml
+          key: zookeeper-metrics-config.yml
+  {{- end }}
   entityOperator:
     topicOperator: {}
     userOperator: {}

@@ -4,9 +4,10 @@
 
 ### Common parameters
 
-| Name       | Description                                      | Type   | Value   |
-| ---------- | ------------------------------------------------ | ------ | ------- |
-| `external` | Enable external access from outside the cluster. | `bool` | `false` |
+| Name       | Description                                      | Type     | Value   |
+| ---------- | ------------------------------------------------ | -------- | ------- |
+| `external` | Enable external access from outside the cluster. | `bool`   | `false` |
+| `version`  | Kafka version to deploy.                         | `string` | `v3.9`  |
 
 
 ### Application-specific parameters
