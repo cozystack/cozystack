@@ -1,5 +1,5 @@
 #!/bin/sh
-# Migration 36 --> 37
+# Migration 37 --> 38
 # Update PostgreSQL image to 17.7-standard-trixie for system databases.
 #
 # This migration updates the imageName for all CNPG clusters with names matching
@@ -68,4 +68,4 @@ echo "=== PostgreSQL image update completed ==="
 
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
-  --from-literal=version=37 --dry-run=client -o yaml | kubectl apply -f-
+  --from-literal=version=38 --dry-run=client -o yaml | kubectl apply -f-
