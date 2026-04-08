@@ -1,43 +1,71 @@
 #!/bin/sh
-# Migration 37 --> 38
-# Backfill spec.version on postgreses.apps.cozystack.io resources.
+# Migration 36 --> 37
+# Update PostgreSQL image to 17.7-standard-trixie for system databases.
 #
-# Before this migration PostgreSQL had a default version field set to v18.
-# This migration sets spec.version to "v17" for any postgres app resource that
-# does not already have it set, to ensure compatibility with monitoring
-# configurations that are hardcoded to PostgreSQL 17.
+# This migration updates the imageName for all CNPG clusters with names matching
+# system database patterns (keycloak-db, harbor-db, grafana-db, alerta-db, seaweedfs-db)
+# to use the pinned PostgreSQL 17.7-standard-trixie image from ghcr.io/cloudnative-pg.
+#
+# NOTE: This migration ONLY updates system CNPG Cluster resources (clusters.postgresql.cnpg.io),
+# NOT user-created Postgres applications (postgreses.apps.cozystack.io).
 
 set -euo pipefail
 
-DEFAULT_VERSION="v17"
+TARGET_IMAGE="ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie"
 
-# Skip if the CRD does not exist (postgres was never installed)
-if ! kubectl api-resources --api-group=apps.cozystack.io -o name 2>/dev/null | grep -q '^postgreses\.'; then
-  echo "CRD postgreses.apps.cozystack.io not found, skipping migration"
-  kubectl create configmap -n cozy-system cozystack-version \
-    --from-literal=version=38 --dry-run=client -o yaml | kubectl apply -f-
-  exit 0
-fi
+# Database names to update (can be in any namespace)
+DB_NAMES="keycloak-db harbor-db grafana-db alerta-db seaweedfs-db"
 
-POSTGRESES=$(kubectl get postgreses.apps.cozystack.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}')
-for resource in $POSTGRESES; do
-  NS="${resource%%/*}"
-  APP_NAME="${resource##*/}"
+echo "=== Updating PostgreSQL images for system databases: $DB_NAMES ==="
+echo "Target image: $TARGET_IMAGE"
 
-  # Skip if spec.version is already set
-  CURRENT_VER=$(kubectl get postgreses.apps.cozystack.io -n "$NS" "$APP_NAME" \
-    -o jsonpath='{.spec.version}')
-  if [ -n "$CURRENT_VER" ]; then
-    echo "SKIP $NS/$APP_NAME: spec.version already set to '$CURRENT_VER'"
+# Find all CNPG clusters across all namespaces
+ALL_CLUSTERS=$(kubectl get clusters.postgresql.cnpg.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+
+for entry in $ALL_CLUSTERS; do
+  [ -z "$entry" ] && continue
+
+  NAMESPACE="${entry%%/*}"
+  CLUSTER_NAME="${entry##*/}"
+
+  # Skip if this is a user-created Postgres (has apps.cozystack.io/application.name label)
+  APP_LABEL=$(kubectl get clusters.postgresql.cnpg.io -n "$NAMESPACE" "$CLUSTER_NAME" \
+    -o jsonpath='{.metadata.labels.apps\.cozystack\.io/application\.name}' 2>/dev/null || echo "")
+  if [ -n "$APP_LABEL" ]; then
     continue
   fi
 
-  echo "Patching postgres/$APP_NAME in $NS: setting version=$DEFAULT_VERSION"
+  # Check if cluster name matches one of our target databases
+  MATCH=false
+  for db_name in $DB_NAMES; do
+    if [ "$CLUSTER_NAME" = "$db_name" ]; then
+      MATCH=true
+      break
+    fi
+  done
 
-  kubectl patch postgreses.apps.cozystack.io -n "$NS" "$APP_NAME" --type=merge \
-    --patch "{\"spec\":{\"version\":\"${DEFAULT_VERSION}\"}}"
+  if [ "$MATCH" = false ]; then
+    continue
+  fi
+
+  # Get current imageName
+  CURRENT_IMAGE=$(kubectl get clusters.postgresql.cnpg.io -n "$NAMESPACE" "$CLUSTER_NAME" \
+    -o jsonpath='{.spec.imageName}' 2>/dev/null || echo "")
+
+  if [ "$CURRENT_IMAGE" = "$TARGET_IMAGE" ]; then
+    echo "SKIP $NAMESPACE/$CLUSTER_NAME: already using $TARGET_IMAGE"
+    continue
+  fi
+
+  echo "PATCH $NAMESPACE/$CLUSTER_NAME: $CURRENT_IMAGE -> $TARGET_IMAGE"
+
+  kubectl patch clusters.postgresql.cnpg.io -n "$NAMESPACE" "$CLUSTER_NAME" \
+    --type=merge \
+    --patch "{\"spec\":{\"imageName\":\"${TARGET_IMAGE}\"}}"
 done
+
+echo "=== PostgreSQL image update completed ==="
 
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \
-  --from-literal=version=38 --dry-run=client -o yaml | kubectl apply -f-
+  --from-literal=version=37 --dry-run=client -o yaml | kubectl apply -f-

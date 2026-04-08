@@ -4,6 +4,7 @@ metadata:
   name: grafana-db
 spec:
   instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie
   storage:
     size: {{ .Values.grafana.db.size }}
   {{- if .Values._cluster.scheduling }}
