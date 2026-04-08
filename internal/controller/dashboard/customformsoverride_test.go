@@ -317,6 +317,108 @@ func TestApplyListInputOverrides_StorageClassFoundationDB(t *testing.T) {
 	assertStorageClassListInput(t, sc)
 }
 
+func TestApplyListInputOverrides_VMDisk_SourceFields(t *testing.T) {
+	openAPISchema := `{
+		"properties":{
+			"optical":{"type":"boolean"},
+			"source":{
+				"type":"object",
+				"properties":{
+					"image":{
+						"type":"object",
+						"properties":{
+							"name":{"type":"string"}
+						}
+					},
+					"disk":{
+						"type":"object",
+						"properties":{
+							"name":{"type":"string"}
+						}
+					}
+				}
+			},
+			"storage":{"type":"string"},
+			"storageClass":{"type":"string"}
+		}
+	}`
+
+	schema, err := buildMultilineStringSchema(openAPISchema)
+	if err != nil {
+		t.Fatalf("buildMultilineStringSchema failed: %v", err)
+	}
+
+	applyListInputOverrides(schema, "VMDisk", map[string]any{})
+
+	specProps := schema["properties"].(map[string]any)["spec"].(map[string]any)["properties"].(map[string]any)
+
+	// Check storageClass
+	sc, ok := specProps["storageClass"].(map[string]any)
+	if !ok {
+		t.Fatal("storageClass not found in spec.properties")
+	}
+	assertStorageClassListInput(t, sc)
+
+	// Check source.image.name listInput
+	// Structure: specProps["source"]["properties"]["image"]["properties"]["name"]
+	sourceObj, ok := specProps["source"].(map[string]any)
+	if !ok {
+		t.Fatal("source not found in spec.properties")
+	}
+	sourceObjProps, ok := sourceObj["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("source.properties not found")
+	}
+	imageObj, ok := sourceObjProps["image"].(map[string]any)
+	if !ok {
+		t.Fatal("image not found in source.properties")
+	}
+	imageObjProps, ok := imageObj["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("image.properties not found")
+	}
+	imgName, ok := imageObjProps["name"].(map[string]any)
+	if !ok {
+		t.Fatal("name not found in image.properties")
+	}
+	if imgName["type"] != "listInput" {
+		t.Errorf("expected type listInput, got %v", imgName["type"])
+	}
+	imgNameCustomProps, ok := imgName["customProps"].(map[string]any)
+	if !ok {
+		t.Fatal("name.customProps not found")
+	}
+	expectedImageURI := "/api/clusters/{cluster}/k8s/apis/cdi.kubevirt.io/v1beta1/namespaces/cozy-public/datavolumes"
+	if imgNameCustomProps["valueUri"] != expectedImageURI {
+		t.Errorf("expected valueUri %s, got %v", expectedImageURI, imgNameCustomProps["valueUri"])
+	}
+
+	// Check source.disk.name listInput
+	diskObj, ok := sourceObjProps["disk"].(map[string]any)
+	if !ok {
+		t.Fatal("disk not found in source.properties")
+	}
+	diskObjProps, ok := diskObj["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("disk.properties not found")
+	}
+	diskName, ok := diskObjProps["name"].(map[string]any)
+	if !ok {
+		t.Fatal("name not found in disk.properties")
+	}
+	if diskName["type"] != "listInput" {
+		t.Errorf("expected type listInput, got %v", diskName["type"])
+	}
+	diskNameCustomProps, ok := diskName["customProps"].(map[string]any)
+	if !ok {
+		t.Fatal("disk name.customProps not found")
+	}
+	expectedDiskURI := "/api/clusters/{cluster}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{namespace}/vmdisks"
+	if diskNameCustomProps["valueUri"] != expectedDiskURI {
+		t.Errorf("expected valueUri %s, got %v", expectedDiskURI, diskNameCustomProps["valueUri"])
+	}
+}
+
 func TestApplyListInputOverrides_StorageClassKafka(t *testing.T) {
 	schema := map[string]any{}
 	applyListInputOverrides(schema, "Kafka", map[string]any{})

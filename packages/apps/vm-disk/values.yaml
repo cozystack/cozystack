@@ -3,17 +3,21 @@
 ##
 
 ## @typedef {struct} SourceImage - Use image by name.
-## @field {string} name - Name of the image to use (uploaded as "golden image" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, `talos`).
+## @field {string} name - Name of the image to use.
 
 ## @typedef {struct} SourceUpload - Upload local image.
 
 ## @typedef {struct} SourceHTTP - Download image from an HTTP source.
 ## @field {string} url - URL to download the image.
 
+## @typedef {struct} SourceDisk - Clone an existing vm-disk.
+## @field {string} name - Name of the vm-disk to clone.
+
 ## @typedef {struct} Source - The source image location used to create a disk.
-## @field {*SourceImage} [image] - Use image by name.
+## @field {*SourceImage} [image] - Use image by name from default collection.
 ## @field {*SourceUpload} [upload] - Upload local image.
 ## @field {*SourceHTTP} [http] - Download image from an HTTP source.
+## @field {*SourceDisk} [disk] - Clone an existing vm-disk.
 
 ## @param {Source} source - The source image location used to create a disk.
 source: {}

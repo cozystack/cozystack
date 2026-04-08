@@ -141,7 +141,10 @@ func (m *Manager) ensureCFOMapping(ctx context.Context, crd *cozyv1alpha1.Applic
 }
 
 // buildMultilineStringSchema parses OpenAPI schema and creates schema with multilineString
-// for all string fields inside spec that don't have enum
+// for all string fields inside spec that don't have enum.
+// It handles two structures:
+// - properties.spec.properties (most resources)
+// - properties.properties (VMDisk and similar resources without spec wrapper)
 func buildMultilineStringSchema(openAPISchema string) (map[string]any, error) {
 	if openAPISchema == "" {
 		return map[string]any{}, nil
@@ -161,15 +164,25 @@ func buildMultilineStringSchema(openAPISchema string) (map[string]any, error) {
 		"properties": map[string]any{},
 	}
 
-	// Check if there's a spec property
-	specProp, ok := props["spec"].(map[string]any)
-	if !ok {
-		return map[string]any{}, nil
+	var specProps map[string]any
+	var hasSpec bool
+
+	// First try to find properties under spec
+	if specProp, ok := props["spec"].(map[string]any); ok {
+		specProps, hasSpec = specProp["properties"].(map[string]any)
 	}
 
-	specProps, ok := specProp["properties"].(map[string]any)
-	if !ok {
-		return map[string]any{}, nil
+	// If no spec wrapper, use top-level properties directly (VMDisk pattern)
+	if !hasSpec {
+		specProps = props
+		// Still wrap in spec for consistency with applyListInputOverrides
+		schemaProps := schema["properties"].(map[string]any)
+		specSchema := map[string]any{
+			"properties": map[string]any{},
+		}
+		schemaProps["spec"] = specSchema
+		processSpecProperties(specProps, specSchema["properties"].(map[string]any))
+		return schema, nil
 	}
 
 	// Create spec.properties structure in schema
@@ -231,9 +244,40 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 		}
 
 	case "ClickHouse", "Harbor", "HTTPCache", "Kubernetes", "MariaDB", "MongoDB",
-		"NATS", "OpenBAO", "Postgres", "Qdrant", "RabbitMQ", "Redis", "VMDisk":
+		"NATS", "OpenBAO", "Postgres", "Qdrant", "RabbitMQ", "Redis":
 		specProps := ensureSchemaPath(schema, "spec")
 		specProps["storageClass"] = storageClassListInput()
+
+	case "VMDisk":
+		specProps := ensureSchemaPath(schema, "spec")
+		specProps["storageClass"] = storageClassListInput()
+
+		// Override source.image.name to be an API-backed dropdown listing default images
+		if sourceObj, ok := specProps["source"].(map[string]any); ok {
+			if imgProps, ok := sourceObj["properties"].(map[string]any); ok {
+				if imgName, ok := imgProps["image"].(map[string]any); ok {
+					imgName["properties"].(map[string]any)["name"] = map[string]any{
+						"type": "listInput",
+						"customProps": map[string]any{
+							"valueUri":    "/api/clusters/{cluster}/k8s/apis/cdi.kubevirt.io/v1beta1/namespaces/cozy-public/datavolumes",
+							"keysToValue": []any{"metadata", "annotations", "vm-default-images.cozystack.io/name"},
+							"keysToLabel": []any{"metadata", "annotations", "vm-default-images.cozystack.io/description"},
+						},
+					}
+				}
+				// Override source.disk.name to be an API-backed dropdown listing VMDisk resources
+				if diskName, ok := imgProps["disk"].(map[string]any); ok {
+					diskName["properties"].(map[string]any)["name"] = map[string]any{
+						"type": "listInput",
+						"customProps": map[string]any{
+							"valueUri":    "/api/clusters/{cluster}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{namespace}/vmdisks",
+							"keysToValue": []any{"metadata", "name"},
+							"keysToLabel": []any{"metadata", "name"},
+						},
+					}
+				}
+			}
+		}
 
 	case "FoundationDB":
 		storageProps := ensureSchemaPath(schema, "spec", "storage")

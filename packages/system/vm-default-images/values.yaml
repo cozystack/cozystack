@@ -1,0 +1,167 @@
+##
+## @section Global Golden Image Collection
+##
+
+## @param {string} storageClass - Default StorageClass for all images. If empty, uses the cluster default StorageClass.
+storageClass: ""
+
+## @typedef {struct} ImageOS - Operating system metadata for a Golden Image.
+## @field {string} [family] - OS family (e.g. "Linux", "Windows").
+## @field {string} [name] - OS distribution name (e.g. "Ubuntu", "Fedora").
+## @field {string} [version] - OS version (e.g. "24.04", "40").
+
+## @typedef {struct} GlobalImage - A global Golden Image entry.
+## @field {string} name - Unique image name used to reference this image in vm-disk (e.g. "ubuntu").
+## @field {string} url - HTTP(S) URL to download the image from.
+## @field {quantity} storage - Storage size to allocate for this image.
+## @field {string} storageClass - StorageClass used to store the image (overrides global default).
+## @field {ImageOS} [os] - Operating system metadata.
+## @field {string} [architecture] - CPU architecture (e.g. "amd64", "arm64").
+## @field {string} [description] - Human-readable description.
+
+## @param {[]GlobalImage} images - List of global Golden Images to provision in the cozy-public namespace.
+images:
+  - name: ubuntu-22.04
+    url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Ubuntu
+      version: "22.04"
+    architecture: amd64
+    description: "Ubuntu 22.04 LTS (Jammy Jellyfish) cloud image"
+  - name: ubuntu-24.04
+    url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Ubuntu
+      version: "24.04"
+    architecture: amd64
+    description: "Ubuntu 24.04 LTS (Noble Numbat) cloud image"
+  - name: rocky-8
+    url: https://dl.rockylinux.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud-Base.latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Rocky Linux
+      version: "8"
+    architecture: amd64
+    description: "Rocky Linux 8 GenericCloud image"
+  - name: rocky-9
+    url: https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Rocky Linux
+      version: "9"
+    architecture: amd64
+    description: "Rocky Linux 9 GenericCloud image"
+  - name: rocky-10
+    url: https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Rocky Linux
+      version: "10"
+    architecture: amd64
+    description: "Rocky Linux 10 GenericCloud image"
+  - name: almalinux-8
+    url: https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: AlmaLinux
+      version: "8"
+    architecture: amd64
+    description: "AlmaLinux 8 GenericCloud image"
+  - name: almalinux-9
+    url: https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: AlmaLinux
+      version: "9"
+    architecture: amd64
+    description: "AlmaLinux 9 GenericCloud image"
+  - name: almalinux-10
+    url: https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: AlmaLinux
+      version: "10"
+    architecture: amd64
+    description: "AlmaLinux 10 GenericCloud image"
+  - name: debian-12
+    url: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Debian
+      version: "12"
+    architecture: amd64
+    description: "Debian 12 (Bookworm) generic cloud image"
+  - name: debian-13
+    url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Debian
+      version: "13"
+    architecture: amd64
+    description: "Debian 13 (Trixie) generic cloud image"
+  - name: centos-stream-9
+    url: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-9-latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: CentOS
+      version: "9"
+    architecture: amd64
+    description: "CentOS Stream 9 GenericCloud image"
+  - name: centos-stream-10
+    url: https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-10-latest.x86_64.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: CentOS
+      version: "10"
+    architecture: amd64
+    description: "CentOS Stream 10 GenericCloud image"
+  - name: opensuse-leap-15.6
+    url: https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images/openSUSE-Leap-15.6.x86_64-NoCloud.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: openSUSE
+      version: "15.6"
+    architecture: amd64
+    description: "openSUSE Leap 15.6 NoCloud image"
+  - name: opensuse-leap-16.0
+    url: https://download.opensuse.org/repositories/openSUSE:/Leap:/16.0:/Images/images/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: openSUSE
+      version: "16.0"
+    architecture: amd64
+    description: "openSUSE Leap 16.0 Minimal VM cloud image"
+  - name: ubuntu-20.04
+    url: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Ubuntu
+      version: "20.04"
+    architecture: amd64
+    description: "Ubuntu 20.04 LTS (Focal Fossa) cloud image"
+  - name: alpine-3.21
+    url: https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.6-x86_64-bios-cloudinit-r0.qcow2
+    storage: 20Gi
+    os:
+      family: Linux
+      name: Alpine
+      version: "3.21"
+    architecture: amd64
+    description: "Alpine Linux 3.21 cloud image (cloud-init)"
