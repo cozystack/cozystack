@@ -1,6 +1,6 @@
 # LINSTOR Server Patches
 
-Custom patches for piraeus-server (linstor-server) v1.33.1.
+Custom patches for piraeus-server (linstor-server) v1.33.2.
 
 - **allow-toggle-disk-retry.diff** — Backport maintainer implementation of toggle-disk retry/abort
   - Source PR/comment: [#475](https://github.com/LINBIT/linstor-server/pull/475), [maintainer note](https://github.com/LINBIT/linstor-server/pull/475#issuecomment-3949630419)
