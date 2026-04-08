@@ -4,7 +4,11 @@ metadata:
   name: grafana-db
 spec:
   instances: 2
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.7
+  imageCatalogRef:
+    apiGroup: postgresql.cnpg.io
+    kind: ClusterImageCatalog
+    name: postgresql-bookworm
+    major: 17
   storage:
     size: {{ .Values.grafana.db.size }}
   {{- if .Values._cluster.scheduling }}
