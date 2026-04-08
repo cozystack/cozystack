@@ -32,6 +32,9 @@ spec:
     - name: {{ .Values.bootstrap.oldName }}
       barmanObjectStore:
         destinationPath: {{ .Values.backup.destinationPath }}
+        {{- if .Values.bootstrap.serverName }}
+        serverName: {{ .Values.bootstrap.serverName }}
+        {{- end }}
         endpointURL: {{ .Values.backup.endpointURL }}
         s3Credentials:
           accessKeyId:

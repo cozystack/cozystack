@@ -86,12 +86,15 @@ type Bootstrap struct {
 	// Whether to restore from a backup.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Previous cluster name before deletion.
+	// Previous cluster name before deletion (matches serverName in backup.info).
 	// +kubebuilder:default:=""
 	OldName string `json:"oldName"`
 	// Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 	// +kubebuilder:default:=""
 	RecoveryTime string `json:"recoveryTime,omitempty"`
+	// Barman server name from the old cluster's backup.info. Use when the original cluster used a different serverName than its Kubernetes cluster name.
+	// +kubebuilder:default:=""
+	ServerName string `json:"serverName,omitempty"`
 }
 
 type Database struct {
