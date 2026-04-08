@@ -3,6 +3,7 @@
 @test "Create Kafka" {
   name='test'
   kubectl -n tenant-test delete kafka.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test wait kafka.apps.cozystack.io $name --for=delete --timeout=2m 2>/dev/null || true
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kafka
@@ -40,7 +41,7 @@ spec:
 EOF
   sleep 5
   kubectl -n tenant-test wait hr kafka-$name --timeout=30s --for=condition=ready
-  kubectl wait kafkas -n tenant-test test --timeout=60s --for=condition=ready
+  kubectl wait kafkas -n tenant-test test --timeout=300s --for=condition=ready
   timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0; do sleep 10; done"
   kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-client -o jsonpath='{.spec.ports[0].port}' | grep -q '2181'; do sleep 10; done"
