@@ -246,12 +246,17 @@
           "default": false
         },
         "oldName": {
-          "description": "Previous cluster name before deletion.",
+          "description": "Previous cluster name before deletion (matches serverName in backup.info).",
           "type": "string",
           "default": ""
         },
         "recoveryTime": {
           "description": "Timestamp (RFC3339) for point-in-time recovery; empty means latest.",
+          "type": "string",
+          "default": ""
+        },
+        "serverName": {
+          "description": "Barman server name from the old cluster's backup.info. Use when the original cluster used a different serverName than its Kubernetes cluster name.",
           "type": "string",
           "default": ""
         }

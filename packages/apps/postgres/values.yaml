@@ -153,7 +153,8 @@ backup:
 ## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
 ## @field {bool} enabled - Whether to restore from a backup.
 ## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
-## @field {string} oldName - Previous cluster name before deletion.
+## @field {string} oldName - Previous cluster name before deletion (matches serverName in backup.info).
+## @field {string} [serverName] - Barman server name from the old cluster's backup.info. Use when the original cluster used a different serverName than its Kubernetes cluster name.
 
 ## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
@@ -161,3 +162,4 @@ bootstrap:
   # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
   oldName: ""
+  serverName: ""
