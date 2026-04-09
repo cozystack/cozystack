@@ -217,17 +217,6 @@ spec:
           chmod 0755 /root/kubeadm
           if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
           if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
-      {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
-      {{- if $sec }}
-      {{- range $key, $_ := $sec.data }}
-      - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
-        contentFrom:
-          secret:
-            name: {{ $.Release.Name }}-patch-containerd
-            key: {{ $key }}
-        permissions: "0400"
-      {{- end }}
-      {{- end }}
       diskSetup:
         filesystems:
         - device: /dev/vdb
