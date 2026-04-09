@@ -1,0 +1,570 @@
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/storage/AbsStorageProvider.java b/satellite/src/main/java/com/linbit/linstor/layer/storage/AbsStorageProvider.java
+--- a/satellite/src/main/java/com/linbit/linstor/layer/storage/AbsStorageProvider.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/storage/AbsStorageProvider.java
+@@ -2081,7 +2081,6 @@ public abstract class AbsStorageProvider<
+     )
+         throws IOException, AccessDeniedException
+     {
+-        final StorPoolName storPoolObjName = storPoolObj.getName();
+         if (storDevicePath != null)
+         {
+             errorReporter.logDebug("updateMinIoSize: Have storDevicePath \"%s\"", storDevicePath);
+@@ -2094,35 +2093,18 @@ public abstract class AbsStorageProvider<
+                 "updateMinIoSize: Block device path is \"%s\"",
+                 blockDevicePath.toString()
+             );
+-            final long minIoSize = BlockSizeInfo.getBlockSize(blockDevicePath);
+-
+-            boolean updateValue = true;
+-
+-            final String propKey = StorageConstants.NAMESPACE_INTERNAL + '/' +
+-                StorageConstants.BLK_DEV_MIN_IO_SIZE;
+-            final Props storPoolProps = storPoolObj.getProps(storDriverAccCtx);
+-            final @Nullable String currentPropValue = storPoolProps.getProp(propKey);
+-            if (currentPropValue != null)
+-            {
+-                try
+-                {
+-                    final long currentPropMinIoSize = Long.parseLong(currentPropValue);
+-                    updateValue = currentPropMinIoSize != minIoSize;
+-                }
+-                catch (NumberFormatException ignored)
+-                {
+-                }
+-            }
+-
+-            if (updateValue)
+-            {
+-                final String propValue = Long.toString(minIoSize);
+-                errorReporter.logDebug(
+-                    "Storage pool \"%s\": Set property \"%s\" = \"%s\"",
+-                    storPoolObjName.displayValue, propKey, propValue
+-                );
+-                propsChange.changeStorPoolProp(storPoolObj, propKey, propValue);
+-            }
++            updatePropIfNeeded(
++                propsChange,
++                storPoolObj,
++                StorageConstants.NAMESPACE_INTERNAL + '/' + StorageConstants.BLK_DEV_MIN_IO_SIZE,
++                Long.toString(BlockSizeInfo.getBlockSize(blockDevicePath))
++            );
++            updatePropIfNeeded(
++                propsChange,
++                storPoolObj,
++                StorageConstants.NAMESPACE_INTERNAL + '/' + StorageConstants.BLK_DEV_OPT_IO_SIZE,
++                Long.toString(BlockSizeInfo.getOptimalIoSize(blockDevicePath))
++            );
+         }
+         else
+         {
+@@ -2130,6 +2112,28 @@ public abstract class AbsStorageProvider<
+         }
+     }
+
++    private void updatePropIfNeeded(
++        LocalPropsChangePojo propsChangeRef,
++        StorPool storPoolObjRef,
++        String propKeyRef,
++        String propValueRef
++    )
++        throws AccessDeniedException
++    {
++        final Props storPoolProps = storPoolObjRef.getProps(storDriverAccCtx);
++        final @Nullable String currentPropValue = storPoolProps.getProp(propKeyRef);
++        if (currentPropValue == null || !currentPropValue.equals(propValueRef))
++        {
++            errorReporter.logDebug(
++                "Storage pool \"%s\": Set property \"%s\" = \"%s\"",
++                storPoolObjRef.getName().displayValue,
++                propKeyRef,
++                propValueRef
++            );
++            propsChangeRef.changeStorPoolProp(storPoolObjRef, propKeyRef, propValueRef);
++        }
++    }
++
+     @SuppressWarnings("unchecked")
+     @Override
+     public void updateAllocatedSize(VlmProviderObject<Resource> vlmDataRef)
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/storage/utils/BlockSizeInfo.java b/satellite/src/main/java/com/linbit/linstor/layer/storage/utils/BlockSizeInfo.java
+--- a/satellite/src/main/java/com/linbit/linstor/layer/storage/utils/BlockSizeInfo.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/storage/utils/BlockSizeInfo.java
+@@ -3,8 +3,11 @@ package com.linbit.linstor.layer.storage.utils;
+ import com.linbit.utils.MathUtils;
+ import com.linbit.utils.SymbolicLinkResolver;
+
++import static com.linbit.linstor.layer.storage.BlockSizeConsts.DFLT_OPT_IO_SIZE;
+ import static com.linbit.linstor.layer.storage.BlockSizeConsts.DFLT_IO_SIZE;
++import static com.linbit.linstor.layer.storage.BlockSizeConsts.MAX_OPT_IO_SIZE;
+ import static com.linbit.linstor.layer.storage.BlockSizeConsts.MAX_IO_SIZE;
++import static com.linbit.linstor.layer.storage.BlockSizeConsts.MIN_OPT_IO_SIZE;
+ import static com.linbit.linstor.layer.storage.BlockSizeConsts.MIN_IO_SIZE;
+
+ import java.io.FileInputStream;
+@@ -13,6 +16,8 @@ import java.nio.file.Path;
+
+ public class BlockSizeInfo
+ {
++    private static final int NUMBER_BUFFER_SIZE = 32;
++
+     /**
+      * Determines the blocksize, aka minimum I/O size, for the specified backing storage path.
+      *
+@@ -51,7 +56,7 @@ public class BlockSizeInfo
+             final Path infoSourceName = blockDevice.getFileName();
+             final Path infoSource = Path.of("/sys/block", infoSourceName.toString(), "queue/physical_block_size");
+
+-            final byte[] data = new byte[32];
++            final byte[] data = new byte[NUMBER_BUFFER_SIZE];
+             try (final FileInputStream fileIn = new FileInputStream(infoSource.toString()))
+             {
+                 final int readCount = fileIn.read(data);
+@@ -75,4 +80,38 @@ public class BlockSizeInfo
+         }
+         return blockSize;
+     }
++
++    public static long getOptimalIoSize(final Path storageObj)
++    {
++        long optIoSize = DFLT_OPT_IO_SIZE;
++        try
++        {
++            final Path blockDevice = SymbolicLinkResolver.resolveSymLink(storageObj);
++            final Path infoSourceName = blockDevice.getFileName();
++            final Path infoSource = Path.of("/sys/block", infoSourceName.toString(), "queue/optimal_io_size");
++
++            final byte[] data = new byte[NUMBER_BUFFER_SIZE];
++            try (final FileInputStream fileIn = new FileInputStream(infoSource.toString()))
++            {
++                final int readCount = fileIn.read(data);
++                if (readCount > 0)
++                {
++                    String numberStr = new String(data, 0, readCount);
++                    numberStr = numberStr.trim();
++                    try
++                    {
++                        final long unboundedOptIoSize = Long.parseLong(numberStr);
++                        optIoSize = MathUtils.bounds(MIN_OPT_IO_SIZE, unboundedOptIoSize, MAX_OPT_IO_SIZE);
++                    }
++                    catch (NumberFormatException ignored)
++                    {
++                    }
++                }
++            }
++        }
++        catch (IOException ignored)
++        {
++        }
++        return optIoSize;
++    }
+ }
+diff --git a/server/src/main/java/com/linbit/SizeConv.java b/server/src/main/java/com/linbit/SizeConv.java
+--- a/server/src/main/java/com/linbit/SizeConv.java
++++ b/server/src/main/java/com/linbit/SizeConv.java
+@@ -16,6 +16,7 @@ public class SizeConv
+     public enum SizeUnit
+     {
+         UNIT_B,
++        UNIT_SECTORS,
+         UNIT_KiB,
+         UNIT_MiB,
+         UNIT_GiB,
+@@ -41,6 +42,9 @@ public class SizeConv
+                 case UNIT_B:
+                     factor = FACTOR_B;
+                     break;
++                case UNIT_SECTORS:
++                    factor = FACTOR_SECTORS;
++                    break;
+                 case UNIT_KiB:
+                     factor = FACTOR_KiB;
+                     break;
+@@ -111,6 +115,9 @@ public class SizeConv
+                 case "b":
+                     unit = SizeUnit.UNIT_B;
+                     break;
++                case "s":
++                    unit = SizeUnit.UNIT_SECTORS;
++                    break;
+                 case "k":
+                     // fall-through
+                 case "kb":
+@@ -217,6 +224,9 @@ public class SizeConv
+     // Factor 1
+     public static final BigInteger FACTOR_B   = BigInteger.valueOf(1L);
+
++    // Factor 512
++    public static final BigInteger FACTOR_SECTORS = BigInteger.valueOf(512L);
++
+     // Factor 1,024
+     // Naming convention exception: SI unit capitalization rules
+     @SuppressWarnings("checkstyle:constantname")
+diff --git a/server/src/main/java/com/linbit/linstor/layer/luks/LuksLayerSizeCalculator.java b/server/src/main/java/com/linbit/linstor/layer/luks/LuksLayerSizeCalculator.java
+--- a/server/src/main/java/com/linbit/linstor/layer/luks/LuksLayerSizeCalculator.java
++++ b/server/src/main/java/com/linbit/linstor/layer/luks/LuksLayerSizeCalculator.java
+@@ -1,27 +1,62 @@
+ package com.linbit.linstor.layer.luks;
+
++import com.linbit.SizeConv;
++import com.linbit.SizeConv.SizeUnit;
+ import com.linbit.exceptions.InvalidSizeException;
++import com.linbit.linstor.PriorityProps;
++import com.linbit.linstor.annotation.Nullable;
++import com.linbit.linstor.api.ApiConsts;
++import com.linbit.linstor.core.objects.AbsResource;
++import com.linbit.linstor.core.objects.AbsVolume;
++import com.linbit.linstor.core.objects.Resource;
++import com.linbit.linstor.core.objects.ResourceDefinition;
++import com.linbit.linstor.core.objects.ResourceGroup;
++import com.linbit.linstor.core.objects.Snapshot;
++import com.linbit.linstor.core.objects.SnapshotVolume;
++import com.linbit.linstor.core.objects.StorPool;
++import com.linbit.linstor.core.objects.Volume;
++import com.linbit.linstor.core.objects.VolumeDefinition;
+ import com.linbit.linstor.dbdrivers.DatabaseException;
+ import com.linbit.linstor.layer.AbsLayerSizeCalculator;
++import com.linbit.linstor.netcom.Peer;
++import com.linbit.linstor.propscon.InvalidKeyException;
++import com.linbit.linstor.propscon.ReadOnlyProps;
+ import com.linbit.linstor.security.AccessDeniedException;
++import com.linbit.linstor.storage.StorageConstants;
+ import com.linbit.linstor.storage.data.adapter.luks.LuksVlmData;
+ import com.linbit.linstor.storage.interfaces.categories.resource.VlmProviderObject;
+ import com.linbit.linstor.storage.kinds.DeviceLayerKind;
+ import com.linbit.linstor.storage.kinds.ExtTools;
+ import com.linbit.linstor.storage.kinds.ExtToolsInfo;
+ import com.linbit.linstor.storage.kinds.ExtToolsInfo.Version;
++import com.linbit.linstor.utils.layer.LayerVlmUtils;
++import com.linbit.utils.ShellUtils;
++import com.linbit.utils.SignedAlign;
+
+ import javax.inject.Inject;
+ import javax.inject.Singleton;
+
++import java.util.Iterator;
++import java.util.LinkedList;
++import java.util.List;
++import java.util.Set;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
+ @Singleton
+ public class LuksLayerSizeCalculator extends AbsLayerSizeCalculator<LuksVlmData<?>>
+ {
++    public static final String LUKS2_OPT_METADATA_SIZE = "--luks2-metadata-size";
++    public static final String LUKS2_OPT_KEYSLOTS_SIZE = "--luks2-keyslots-size";
++    public static final String LUKS2_OPT_OFFSET = "--offset";
++    private static final String LUKS2_OPT_ALIGN_PAYLOAD = "--align-payload";
++    private static final long DFLT_LUKS2_METADATA_SIZE_IN_BYTES = 16L << 10;
++    private static final long DFLT_ALIGNMENT_1MIB_IN_BYTES = 1L << 20;
++    private static final long LUKS1_HEADER_SIZE_IN_KIB = 2L << 10;
++    private static final long LUKS2_HEADER_SIZE_IN_KIB = 16L << 10;
++    private static final long LUKS2_HEADER_SIZE_IN_BYTES = LUKS2_HEADER_SIZE_IN_KIB << 10;
+
+-    // linstor calculates in KiB
+-    private static final int MIB = 1024;
+-    private static final int LUKS1_HEADER_SIZE = 2 * MIB;
+-    private static final int LUKS2_HEADER_SIZE = 16 * MIB;
++    private static final Pattern PATTERN_SIZE = Pattern.compile("(\\d+)([kKmMgGtT]i?[bB]?|[sS]|)");
+
+     @Inject
+     public LuksLayerSizeCalculator(AbsLayerSizeCalculatorInit initRef)
+@@ -74,30 +109,266 @@ public class LuksLayerSizeCalculator extends AbsLayerSizeCalculator<LuksVlmData<
+     }
+
+     private long getLuksHeaderSize(VlmProviderObject<?> vlmDataRef)
+-        throws AccessDeniedException
++        throws AccessDeniedException, InvalidSizeException
+     {
+-        ExtToolsInfo cryptSetupInfo = vlmDataRef.getRscLayerObject()
++        @Nullable Peer peer = vlmDataRef.getRscLayerObject()
+             .getAbsResource()
+             .getNode()
+-            .getPeer(sysCtx)
+-            .getExtToolsManager()
++            .getPeer(sysCtx);
++        if (peer == null)
++        {
++            throw new InvalidSizeException(
++                "Could not calculate size of LUKS volume, since cryptsetup's version could not be determined",
++                null
++            );
++        }
++        ExtToolsInfo cryptSetupInfo = peer.getExtToolsManager()
+             .getExtToolInfo(ExtTools.CRYPT_SETUP);
+-        long luksHeaderSize;
++
++        final long luksHeaderSize;
+         if (cryptSetupInfo != null && cryptSetupInfo.isSupported())
+         {
+             if (cryptSetupInfo.hasVersionOrHigher(new Version(2, 1)))
+             {
+-                luksHeaderSize = LUKS2_HEADER_SIZE;
++                luksHeaderSize = calcLuks2HeaderSize(vlmDataRef);
+             }
+             else
+             {
+-                luksHeaderSize = LUKS1_HEADER_SIZE;
++                luksHeaderSize = LUKS1_HEADER_SIZE_IN_KIB;
+             }
+         }
+         else
+         {
+-            luksHeaderSize = -1;
++            throw new InvalidSizeException(
++                "Could not calculate size of LUKS volume, since cryptsetup's version could not be determined",
++                null
++            );
+         }
+         return luksHeaderSize;
+     }
++
++    private long calcLuks2HeaderSize(VlmProviderObject<?> vlmDataRef) throws AccessDeniedException
++    {
++        PriorityProps prioProps = getPrioProps(vlmDataRef);
++
++        final @Nullable String userOptProp = prioProps.getProp(
++            ApiConsts.KEY_STOR_DRIVER_LUKS_FORMAT_OPTIONS,
++            ApiConsts.NAMESPC_STORAGE_DRIVER
++        );
++        List<String> userOptions = userOptProp != null ?
++            ShellUtils.shellSplit(userOptProp) :
++            new LinkedList<>();
++
++        final long alignedHeaderSizeInBytes;
++        final long unalignedHeaderSizeInBytes;
++        @Nullable Long cryptsetupOffsetInBytes = getLongOptionValue(
++            userOptions,
++            LUKS2_OPT_OFFSET,
++            SizeUnit.UNIT_SECTORS
++        );
++        if (cryptsetupOffsetInBytes != null)
++        {
++            alignedHeaderSizeInBytes = cryptsetupOffsetInBytes;
++        }
++        else
++        {
++            @Nullable Long cryptsetupLuks2KeyslotsSize = getLongOptionValue(
++                userOptions,
++                LUKS2_OPT_KEYSLOTS_SIZE
++            );
++            if (cryptsetupLuks2KeyslotsSize == null)
++            {
++                unalignedHeaderSizeInBytes = LUKS2_HEADER_SIZE_IN_BYTES;
++            }
++            else
++            {
++                @Nullable Long cryptsetupLuks2MetadataSize = getLongOptionValue(
++                    userOptions,
++                    LUKS2_OPT_METADATA_SIZE
++                );
++                cryptsetupLuks2MetadataSize = cryptsetupLuks2MetadataSize == null ?
++                    DFLT_LUKS2_METADATA_SIZE_IN_BYTES :
++                    cryptsetupLuks2MetadataSize;
++
++                unalignedHeaderSizeInBytes = 2 * cryptsetupLuks2MetadataSize + cryptsetupLuks2KeyslotsSize;
++            }
++
++            long alignment = getAlignment(vlmDataRef, userOptions);
++            alignedHeaderSizeInBytes = new SignedAlign(alignment).ceiling(unalignedHeaderSizeInBytes);
++        }
++        return SizeConv.convert(
++            alignedHeaderSizeInBytes,
++            SizeUnit.UNIT_B,
++            SizeUnit.UNIT_KiB
++        );
++    }
++
++    private long getAlignment(VlmProviderObject<?> vlmDataRef, List<String> userOptions) throws AccessDeniedException
++    {
++        @Nullable Long cryptsetupAlignPayloadInBytes = getLongOptionValue(
++            userOptions,
++            LUKS2_OPT_ALIGN_PAYLOAD,
++            SizeUnit.UNIT_SECTORS
++        );
++
++        long alignment = DFLT_ALIGNMENT_1MIB_IN_BYTES;
++        if (cryptsetupAlignPayloadInBytes != null)
++        {
++            alignment = cryptsetupAlignPayloadInBytes;
++        }
++        else
++        {
++            final long maxOptIoSize = getMaxOptIoSize(vlmDataRef);
++            alignment = Math.max(alignment, maxOptIoSize);
++        }
++        return alignment;
++    }
++
++    private long getMaxOptIoSize(VlmProviderObject<?> vlmDataRef) throws InvalidKeyException, AccessDeniedException
++    {
++        long ret = 0;
++        Set<StorPool> storPoolSet = LayerVlmUtils.getStorPoolSet(vlmDataRef, sysCtx);
++        for (StorPool sp : storPoolSet)
++        {
++            @Nullable String strValue = sp.getProps(sysCtx)
++                .getProp(
++                    StorageConstants.BLK_DEV_OPT_IO_SIZE,
++                    StorageConstants.NAMESPACE_INTERNAL
++                );
++            if (strValue != null)
++            {
++                try
++                {
++                    long parsed = Long.parseLong(strValue);
++                    ret = Math.max(parsed, ret);
++                }
++                catch (NumberFormatException ignored)
++                {
++                    errorReporter.logWarning(
++                        "LuksHeaderSize: Failed to parse '%s' from prop %s. Defaulting to 0 opt_io_size " +
++                            "(no recommendation/hint)",
++                        strValue,
++                        StorageConstants.NAMESPACE_INTERNAL + "/" + StorageConstants.BLK_DEV_OPT_IO_SIZE
++                    );
++                }
++            }
++        }
++        return ret;
++    }
++
++    private @Nullable Long getLongOptionValue(List<String> userOptionsRef, String optRef)
++    {
++        return getLongOptionValue(userOptionsRef, optRef, SizeUnit.UNIT_B);
++    }
++
++    @SuppressWarnings("checkstyle:magicnumber")
++    private @Nullable Long getLongOptionValue(List<String> userOptionsRef, String optRef, SizeUnit dfltSizeUnit)
++    {
++        @Nullable Long ret = null;
++        @Nullable String val = findLastValue(userOptionsRef, optRef);
++        if (val != null && !val.isBlank())
++        {
++            Matcher matcher = PATTERN_SIZE.matcher(val);
++            if (matcher.matches())
++            {
++                try
++                {
++                    ret = Long.parseLong(matcher.group(1));
++                    String unit = matcher.group(2);
++                    SizeUnit sizeUnit;
++                    if (unit.isBlank())
++                    {
++                        sizeUnit = dfltSizeUnit;
++                    }
++                    else
++                    {
++                        boolean forcePowerOfTwo = unit.length() == 1 || unit.length() == 3;
++                        sizeUnit = SizeUnit.parse(unit, forcePowerOfTwo);
++                    }
++
++                    ret = SizeConv.convert(ret, sizeUnit, SizeUnit.UNIT_B);
++                }
++                catch (NumberFormatException ignored)
++                {
++                    errorReporter.logWarning(
++                        "LuksHeaderSize: Failed to parse '%s' from option '%s %s'.",
++                        matcher.group(1),
++                        optRef,
++                        val
++                    );
++                }
++            }
++        }
++        return ret;
++    }
++
++    private @Nullable String findLastValue(List<String> userOptionsRef, String optRef)
++    {
++        Iterator<String> it = userOptionsRef.iterator();
++        @Nullable String val = null;
++        while (it.hasNext())
++        {
++            String opt = it.next();
++            if (opt.equals(optRef))
++            {
++                if (it.hasNext())
++                {
++                    val = it.next();
++                }
++                else
++                {
++                    val = null;
++                }
++            }
++            else if (opt.startsWith(optRef + "="))
++            {
++                val = opt.substring(optRef.length() + 1);
++                if (val.isBlank())
++                {
++                    val = null;
++                }
++            }
++        }
++        return val;
++    }
++
++    private PriorityProps getPrioProps(VlmProviderObject<?> vlmDataRef) throws AccessDeniedException
++    {
++        final AbsVolume<?> vlm = vlmDataRef.getVolume();
++        final AbsResource<?> rsc = vlm.getAbsResource();
++        final ResourceDefinition rscDfn = vlm.getResourceDefinition();
++        final VolumeDefinition vlmDfn = vlm.getVolumeDefinition();
++        final ResourceGroup rscGrp = rscDfn.getResourceGroup();
++
++        final ReadOnlyProps vlmProps;
++        final ReadOnlyProps rscProps;
++        if (vlm instanceof Volume)
++        {
++            vlmProps = ((Volume) vlm).getProps(sysCtx);
++            rscProps = ((Resource) rsc).getProps(sysCtx);
++        }
++        else
++        {
++            vlmProps = ((SnapshotVolume) vlm).getVlmProps(sysCtx);
++            rscProps = ((Snapshot) rsc).getRscProps(sysCtx);
++        }
++
++        final PriorityProps prioProps = new PriorityProps(
++            vlmProps,
++            rscProps
++        );
++        for (StorPool storPool : LayerVlmUtils.getStorPoolSet(vlmDataRef, sysCtx))
++        {
++            prioProps.addProps(storPool.getProps(sysCtx));
++        }
++        prioProps.addProps(
++            rsc.getNode().getProps(sysCtx),
++            vlmDfn.getProps(sysCtx),
++            rscDfn.getProps(sysCtx),
++            rscGrp.getVolumeGroupProps(sysCtx, vlmDfn.getVolumeNumber()),
++            rscGrp.getProps(sysCtx),
++            stltProps
++        );
++        return prioProps;
++    }
+ }
+diff --git a/server/src/main/java/com/linbit/linstor/layer/storage/BlockSizeConsts.java b/server/src/main/java/com/linbit/linstor/layer/storage/BlockSizeConsts.java
+--- a/server/src/main/java/com/linbit/linstor/layer/storage/BlockSizeConsts.java
++++ b/server/src/main/java/com/linbit/linstor/layer/storage/BlockSizeConsts.java
+@@ -13,4 +13,9 @@ public class BlockSizeConsts
+
+     // Default value for the minimum_io_size value of non-storage layers
+     public static final long DFLT_SPECIAL_IO_SIZE   = (1L << 12);
++
++    // optimal_io_size may be 0 to indicate no recommendation.
++    public static final long MIN_OPT_IO_SIZE = 0;
++    public static final long DFLT_OPT_IO_SIZE = 0;
++    public static final long MAX_OPT_IO_SIZE = Long.MAX_VALUE;
+ }
+diff --git a/server/src/main/java/com/linbit/linstor/storage/StorageConstants.java b/server/src/main/java/com/linbit/linstor/storage/StorageConstants.java
+--- a/server/src/main/java/com/linbit/linstor/storage/StorageConstants.java
++++ b/server/src/main/java/com/linbit/linstor/storage/StorageConstants.java
+@@ -11,6 +11,7 @@ public class StorageConstants
+     public static final String NAMESPACE_NVME = ApiConsts.NAMESPC_STORAGE_DRIVER + "/NVME";
+     public static final String NAMESPACE_INTERNAL = NAMESPACE_STOR_DRIVER + "/internal/";
+
++    public static final String BLK_DEV_OPT_IO_SIZE      = "optIoSize";
+     public static final String BLK_DEV_MIN_IO_SIZE      = "minIoSize";
+     public static final String BLK_DEV_MIN_IO_SIZE_AUTO = "minIoSizeAuto";
+     public static final String BLK_DEV_MAX_BIO_SIZE     = "maxBioSize";

@@ -4,7 +4,7 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-LINSTOR_VERSION ?= 1.32.3
+LINSTOR_VERSION ?= 1.33.2
 LINSTOR_CSI_VERSION ?= v1.10.5
 
 image: image-piraeus-server image-linstor-csi
