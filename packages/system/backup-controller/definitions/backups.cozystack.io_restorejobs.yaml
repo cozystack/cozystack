@@ -59,6 +59,12 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              options:
+                description: |-
+                  Options is a driver-specific blob of restore options, typed based on
+                  targetApplicationRef and the current controller implementation.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               targetApplicationRef:
                 description: |-
                   TargetApplicationRef refers to the application into which the backup

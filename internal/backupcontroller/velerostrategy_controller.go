@@ -75,6 +75,107 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// boolPtr returns a pointer to a bool value.
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// boolDefault returns the value of a *bool pointer, or the given default if nil.
+func boolDefault(p *bool, def bool) bool {
+	if p != nil {
+		return *p
+	}
+	return def
+}
+
+// CommonRestoreOptions contains driver-agnostic restore options shared across
+// all application kinds.
+type CommonRestoreOptions struct {
+	// TargetNamespace is the namespace to restore into. When set (and differs
+	// from the backup namespace), a cross-namespace restore (copy) is performed
+	// using Velero's namespaceMapping.
+	TargetNamespace string `json:"targetNamespace,omitempty"`
+	// FailIfTargetExists makes the restore fail if the target resource already
+	// exists. Defaults to true when omitted.
+	FailIfTargetExists *bool `json:"failIfTargetExists,omitempty"`
+}
+
+// RestoreOptions is the typed representation of RestoreJob.Spec.Options for the
+// Velero driver. The struct is deserialized from runtime.RawExtension and used
+// for all application kinds. VMInstance-specific fields (KeepOriginalPVC,
+// KeepOriginalIpAndMac) are only effective when the application kind is VMInstance.
+type RestoreOptions struct {
+	CommonRestoreOptions `json:",inline"`
+	// KeepOriginalPVC renames the original PVC to <name>-orig-<hash> before restore.
+	// Only effective for in-place VMInstance restore (no targetNamespace). Defaults to true when omitted.
+	KeepOriginalPVC *bool `json:"keepOriginalPVC,omitempty"`
+	// KeepOriginalIpAndMac preserves the original IP and MAC address via OVN
+	// annotations. Only effective for VMInstance restores. Defaults to true when omitted.
+	KeepOriginalIpAndMac *bool `json:"keepOriginalIpAndMac,omitempty"`
+}
+
+// GetFailIfTargetExists returns the effective value (default: true).
+func (o *CommonRestoreOptions) GetFailIfTargetExists() bool {
+	return boolDefault(o.FailIfTargetExists, true)
+}
+
+// GetKeepOriginalPVC returns the effective value (default: true).
+func (o *RestoreOptions) GetKeepOriginalPVC() bool {
+	return boolDefault(o.KeepOriginalPVC, true)
+}
+
+// GetKeepOriginalIpAndMac returns the effective value (default: true).
+func (o *RestoreOptions) GetKeepOriginalIpAndMac() bool {
+	return boolDefault(o.KeepOriginalIpAndMac, true)
+}
+
+// parseRestoreOptions deserializes RestoreJob.Spec.Options into RestoreOptions.
+// Returns zero-value RestoreOptions if options is nil.
+func parseRestoreOptions(opts *runtime.RawExtension) (RestoreOptions, error) {
+	var ro RestoreOptions
+	if opts == nil || len(opts.Raw) == 0 {
+		return ro, nil
+	}
+	if err := json.Unmarshal(opts.Raw, &ro); err != nil {
+		return ro, fmt.Errorf("failed to parse restore options: %w", err)
+	}
+	return ro, nil
+}
+
+// restoreTarget holds the resolved target namespace and app identity for a restore operation.
+type restoreTarget struct {
+	Namespace string
+	AppName   string
+	AppKind   string
+	IsCopy    bool // true when targetNamespace differs from backup namespace
+	IsRenamed bool // true when target app name differs from source app name
+}
+
+// resolveRestoreTarget computes the effective restore target from RestoreJob, Backup, and options.
+func resolveRestoreTarget(restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, opts RestoreOptions) restoreTarget {
+	targetNS := backup.Namespace
+	isCopy := false
+	if opts.TargetNamespace != "" && opts.TargetNamespace != backup.Namespace {
+		targetNS = opts.TargetNamespace
+		isCopy = true
+	}
+	targetAppName := backup.Spec.ApplicationRef.Name
+	if restoreJob.Spec.TargetApplicationRef != nil && restoreJob.Spec.TargetApplicationRef.Name != "" {
+		targetAppName = restoreJob.Spec.TargetApplicationRef.Name
+	}
+	targetAppKind := backup.Spec.ApplicationRef.Kind
+	if restoreJob.Spec.TargetApplicationRef != nil && restoreJob.Spec.TargetApplicationRef.Kind != "" {
+		targetAppKind = restoreJob.Spec.TargetApplicationRef.Kind
+	}
+	return restoreTarget{
+		Namespace: targetNS,
+		AppName:   targetAppName,
+		AppKind:   targetAppKind,
+		IsCopy:    isCopy,
+		IsRenamed: targetAppName != backup.Spec.ApplicationRef.Name,
+	}
+}
+
 // vmInstanceResources contains VM-specific underlying resources discovered during backup.
 type vmInstanceResources struct {
 	DataVolumes []backupsv1alpha1.DataVolumeResource `json:"dataVolumes,omitempty"`
@@ -475,6 +576,37 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 	logger := getLogger(ctx)
 	logger.Debug("reconciling Velero strategy restore", "restorejob", restoreJob.Name, "backup", backup.Name)
 
+	// Parse restore options from the opaque blob
+	restoreOpts, err := parseRestoreOptions(restoreJob.Spec.Options)
+	if err != nil {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("invalid restore options: %v", err))
+	}
+
+	target := resolveRestoreTarget(restoreJob, backup, restoreOpts)
+	logger.Debug("resolved restore target", "targetNS", target.Namespace, "targetApp", target.AppName, "isCopy", target.IsCopy)
+
+	// Validate: target namespace must exist for cross-namespace copies
+	if target.IsCopy {
+		targetNS := &corev1.Namespace{}
+		if err := r.Get(ctx, client.ObjectKey{Name: target.Namespace}, targetNS); err != nil {
+			if errors.IsNotFound(err) {
+				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+					"target namespace %q does not exist; create it before requesting a cross-namespace restore",
+					target.Namespace))
+			}
+			return ctrl.Result{}, fmt.Errorf("failed to check target namespace %q: %w", target.Namespace, err)
+		}
+	}
+
+	// Validate: same-namespace restore with a different app name is not supported
+	// due to Velero DataUpload always writing to PVCs with the original name.
+	if !target.IsCopy && target.AppName != backup.Spec.ApplicationRef.Name {
+		return r.markRestoreJobFailed(ctx, restoreJob,
+			"restoring to the same namespace with a different application name is not supported "+
+				"due to Velero DataUpload limitations: data is always uploaded to PVCs with the original name. "+
+				"Use options.targetNamespace to restore into a different namespace")
+	}
+
 	// Step 1: On first reconcile, set startedAt and phase = Running
 	if restoreJob.Status.StartedAt == nil {
 		logger.Debug("setting RestoreJob StartedAt and phase to Running")
@@ -525,11 +657,29 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 	}
 
 	if len(veleroRestoreList.Items) == 0 {
+		// For copy restores, enforce failIfTargetExists before touching anything.
+		// In-place restores are excluded: the source application is expected to exist
+		// and will be halted/overwritten deliberately.
+		if target.IsCopy && restoreOpts.GetFailIfTargetExists() {
+			targetHRName := helmReleaseNameForApp(target.AppKind, target.AppName)
+			exists, err := r.targetHelmReleaseExists(ctx, target.AppKind, targetHRName, target.Namespace)
+			if err != nil {
+				logger.Error(err, "failed to check whether target HelmRelease exists")
+				return ctrl.Result{}, err
+			}
+			if exists {
+				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+					"target application %q already exists in namespace %q; "+
+						"set options.failIfTargetExists=false to overwrite",
+					target.AppName, target.Namespace))
+			}
+		}
+
 		// Resolve underlying resources once; prefer Backup status, fall back to Velero annotation.
 		ur := r.resolveUnderlyingResourcesForRestore(ctx, backup, veleroBackupName)
 
-		// Pre-restore: graceful shutdown, suspend HRs, rename PVCs
-		ready, result, err := r.prepareForRestore(ctx, restoreJob, backup, ur)
+		// Pre-restore: graceful shutdown, suspend HRs, rename PVCs (skipped for copy)
+		ready, result, err := r.prepareForRestore(ctx, restoreJob, backup, ur, target, restoreOpts)
 		if err != nil {
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("pre-restore preparation failed: %v", err))
 		}
@@ -540,7 +690,7 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 
 		// Create Velero Restore
 		logger.Debug("Velero Restore not found, creating new one")
-		if err := r.createVeleroRestore(ctx, restoreJob, backup, veleroStrategy, veleroBackupName, ur); err != nil {
+		if err := r.createVeleroRestore(ctx, restoreJob, backup, veleroStrategy, veleroBackupName, ur, target, restoreOpts); err != nil {
 			logger.Error(err, "failed to create Velero Restore")
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to create Velero Restore: %v", err))
 		}
@@ -566,6 +716,18 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 
 	// Step 4: On success
 	if phase == "Completed" {
+		// Post-restore: rename resources if target app name differs from source.
+		// Velero resource modifiers cannot change metadata.name, so we do it after restore.
+		if target.IsRenamed {
+			if err := r.postRestoreRename(ctx, restoreJob, backup, target); err != nil {
+				r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
+				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("post-restore rename failed: %v", err))
+			}
+		}
+
+		// Clean up resource modifier ConfigMaps now that the restore is complete.
+		r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
+
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
@@ -579,6 +741,7 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 
 	// Step 5: On failure
 	if phase == "Failed" || phase == "PartiallyFailed" {
+		r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
 		message := fmt.Sprintf("Velero Restore failed with phase: %s", phase)
 		if veleroRestore.Status.FailureReason != "" {
 			message = fmt.Sprintf("%s: %s", message, veleroRestore.Status.FailureReason)
@@ -600,6 +763,7 @@ type resourceModifiers struct {
 type resourceModifierRule struct {
 	Conditions   resourceModifierConditions `yaml:"conditions"`
 	MergePatches []mergePatch               `yaml:"mergePatches,omitempty"`
+	Patches      []jsonPatch                `yaml:"patches,omitempty"`
 }
 
 type resourceModifierConditions struct {
@@ -610,6 +774,12 @@ type resourceModifierConditions struct {
 
 type mergePatch struct {
 	PatchData string `yaml:"patchData"`
+}
+
+type jsonPatch struct {
+	Operation string `yaml:"operation"`
+	Path      string `yaml:"path"`
+	Value     string `yaml:"value,omitempty"`
 }
 
 // marshalPatchData marshals an arbitrary object to YAML for use as
@@ -627,10 +797,10 @@ func marshalPatchData(v interface{}) (string, error) {
 //   - PVC adoption: always adds cdi.kubevirt.io/allowClaimAdoption=true to all
 //     restored PVCs so CDI can adopt them when a HelmRelease of VMDisk recreates a DV.
 //   - OVN IP/MAC: sets OVN annotations on the VirtualMachine for correct ssh access to restored VM.
-func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension) (*corev1.ConfigMap, error) {
+func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) (*corev1.ConfigMap, error) {
 	logger := getLogger(ctx)
 
-	targetNS := backup.Namespace
+	targetNS := target.Namespace
 
 	var rules []resourceModifierRule
 
@@ -654,22 +824,17 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 		MergePatches: []mergePatch{{PatchData: pvcPatch}},
 	})
 
-	// OVN IP/MAC annotations on VirtualMachine for correct network identity after restore.
-	if vmRes := getVMInstanceResources(ur); vmRes != nil && (vmRes.IP != "" || vmRes.MAC != "") {
-		ovnAnnotations := map[string]string{}
-		if vmRes.IP != "" {
-			ovnAnnotations[ovnIPAnnotation] = vmRes.IP
-		}
-		if vmRes.MAC != "" {
-			ovnAnnotations[ovnMACAnnotation] = vmRes.MAC
-		}
-		vmPatch, err := marshalPatchData(map[string]interface{}{
+	// For cross-namespace restore: strip Velero's dynamic PV restore selector and
+	// volumeName from PVCs so the storage provisioner can dynamically provision new PVs.
+	// Without this, Velero's CSI PVCAction adds spec.selector with a velero.io/dynamic-pv-restore
+	// label that prevents dynamic provisioning when PVs are not included in the restore.
+	// Uses merge patch (null values) instead of JSON Patch remove to avoid RFC 6902
+	// failures when the fields don't exist on the PVC (e.g. statically provisioned PVCs).
+	if target.IsCopy {
+		pvcStripPatch, err := marshalPatchData(map[string]interface{}{
 			"spec": map[string]interface{}{
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"annotations": ovnAnnotations,
-					},
-				},
+				"selector":   nil,
+				"volumeName": nil,
 			},
 		})
 		if err != nil {
@@ -677,12 +842,47 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 		}
 		rules = append(rules, resourceModifierRule{
 			Conditions: resourceModifierConditions{
-				GroupResource:     "virtualmachines.kubevirt.io",
+				GroupResource:     "persistentvolumeclaims",
 				ResourceNameRegex: ".*",
 				Namespaces:        []string{targetNS},
 			},
-			MergePatches: []mergePatch{{PatchData: vmPatch}},
+			MergePatches: []mergePatch{{PatchData: pvcStripPatch}},
 		})
+	}
+
+	// OVN IP/MAC annotations on VirtualMachine for correct network identity after restore.
+	// Only applied when keepOriginalIpAndMac is true; for restore-to-copy the copy
+	// should get new IP/MAC from the network to avoid conflicts.
+	if opts.GetKeepOriginalIpAndMac() {
+		if vmRes := getVMInstanceResources(ur); vmRes != nil && (vmRes.IP != "" || vmRes.MAC != "") {
+			ovnAnnotations := map[string]string{}
+			if vmRes.IP != "" {
+				ovnAnnotations[ovnIPAnnotation] = vmRes.IP
+			}
+			if vmRes.MAC != "" {
+				ovnAnnotations[ovnMACAnnotation] = vmRes.MAC
+			}
+			vmPatch, err := marshalPatchData(map[string]interface{}{
+				"spec": map[string]interface{}{
+					"template": map[string]interface{}{
+						"metadata": map[string]interface{}{
+							"annotations": ovnAnnotations,
+						},
+					},
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+			rules = append(rules, resourceModifierRule{
+				Conditions: resourceModifierConditions{
+					GroupResource:     "virtualmachines.kubevirt.io",
+					ResourceNameRegex: ".*",
+					Namespaces:        []string{targetNS},
+				},
+				MergePatches: []mergePatch{{PatchData: vmPatch}},
+			})
+		}
 	}
 
 	rulesYAML, err := yaml.Marshal(resourceModifiers{
@@ -760,6 +960,36 @@ var (
 	dataVolumeGVR     = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
 )
 
+// helmReleaseNameForApp returns the HelmRelease name for the given application
+// kind and name. Returns empty string for unsupported kinds.
+func helmReleaseNameForApp(appKind, appName string) string {
+	switch appKind {
+	case vmInstanceKind:
+		return vmNamePrefix + appName
+	case vmDiskAppKind:
+		return vmDiskNamePrefix + appName
+	default:
+		return ""
+	}
+}
+
+// targetHelmReleaseExists returns true when a HelmRelease with the given name
+// already exists in namespace. Returns false for unsupported application kinds
+// (those where helmReleaseNameForApp returns "").
+func (r *RestoreJobReconciler) targetHelmReleaseExists(ctx context.Context, appKind, hrName, namespace string) (bool, error) {
+	if hrName == "" {
+		return false, nil
+	}
+	_, err := r.Resource(helmReleaseGVR).Namespace(namespace).Get(ctx, hrName, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // shortHash returns the first 4 hex characters of sha256(input).
 func shortHash(input string) string {
 	h := sha256.Sum256([]byte(input))
@@ -778,9 +1008,90 @@ func shortHash(input string) string {
 // (e.g. restore requested when app was already deleted). Each action emits
 // a Kubernetes Event on the RestoreJob for observability.
 //
+// postRestoreRename renames VMInstance HelmRelease after Velero Restore completes.
+// Velero resource modifiers cannot change metadata.name, so this step creates
+// a new HelmRelease with the target name and deletes the old one.
+// Flux will reconcile the renamed HelmRelease and recreate downstream resources
+// (VM, VMI) with the new name.
+func (r *RestoreJobReconciler) postRestoreRename(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, target restoreTarget) error {
+	logger := getLogger(ctx)
+	sourceAppName := backup.Spec.ApplicationRef.Name
+	sourceHRName := vmNamePrefix + sourceAppName
+	targetHRName := vmNamePrefix + target.AppName
+
+	logger.Debug("post-restore rename", "from", sourceHRName, "to", targetHRName, "namespace", target.Namespace)
+
+	// Get the restored HelmRelease with the original name
+	hrClient := r.Resource(helmReleaseGVR).Namespace(target.Namespace)
+	oldHR, err := hrClient.Get(ctx, sourceHRName, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Debug("source HelmRelease not found, skipping rename", "name", sourceHRName)
+			return nil
+		}
+		return fmt.Errorf("failed to get HelmRelease %s: %w", sourceHRName, err)
+	}
+
+	// Create new HelmRelease with the target name
+	newHR := oldHR.DeepCopy()
+	newHR.SetName(targetHRName)
+	newHR.SetResourceVersion("")
+	newHR.SetUID("")
+	newHR.SetCreationTimestamp(metav1.Time{})
+	newHR.SetManagedFields(nil)
+	newHR.SetGeneration(0)
+
+	// Update labels
+	labels := newHR.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[appNameLabel] = target.AppName
+	labels["app.kubernetes.io/instance"] = targetHRName
+	labels["helm.toolkit.fluxcd.io/name"] = targetHRName
+	newHR.SetLabels(labels)
+
+	// Remove Velero restore annotations/labels that tie it to the old restore
+	annotations := newHR.GetAnnotations()
+	delete(annotations, "velero.io/restore-name")
+	newHR.SetAnnotations(annotations)
+
+	// Clear status so Flux reconciles fresh
+	unstructured.RemoveNestedField(newHR.Object, "status")
+
+	if _, err := hrClient.Create(ctx, newHR, metav1.CreateOptions{}); err != nil {
+		if errors.IsAlreadyExists(err) {
+			logger.Debug("target HelmRelease already exists, skipping create", "name", targetHRName)
+		} else {
+			return fmt.Errorf("failed to create renamed HelmRelease %s: %w", targetHRName, err)
+		}
+	} else {
+		r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PostRestoreRename",
+			fmt.Sprintf("Created renamed HelmRelease %s (from %s)", targetHRName, sourceHRName))
+	}
+
+	// Delete the old HelmRelease
+	if err := hrClient.Delete(ctx, sourceHRName, metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete old HelmRelease %s: %w", sourceHRName, err)
+	}
+	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PostRestoreRename",
+		fmt.Sprintf("Deleted old HelmRelease %s", sourceHRName))
+
+	logger.Debug("post-restore rename complete", "from", sourceHRName, "to", targetHRName)
+	return nil
+}
+
 // Returns true when preparation is complete and the Velero Restore can be created.
 // Returns false (with a requeue) when still waiting for VM shutdown.
-func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension) (ready bool, result ctrl.Result, err error) {
+func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) (ready bool, result ctrl.Result, err error) {
+	// For restore-to-copy, skip all source-app preparation.
+	// The source application remains untouched; we're restoring a copy into another namespace.
+	if target.IsCopy {
+		r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+			"Restore to copy: skipping source application preparation")
+		return true, ctrl.Result{}, nil
+	}
+
 	ns := restoreJob.Namespace
 	appName := backup.Spec.ApplicationRef.Name
 	appKind := backup.Spec.ApplicationRef.Kind
@@ -828,7 +1139,8 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 	// --- Step 3: Rename PVCs to <name>-orig-<hash> ---
 	// Must happen BEFORE deleting DVs: the PVC has an ownerReference to the DV,
 	// so deleting the DV first would cascade-delete the PVC via garbage collection.
-	if vmRes != nil {
+	// Only when keepOriginalPVC is true (default for in-place restore).
+	if opts.GetKeepOriginalPVC() && vmRes != nil {
 		for _, dv := range vmRes.DataVolumes {
 			if err := r.renamePVC(ctx, restoreJob, ns, dv.DataVolumeName, dv.DataVolumeName+origSuffix); err != nil {
 				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
@@ -908,8 +1220,14 @@ func (r *RestoreJobReconciler) haltVirtualMachine(ctx context.Context, ns, vmNam
 }
 
 // deleteDataVolume deletes a DataVolume so CDI doesn't recreate the PVC after rename.
+// Uses Orphan propagation to avoid cascade-deleting the PVC that the DV owns via
+// ownerReference. Without this, keepOriginalPVC=false would silently destroy the
+// original PVC through garbage collection instead of leaving it for Velero to overwrite.
 func (r *RestoreJobReconciler) deleteDataVolume(ctx context.Context, ns, name string) error {
-	err := r.Resource(dataVolumeGVR).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{})
+	orphan := metav1.DeletePropagationOrphan
+	err := r.Resource(dataVolumeGVR).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{
+		PropagationPolicy: &orphan,
+	})
 	if err != nil && !errors.IsNotFound(err) {
 		return err
 	}
@@ -1004,10 +1322,16 @@ func (r *RestoreJobReconciler) renamePVC(ctx context.Context, restoreJob *backup
 }
 
 // createVeleroRestore creates a Velero Restore resource.
-func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, strategy *strategyv1alpha1.Velero, veleroBackupName string, ur *runtime.RawExtension) error {
+func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, strategy *strategyv1alpha1.Velero, veleroBackupName string, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) error {
 	logger := getLogger(ctx)
-	logger.Debug("createVeleroRestore called", "strategy", strategy.Name, "veleroBackupName", veleroBackupName)
+	logger.Debug("createVeleroRestore called", "strategy", strategy.Name, "veleroBackupName", veleroBackupName, "targetNS", target.Namespace, "isCopy", target.IsCopy)
 
+	// For restore template context, always use the source (backup) namespace and app name.
+	// The strategy template uses includedNamespaces and orLabelSelectors to select
+	// resources from the backup tarball, which are stored under the source namespace
+	// and labeled with the source app name.
+	// Velero's namespaceMapping handles redirecting to the target namespace;
+	// resource modifiers handle renaming when the target app name differs.
 	templateContext := map[string]interface{}{
 		"Application": map[string]interface{}{
 			"metadata": map[string]interface{}{
@@ -1034,6 +1358,16 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 	// Set the backupName in the spec (required by Velero)
 	veleroRestoreSpec.BackupName = veleroBackupName
 
+	// For restore-to-copy, set Velero namespaceMapping to redirect resources
+	// from the source namespace to the target namespace.
+	if target.IsCopy {
+		if veleroRestoreSpec.NamespaceMapping == nil {
+			veleroRestoreSpec.NamespaceMapping = make(map[string]string)
+		}
+		veleroRestoreSpec.NamespaceMapping[backup.Namespace] = target.Namespace
+		logger.Debug("set namespaceMapping on Velero Restore", "from", backup.Namespace, "to", target.Namespace)
+	}
+
 	// Match backup: add OR selectors for each underlying VMDisk so restore applies the same
 	// scope as the intended backup (see createVeleroBackup).
 	if vmRes := getVMInstanceResources(ur); vmRes != nil {
@@ -1051,7 +1385,7 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 	}
 
 	// Create resourceModifiers ConfigMap
-	resourceModifierCM, err := r.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur)
+	resourceModifierCM, err := r.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur, target, opts)
 	if err != nil {
 		return fmt.Errorf("failed to create resourceModifiers ConfigMap: %w", err)
 	}

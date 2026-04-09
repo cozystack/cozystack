@@ -153,6 +153,23 @@ func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restore
 	return ctrl.Result{}, nil
 }
 
+// cleanupResourceModifierConfigMaps deletes resource modifier ConfigMaps owned
+// by this RestoreJob. Called on completion (success or failure) to avoid leaking
+// ConfigMaps in cozy-velero when RestoreJobs are not immediately deleted.
+func (r *RestoreJobReconciler) cleanupResourceModifierConfigMaps(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob) {
+	logger := log.FromContext(ctx)
+	opts := []client.DeleteAllOfOption{
+		client.InNamespace(veleroNamespace),
+		client.MatchingLabels{
+			backupsv1alpha1.OwningJobNameLabel:      restoreJob.Name,
+			backupsv1alpha1.OwningJobNamespaceLabel: restoreJob.Namespace,
+		},
+	}
+	if err := r.DeleteAllOf(ctx, &corev1.ConfigMap{}, opts...); err != nil {
+		logger.Error(err, "failed to clean up resourceModifiers ConfigMap(s)")
+	}
+}
+
 // cleanupVeleroRestore deletes all Velero Restores and resourceModifier
 // ConfigMaps owned by this RestoreJob (identified by labels).
 func (r *RestoreJobReconciler) cleanupVeleroRestore(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob) {
