@@ -47,6 +47,7 @@ func (m *Manager) ensureFactory(ctx context.Context, crd *cozyv1alpha1.Applicati
 	if prefix, ok := vncTabPrefix(kind); ok {
 		tabs = append(tabs, vncTab(prefix))
 	}
+	tabs = append(tabs, eventsTab(kind))
 	tabs = append(tabs, yamlTab(g, v, plural))
 
 	// Use unified factory creation
@@ -352,6 +353,37 @@ func secretsTab(kind string) map[string]any {
 						"apps.cozystack.io/application.kind":  kind,
 						"apps.cozystack.io/application.name":  "{reqs[0]['metadata','name']}",
 					},
+				},
+			},
+		},
+	}
+}
+
+// eventsTab shows Kubernetes Events scoped to the application's namespace.
+// Events are namespace-scoped because Kubernetes Events don't carry application
+// labels and cannot be filtered by label selector. In Cozystack's multi-tenancy
+// model, each tenant namespace maps to a single application scope, so namespace
+// filtering provides the correct event scope.
+// For Tenant applications, events are fetched from status.namespace (the tenant's
+// own namespace) instead of the parent namespace where the Tenant object lives.
+func eventsTab(kind string) map[string]any {
+	nsPlaceholder := "{3}"
+	if kind == "Tenant" {
+		nsPlaceholder = "{reqsJsonPath[0]['.status.namespace']}"
+	}
+	return map[string]any{
+		"key":   "events",
+		"label": "Events",
+		"children": []any{
+			map[string]any{
+				"type": "EnrichedTable",
+				"data": map[string]any{
+					"id":              "events-table",
+					"fetchUrl":        "/api/clusters/{2}/k8s/api/v1/namespaces/" + nsPlaceholder + "/events",
+					"cluster":         "{2}",
+					"baseprefix":      "/openapi-ui",
+					"customizationId": "factory-details-events",
+					"pathToItems":     []any{"items"},
 				},
 			},
 		},

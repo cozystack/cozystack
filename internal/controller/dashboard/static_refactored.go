@@ -224,6 +224,17 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createStringColumn("Name", ".name"),
 		}),
 
+		// Factory details events
+		createCustomColumnsOverride("factory-details-events", []any{
+			createTimestampColumn("Last Seen", ".lastTimestamp"),
+			createTimestampColumn("Event Time", ".eventTime"),
+			createStringColumn("Type", ".type"),
+			createStringColumn("Reason", ".reason"),
+			createStringColumn("Object", ".involvedObject.kind"),
+			createStringColumn("Name", ".involvedObject.name"),
+			createStringColumn("Message", ".message"),
+		}),
+
 		// Factory status conditions
 		createCustomColumnsOverride("factory-status-conditions", []any{
 			createStringColumn("Type", ".type"),
