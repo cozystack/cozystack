@@ -3,9 +3,10 @@
 {{- $isExisting := not (empty $existingKafka) }}
 {{- $metadataState := "" }}
 {{- if $isExisting }}
-  {{- $metadataState = dig "status" "kafkaMetadataState" "ZooKeeper" $existingKafka }}
+  {{- $metadataState = dig "status" "kafkaMetadataState" "" $existingKafka }}
 {{- end }}
-{{- $isKRaft := or (not $isExisting) (eq $metadataState "KRaft") }}
+{{- /* Switch to KRaft enabled when migration reaches KRaftPostMigration or later */ -}}
+{{- $isKRaft := or (not $isExisting) (has $metadataState (list "KRaftPostMigration" "PreKRaft" "KRaft")) }}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:

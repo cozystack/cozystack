@@ -1,6 +1,10 @@
-{{- /* Detect pool layout: if a broker pool already exists, keep separate pools to preserve data */ -}}
+{{- /* Detect pool layout: use separate pools for existing ZK clusters (migration requires it) */ -}}
 {{- $existingBrokerPool := lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" .Release.Namespace (printf "%s-broker" .Release.Name) }}
-{{- $useCombinedPool := empty $existingBrokerPool }}
+{{- $existingKafka := lookup "kafka.strimzi.io/v1beta2" "Kafka" .Release.Namespace .Release.Name }}
+{{- $metadataState := dig "status" "kafkaMetadataState" "" $existingKafka }}
+{{- /* Combined pools are only for new installs; ZK→KRaft migration requires separate broker+controller pools */ -}}
+{{- $isMigrating := and (not (empty $existingKafka)) (not (has $metadataState (list "KRaftPostMigration" "PreKRaft" "KRaft" ""))) }}
+{{- $useCombinedPool := and (empty $existingBrokerPool) (not $isMigrating) }}
 {{- /* Controller replicas: use odd number for quorum (1 for single-node, 3 otherwise) */ -}}
 {{- $controllerReplicas := 3 }}
 {{- if le (int .Values.kafka.replicas) 1 }}
@@ -71,6 +75,7 @@ spec:
   replicas: {{ $controllerReplicas }}
   roles:
     - controller
+  resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 4 }}
   storage:
     type: jbod
     volumes:
@@ -81,5 +86,5 @@ spec:
       class: {{ . }}
       {{- end }}
       kraftMetadata: shared
-      deleteClaim: true
+      deleteClaim: false
 {{- end }}
