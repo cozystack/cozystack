@@ -59,7 +59,7 @@ spec:
       {{- with .Values.kafka.storageClass }}
       class: {{ . }}
       {{- end }}
-      deleteClaim: true
+      deleteClaim: false
 ---
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaNodePool
@@ -76,7 +76,7 @@ spec:
     volumes:
     - id: 0
       type: persistent-claim
-      size: 5Gi
+      size: {{ .Values.kafka.controllerStorageSize | default "5Gi" }}
       {{- with .Values.kafka.storageClass }}
       class: {{ . }}
       {{- end }}

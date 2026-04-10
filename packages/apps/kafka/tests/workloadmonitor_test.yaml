@@ -73,3 +73,11 @@ tests:
       - equal:
           path: spec.selector["app.kubernetes.io/name"]
           value: kafka
+
+  - it: does not create zookeeper WorkloadMonitor for new instance
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1

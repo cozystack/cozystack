@@ -40,6 +40,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-controller
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.kafka.resourcesPreset | quote }}
 spec:
   replicas: {{ $controllerReplicas }}
   minReplicas: 1

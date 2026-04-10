@@ -23,19 +23,22 @@ type ConfigSpec struct {
 	External bool `json:"external"`
 	// Kafka version to deploy.
 	// +kubebuilder:default:="v3.9"
-	Version string `json:"version"`
+	Version Version `json:"version"`
 	// Topics configuration.
 	// +kubebuilder:default:={}
 	Topics []Topic `json:"topics,omitempty"`
 	// Kafka configuration.
 	// +kubebuilder:default:={}
 	Kafka Kafka `json:"kafka"`
-	// ZooKeeper configuration.
+	// ZooKeeper configuration (only used for existing instances migrating from ZooKeeper to KRaft).
 	// +kubebuilder:default:={}
-	Zookeeper ZooKeeper `json:"zookeeper"`
+	Zookeeper ZooKeeper `json:"zookeeper,omitempty"`
 }
 
 type Kafka struct {
+	// Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).
+	// +kubebuilder:default:="5Gi"
+	ControllerStorageSize resource.Quantity `json:"controllerStorageSize,omitempty"`
 	// Number of Kafka replicas.
 	// +kubebuilder:default:=3
 	Replicas int `json:"replicas"`
@@ -91,3 +94,6 @@ type ZooKeeper struct {
 
 // +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
+
+// +kubebuilder:validation:Enum="v3.9";"v3.8"
+type Version string

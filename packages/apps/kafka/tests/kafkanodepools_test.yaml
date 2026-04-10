@@ -121,3 +121,20 @@ tests:
       - equal:
           path: spec.replicas
           value: 1
+
+  ##################################
+  # Storage in combined pool       #
+  ##################################
+
+  - it: combined pool uses kafka.size (not controllerStorageSize)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        size: 50Gi
+        controllerStorageSize: 20Gi
+    asserts:
+      - equal:
+          path: spec.storage.volumes[0].size
+          value: 50Gi

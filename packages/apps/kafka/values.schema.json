@@ -10,7 +10,11 @@
     "version": {
       "description": "Kafka version to deploy.",
       "type": "string",
-      "default": "v3.9"
+      "default": "v3.9",
+      "enum": [
+        "v3.9",
+        "v3.8"
+      ]
     },
     "topics": {
       "description": "Topics configuration.",
@@ -56,6 +60,20 @@
         "storageClass"
       ],
       "properties": {
+        "controllerStorageSize": {
+          "description": "Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).",
+          "default": "5Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
         "replicas": {
           "description": "Number of Kafka replicas.",
           "type": "integer",
@@ -130,7 +148,7 @@
       }
     },
     "zookeeper": {
-      "description": "ZooKeeper configuration.",
+      "description": "ZooKeeper configuration (only used for existing instances migrating from ZooKeeper to KRaft).",
       "type": "object",
       "default": {},
       "required": [

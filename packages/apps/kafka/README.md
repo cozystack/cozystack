@@ -23,23 +23,24 @@
 
 ### Kafka configuration
 
-| Name                     | Description                                                                                              | Type       | Value   |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | ------- |
-| `kafka`                  | Kafka configuration.                                                                                     | `object`   | `{}`    |
-| `kafka.replicas`         | Number of Kafka replicas.                                                                                | `int`      | `3`     |
-| `kafka.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `kafka.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`    |
-| `kafka.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`    |
-| `kafka.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `small` |
-| `kafka.size`             | Persistent Volume size for Kafka.                                                                        | `quantity` | `10Gi`  |
-| `kafka.storageClass`     | StorageClass used to store the Kafka data.                                                               | `string`   | `""`    |
+| Name                          | Description                                                                                              | Type       | Value   |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `kafka`                       | Kafka configuration.                                                                                     | `object`   | `{}`    |
+| `kafka.replicas`              | Number of Kafka replicas.                                                                                | `int`      | `3`     |
+| `kafka.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
+| `kafka.resources.cpu`         | CPU available to each replica.                                                                           | `quantity` | `""`    |
+| `kafka.resources.memory`      | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`    |
+| `kafka.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `small` |
+| `kafka.size`                  | Persistent Volume size for Kafka.                                                                        | `quantity` | `10Gi`  |
+| `kafka.storageClass`          | StorageClass used to store the Kafka data.                                                               | `string`   | `""`    |
+| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).                | `quantity` | `5Gi`   |
 
 
 ### ZooKeeper configuration
 
 | Name                         | Description                                                                                              | Type       | Value   |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ------- |
-| `zookeeper`                  | ZooKeeper configuration.                                                                                 | `object`   | `{}`    |
+| `zookeeper`                  | ZooKeeper configuration (only used for existing instances migrating from ZooKeeper to KRaft).            | `object`   | `{}`    |
 | `zookeeper.replicas`         | Number of ZooKeeper replicas.                                                                            | `int`      | `3`     |
 | `zookeeper.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
 | `zookeeper.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`    |
@@ -93,3 +94,25 @@ topics:
     partitions: 1
     replicas: 3
 ```
+
+## ZooKeeper to KRaft Migration
+
+New Kafka instances deploy directly in KRaft (Kafka Raft) mode. Existing
+ZooKeeper-based instances are migrated automatically using Strimzi's built-in
+migration state machine.
+
+### How it works
+
+1. On upgrade, existing ZooKeeper instances receive the `strimzi.io/kraft: migration` annotation.
+2. Strimzi creates a dedicated KRaft controller pool alongside the existing brokers (separate pool layout).
+3. The migration progresses through these states:
+   `ZooKeeper` -> `KRaftMigration` -> `KRaftDualWriting` -> `KRaftPostMigration` -> `KRaft`
+4. Once the state reaches `KRaft`, ZooKeeper pods are removed automatically.
+5. Broker data is preserved throughout the migration — the existing broker pool is kept intact.
+
+### Important notes
+
+- **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi releases will only support KRaft.
+- The migration is fully automated — no manual intervention is required.
+- Monitor progress by checking `status.kafkaMetadataState` on the Kafka CR.
+- The `kafka.controllerStorageSize` parameter controls PV size for the new KRaft controller nodes (default: 5Gi).
