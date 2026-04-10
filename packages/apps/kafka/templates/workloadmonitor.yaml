@@ -2,11 +2,12 @@
 {{- $isExisting := not (empty $existingKafka) }}
 {{- $metadataState := "" }}
 {{- if $isExisting }}
-  {{- $metadataState = dig "status" "kafkaMetadataState" "ZooKeeper" $existingKafka }}
+  {{- $metadataState = dig "status" "kafkaMetadataState" "" $existingKafka }}
 {{- end }}
-{{- $isKRaft := or (not $isExisting) (eq $metadataState "KRaft") }}
+{{- $isKRaft := or (not $isExisting) (has $metadataState (list "KRaftPostMigration" "PreKRaft" "KRaft")) }}
 {{- $existingBrokerPool := lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" .Release.Namespace (printf "%s-broker" .Release.Name) }}
-{{- $useCombinedPool := empty $existingBrokerPool }}
+{{- $isMigrating := and (not (empty $existingKafka)) (not (has $metadataState (list "KRaftPostMigration" "PreKRaft" "KRaft" ""))) }}
+{{- $useCombinedPool := and (empty $existingBrokerPool) (not $isMigrating) }}
 {{- $controllerReplicas := 3 }}
 {{- if le (int .Values.kafka.replicas) 1 }}
   {{- $controllerReplicas = 1 }}

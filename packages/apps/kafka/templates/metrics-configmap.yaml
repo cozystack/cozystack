@@ -2,9 +2,9 @@
 {{- $isExisting := not (empty $existingKafka) }}
 {{- $metadataState := "" }}
 {{- if $isExisting }}
-  {{- $metadataState = dig "status" "kafkaMetadataState" "ZooKeeper" $existingKafka }}
+  {{- $metadataState = dig "status" "kafkaMetadataState" "" $existingKafka }}
 {{- end }}
-{{- $isKRaft := or (not $isExisting) (eq $metadataState "KRaft") }}
+{{- $isKRaft := or (not $isExisting) (has $metadataState (list "KRaftPostMigration" "PreKRaft" "KRaft")) }}
 kind: ConfigMap
 apiVersion: v1
 metadata:
