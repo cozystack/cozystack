@@ -14,7 +14,8 @@
 # When to run:
 #   Before `helm install cozy-installer` on an Ubuntu host prepared with k3s
 #   or kubeadm (cozystack "generic" variant). Irrelevant on Talos where the
-#   container runtime lifecycle is fully managed.
+#   container runtime lifecycle is fully managed. Discoverable via
+#   `make preflight` from the repository root.
 #
 # Exit code:
 #   Always 0 (warning, not a blocker). Warnings go to stderr.
@@ -28,19 +29,24 @@
 # -----------------------------------------------------------------------------
 set -euo pipefail
 
-YELLOW='\033[1;33m'
-RESET='\033[0m'
+if [ -t 2 ]; then
+    YELLOW=$'\033[1;33m'
+    RESET=$'\033[0m'
+else
+    YELLOW=''
+    RESET=''
+fi
 
 CONTAINERD_SOCKET=${COZYSTACK_CONTAINERD_SOCKET:-/run/containerd/containerd.sock}
 DOCKER_SOCKET_PATHS=${COZYSTACK_DOCKER_SOCKET_PATHS:-/run/docker.sock /var/run/docker.sock}
 CONTAINERD_DIR=${COZYSTACK_CONTAINERD_DIR:-/var/lib/containerd}
 DOCKER_DIR=${COZYSTACK_DOCKER_DIR:-/var/lib/docker}
 
-WARNINGS=0
+CONTAINERD_WARN=0
+DOCKER_WARN=0
 
 warn() {
-    printf '%bWARNING:%b %s\n' "$YELLOW" "$RESET" "$1" >&2
-    WARNINGS=$((WARNINGS + 1))
+    printf '%sWARNING:%s %s\n' "$YELLOW" "$RESET" "$1" >&2
 }
 
 detect_systemctl() {
@@ -86,6 +92,7 @@ check_containerd() {
     if [ "$found" -eq 1 ]; then
         detail=$(disk_usage "$CONTAINERD_DIR")
         warn "standalone containerd.service detected alongside k3s embedded runtime${detail}"
+        CONTAINERD_WARN=1
     fi
 }
 
@@ -106,6 +113,7 @@ check_docker() {
     if [ "$found" -eq 1 ]; then
         detail=$(disk_usage "$DOCKER_DIR")
         warn "standalone docker.service detected alongside k3s embedded runtime${detail}"
+        DOCKER_WARN=1
     fi
 }
 
@@ -118,9 +126,20 @@ fi
 check_containerd
 check_docker
 
-if [ "$WARNINGS" -gt 0 ]; then
-    printf '%bHINT:%b cozystack runs its own containerd under k3s. To stop the shadow runtime:\n' "$YELLOW" "$RESET" >&2
-    printf '  sudo systemctl disable --now docker.service containerd.service\n' >&2
+if [ "$CONTAINERD_WARN" -eq 1 ] || [ "$DOCKER_WARN" -eq 1 ]; then
+    services=""
+    if [ "$CONTAINERD_WARN" -eq 1 ]; then
+        services="containerd.service"
+    fi
+    if [ "$DOCKER_WARN" -eq 1 ]; then
+        if [ -n "$services" ]; then
+            services="$services docker.service"
+        else
+            services="docker.service"
+        fi
+    fi
+    printf '%sHINT:%s cozystack runs its own containerd under k3s. To stop the shadow runtime:\n' "$YELLOW" "$RESET" >&2
+    printf '  sudo systemctl disable --now %s\n' "$services" >&2
     printf 'Inspect and reclaim standalone runtime storage separately — it may contain container data\n' >&2
     printf 'that the operator still needs; do not delete it blindly.\n' >&2
 fi
