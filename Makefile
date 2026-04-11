@@ -90,6 +90,12 @@ helm-unit-tests:
 # Discover every hack/*.bats file that is NOT an e2e test and run it
 # through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
 # up automatically on the next `make unit-tests` run.
+#
+# Caveat: $(wildcard ...) returns space-separated names, so a filename
+# containing a literal space would split into multiple tokens here. All
+# current bats files use hyphen-separated names; if the project ever
+# introduces whitespace-bearing filenames this recipe must be rewritten
+# (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
 
 bats-unit-tests:
