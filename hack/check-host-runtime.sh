@@ -103,12 +103,15 @@ check_docker() {
         found=1
     fi
     if [ "$found" -eq 0 ]; then
-        # Intentional unquoted expansion: DOCKER_SOCKET_PATHS is a space
-        # separated list of socket paths (e.g. "/run/docker.sock
-        # /var/run/docker.sock"). Socket paths never contain spaces in
-        # practice on Linux hosts, so word splitting is the documented
-        # mechanism and must not be "fixed" by quoting the expansion.
-        for sock in $DOCKER_SOCKET_PATHS; do
+        # DOCKER_SOCKET_PATHS is a space separated list of paths. Parse
+        # it into an array via `read -ra` so that word splitting is
+        # explicit AND glob expansion is suppressed — `for sock in
+        # $DOCKER_SOCKET_PATHS` would both word split and glob, so a
+        # path containing a literal `*` or `?` could expand into
+        # directory entries and produce false positives.
+        local -a _socks
+        read -ra _socks <<<"$DOCKER_SOCKET_PATHS"
+        for sock in "${_socks[@]}"; do
             if [ -e "$sock" ]; then
                 found=1
                 break
