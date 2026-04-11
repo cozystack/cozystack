@@ -23,3 +23,18 @@ cilium:
   operator:
     rollOutPods: true
     replicas: 1
+  # Opt out of the cri-containerd.apparmor.d profile for containers that invoke
+  # nsenter --ptrace to join the host cgroup/mount namespace. Required on
+  # Ubuntu 22.04+ and other distros that load this AppArmor profile by default,
+  # where the denial puts cilium-agent into Init:CrashLoopBackOff.
+  # The deprecated annotations are used because k8s >= 1.30 pod-level
+  # appArmorProfile: Unconfined is not honoured by containerd CRI today
+  # (kubernetes/kubernetes#125069).
+  # Safe on Talos / RHEL family without AppArmor: kubelet ignores these
+  # annotations when the AppArmor LSM is not loaded.
+  podAnnotations:
+    container.apparmor.security.beta.kubernetes.io/cilium-agent: unconfined
+    container.apparmor.security.beta.kubernetes.io/clean-cilium-state: unconfined
+    container.apparmor.security.beta.kubernetes.io/mount-cgroup: unconfined
+    container.apparmor.security.beta.kubernetes.io/apply-sysctl-overwrites: unconfined
+    container.apparmor.security.beta.kubernetes.io/mount-bpf-fs: unconfined
