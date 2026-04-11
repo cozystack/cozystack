@@ -174,9 +174,11 @@ STUBEOF
   grep -q 'standalone docker.service' "$STDERR_FILE"
   # HINT block must fire whenever warnings exist; otherwise a future silent
   # removal of the HINT would go unnoticed. When both services fire the HINT
-  # must list both in a single systemctl disable invocation.
+  # must list both in a single sudo systemctl disable invocation — the sudo
+  # prefix is as important as the systemctl verb, otherwise the operator
+  # would be told to run it as a non-root user and quietly fail.
   grep -q 'HINT:' "$STDERR_FILE"
-  grep -q 'systemctl disable --now containerd.service docker.service' "$STDERR_FILE"
+  grep -q 'sudo systemctl disable --now containerd.service docker.service' "$STDERR_FILE"
 }
 
 @test "failing du does not suppress the containerd warning" {
@@ -219,12 +221,12 @@ DUEOF
   STUB_DIR=$(mktemp -d)
   trap 'rm -rf "$STUB_DIR"' EXIT
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "# SKIP: python3 unavailable - cannot create unix socket" >&2
-    return 0
-  fi
+  # The script uses `[ -e "$sock" ]`, not `[ -S ... ]`, so a regular
+  # file is a valid stand-in for a unix socket in tests. This also
+  # removes any optional runtime dependency on python3 and makes the
+  # test unconditional on every CI runner.
   SOCK="$STUB_DIR/containerd.sock"
-  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$SOCK"
+  touch "$SOCK"
 
   STDERR_FILE="$STUB_DIR/stderr"
   COZYSTACK_PREFLIGHT_FORCE_NO_SYSTEMCTL=1 \
@@ -241,12 +243,8 @@ DUEOF
   STUB_DIR=$(mktemp -d)
   trap 'rm -rf "$STUB_DIR"' EXIT
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "# SKIP: python3 unavailable - cannot create unix socket" >&2
-    return 0
-  fi
   SOCK="$STUB_DIR/docker.sock"
-  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$SOCK"
+  touch "$SOCK"
 
   STDERR_FILE="$STUB_DIR/stderr"
   COZYSTACK_PREFLIGHT_FORCE_NO_SYSTEMCTL=1 \
@@ -298,12 +296,8 @@ exit 1
 STUBEOF
   chmod +x "$STUB_DIR/systemctl"
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "# SKIP: python3 unavailable - cannot create unix socket" >&2
-    return 0
-  fi
   SOCK="$STUB_DIR/docker.sock"
-  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$SOCK"
+  touch "$SOCK"
 
   mkdir -p "$STUB_DIR/var-lib-docker"
 
@@ -341,12 +335,12 @@ exit 1
 STUBEOF
   chmod +x "$STUB_DIR/systemctl"
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "# SKIP: python3 unavailable - cannot create unix socket" >&2
-    return 0
-  fi
+  # The script uses `[ -e "$sock" ]`, not `[ -S ... ]`, so a regular
+  # file is a valid stand-in for a unix socket in tests. This also
+  # removes any optional runtime dependency on python3 and makes the
+  # test unconditional on every CI runner.
   SOCK="$STUB_DIR/containerd.sock"
-  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$SOCK"
+  touch "$SOCK"
 
   mkdir -p "$STUB_DIR/var-lib-containerd"
 
