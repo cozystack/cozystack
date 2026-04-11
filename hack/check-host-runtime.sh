@@ -63,7 +63,13 @@ disk_usage() {
     local path=$1
     local usage
     if [ -d "$path" ]; then
-        usage=$(du -sh "$path" 2>/dev/null | awk '{print $1}' || true)
+        # Wrap `du` in `timeout 5s` so a container data directory with
+        # millions of files (the exact scenario this script exists to
+        # warn about) cannot stall the preflight indefinitely. If the
+        # `timeout` binary is absent the pipeline still exits 0 via
+        # `|| true` and `usage` stays empty; the warning itself is
+        # still printed, just without the size detail.
+        usage=$(timeout 5s du -sh "$path" 2>/dev/null | awk '{print $1}' || true)
         if [ -n "${usage:-}" ]; then
             printf ' (%s uses %s)' "$path" "$usage"
         fi
