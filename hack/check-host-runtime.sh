@@ -60,10 +60,8 @@ disk_usage() {
         usage=$(du -sh "$path" 2>/dev/null | awk '{print $1}' || true)
         if [ -n "${usage:-}" ]; then
             printf ' (%s uses %s)' "$path" "$usage"
-            return 0
         fi
     fi
-    printf ''
 }
 
 service_active() {
@@ -82,7 +80,7 @@ check_containerd() {
     if service_active containerd.service; then
         found=1
     fi
-    if [ -e "$CONTAINERD_SOCKET" ]; then
+    if [ "$found" -eq 0 ] && [ -e "$CONTAINERD_SOCKET" ]; then
         found=1
     fi
     if [ "$found" -eq 1 ]; then
@@ -123,7 +121,8 @@ check_docker
 if [ "$WARNINGS" -gt 0 ]; then
     printf '%bHINT:%b cozystack runs its own containerd under k3s. To stop the shadow runtime:\n' "$YELLOW" "$RESET" >&2
     printf '  sudo systemctl disable --now docker.service containerd.service\n' >&2
-    printf '  sudo rm -rf /var/lib/docker /var/lib/containerd\n' >&2
+    printf 'Inspect and reclaim standalone runtime storage separately — it may contain container data\n' >&2
+    printf 'that the operator still needs; do not delete it blindly.\n' >&2
 fi
 
 exit 0
