@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests preflight
 
 include hack/common-envs.mk
 
@@ -87,8 +87,22 @@ unit-tests: helm-unit-tests bats-unit-tests
 helm-unit-tests:
 	hack/helm-unit-tests.sh
 
+# Discover every hack/*.bats file that is NOT an e2e test and run it
+# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
+# up automatically on the next `make unit-tests` run.
+BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+
 bats-unit-tests:
-	hack/cozytest.sh hack/check-host-runtime.bats
+	@for f in $(BATS_UNIT_FILES); do \
+		echo "--- running $$f ---"; \
+		hack/cozytest.sh "$$f" || exit 1; \
+	done
+
+# Operator-facing host preflight check. Warns about a standalone
+# containerd.service or docker.service running alongside the embedded
+# k3s runtime. Safe to run at any time; always exits 0.
+preflight:
+	@hack/check-host-runtime.sh
 
 prepare-env:
 	make -C packages/core/testing apply
