@@ -32,9 +32,10 @@ cilium:
   # (kubernetes/kubernetes#125069).
   # Safe on Talos / RHEL family without AppArmor: kubelet ignores these
   # annotations when the AppArmor LSM is not loaded.
+  # mount-bpf-fs is intentionally excluded: it runs as privileged, and the
+  # kernel does not apply AppArmor profiles to privileged containers.
   podAnnotations:
     container.apparmor.security.beta.kubernetes.io/cilium-agent: unconfined
     container.apparmor.security.beta.kubernetes.io/clean-cilium-state: unconfined
     container.apparmor.security.beta.kubernetes.io/mount-cgroup: unconfined
     container.apparmor.security.beta.kubernetes.io/apply-sysctl-overwrites: unconfined
-    container.apparmor.security.beta.kubernetes.io/mount-bpf-fs: unconfined
