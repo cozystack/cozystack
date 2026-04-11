@@ -66,6 +66,7 @@ spec:
       path: system/cilium
       valuesFiles:
       - values.yaml
+      - values-apparmor.yaml
       install:
         privileged: true
         namespace: cozy-cilium
@@ -117,6 +118,7 @@ spec:
       path: system/cilium
       valuesFiles:
       - values.yaml
+      - values-apparmor.yaml
       - values-kubeovn.yaml
       install:
         privileged: true
