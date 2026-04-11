@@ -1,6 +1,7 @@
 {{- $etcd := .Values._namespace.etcd }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cluster.local" }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
@@ -256,7 +257,7 @@ spec:
           - FileExisting-conntrack
         discovery:
           bootstrapToken:
-            apiServerEndpoint: {{ $.Release.Name }}.{{ $.Release.Namespace }}.svc:6443
+            apiServerEndpoint: {{ $.Release.Name }}.{{ $.Release.Namespace }}.svc.{{ $clusterDomain }}:6443
       initConfiguration:
         skipPhases:
         - addon/kube-proxy
