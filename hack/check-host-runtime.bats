@@ -12,9 +12,14 @@
 # variables to redirect socket/dir probes into the stub tree, so tests do not
 # need root privileges or a real systemd host.
 #
-# Tests are self-contained — no shared setup/teardown helpers, because
-# cozytest.sh's awk parser only recognizes @test blocks and treats a bare `}`
-# on its own line as the end of a test function.
+# Each test installs a `trap 'rm -rf "$STUB_DIR"' EXIT` immediately after
+# creating the stub dir so cleanup runs even when an assertion fails mid-test
+# under `set -e`. cozytest.sh runs each @test in its own subshell, so traps
+# scope per test and do not leak across tests.
+#
+# Tests are otherwise self-contained — no shared setup/teardown helpers,
+# because cozytest.sh's awk parser only recognizes @test blocks and treats a
+# bare `}` on its own line as the end of a test function.
 #
 # Run with: hack/cozytest.sh hack/check-host-runtime.bats
 #           (or `bats hack/check-host-runtime.bats` if the bats binary is
@@ -23,6 +28,8 @@
 
 @test "clean host with no runtime services exits silently" {
   STUB_DIR=$(mktemp -d)
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -43,12 +50,12 @@ STUBEOF
 
   [ ! -s "$STDERR_FILE" ]
   [ ! -s "$STUB_DIR/stdout" ]
-
-  rm -rf "$STUB_DIR"
 }
 
 @test "standalone containerd service active prints warning" {
   STUB_DIR=$(mktemp -d)
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -80,12 +87,12 @@ STUBEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
-
-  rm -rf "$STUB_DIR"
 }
 
 @test "standalone docker service active prints warning" {
   STUB_DIR=$(mktemp -d)
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -117,12 +124,12 @@ STUBEOF
     cat "$STDERR_FILE" >&2
     exit 1
   fi
-
-  rm -rf "$STUB_DIR"
 }
 
-@test "both services active prints two warnings" {
+@test "both services active prints two warnings and the HINT block" {
   STUB_DIR=$(mktemp -d)
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -150,12 +157,16 @@ STUBEOF
 
   grep -q 'standalone containerd.service' "$STDERR_FILE"
   grep -q 'standalone docker.service' "$STDERR_FILE"
-
-  rm -rf "$STUB_DIR"
+  # HINT block must fire whenever warnings exist; otherwise a future silent
+  # removal of the HINT would go unnoticed.
+  grep -q 'HINT:' "$STDERR_FILE"
+  grep -q 'systemctl disable --now' "$STDERR_FILE"
 }
 
 @test "failing du does not suppress the containerd warning" {
   STUB_DIR=$(mktemp -d)
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
   cat >"$STUB_DIR/systemctl" <<'STUBEOF'
 #!/bin/sh
 if [ "$1" = "--version" ]; then
@@ -186,18 +197,17 @@ DUEOF
     bash hack/check-host-runtime.sh 2>"$STDERR_FILE"
 
   grep -q 'standalone containerd.service' "$STDERR_FILE"
-
-  rm -rf "$STUB_DIR"
 }
 
-@test "socket only fallback fires when systemctl is unavailable" {
+@test "containerd socket fallback fires when systemctl is unavailable" {
   STUB_DIR=$(mktemp -d)
-  SOCK="$STUB_DIR/containerd.sock"
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
   if ! command -v python3 >/dev/null 2>&1; then
     echo "python3 not available - skipping socket fallback test" >&2
-    rm -rf "$STUB_DIR"
     return 0
   fi
+  SOCK="$STUB_DIR/containerd.sock"
   python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$SOCK"
 
   STDERR_FILE="$STUB_DIR/stderr"
@@ -209,6 +219,74 @@ DUEOF
     bash hack/check-host-runtime.sh 2>"$STDERR_FILE"
 
   grep -q 'standalone containerd.service' "$STDERR_FILE"
+}
 
-  rm -rf "$STUB_DIR"
+@test "docker socket fallback fires when systemctl is unavailable" {
+  STUB_DIR=$(mktemp -d)
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 not available - skipping docker socket fallback test" >&2
+    return 0
+  fi
+  SOCK="$STUB_DIR/docker.sock"
+  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$SOCK"
+
+  STDERR_FILE="$STUB_DIR/stderr"
+  COZYSTACK_PREFLIGHT_FORCE_NO_SYSTEMCTL=1 \
+  COZYSTACK_CONTAINERD_SOCKET="$STUB_DIR/missing-containerd.sock" \
+  COZYSTACK_DOCKER_SOCKET_PATHS="$SOCK" \
+  COZYSTACK_CONTAINERD_DIR="$STUB_DIR/missing-containerd-dir" \
+  COZYSTACK_DOCKER_DIR="$STUB_DIR/missing-docker-dir" \
+    bash hack/check-host-runtime.sh 2>"$STDERR_FILE"
+
+  grep -q 'standalone docker.service' "$STDERR_FILE"
+  if grep -q 'standalone containerd.service' "$STDERR_FILE"; then
+    echo "unexpected containerd warning found:" >&2
+    cat "$STDERR_FILE" >&2
+    exit 1
+  fi
+}
+
+@test "containerd service plus socket still emits exactly one warning" {
+  STUB_DIR=$(mktemp -d)
+  trap 'rm -rf "$STUB_DIR"' EXIT
+
+  cat >"$STUB_DIR/systemctl" <<'STUBEOF'
+#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "systemd stub"
+  exit 0
+fi
+if [ "$1" = "is-active" ] && [ "$2" = "containerd.service" ]; then
+  echo active
+  exit 0
+fi
+exit 1
+STUBEOF
+  chmod +x "$STUB_DIR/systemctl"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 not available - skipping service+socket test" >&2
+    return 0
+  fi
+  SOCK="$STUB_DIR/containerd.sock"
+  python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$SOCK"
+
+  mkdir -p "$STUB_DIR/var-lib-containerd"
+
+  STDERR_FILE="$STUB_DIR/stderr"
+  COZYSTACK_CONTAINERD_SOCKET="$SOCK" \
+  COZYSTACK_DOCKER_SOCKET_PATHS="$STUB_DIR/missing-docker.sock" \
+  COZYSTACK_CONTAINERD_DIR="$STUB_DIR/var-lib-containerd" \
+  COZYSTACK_DOCKER_DIR="$STUB_DIR/missing-docker-dir" \
+  PATH="$STUB_DIR:$PATH" \
+    bash hack/check-host-runtime.sh 2>"$STDERR_FILE"
+
+  count=$(grep -c 'standalone containerd.service' "$STDERR_FILE")
+  if [ "$count" != "1" ]; then
+    echo "expected exactly one containerd warning, got $count" >&2
+    cat "$STDERR_FILE" >&2
+    exit 1
+  fi
 }
