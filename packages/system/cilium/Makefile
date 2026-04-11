@@ -18,7 +18,7 @@ update:
 	# produce duplicate mapping keys on k8s<1.30.
 	perl -i -0pe 's|\n        \{\{- if not \.Values\.securityContext\.privileged \}\}\n        \{\{- if semverCompare "<1\.30\.0".*?\n        \{\{- end \}\}\n        \{\{- end \}\}\n        \{\{- end \}\}||s' \
 		charts/cilium/templates/cilium-agent/daemonset.yaml
-	@! grep -q 'container\.apparmor\.security\.beta\.kubernetes\.io/cilium-agent: "unconfined"' \
+	@! grep -q 'container\.apparmor\.security\.beta\.kubernetes\.io' \
 		charts/cilium/templates/cilium-agent/daemonset.yaml || \
 		{ echo 'ERROR: perl patch did not remove the upstream AppArmor block from cilium-agent/daemonset.yaml (upstream template format may have changed)' >&2; exit 1; }
 	version=$$(awk '$$1 == "version:" {print $$2}' charts/cilium/Chart.yaml) && \
