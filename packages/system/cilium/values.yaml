@@ -34,6 +34,11 @@ cilium:
   # annotations when the AppArmor LSM is not loaded.
   # mount-bpf-fs is intentionally excluded: it runs as privileged, and the
   # kernel does not apply AppArmor profiles to privileged containers.
+  # On unsupported k8s < 1.30 the upstream chart renders the same keys
+  # inside its own <1.30 branch, yielding a duplicate mapping with
+  # identical values (last-wins). The supported matrix starts at 1.30
+  # (packages/apps/kubernetes/files/versions.yaml), so this does not
+  # affect any shipped version.
   podAnnotations:
     container.apparmor.security.beta.kubernetes.io/cilium-agent: unconfined
     container.apparmor.security.beta.kubernetes.io/clean-cilium-state: unconfined
