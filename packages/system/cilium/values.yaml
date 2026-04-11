@@ -31,10 +31,13 @@ cilium:
   # The deprecated annotations are used because k8s >= 1.30 pod-level
   # appArmorProfile: Unconfined is not honoured by containerd CRI today
   # (kubernetes/kubernetes#125069).
-  # Safe on Talos / RHEL family without AppArmor: kubelet ignores these
-  # annotations when the AppArmor LSM is not loaded.
-  # mount-bpf-fs is intentionally excluded: it runs as privileged, and the
-  # kernel does not apply AppArmor profiles to privileged containers.
+  # On Talos mount-cgroup is not rendered (cgroup.autoMount.enabled=false in
+  # values-talos.yaml) so its annotation is inert there. On RHEL-family and
+  # other AppArmor-less hosts kubelet silently ignores these annotations
+  # because the AppArmor LSM is not loaded.
+  # mount-bpf-fs is intentionally excluded: it renders with its own
+  # securityContext.privileged=true, and the kernel does not apply AppArmor
+  # profiles to privileged containers.
   podAnnotations:
     container.apparmor.security.beta.kubernetes.io/cilium-agent: unconfined
     container.apparmor.security.beta.kubernetes.io/clean-cilium-state: unconfined
