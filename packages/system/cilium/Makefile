@@ -12,15 +12,11 @@ update:
 	helm repo update cilium
 	helm pull cilium/cilium --untar --untardir charts --version 1.19
 	$(SED_INPLACE) -e '/Used in iptables/d' -e '/SYS_MODULE/d' charts/cilium/values.yaml
-	# Drop the hardcoded AppArmor unconfined annotations from the cilium-agent
-	# DaemonSet's k8s<1.30 branch. Cozystack manages these through
-	# cilium.podAnnotations in values.yaml for all k8s versions, and keeping the
-	# upstream block would produce duplicate mapping keys on k8s<1.30.
-	$(SED_INPLACE) \
-		-e '/container\.apparmor\.security\.beta\.kubernetes\.io\/cilium-agent: "unconfined"/d' \
-		-e '/container\.apparmor\.security\.beta\.kubernetes\.io\/clean-cilium-state: "unconfined"/d' \
-		-e '/container\.apparmor\.security\.beta\.kubernetes\.io\/mount-cgroup: "unconfined"/d' \
-		-e '/container\.apparmor\.security\.beta\.kubernetes\.io\/apply-sysctl-overwrites: "unconfined"/d' \
+	# Drop the whole k8s<1.30 AppArmor annotations block from the cilium-agent
+	# DaemonSet. Cozystack manages these annotations through cilium.podAnnotations
+	# in values.yaml on every k8s version, so keeping the upstream block would
+	# produce duplicate mapping keys on k8s<1.30.
+	perl -i -0pe 's|\n        \{\{- if not \.Values\.securityContext\.privileged \}\}\n        \{\{- if semverCompare "<1\.30\.0".*?\n        \{\{- end \}\}\n        \{\{- end \}\}\n        \{\{- end \}\}||s' \
 		charts/cilium/templates/cilium-agent/daemonset.yaml
 	version=$$(awk '$$1 == "version:" {print $$2}' charts/cilium/Chart.yaml) && \
 	$(SED_INPLACE) "s/ARG VERSION=.*/ARG VERSION=v$${version}/" images/cilium/Dockerfile
