@@ -93,6 +93,10 @@ helm-unit-tests:
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
 
 bats-unit-tests:
+	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
+		echo "ERROR: no hack/*.bats unit test files found"; \
+		exit 1; \
+	fi
 	@for f in $(BATS_UNIT_FILES); do \
 		echo "--- running $$f ---"; \
 		hack/cozytest.sh "$$f" || exit 1; \
