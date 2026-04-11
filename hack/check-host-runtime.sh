@@ -103,6 +103,11 @@ check_docker() {
         found=1
     fi
     if [ "$found" -eq 0 ]; then
+        # Intentional unquoted expansion: DOCKER_SOCKET_PATHS is a space
+        # separated list of socket paths (e.g. "/run/docker.sock
+        # /var/run/docker.sock"). Socket paths never contain spaces in
+        # practice on Linux hosts, so word splitting is the documented
+        # mechanism and must not be "fixed" by quoting the expansion.
         for sock in $DOCKER_SOCKET_PATHS; do
             if [ -e "$sock" ]; then
                 found=1
