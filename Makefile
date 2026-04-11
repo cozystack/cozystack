@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests
 
 include hack/common-envs.mk
 
@@ -82,10 +82,13 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests
+unit-tests: helm-unit-tests bats-unit-tests
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
+
+bats-unit-tests:
+	hack/cozytest.sh hack/check-host-runtime.bats
 
 prepare-env:
 	make -C packages/core/testing apply
