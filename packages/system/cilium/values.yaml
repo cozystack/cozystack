@@ -24,9 +24,10 @@ cilium:
     rollOutPods: true
     replicas: 1
   # Opt out of the cri-containerd.apparmor.d profile for containers that invoke
-  # nsenter --ptrace to join the host cgroup/mount namespace. Required on
-  # Ubuntu 22.04+ and other distros that load this AppArmor profile by default,
-  # where the denial puts cilium-agent into Init:CrashLoopBackOff.
+  # nsenter to join the host cgroup/mount namespace. The kernel reports the
+  # denial as a blocked "ptrace" operation. Required on Ubuntu 22.04+ and
+  # other distros that load this AppArmor profile by default, where the
+  # denial otherwise puts cilium-agent into Init:CrashLoopBackOff.
   # The deprecated annotations are used because k8s >= 1.30 pod-level
   # appArmorProfile: Unconfined is not honoured by containerd CRI today
   # (kubernetes/kubernetes#125069).
