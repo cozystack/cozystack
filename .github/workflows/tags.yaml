@@ -23,6 +23,14 @@ jobs:
       actions: write
 
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
       # Check if a non-draft release with this tag already exists
       - name: Check if release already exists
         id: check_release
@@ -113,15 +121,30 @@ jobs:
       - name: Commit release artifacts
         if: steps.check_release.outputs.skip == 'false'
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config user.name  "cozystack-bot"
-          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
-          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           git config --unset-all http.https://github.com/.extraheader || true
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
           git push origin HEAD || true
+
+      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev
+      - name: Tag API submodule
+        if: steps.check_release.outputs.skip == 'false'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          VTAG="${{ steps.tag.outputs.tag }}"
+          SUBTAG="api/apps/v1alpha1/${VTAG}"
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
+          TARGET="$(git rev-parse "${VTAG}^{}")"
+          git tag -f "${SUBTAG}" "$TARGET"
+          git push -f origin "refs/tags/${SUBTAG}"
 
       # Create or reuse draft release
       - name: Create / reuse draft release
@@ -167,11 +190,11 @@ jobs:
       - name: Create release branch
         if: steps.check_release.outputs.skip == 'false'
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config user.name  "cozystack-bot"
-          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
-          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           BRANCH="release-${GITHUB_REF#refs/tags/v}"
           git branch -f "$BRANCH"
           git push -f origin "$BRANCH"
@@ -181,7 +204,7 @@ jobs:
         if: steps.check_release.outputs.skip == 'false'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const version = context.ref.replace('refs/tags/v', '');
             const base    = '${{ steps.get_base.outputs.branch }}';
@@ -223,6 +246,14 @@ jobs:
       pull-requests: write
     if: needs.prepare-release.result == 'success'
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
       - name: Parse tag
         id: tag
         uses: actions/github-script@v7
@@ -245,7 +276,7 @@ jobs:
           ref: main
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Check if changelog already exists
         id: check_changelog
@@ -273,7 +304,7 @@ jobs:
         if: steps.check_changelog.outputs.exists == 'false'
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           copilot --prompt "prepare changelog file for tagged release v${{ steps.tag.outputs.version }}, use @docs/agents/changelog.md for it. Create the changelog file at docs/changelogs/v${{ steps.tag.outputs.version }}.md" \
             --allow-all-tools --allow-all-paths < /dev/null
@@ -281,11 +312,11 @@ jobs:
       - name: Create changelog branch and commit
         if: steps.check_changelog.outputs.exists == 'false'
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config user.name  "cozystack-bot"
-          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
-          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           
           CHANGELOG_FILE="docs/changelogs/v${{ steps.tag.outputs.version }}.md"
           CHANGELOG_BRANCH="changelog-v${{ steps.tag.outputs.version }}"
@@ -320,7 +351,7 @@ jobs:
         if: steps.check_changelog.outputs.exists == 'false'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const version = '${{ steps.tag.outputs.version }}';
             const changelogBranch = `changelog-v${version}`;
@@ -370,3 +401,82 @@ jobs:
               
               console.log(`Created PR #${pr.data.number} for changelog`);
             }
+
+  update-website-docs:
+    name: Update Website Docs
+    runs-on: [self-hosted]
+    needs: [generate-changelog, prepare-release]
+    if: needs.generate-changelog.result == 'success' && needs.prepare-release.outputs.skip != 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
+      - name: Parse tag
+        id: tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ref = context.ref.replace('refs/tags/', '');
+            const m = ref.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);
+            if (!m) {
+              core.setFailed(`❌ tag '${ref}' must match 'vX.Y.Z' or 'vX.Y.Z-(alpha|beta|rc).N'`);
+              return;
+            }
+            const version = m[1] + (m[2] ?? '');
+            core.setOutput('tag',     ref);      // v0.22.0
+            core.setOutput('version', version);  // 0.22.0
+
+      - name: Checkout website repo
+        uses: actions/checkout@v4
+        with:
+          repository: cozystack/website
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+
+      - name: Update docs from release branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: make update-all BRANCH=release-${{ steps.tag.outputs.version }} RELEASE_TAG=${{ steps.tag.outputs.tag }}
+
+      - name: Commit and push
+        id: commit
+        run: |
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git add content
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          BRANCH="update-docs-v${{ steps.tag.outputs.version }}"
+          git branch -D "$BRANCH" 2>/dev/null || true
+          git checkout -b "$BRANCH"
+          git commit --signoff -m "[docs] Update managed apps reference for v${{ steps.tag.outputs.version }}"
+          git push --force --set-upstream origin "$BRANCH"
+          echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Open pull request
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          BRANCH="update-docs-v${{ steps.tag.outputs.version }}"
+          pr_state=$(gh pr view "$BRANCH" --repo cozystack/website --json state --jq .state 2>/dev/null || echo "")
+          if [[ "$pr_state" == "OPEN" ]]; then
+            echo "PR already open, skipping creation."
+          else
+            gh pr create \
+              --repo cozystack/website \
+              --title "[docs] Update managed apps reference for v${{ steps.tag.outputs.version }}" \
+              --body "Automated docs update for release \`v${{ steps.tag.outputs.version }}\`." \
+              --head "update-docs-v${{ steps.tag.outputs.version }}" \
+              --base main
+          fi
