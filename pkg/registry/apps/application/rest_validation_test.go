@@ -24,6 +24,46 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
+func TestValidateNameFormat(t *testing.T) {
+	tests := []struct {
+		name      string
+		kindName  string
+		appName   string
+		wantError bool
+	}{
+		// Non-tenant kinds follow DNS-1035 only — hyphens are allowed.
+		{"non-tenant accepts hyphen", "MySQL", "my-db", false},
+		{"non-tenant accepts double hyphen", "MySQL", "my--db", false},
+		{"non-tenant rejects uppercase", "MySQL", "MyDB", true},
+
+		// Tenant kind enforces alphanumeric-only — see
+		// packages/apps/tenant/templates/_helpers.tpl for the reason.
+		{"tenant accepts alphanumeric", "Tenant", "foo", false},
+		{"tenant accepts digits", "Tenant", "foo123", false},
+		{"tenant rejects single hyphen", "Tenant", "foo-bar", true},
+		{"tenant rejects leading hyphen", "Tenant", "-foo", true},
+		{"tenant rejects trailing hyphen", "Tenant", "foo-", true},
+		{"tenant rejects uppercase", "Tenant", "Foo", true},
+		{"tenant rejects underscore", "Tenant", "foo_bar", true},
+		{"tenant rejects empty", "Tenant", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &REST{kindName: tt.kindName}
+
+			errs := r.validateNameFormat(tt.appName)
+
+			if tt.wantError && len(errs) == 0 {
+				t.Errorf("expected error for name %q (kind=%q), got none", tt.appName, tt.kindName)
+			}
+			if !tt.wantError && len(errs) > 0 {
+				t.Errorf("unexpected error for name %q (kind=%q): %v", tt.appName, tt.kindName, errs)
+			}
+		})
+	}
+}
+
 func TestValidateNameLength(t *testing.T) {
 	tests := []struct {
 		name      string
