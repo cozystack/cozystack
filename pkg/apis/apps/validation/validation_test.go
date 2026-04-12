@@ -140,3 +140,30 @@ func TestValidateApplicationName_TenantErrorMessage(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateApplicationName_TenantLengthFallthrough documents the one
+// invalid-tenant case where the error message is intentionally NOT tenant-
+// specific: when a name contains only valid tenant characters but exceeds
+// the DNS-1035 63-char label limit, the length error comes from DNS-1035
+// because length is not a tenant-specific constraint (every application
+// kind is subject to the same Kubernetes label limit). REST.validateNameLength
+// further tightens the limit using the Helm release prefix, so tenants cannot
+// actually reach 64 characters end-to-end — this test only pins the package-
+// level fallthrough so a future refactor does not accidentally promote the
+// length error into tenant-specific wording.
+func TestValidateApplicationName_TenantLengthFallthrough(t *testing.T) {
+	name := strings.Repeat("a", 64) // valid tenant pattern, too long for DNS-1035
+
+	errs := ValidateApplicationName(name, "Tenant", field.NewPath("metadata").Child("name"))
+	if len(errs) == 0 {
+		t.Fatalf("expected DNS-1035 length error for 64-char tenant name, got none")
+	}
+	// This error is the generic DNS-1035 one, NOT the tenant-specific message.
+	if strings.Contains(errs[0].Detail, "tenant names must") {
+		t.Errorf("64-char tenant name should surface the generic DNS-1035 error, got tenant-specific: %q", errs[0].Detail)
+	}
+	// Sanity check: the DNS-1035 error we do expect mentions length bounds.
+	if !strings.Contains(errs[0].Detail, "63") {
+		t.Errorf("expected DNS-1035 length hint in error detail, got: %q", errs[0].Detail)
+	}
+}

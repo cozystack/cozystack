@@ -206,8 +206,18 @@ EOF
   # ["tenant", "<name>"]. The aggregated API must catch tenant names
   # containing dashes up-front with a tenant-specific error, instead of
   # silently accepting the Application and letting Flux fail later.
+
+  # Preflight: tenant-root is created by earlier tests in this suite. Fail
+  # loudly if it is missing so this test does not silently trigger an
+  # unrelated "namespace not found" error and misreport as a pass.
+  kubectl get namespace tenant-root
+
+  # --validate=false forces kubectl to skip client-side OpenAPI validation
+  # and send the payload straight to the aggregated API. This guarantees the
+  # server-side name check runs and the error we grep for is the tenant
+  # contract error, not a kubectl schema rejection.
   local output
-  output=$(kubectl apply -f - <<EOF 2>&1 || true
+  output=$(kubectl apply --validate=false -f - <<EOF 2>&1 || true
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
 metadata:
@@ -216,7 +226,11 @@ metadata:
 spec: {}
 EOF
 )
+  # Assert the tenant-specific message is present (distinguishes from
+  # generic DNS-1035 errors and from network/auth failures).
   echo "$output" | grep -q "tenant names must"
+  # And assert kubectl did NOT report creation — if validation regressed,
+  # the server would accept the object and kubectl would print "... created".
   ! echo "$output" | grep -qi "created"
 }
 
