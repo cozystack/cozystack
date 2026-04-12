@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests preflight
 
 include hack/common-envs.mk
 
@@ -82,10 +82,37 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests
+unit-tests: helm-unit-tests bats-unit-tests
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
+
+# Discover every hack/*.bats file that is NOT an e2e test and run it
+# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
+# up automatically on the next `make unit-tests` run.
+#
+# Caveat: $(wildcard ...) returns space-separated names, so a filename
+# containing a literal space would split into multiple tokens here. All
+# current bats files use hyphen-separated names; if the project ever
+# introduces whitespace-bearing filenames this recipe must be rewritten
+# (e.g. to use `find ... -print0 | xargs -0`).
+BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+
+bats-unit-tests:
+	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
+		echo "ERROR: no hack/*.bats unit test files found"; \
+		exit 1; \
+	fi
+	@for f in $(BATS_UNIT_FILES); do \
+		echo "--- running $$f ---"; \
+		hack/cozytest.sh "$$f" || exit 1; \
+	done
+
+# Operator-facing host preflight check. Warns about a standalone
+# containerd.service or docker.service running alongside the embedded
+# k3s runtime. Safe to run at any time; always exits 0.
+preflight:
+	@hack/check-host-runtime.sh
 
 prepare-env:
 	make -C packages/core/testing apply
