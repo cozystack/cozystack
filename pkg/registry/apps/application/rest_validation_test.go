@@ -51,14 +51,14 @@ func TestValidateNameFormat(t *testing.T) {
 
 		// Tenant kind enforces alphanumeric-only — see
 		// packages/apps/tenant/templates/_helpers.tpl for the reason.
-		{"tenant accepts alphanumeric", "Tenant", "foo", false},
-		{"tenant accepts digits", "Tenant", "foo123", false},
-		{"tenant rejects single hyphen", "Tenant", "foo-bar", true},
-		{"tenant rejects leading hyphen", "Tenant", "-foo", true},
-		{"tenant rejects trailing hyphen", "Tenant", "foo-", true},
-		{"tenant rejects uppercase", "Tenant", "Foo", true},
-		{"tenant rejects underscore", "Tenant", "foo_bar", true},
-		{"tenant rejects empty", "Tenant", "", true},
+		{"tenant accepts alphanumeric", validation.TenantKind, "foo", false},
+		{"tenant accepts digits", validation.TenantKind, "foo123", false},
+		{"tenant rejects single hyphen", validation.TenantKind, "foo-bar", true},
+		{"tenant rejects leading hyphen", validation.TenantKind, "-foo", true},
+		{"tenant rejects trailing hyphen", validation.TenantKind, "foo-", true},
+		{"tenant rejects uppercase", validation.TenantKind, "Foo", true},
+		{"tenant rejects underscore", validation.TenantKind, "foo_bar", true},
+		{"tenant rejects empty", validation.TenantKind, "", true},
 	}
 
 	for _, tt := range tests {
@@ -96,7 +96,7 @@ func TestUpdate_ForceAllowCreate_RejectsTenantDashName(t *testing.T) {
 	resourceCfg := &config.ResourceConfig{
 		Resources: []config.Resource{
 			{
-				Application: config.ApplicationConfig{Kind: "Tenant"},
+				Application: config.ApplicationConfig{Kind: validation.TenantKind},
 			},
 		},
 	}
@@ -116,9 +116,9 @@ func TestUpdate_ForceAllowCreate_RejectsTenantDashName(t *testing.T) {
 		gvk: schema.GroupVersionKind{
 			Group:   appsv1alpha1.GroupName,
 			Version: "v1alpha1",
-			Kind:    "Tenant",
+			Kind:    validation.TenantKind,
 		},
-		kindName: "Tenant",
+		kindName: validation.TenantKind,
 		releaseConfig: config.ReleaseConfig{
 			Prefix: "tenant-",
 		},
@@ -127,7 +127,7 @@ func TestUpdate_ForceAllowCreate_RejectsTenantDashName(t *testing.T) {
 	newApp := &appsv1alpha1.Application{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps.cozystack.io/v1alpha1",
-			Kind:       "Tenant",
+			Kind:       validation.TenantKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "foo-bar",
