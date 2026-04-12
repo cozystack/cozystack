@@ -17,10 +17,21 @@ limitations under the License.
 package application
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
@@ -61,6 +72,85 @@ func TestValidateNameFormat(t *testing.T) {
 				t.Errorf("unexpected error for name %q (kind=%q): %v", tt.appName, tt.kindName, errs)
 			}
 		})
+	}
+}
+
+// TestUpdate_ForceAllowCreate_RejectsTenantDashName pins the wiring from the
+// Update → Create fall-through path. When a user runs `kubectl apply` and
+// the object does not yet exist, Kubernetes routes the request through
+// REST.Update with forceAllowCreate=true, which delegates to REST.Create
+// (rest.go:452). This test ensures tenant name validation fires on that
+// upsert path — otherwise a future refactor could silently regress the
+// fix for #2375 while unit tests of r.validateNameFormat alone keep passing.
+func TestUpdate_ForceAllowCreate_RejectsTenantDashName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("register helmv2 scheme: %v", err)
+	}
+	// Register the dynamic Tenant kind so the Application type round-trips
+	// through the scheme the same way the real aggregated API server wires
+	// it at startup.
+	resourceCfg := &config.ResourceConfig{
+		Resources: []config.Resource{
+			{
+				Application: config.ApplicationConfig{Kind: "Tenant"},
+			},
+		},
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, resourceCfg); err != nil {
+		t.Fatalf("register dynamic Tenant type: %v", err)
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	r := &REST{
+		c: fakeClient,
+		gvr: schema.GroupVersionResource{
+			Group:    appsv1alpha1.GroupName,
+			Version:  "v1alpha1",
+			Resource: "tenants",
+		},
+		gvk: schema.GroupVersionKind{
+			Group:   appsv1alpha1.GroupName,
+			Version: "v1alpha1",
+			Kind:    "Tenant",
+		},
+		kindName: "Tenant",
+		releaseConfig: config.ReleaseConfig{
+			Prefix: "tenant-",
+		},
+	}
+
+	newApp := &appsv1alpha1.Application{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps.cozystack.io/v1alpha1",
+			Kind:       "Tenant",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo-bar",
+			Namespace: "tenant-root",
+		},
+	}
+
+	ctx := request.WithNamespace(context.Background(), "tenant-root")
+
+	_, _, err := r.Update(
+		ctx,
+		"foo-bar",
+		rest.DefaultUpdatedObjectInfo(newApp),
+		nil,                      // createValidation
+		nil,                      // updateValidation
+		true,                     // forceAllowCreate → routes through Create on NotFound
+		&metav1.UpdateOptions{},
+	)
+	if err == nil {
+		t.Fatalf("expected Update to reject tenant name with dashes, got no error")
+	}
+	if !apierrors.IsInvalid(err) {
+		t.Errorf("expected Invalid status error, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "tenant names must") {
+		t.Errorf("expected tenant-specific error in %q", err.Error())
 	}
 }
 

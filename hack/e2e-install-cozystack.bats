@@ -222,8 +222,12 @@ EOF
   # server-side name check runs and the error we grep for is the tenant
   # contract error, not a kubectl schema rejection. (--validate=false is the
   # deprecated alias.)
-  local output
-  output=$(kubectl apply --validate=ignore -f - <<EOF 2>&1 || true
+  local output rc
+  # Run the apply in its own subshell so we can capture BOTH stdout+stderr
+  # AND the exit code explicitly, without `|| true` swallowing a real failure
+  # mode (e.g. network error, auth failure) that should also fail the test.
+  output=$(
+    kubectl apply --validate=ignore -f - 2>&1 <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
 metadata:
@@ -231,12 +235,15 @@ metadata:
   namespace: tenant-root
 spec: {}
 EOF
-)
+  ) && rc=0 || rc=$?
+  echo "kubectl apply exit=$rc, output=$output"
+  # kubectl MUST have failed: success would mean validation regressed.
+  [ "$rc" -ne 0 ]
   # Assert the tenant-specific message is present (distinguishes from
   # generic DNS-1035 errors and from network/auth failures).
   echo "$output" | grep -q "tenant names must"
-  # And assert kubectl did NOT report creation — if validation regressed,
-  # the server would accept the object and kubectl would print "... created".
+  # And assert kubectl did NOT report creation — if validation regressed
+  # into a "warn" variant, the server could still accept the object.
   ! echo "$output" | grep -qi "created"
 
   # Post-condition cleanup: even though we expect validation to reject the

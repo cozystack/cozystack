@@ -151,6 +151,12 @@ func TestValidateApplicationName_TenantErrorMessage(t *testing.T) {
 // actually reach 64 characters end-to-end — this test only pins the package-
 // level fallthrough so a future refactor does not accidentally promote the
 // length error into tenant-specific wording.
+//
+// NOTE: this is an architectural decision, not a user-facing requirement.
+// If tenant length is ever promoted into a tenant-specific rule (e.g. to
+// include the Helm release prefix budget in this package's error message),
+// this test should be updated or deleted — it is not a backwards-compat
+// guarantee, just a checkpoint on the current layering.
 func TestValidateApplicationName_TenantLengthFallthrough(t *testing.T) {
 	name := strings.Repeat("a", 64) // valid tenant pattern, too long for DNS-1035
 

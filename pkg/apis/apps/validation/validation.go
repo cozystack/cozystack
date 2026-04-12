@@ -23,6 +23,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// TenantKind is the Application.Kind string that gates the tenant-specific
+// name rules below. It must stay in sync with the `kind` field of the tenant
+// ApplicationDefinition (packages/system/tenant-rd/cozyrds/tenant.yaml) which
+// is the upstream source the aggregated API reads at startup via
+// config.Application.Kind.
+const TenantKind = "Tenant"
+
 // tenantNameRegex enforces alphanumeric-only tenant names that begin with a
 // lowercase letter. This is stricter than DNS-1035 because the tenant Helm
 // chart's tenant.name helper (packages/apps/tenant/templates/_helpers.tpl)
@@ -54,7 +61,7 @@ func ValidateApplicationName(name, kindName string, fldPath *field.Path) field.E
 	// tenantNameRegex comment for the reason. Check before DNS-1035 so the
 	// error message is specific to the tenant contract, not the generic DNS
 	// label rules.
-	if kindName == "Tenant" && !tenantNameRegex.MatchString(name) {
+	if kindName == TenantKind && !tenantNameRegex.MatchString(name) {
 		allErrs = append(allErrs, field.Invalid(fldPath, name,
 			"tenant names must start with a lowercase letter and contain only lowercase letters and digits; dashes are not allowed"))
 		return allErrs
