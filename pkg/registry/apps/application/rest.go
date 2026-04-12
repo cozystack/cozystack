@@ -1153,7 +1153,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 	app.SetConditions(conditions)
 
 	// Add namespace field for Tenant applications
-	if r.kindName == "Tenant" {
+	if r.kindName == validation.TenantKind {
 		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
 		externalIPsCount, err := r.countTenantExternalIPs(ctx, app.Status.Namespace)
 		if err != nil {
