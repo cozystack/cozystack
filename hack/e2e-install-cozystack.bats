@@ -207,17 +207,23 @@ EOF
   # containing dashes up-front with a tenant-specific error, instead of
   # silently accepting the Application and letting Flux fail later.
 
+  # Defensive cleanup: if a prior regression left foo-bar in the cluster,
+  # remove it before exercising the validation so we are not observing
+  # stale state. Safe even in the happy path because of --ignore-not-found.
+  kubectl delete tenants.apps.cozystack.io foo-bar -n tenant-root --ignore-not-found
+
   # Preflight: tenant-root is created by earlier tests in this suite. Fail
   # loudly if it is missing so this test does not silently trigger an
   # unrelated "namespace not found" error and misreport as a pass.
   kubectl get namespace tenant-root
 
-  # --validate=false forces kubectl to skip client-side OpenAPI validation
+  # --validate=ignore forces kubectl to skip client-side OpenAPI validation
   # and send the payload straight to the aggregated API. This guarantees the
   # server-side name check runs and the error we grep for is the tenant
-  # contract error, not a kubectl schema rejection.
+  # contract error, not a kubectl schema rejection. (--validate=false is the
+  # deprecated alias.)
   local output
-  output=$(kubectl apply --validate=false -f - <<EOF 2>&1 || true
+  output=$(kubectl apply --validate=ignore -f - <<EOF 2>&1 || true
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
 metadata:
@@ -232,6 +238,11 @@ EOF
   # And assert kubectl did NOT report creation — if validation regressed,
   # the server would accept the object and kubectl would print "... created".
   ! echo "$output" | grep -qi "created"
+
+  # Post-condition cleanup: even though we expect validation to reject the
+  # create, removing foo-bar unconditionally keeps the cluster clean for
+  # subsequent tests in case validation regresses and the object is created.
+  kubectl delete tenants.apps.cozystack.io foo-bar -n tenant-root --ignore-not-found
 }
 
 @test "Create tenant with isolated mode enabled" {

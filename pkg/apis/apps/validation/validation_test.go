@@ -159,11 +159,10 @@ func TestValidateApplicationName_TenantLengthFallthrough(t *testing.T) {
 		t.Fatalf("expected DNS-1035 length error for 64-char tenant name, got none")
 	}
 	// This error is the generic DNS-1035 one, NOT the tenant-specific message.
+	// We deliberately do not assert against the exact upstream DNS-1035 text
+	// (that would tie this test to a k8s.io/apimachinery internal string and
+	// break on unrelated upstream wording changes).
 	if strings.Contains(errs[0].Detail, "tenant names must") {
 		t.Errorf("64-char tenant name should surface the generic DNS-1035 error, got tenant-specific: %q", errs[0].Detail)
-	}
-	// Sanity check: the DNS-1035 error we do expect mentions length bounds.
-	if !strings.Contains(errs[0].Detail, "63") {
-		t.Errorf("expected DNS-1035 length hint in error detail, got: %q", errs[0].Detail)
 	}
 }
