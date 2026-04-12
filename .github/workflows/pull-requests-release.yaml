@@ -23,6 +23,14 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'release')
 
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
       # Extract tag from branch name  (branch = release-X.Y.Z*)
       - name: Extract tag from branch name
         id: get_tag
@@ -47,11 +55,11 @@ jobs:
 
       - name: Create tag on merge commit
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config user.name  "cozystack-bot"
-          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
-          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           git tag -f ${{ steps.get_tag.outputs.tag }} ${{ github.sha }}
           git push -f origin ${{ steps.get_tag.outputs.tag }}
 
@@ -59,7 +67,7 @@ jobs:
       - name: Ensure maintenance branch release-X.Y
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = '${{ steps.get_tag.outputs.tag }}';  // e.g. v0.1.3 or v0.1.3-rc3
             const match = tag.match(/^v(\d+)\.(\d+)\.\d+(?:[-\w\.]+)?$/);
