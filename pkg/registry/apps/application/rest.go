@@ -164,6 +164,17 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nameLenErrs)
 	}
 
+	// For Tenant applications, also validate that the computed workload
+	// namespace fits within the DNS-1123 label limit. A deeply-nested tenant
+	// can exceed the limit even when its own name passes the per-name Helm
+	// release length check, because the namespace is formed from the full
+	// ancestor chain.
+	if r.kindName == "Tenant" {
+		if nsErrs := r.validateTenantNamespaceLength(app.Namespace, app.Name); len(nsErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nsErrs)
+		}
+	}
+
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
@@ -1049,6 +1060,12 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 // chart-generated resource suffixes within the 63-char DNS-1035 label limit.
 const maxHelmReleaseName = 53
 
+// maxNamespaceName is the DNS-1123 label limit for Kubernetes namespace names.
+// The tenant Helm chart creates a Namespace whose name is the computed
+// workload namespace (parent namespace + "-" + tenant name), so the total
+// must fit inside a single 63-char DNS-1123 label.
+const maxNamespaceName = 63
+
 // validateNameLength checks that the application name won't exceed Kubernetes limits.
 // prefix + name must fit within the Helm release name limit (53 chars).
 func (r *REST) validateNameLength(name string) field.ErrorList {
@@ -1066,6 +1083,24 @@ func (r *REST) validateNameLength(name string) field.ErrorList {
 	if len(name) > maxLen {
 		allErrs = append(allErrs, field.Invalid(fldPath, name,
 			fmt.Sprintf("must be no more than %d characters (release prefix %q)", maxLen, r.releaseConfig.Prefix)))
+	}
+	return allErrs
+}
+
+// validateTenantNamespaceLength checks that the computed workload namespace
+// for a Tenant application fits within the DNS-1123 label limit. The namespace
+// is formed by dash-joining the parent namespace with the tenant name, so
+// deep nesting can exceed the limit even when each individual name passes the
+// per-name Helm release length check.
+func (r *REST) validateTenantNamespaceLength(currentNamespace, tenantName string) field.ErrorList {
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	computed := r.computeTenantNamespace(currentNamespace, tenantName)
+	if len(computed) > maxNamespaceName {
+		allErrs = append(allErrs, field.Invalid(fldPath, tenantName,
+			fmt.Sprintf("computed tenant namespace %q would be %d characters, which exceeds the %d-character Kubernetes namespace limit; shorten the tenant name or reduce ancestor nesting depth",
+				computed, len(computed), maxNamespaceName)))
 	}
 	return allErrs
 }
