@@ -23,20 +23,23 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// tenantNameRegex enforces alphanumeric-only tenant names. This is stricter
-// than DNS-1035 because the tenant Helm chart's tenant.name helper
-// (packages/apps/tenant/templates/_helpers.tpl) splits Release.Name on "-"
-// and fails unless the result is exactly ["tenant", "<name>"]. Any dash
-// inside <name> would break that invariant at Helm template time, so the
-// aggregated API must reject such names up-front with a specific error.
-var tenantNameRegex = regexp.MustCompile(`^[a-z0-9]+$`)
+// tenantNameRegex enforces alphanumeric-only tenant names that begin with a
+// lowercase letter. This is stricter than DNS-1035 because the tenant Helm
+// chart's tenant.name helper (packages/apps/tenant/templates/_helpers.tpl)
+// splits Release.Name on "-" and fails unless the result is exactly
+// ["tenant", "<name>"]. Any dash inside <name> would break that invariant at
+// Helm template time, so the aggregated API must reject such names up-front
+// with a specific error. Requiring a leading letter (rather than letting
+// leading-digit names fall through to DNS-1035) keeps the error message
+// tenant-specific for all invalid inputs.
+var tenantNameRegex = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 
 // ValidateApplicationName validates that an Application name is acceptable for
 // the given kind. All applications must conform to DNS-1035 because their
 // names are used to create Kubernetes resources (Services, Namespaces, etc.)
 // that require DNS-1035 compliance. Tenant applications additionally must be
-// alphanumeric (no dashes) because of the Helm chart constraint described on
-// tenantNameRegex.
+// alphanumeric and begin with a lowercase letter because of the Helm chart
+// constraint described on tenantNameRegex.
 // Note: length validation is handled separately by validateNameLength in the
 // REST handler, which computes dynamic limits based on Helm release prefix.
 func ValidateApplicationName(name, kindName string, fldPath *field.Path) field.ErrorList {
@@ -47,12 +50,13 @@ func ValidateApplicationName(name, kindName string, fldPath *field.Path) field.E
 		return allErrs
 	}
 
-	// Tenant names must be alphanumeric — see tenantNameRegex comment for the
-	// reason. Check before DNS-1035 so the error message is specific to the
-	// tenant contract, not the generic DNS label rules.
+	// Tenant names must be alphanumeric starting with a letter — see
+	// tenantNameRegex comment for the reason. Check before DNS-1035 so the
+	// error message is specific to the tenant contract, not the generic DNS
+	// label rules.
 	if kindName == "Tenant" && !tenantNameRegex.MatchString(name) {
 		allErrs = append(allErrs, field.Invalid(fldPath, name,
-			"tenant names must be alphanumeric (lowercase letters and digits only); dashes are not allowed"))
+			"tenant names must start with a lowercase letter and contain only lowercase letters and digits; dashes are not allowed"))
 		return allErrs
 	}
 

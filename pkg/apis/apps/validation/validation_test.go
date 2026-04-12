@@ -86,8 +86,9 @@ func TestValidateApplicationName(t *testing.T) {
 		{"tenant uppercase", "Foo", "Tenant", true},
 		{"tenant underscore", "foo_bar", "Tenant", true},
 		{"tenant empty", "", "Tenant", true},
-		// Leading digit is alphanumeric (tenant regex passes) but falls through
-		// to DNS-1035, which requires a leading alphabetic character.
+		// Leading digit must be caught by the tenant-specific regex (not by
+		// falling through to DNS-1035) so the error message reflects the
+		// tenant contract — see TestValidateApplicationName_TenantErrorMessage.
 		{"tenant leading digit", "123foo", "Tenant", true},
 	}
 
@@ -97,6 +98,44 @@ func TestValidateApplicationName(t *testing.T) {
 			if (len(errs) > 0) != tt.wantError {
 				t.Errorf("ValidateApplicationName(%q, kind=%q) returned %d errors, wantError = %v, errors = %v",
 					tt.appName, tt.kindName, len(errs), tt.wantError, errs)
+			}
+		})
+	}
+}
+
+// TestValidateApplicationName_TenantErrorMessage pins the contract that when
+// a tenant name is invalid, the returned error message is specific to the
+// tenant naming rule — not the generic DNS-1035 message. Otherwise users get
+// back "must start with an alphabetic character" or similar and have no way
+// to know the constraint is tied to the tenant Helm chart.
+func TestValidateApplicationName_TenantErrorMessage(t *testing.T) {
+	// Every tenant-invalid name below must surface a tenant-specific error
+	// message. In particular, "123foo" starts with a digit — the original
+	// implementation let that fall through to DNS-1035 with a generic error;
+	// the regex is tightened specifically so this case fails up-front.
+	invalidTenantNames := []string{
+		"foo-bar",  // dash
+		"-foo",     // leading dash
+		"foo-",     // trailing dash
+		"foo--bar", // double dash
+		"Foo",      // uppercase
+		"foo_bar",  // underscore
+		"foo.bar",  // dot
+		"foo bar",  // space
+		"123foo",   // leading digit — must not fall through to DNS-1035
+	}
+
+	const wantSubstring = "tenant names must"
+
+	for _, name := range invalidTenantNames {
+		t.Run(name, func(t *testing.T) {
+			errs := ValidateApplicationName(name, "Tenant", field.NewPath("metadata").Child("name"))
+			if len(errs) == 0 {
+				t.Fatalf("expected error for tenant name %q, got none", name)
+			}
+			if !strings.Contains(errs[0].Detail, wantSubstring) {
+				t.Errorf("tenant name %q: error detail = %q, want substring %q (generic DNS-1035 message is not tenant-specific)",
+					name, errs[0].Detail, wantSubstring)
 			}
 		})
 	}

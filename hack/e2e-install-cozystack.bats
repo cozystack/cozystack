@@ -200,8 +200,28 @@ EOF
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
 }
 
+@test "Aggregated API rejects Tenant name with dashes" {
+  # Regression guard: the tenant Helm chart's tenant.name helper splits the
+  # Release.Name on "-" and fails unless the result is exactly
+  # ["tenant", "<name>"]. The aggregated API must catch tenant names
+  # containing dashes up-front with a tenant-specific error, instead of
+  # silently accepting the Application and letting Flux fail later.
+  local output
+  output=$(kubectl apply -f - <<EOF 2>&1 || true
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: foo-bar
+  namespace: tenant-root
+spec: {}
+EOF
+)
+  echo "$output" | grep -q "tenant names must"
+  ! echo "$output" | grep -qi "created"
+}
+
 @test "Create tenant with isolated mode enabled" {
-  kubectl -n tenant-root get tenants.apps.cozystack.io test || 
+  kubectl -n tenant-root get tenants.apps.cozystack.io test ||
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
