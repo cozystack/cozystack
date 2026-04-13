@@ -187,6 +187,20 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
+  name: allow-to-linstor-gui
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-linstor
+          "k8s:app.kubernetes.io/instance": linstor-gui
+          "k8s:app.kubernetes.io/name": gatekeeper
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
   name: allow-to-keycloak
   namespace: {{ include "tenant.name" . }}
 spec:
