@@ -154,8 +154,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
 	}
 
-	// Validate Application name conforms to DNS-1035
-	if errs := validation.ValidateApplicationName(app.Name, field.NewPath("metadata").Child("name")); len(errs) > 0 {
+	// Validate Application name format (DNS-1035 plus any kind-specific rules)
+	if errs := r.validateNameFormat(app.Name); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
 	}
 
@@ -1066,6 +1066,13 @@ const maxHelmReleaseName = 53
 // must fit inside a single 63-char DNS-1123 label.
 const maxNamespaceName = 63
 
+// validateNameFormat checks an Application name against DNS-1035 and any
+// kind-specific format rules (e.g. Tenant names must be alphanumeric — see
+// validation.ValidateApplicationName for the reasoning).
+func (r *REST) validateNameFormat(name string) field.ErrorList {
+	return validation.ValidateApplicationName(name, r.kindName, field.NewPath("metadata").Child("name"))
+}
+
 // validateNameLength checks that the application name won't exceed Kubernetes limits.
 // prefix + name must fit within the Helm release name limit (53 chars).
 func (r *REST) validateNameLength(name string) field.ErrorList {
@@ -1146,7 +1153,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 	app.SetConditions(conditions)
 
 	// Add namespace field for Tenant applications
-	if r.kindName == "Tenant" {
+	if r.kindName == validation.TenantKind {
 		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
 		externalIPsCount, err := r.countTenantExternalIPs(ctx, app.Status.Namespace)
 		if err != nil {

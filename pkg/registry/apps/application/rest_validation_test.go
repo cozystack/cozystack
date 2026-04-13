@@ -17,12 +17,206 @@ limitations under the License.
 package application
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
 )
+
+func TestValidateNameFormat(t *testing.T) {
+	tests := []struct {
+		name      string
+		kindName  string
+		appName   string
+		wantError bool
+	}{
+		// Non-tenant kinds follow DNS-1035 only — hyphens are allowed.
+		{"non-tenant accepts hyphen", "MySQL", "my-db", false},
+		{"non-tenant accepts double hyphen", "MySQL", "my--db", false},
+		{"non-tenant rejects uppercase", "MySQL", "MyDB", true},
+
+		// Tenant kind enforces alphanumeric-only — see
+		// packages/apps/tenant/templates/_helpers.tpl for the reason.
+		{"tenant accepts alphanumeric", validation.TenantKind, "foo", false},
+		{"tenant accepts digits", validation.TenantKind, "foo123", false},
+		{"tenant rejects single hyphen", validation.TenantKind, "foo-bar", true},
+		{"tenant rejects leading hyphen", validation.TenantKind, "-foo", true},
+		{"tenant rejects trailing hyphen", validation.TenantKind, "foo-", true},
+		{"tenant rejects uppercase", validation.TenantKind, "Foo", true},
+		{"tenant rejects underscore", validation.TenantKind, "foo_bar", true},
+		{"tenant rejects empty", validation.TenantKind, "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &REST{kindName: tt.kindName}
+
+			errs := r.validateNameFormat(tt.appName)
+
+			if tt.wantError && len(errs) == 0 {
+				t.Errorf("expected error for name %q (kind=%q), got none", tt.appName, tt.kindName)
+			}
+			if !tt.wantError && len(errs) > 0 {
+				t.Errorf("unexpected error for name %q (kind=%q): %v", tt.appName, tt.kindName, errs)
+			}
+		})
+	}
+}
+
+// TestUpdate_ForceAllowCreate_RejectsTenantDashName pins the wiring from the
+// Update → Create fall-through path. When a user runs `kubectl apply` and
+// the object does not yet exist, Kubernetes routes the request through
+// REST.Update with forceAllowCreate=true, which delegates to REST.Create
+// (rest.go:452). Without this test, a future refactor could quietly reroute
+// that delegation and bypass the tenant name check — unit tests of the
+// pure r.validateNameFormat method would still pass while upsert-style
+// kubectl apply regressed back to accepting tenant names with dashes.
+func TestUpdate_ForceAllowCreate_RejectsTenantDashName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("register helmv2 scheme: %v", err)
+	}
+	// Register the dynamic Tenant kind so the Application type round-trips
+	// through the scheme the same way the real aggregated API server wires
+	// it at startup.
+	resourceCfg := &config.ResourceConfig{
+		Resources: []config.Resource{
+			{
+				Application: config.ApplicationConfig{Kind: validation.TenantKind},
+			},
+		},
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, resourceCfg); err != nil {
+		t.Fatalf("register dynamic Tenant type: %v", err)
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	r := &REST{
+		c: fakeClient,
+		gvr: schema.GroupVersionResource{
+			Group:    appsv1alpha1.GroupName,
+			Version:  "v1alpha1",
+			Resource: "tenants",
+		},
+		gvk: schema.GroupVersionKind{
+			Group:   appsv1alpha1.GroupName,
+			Version: "v1alpha1",
+			Kind:    validation.TenantKind,
+		},
+		kindName: validation.TenantKind,
+		releaseConfig: config.ReleaseConfig{
+			Prefix: "tenant-",
+		},
+	}
+
+	newApp := &appsv1alpha1.Application{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps.cozystack.io/v1alpha1",
+			Kind:       validation.TenantKind,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "foo-bar",
+			Namespace: "tenant-root",
+		},
+	}
+
+	ctx := request.WithNamespace(context.Background(), "tenant-root")
+
+	_, _, err := r.Update(
+		ctx,
+		"foo-bar",
+		rest.DefaultUpdatedObjectInfo(newApp),
+		nil,                      // createValidation
+		nil,                      // updateValidation
+		true,                     // forceAllowCreate → routes through Create on NotFound
+		&metav1.UpdateOptions{},
+	)
+	if err == nil {
+		t.Fatalf("expected Update to reject tenant name with dashes, got no error")
+	}
+	if !apierrors.IsInvalid(err) {
+		t.Errorf("expected Invalid status error, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), "tenant names must") {
+		t.Errorf("expected tenant-specific error in %q", err.Error())
+	}
+}
+
+// TestConvertHelmReleaseToApplication_TenantNamespaceKindGate pins the
+// behavior that convertHelmReleaseToApplication fills Status.Namespace only
+// when the kind is Tenant. This path is gated on r.kindName matching a
+// specific literal — the test uses the validation.TenantKind constant so
+// that if the source of truth for the tenant kind string is ever renamed,
+// the gate and the constant drift together (or the test fails).
+func TestConvertHelmReleaseToApplication_TenantNamespaceKindGate(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("register helmv2 scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
+	}
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tenant-foo",
+			Namespace: "tenant-root",
+		},
+	}
+
+	t.Run("tenant kind fills Status.Namespace", func(t *testing.T) {
+		r := &REST{
+			c:        fakeClient,
+			kindName: validation.TenantKind,
+			releaseConfig: config.ReleaseConfig{
+				Prefix: "tenant-",
+			},
+		}
+
+		app, err := r.convertHelmReleaseToApplication(context.Background(), hr)
+		if err != nil {
+			t.Fatalf("convertHelmReleaseToApplication: %v", err)
+		}
+		if app.Status.Namespace == "" {
+			t.Errorf("expected Status.Namespace to be populated for tenant kind, got empty")
+		}
+	})
+
+	t.Run("non-tenant kind leaves Status.Namespace empty", func(t *testing.T) {
+		r := &REST{
+			c:        fakeClient,
+			kindName: "MySQL",
+			releaseConfig: config.ReleaseConfig{
+				Prefix: "mysql-",
+			},
+		}
+
+		app, err := r.convertHelmReleaseToApplication(context.Background(), hr)
+		if err != nil {
+			t.Fatalf("convertHelmReleaseToApplication: %v", err)
+		}
+		if app.Status.Namespace != "" {
+			t.Errorf("expected Status.Namespace to be empty for non-tenant kind, got %q", app.Status.Namespace)
+		}
+	})
+}
 
 func TestValidateNameLength(t *testing.T) {
 	tests := []struct {

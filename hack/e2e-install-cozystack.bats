@@ -200,8 +200,60 @@ EOF
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
 }
 
+@test "Aggregated API rejects Tenant name with dashes" {
+  # Regression guard: the tenant Helm chart's tenant.name helper splits the
+  # Release.Name on "-" and fails unless the result is exactly
+  # ["tenant", "<name>"]. The aggregated API must catch tenant names
+  # containing dashes up-front with a tenant-specific error, instead of
+  # silently accepting the Application and letting Flux fail later.
+
+  # Defensive cleanup: if a prior regression left foo-bar in the cluster,
+  # remove it before exercising the validation so we are not observing
+  # stale state. Safe even in the happy path because of --ignore-not-found.
+  kubectl delete tenants.apps.cozystack.io foo-bar -n tenant-root --ignore-not-found
+
+  # Preflight: tenant-root is created by earlier tests in this suite. Fail
+  # loudly if it is missing so this test does not silently trigger an
+  # unrelated "namespace not found" error and misreport as a pass.
+  kubectl get namespace tenant-root
+
+  # --validate=ignore forces kubectl to skip client-side OpenAPI validation
+  # and send the payload straight to the aggregated API. This guarantees the
+  # server-side name check runs and the error we grep for is the tenant
+  # contract error, not a kubectl schema rejection. (--validate=false is the
+  # deprecated alias.)
+  local output rc
+  # Run the apply in its own subshell so we can capture BOTH stdout+stderr
+  # AND the exit code explicitly, without `|| true` swallowing a real failure
+  # mode (e.g. network error, auth failure) that should also fail the test.
+  output=$(
+    kubectl apply --validate=ignore -f - 2>&1 <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: foo-bar
+  namespace: tenant-root
+spec: {}
+EOF
+  ) && rc=0 || rc=$?
+  echo "kubectl apply exit=$rc, output=$output"
+  # kubectl MUST have failed: success would mean validation regressed.
+  [ "$rc" -ne 0 ]
+  # Assert the tenant-specific message is present (distinguishes from
+  # generic DNS-1035 errors and from network/auth failures).
+  echo "$output" | grep -q "tenant names must"
+  # And assert kubectl did NOT report creation — if validation regressed
+  # into a "warn" variant, the server could still accept the object.
+  ! echo "$output" | grep -qi "created"
+
+  # Post-condition cleanup: even though we expect validation to reject the
+  # create, removing foo-bar unconditionally keeps the cluster clean for
+  # subsequent tests in case validation regresses and the object is created.
+  kubectl delete tenants.apps.cozystack.io foo-bar -n tenant-root --ignore-not-found
+}
+
 @test "Create tenant with isolated mode enabled" {
-  kubectl -n tenant-root get tenants.apps.cozystack.io test || 
+  kubectl -n tenant-root get tenants.apps.cozystack.io test ||
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
