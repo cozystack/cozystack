@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
 )
 
 // WorkloadMonitorReconciler reconciles a WorkloadMonitor object
@@ -36,6 +37,12 @@ type WorkloadMonitorReconciler struct {
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloads/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=objectstorage.k8s.io,resources=bucketclaims,verbs=get;list;watch
+
+// isBucketClaimReady checks if the BucketClaim has been provisioned.
+func (r *WorkloadMonitorReconciler) isBucketClaimReady(bc *cosiv1alpha1.BucketClaim) bool {
+	return bc.Status.BucketReady
+}
 
 // isServiceReady checks if the service has an external IP bound
 func (r *WorkloadMonitorReconciler) isServiceReady(svc *corev1.Service) bool {
@@ -99,6 +106,47 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 
 	// Update the owner references of the object
 	obj.SetOwnerReferences(owners)
+}
+
+// reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
+func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
+	ctx context.Context,
+	monitor *cozyv1alpha1.WorkloadMonitor,
+	bc cosiv1alpha1.BucketClaim,
+) error {
+	logger := log.FromContext(ctx)
+	workload := &cozyv1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("bucket-%s", bc.Name),
+			Namespace: bc.Namespace,
+			Labels:    make(map[string]string, len(bc.Labels)),
+		},
+	}
+
+	resources := make(map[string]resource.Quantity)
+	resources["s3-buckets"] = resource.MustParse("1")
+
+	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+		updateOwnerReferences(workload.GetObjectMeta(), &bc)
+
+		for k, v := range bc.Labels {
+			workload.Labels[k] = v
+		}
+		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
+
+		workload.Status.Kind = monitor.Spec.Kind
+		workload.Status.Type = monitor.Spec.Type
+		workload.Status.Resources = resources
+		workload.Status.Operational = r.isBucketClaimReady(&bc)
+
+		return nil
+	})
+	if err != nil {
+		logger.Error(err, "Failed to CreateOrUpdate Workload", "workload", workload.Name)
+		return err
+	}
+
+	return nil
 }
 
 // reconcileServiceForMonitor creates or updates a Workload object for the given Service and WorkloadMonitor.
@@ -375,6 +423,26 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	bucketClaimList := &cosiv1alpha1.BucketClaimList{}
+	if err := r.List(
+		ctx,
+		bucketClaimList,
+		client.InNamespace(monitor.Namespace),
+		client.MatchingLabels(monitor.Spec.Selector),
+	); err != nil {
+		if !apierrors.IsNotFound(err) {
+			logger.Error(err, "Unable to list BucketClaims for WorkloadMonitor", "monitor", monitor.Name)
+			return ctrl.Result{}, err
+		}
+	}
+
+	for _, bc := range bucketClaimList.Items {
+		if err := r.reconcileBucketClaimForMonitor(ctx, monitor, bc); err != nil {
+			logger.Error(err, "Failed to reconcile Workload for BucketClaim", "BucketClaim", bc.Name)
+			continue
+		}
+	}
+
 	// Update WorkloadMonitor status based on observed pods
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
@@ -420,6 +488,11 @@ func (r *WorkloadMonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.PersistentVolumeClaim{},
 			handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(&corev1.PersistentVolumeClaim{}, r.Client)),
+		).
+		// Watch BucketClaims for S3 bucket billing
+		Watches(
+			&cosiv1alpha1.BucketClaim{},
+			handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(&cosiv1alpha1.BucketClaim{}, r.Client)),
 		).
 		// Watch for changes to Workload objects we create (owned by WorkloadMonitor)
 		Owns(&cozyv1alpha1.Workload{}).

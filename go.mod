@@ -5,6 +5,7 @@ module github.com/cozystack/cozystack
 go 1.25.0
 
 require (
+	github.com/cozystack/cozystack-scheduler/pkg/apis v0.1.1
 	github.com/emicklei/dot v1.10.0
 	github.com/fluxcd/helm-controller/api v1.4.3
 	github.com/fluxcd/source-controller/api v1.7.4
@@ -28,8 +29,10 @@ require (
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-openapi v0.0.0-20250710124328-f3f2b991d03b
 	k8s.io/utils v0.0.0-20250820121507-0af2bda4dd1d
+	sigs.k8s.io/container-object-storage-interface-api v0.1.0
 	sigs.k8s.io/controller-runtime v0.22.4
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -42,10 +45,8 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
-	github.com/cozystack/cozystack-scheduler/pkg/apis v0.1.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
-	github.com/evanphx/json-patch v4.12.0+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fluxcd/pkg/apis/acl v0.9.0 // indirect
@@ -126,7 +127,6 @@ require (
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.2 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
 // See: issues.k8s.io/135537
