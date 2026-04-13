@@ -6,6 +6,8 @@ include ../../../hack/package.mk
 
 LINSTOR_GUI_VERSION ?= 2.3.0
 
+.PHONY: image image-linstor-gui test
+
 image: image-linstor-gui
 
 image-linstor-gui:

@@ -12,7 +12,7 @@ RUN apk add --no-cache curl tar && \
     tar -xzf /tmp/linstor-gui.tar.gz -C /usr/share/nginx/html --strip-components=2 "linstor-gui-${LINSTOR_GUI_VERSION}/dist" && \
     rm -f /tmp/linstor-gui.tar.gz && \
     apk del curl tar && \
-    chown -R 101:0 /usr/share/nginx/html
+    chown -R 101:101 /usr/share/nginx/html
 
 USER 101
 EXPOSE 3373

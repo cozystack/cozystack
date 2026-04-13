@@ -1,9 +1,12 @@
 {{/*
 Parse the LINSTOR endpoint so nginx can set `proxy_ssl_name` correctly.
-The endpoint is expected to be an https:// URL like
-  https://linstor-controller.cozy-linstor.svc:3371
+The endpoint must be an https:// URL — http:// would downgrade the
+mTLS-protected controller path.
 */}}
-{{- $endpoint := trimPrefix "https://" (trimPrefix "http://" .Values.linstor.endpoint) -}}
+{{- if not (hasPrefix "https://" .Values.linstor.endpoint) -}}
+{{- fail "linstor.endpoint must start with https:// to enforce mTLS to the LINSTOR controller" -}}
+{{- end -}}
+{{- $endpoint := trimPrefix "https://" .Values.linstor.endpoint -}}
 {{- $endpointHost := (splitList ":" $endpoint) | first -}}
 apiVersion: v1
 kind: ConfigMap
@@ -41,6 +44,17 @@ data:
         root /usr/share/nginx/html;
         index index.html;
 
+        # Shared proxy + mTLS settings for the LINSTOR controller upstream
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_ssl_certificate         /etc/linstor/client/tls.crt;
+        proxy_ssl_certificate_key     /etc/linstor/client/tls.key;
+        proxy_ssl_trusted_certificate /etc/linstor/client/ca.crt;
+        proxy_ssl_verify       on;
+        proxy_ssl_verify_depth 2;
+        proxy_ssl_server_name  on;
+        proxy_ssl_name         {{ $endpointHost }};
+
         # Static UI assets
         location / {
           try_files $uri $uri/ /index.html;
@@ -49,28 +63,10 @@ data:
         # Proxy LINSTOR REST API over mTLS to the controller
         location /v1 {
           proxy_pass {{ .Values.linstor.endpoint }};
-          proxy_set_header Host $host;
-          proxy_set_header X-Real-IP $remote_addr;
-          proxy_ssl_certificate     /etc/linstor/client/tls.crt;
-          proxy_ssl_certificate_key /etc/linstor/client/tls.key;
-          proxy_ssl_trusted_certificate /etc/linstor/client/ca.crt;
-          proxy_ssl_verify       on;
-          proxy_ssl_verify_depth 2;
-          proxy_ssl_server_name  on;
-          proxy_ssl_name         {{ $endpointHost }};
         }
 
         location /metrics {
           proxy_pass {{ .Values.linstor.endpoint }};
-          proxy_set_header Host $host;
-          proxy_set_header X-Real-IP $remote_addr;
-          proxy_ssl_certificate     /etc/linstor/client/tls.crt;
-          proxy_ssl_certificate_key /etc/linstor/client/tls.key;
-          proxy_ssl_trusted_certificate /etc/linstor/client/ca.crt;
-          proxy_ssl_verify       on;
-          proxy_ssl_verify_depth 2;
-          proxy_ssl_server_name  on;
-          proxy_ssl_name         {{ $endpointHost }};
         }
 
         location = /healthz {

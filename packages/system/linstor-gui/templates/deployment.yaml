@@ -25,7 +25,6 @@ spec:
     spec:
       serviceAccountName: linstor-gui
       automountServiceAccountToken: false
-      priorityClassName: system-cluster-critical
       securityContext:
         runAsNonRoot: true
         seccompProfile:
