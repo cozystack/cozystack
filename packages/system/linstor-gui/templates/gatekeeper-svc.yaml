@@ -7,7 +7,8 @@ metadata:
   labels:
     app.kubernetes.io/instance: linstor-gui
     app.kubernetes.io/name: gatekeeper
-    {{- include "linstor-gui.labels" . | nindent 4 }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: cozystack
 spec:
   type: ClusterIP
   ports:

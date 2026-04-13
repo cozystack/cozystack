@@ -67,8 +67,6 @@ spec:
     - offline_access
   attributes:
     post.logout.redirect.uris: "+"
-    client.session.idle.timeout: "86400"
-    client.session.max.lifespan: "604800"
   redirectUris:
     - "https://linstor-gui.{{ $host }}/oauth2/callback/*"
 {{- end }}
