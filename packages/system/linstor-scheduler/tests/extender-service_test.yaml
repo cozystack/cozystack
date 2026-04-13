@@ -1,0 +1,35 @@
+suite: extender service targets deployment pods
+
+templates:
+  - templates/extender-service.yaml
+  - charts/linstor-scheduler/templates/deployment.yaml
+
+release:
+  name: linstor-scheduler
+
+tests:
+  - it: service selector matches deployment pod labels
+    template: charts/linstor-scheduler/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: linstor-scheduler
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: linstor-scheduler
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: scheduler
+
+  - it: service selector uses the same values
+    template: templates/extender-service.yaml
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: linstor-scheduler
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: linstor-scheduler
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: scheduler

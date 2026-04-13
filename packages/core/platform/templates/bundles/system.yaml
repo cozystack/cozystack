@@ -25,10 +25,12 @@
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
 {{include "cozystack.platform.system.common-packages" $ }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
 
 {{- if eq .Values.bundles.system.variant "isp-hosted" }}
 {{include "cozystack.platform.package" (list "cozystack.networking" "noop" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozystack-scheduler" $) }}
 {{- end }}
 
 {{- if eq .Values.bundles.system.variant "isp-full-generic" }}
@@ -92,6 +94,7 @@
 {{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
 {{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
 
 # Cozystack Engine
@@ -130,7 +133,6 @@
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozystack-scheduler" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.metrics-server" $) }}
 {{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}

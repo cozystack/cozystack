@@ -17,3 +17,14 @@ spec:
       install:
         namespace: kube-system
         releaseName: cozystack-scheduler
+  - name: linstor
+    dependsOn:
+    - cozystack.linstor-scheduler
+    components:
+    - name: cozystack-scheduler
+      path: system/cozystack-scheduler
+      valuesFiles:
+      - values-linstor.yaml
+      install:
+        namespace: kube-system
+        releaseName: cozystack-scheduler
