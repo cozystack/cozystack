@@ -115,21 +115,20 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 	obj.SetOwnerReferences(owners)
 }
 
-// queryBucketSizeBytes queries Prometheus for the logical size of a SeaweedFS bucket.
+// queryPrometheusMetric queries a Prometheus-compatible API for a single instant value.
 // Returns 0 if the metric is not available or PrometheusURL is not configured.
-func (r *WorkloadMonitorReconciler) queryBucketSizeBytes(ctx context.Context, seaweedBucketName string) int64 {
-	if r.PrometheusURL == "" || seaweedBucketName == "" {
+func (r *WorkloadMonitorReconciler) queryPrometheusMetric(ctx context.Context, promQL string) int64 {
+	if r.PrometheusURL == "" {
 		return 0
 	}
 	logger := log.FromContext(ctx)
 
-	query := fmt.Sprintf(`SeaweedFS_s3_bucket_size_bytes{bucket="%s"}`, seaweedBucketName)
 	u, err := url.Parse(r.PrometheusURL + "/api/v1/query")
 	if err != nil {
 		logger.Error(err, "Failed to parse Prometheus URL")
 		return 0
 	}
-	u.RawQuery = url.Values{"query": {query}}.Encode()
+	u.RawQuery = url.Values{"query": {promQL}}.Encode()
 
 	httpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -142,7 +141,7 @@ func (r *WorkloadMonitorReconciler) queryBucketSizeBytes(ctx context.Context, se
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.V(1).Info("Failed to query Prometheus for bucket size", "bucket", seaweedBucketName, "error", err)
+		logger.V(1).Info("Failed to query Prometheus", "query", promQL, "error", err)
 		return 0
 	}
 	defer resp.Body.Close()
@@ -203,11 +202,16 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	resources := make(map[string]resource.Quantity)
 	resources["s3-buckets"] = resource.MustParse("1")
 
-	// Query actual bucket size from SeaweedFS metrics via Prometheus.
+	// Query actual bucket sizes from SeaweedFS metrics via Prometheus.
 	// bc.Status.BucketName is the COSI Bucket name, which the COSI driver
 	// uses directly as the SeaweedFS bucket name.
-	if sizeBytes := r.queryBucketSizeBytes(ctx, bc.Status.BucketName); sizeBytes > 0 {
-		resources["s3-storage-bytes"] = *resource.NewQuantity(sizeBytes, resource.BinarySI)
+	if bn := bc.Status.BucketName; bn != "" {
+		if v := r.queryPrometheusMetric(ctx, fmt.Sprintf(`SeaweedFS_s3_bucket_size_bytes{bucket="%s"}`, bn)); v > 0 {
+			resources["s3-storage-bytes"] = *resource.NewQuantity(v, resource.BinarySI)
+		}
+		if v := r.queryPrometheusMetric(ctx, fmt.Sprintf(`SeaweedFS_s3_bucket_physical_size_bytes{bucket="%s"}`, bn)); v > 0 {
+			resources["s3-physical-storage-bytes"] = *resource.NewQuantity(v, resource.BinarySI)
+		}
 	}
 
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {

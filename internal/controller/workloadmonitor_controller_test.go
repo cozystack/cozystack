@@ -386,35 +386,35 @@ func TestReconcileNoBucketClaimSkips(t *testing.T) {
 	}
 }
 
-func TestQueryBucketSizeBytes(t *testing.T) {
+func TestQueryPrometheusMetric(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"5368709120"]}]}}`)
 	}))
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
-	size := reconciler.queryBucketSizeBytes(context.TODO(), "cosi-abc123")
+	size := reconciler.queryPrometheusMetric(context.TODO(), `SeaweedFS_s3_bucket_size_bytes{bucket="cosi-abc123"}`)
 	if size != 5368709120 {
 		t.Errorf("expected 5368709120, got %d", size)
 	}
 }
 
-func TestQueryBucketSizeBytesEmpty(t *testing.T) {
+func TestQueryPrometheusMetricEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 	}))
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
-	size := reconciler.queryBucketSizeBytes(context.TODO(), "nonexistent")
+	size := reconciler.queryPrometheusMetric(context.TODO(), `SeaweedFS_s3_bucket_size_bytes{bucket="nonexistent"}`)
 	if size != 0 {
 		t.Errorf("expected 0 for empty result, got %d", size)
 	}
 }
 
-func TestQueryBucketSizeBytesNoPrometheus(t *testing.T) {
+func TestQueryPrometheusMetricNoURL(t *testing.T) {
 	reconciler := &WorkloadMonitorReconciler{PrometheusURL: ""}
-	size := reconciler.queryBucketSizeBytes(context.TODO(), "cosi-abc123")
+	size := reconciler.queryPrometheusMetric(context.TODO(), `anything`)
 	if size != 0 {
 		t.Errorf("expected 0 when PrometheusURL is empty, got %d", size)
 	}
@@ -422,7 +422,13 @@ func TestQueryBucketSizeBytesNoPrometheus(t *testing.T) {
 
 func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"1073741824"]}]}}`)
+		query := r.URL.Query().Get("query")
+		switch {
+		case len(query) > 0 && query[0:len("SeaweedFS_s3_bucket_physical")] == "SeaweedFS_s3_bucket_physical":
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"2147483648"]}]}}`)
+		default:
+			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"1073741824"]}]}}`)
+		}
 	}))
 	defer srv.Close()
 
@@ -508,5 +514,13 @@ func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
 	}
 	if bucketsQty.Cmp(resource.MustParse("1")) != 0 {
 		t.Errorf("expected s3-buckets=1, got %s", bucketsQty.String())
+	}
+
+	physQty, ok := workload.Status.Resources["s3-physical-storage-bytes"]
+	if !ok {
+		t.Fatal("expected s3-physical-storage-bytes resource to be set")
+	}
+	if physQty.Value() != 2147483648 {
+		t.Errorf("expected s3-physical-storage-bytes=2147483648 (2 GiB), got %d", physQty.Value())
 	}
 }
