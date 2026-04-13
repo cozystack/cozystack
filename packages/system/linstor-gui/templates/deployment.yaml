@@ -93,7 +93,9 @@ spec:
         - name: linstor-client-tls
           secret:
             secretName: {{ .Values.linstor.clientSecret }}
-            defaultMode: 0400
+            # 0444 so nginx (UID 101) can read the mTLS client keypair;
+            # the secret volume is pod-local, not a broader disclosure.
+            defaultMode: 0444
         - name: tmp
           emptyDir: {}
         - name: nginx-cache
