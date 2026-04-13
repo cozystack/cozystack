@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -123,7 +124,7 @@ func (r *WorkloadMonitorReconciler) queryPrometheusMetric(ctx context.Context, p
 	}
 	logger := log.FromContext(ctx)
 
-	u, err := url.Parse(r.PrometheusURL + "/api/v1/query")
+	u, err := url.Parse(strings.TrimRight(r.PrometheusURL, "/") + "/api/v1/query")
 	if err != nil {
 		logger.Error(err, "Failed to parse Prometheus URL")
 		return 0
@@ -523,10 +524,8 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		client.InNamespace(monitor.Namespace),
 		client.MatchingLabels(monitor.Spec.Selector),
 	); err != nil {
-		if !apierrors.IsNotFound(err) {
-			logger.Error(err, "Unable to list BucketClaims for WorkloadMonitor", "monitor", monitor.Name)
-			return ctrl.Result{}, err
-		}
+		logger.Error(err, "Unable to list BucketClaims for WorkloadMonitor", "monitor", monitor.Name)
+		return ctrl.Result{}, err
 	}
 
 	for _, bc := range bucketClaimList.Items {
