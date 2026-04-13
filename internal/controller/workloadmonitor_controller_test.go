@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -393,8 +392,8 @@ func TestQueryPrometheusMetric(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
-	size := reconciler.queryPrometheusMetric(context.TODO(), `SeaweedFS_s3_bucket_size_bytes{bucket="cosi-abc123"}`)
+	reconciler := &WorkloadMonitorReconciler{}
+	size := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="cosi-abc123"}`)
 	if size != 5368709120 {
 		t.Errorf("expected 5368709120, got %d", size)
 	}
@@ -406,8 +405,8 @@ func TestQueryPrometheusMetricEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
-	size := reconciler.queryPrometheusMetric(context.TODO(), `SeaweedFS_s3_bucket_size_bytes{bucket="nonexistent"}`)
+	reconciler := &WorkloadMonitorReconciler{}
+	size := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="nonexistent"}`)
 	if size != 0 {
 		t.Errorf("expected 0 for empty result, got %d", size)
 	}
@@ -419,34 +418,77 @@ func TestQueryPrometheusMetricServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
-	size := reconciler.queryPrometheusMetric(context.TODO(), `SeaweedFS_s3_bucket_size_bytes{bucket="test"}`)
+	reconciler := &WorkloadMonitorReconciler{}
+	size := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="test"}`)
 	if size != 0 {
 		t.Errorf("expected 0 for server error, got %d", size)
 	}
 }
 
 func TestQueryPrometheusMetricNoURL(t *testing.T) {
-	reconciler := &WorkloadMonitorReconciler{PrometheusURL: ""}
-	size := reconciler.queryPrometheusMetric(context.TODO(), `anything`)
+	reconciler := &WorkloadMonitorReconciler{}
+	size := reconciler.queryPrometheusMetric(context.TODO(), "", `anything`)
 	if size != 0 {
 		t.Errorf("expected 0 when PrometheusURL is empty, got %d", size)
 	}
 }
 
-func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query().Get("query")
-		switch {
-		case strings.HasPrefix(query, "SeaweedFS_s3_bucket_physical"):
-			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"2147483648"]}]}}`)
-		default:
-			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"1073741824"]}]}}`)
-		}
-	}))
-	defer srv.Close()
-
+func TestResolvePrometheusURL(t *testing.T) {
 	s := newTestScheme()
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-demo",
+			Labels: map[string]string{
+				"namespace.cozystack.io/monitoring": "tenant-root",
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ns).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	url := reconciler.resolvePrometheusURL(context.TODO(), "tenant-demo")
+
+	expected := "http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus"
+	if url != expected {
+		t.Errorf("expected %q, got %q", expected, url)
+	}
+}
+
+func TestResolvePrometheusURLNoLabel(t *testing.T) {
+	s := newTestScheme()
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-demo",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ns).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	url := reconciler.resolvePrometheusURL(context.TODO(), "tenant-demo")
+
+	if url != "" {
+		t.Errorf("expected empty URL when no monitoring label, got %q", url)
+	}
+}
+
+func TestReconcileBucketClaimRequeuesWhenBucketsExist(t *testing.T) {
+	s := newTestScheme()
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-demo",
+		},
+	}
 
 	monitor := &cozyv1alpha1.WorkloadMonitor{
 		ObjectMeta: metav1.ObjectMeta{
@@ -482,15 +524,11 @@ func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(monitor, bc).
+		WithObjects(ns, monitor, bc).
 		WithStatusSubresource(monitor).
 		Build()
 
-	reconciler := &WorkloadMonitorReconciler{
-		Client:        fakeClient,
-		Scheme:        s,
-		PrometheusURL: srv.URL,
-	}
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
 	req := reconcile.Request{NamespacedName: types.NamespacedName{
 		Name:      "my-bucket",
 		Namespace: "tenant-demo",
@@ -502,7 +540,7 @@ func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
 	}
 
 	if result.RequeueAfter == 0 {
-		t.Error("expected RequeueAfter > 0 when PrometheusURL is set and buckets exist")
+		t.Error("expected RequeueAfter > 0 when buckets exist")
 	}
 
 	workload := &cozyv1alpha1.Workload{}
@@ -514,12 +552,9 @@ func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
 		t.Fatalf("expected Workload to be created, got error: %v", err)
 	}
 
-	sizeQty, ok := workload.Status.Resources["s3-storage-bytes"]
-	if !ok {
-		t.Fatal("expected s3-storage-bytes resource to be set")
-	}
-	if sizeQty.Value() != 1073741824 {
-		t.Errorf("expected s3-storage-bytes=1073741824 (1 GiB), got %d", sizeQty.Value())
+	// Without monitoring label on namespace, only s3-buckets should be set (no size metrics)
+	if _, ok := workload.Status.Resources["s3-storage-bytes"]; ok {
+		t.Error("expected no s3-storage-bytes when monitoring is not configured")
 	}
 
 	bucketsQty, ok := workload.Status.Resources["s3-buckets"]
@@ -528,13 +563,5 @@ func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
 	}
 	if bucketsQty.Cmp(resource.MustParse("1")) != 0 {
 		t.Errorf("expected s3-buckets=1, got %s", bucketsQty.String())
-	}
-
-	physQty, ok := workload.Status.Resources["s3-physical-storage-bytes"]
-	if !ok {
-		t.Fatal("expected s3-physical-storage-bytes resource to be set")
-	}
-	if physQty.Value() != 2147483648 {
-		t.Errorf("expected s3-physical-storage-bytes=2147483648 (2 GiB), got %d", physQty.Value())
 	}
 }

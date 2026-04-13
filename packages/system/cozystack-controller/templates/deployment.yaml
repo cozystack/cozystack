@@ -27,6 +27,3 @@ spec:
         {{- if .Values.cozystackController.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
-        {{- if .Values.cozystackController.prometheusUrl }}
-        - --prometheus-url={{ .Values.cozystackController.prometheusUrl }}
-        {{- end }}

@@ -30,13 +30,21 @@ import (
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
 )
 
+const (
+	// namespaceMonitoringLabel is the namespace label that indicates which tenant
+	// namespace hosts the monitoring stack (VictoriaMetrics/Prometheus).
+	namespaceMonitoringLabel = "namespace.cozystack.io/monitoring"
+	// vmSelectService is the well-known service name for VictoriaMetrics vmselect
+	// within a monitoring namespace. Port 8481, path /select/0/prometheus.
+	vmSelectService = "vmselect-shortterm"
+	vmSelectPort    = "8481"
+	vmSelectPath    = "/select/0/prometheus"
+)
+
 // WorkloadMonitorReconciler reconciles a WorkloadMonitor object
 type WorkloadMonitorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// PrometheusURL is the base URL of a Prometheus-compatible API for querying
-	// SeaweedFS bucket metrics. If empty, bucket size metrics are not collected.
-	PrometheusURL string
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -116,15 +124,30 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 	obj.SetOwnerReferences(owners)
 }
 
+// resolvePrometheusURL returns the Prometheus-compatible API base URL for the given namespace.
+// It reads the namespace.cozystack.io/monitoring label to find the monitoring namespace,
+// then constructs the vmselect URL. Returns empty string if monitoring is not configured.
+func (r *WorkloadMonitorReconciler) resolvePrometheusURL(ctx context.Context, namespace string) string {
+	ns := &corev1.Namespace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: namespace}, ns); err != nil {
+		return ""
+	}
+	monitoringNS := ns.Labels[namespaceMonitoringLabel]
+	if monitoringNS == "" {
+		return ""
+	}
+	return fmt.Sprintf("http://%s.%s.svc:%s%s", vmSelectService, monitoringNS, vmSelectPort, vmSelectPath)
+}
+
 // queryPrometheusMetric queries a Prometheus-compatible API for a single instant value.
-// Returns 0 if the metric is not available or PrometheusURL is not configured.
-func (r *WorkloadMonitorReconciler) queryPrometheusMetric(ctx context.Context, promQL string) int64 {
-	if r.PrometheusURL == "" {
+// Returns 0 if prometheusBaseURL is empty or the metric is not available.
+func (r *WorkloadMonitorReconciler) queryPrometheusMetric(ctx context.Context, prometheusBaseURL, promQL string) int64 {
+	if prometheusBaseURL == "" {
 		return 0
 	}
 	logger := log.FromContext(ctx)
 
-	u, err := url.Parse(strings.TrimRight(r.PrometheusURL, "/") + "/api/v1/query")
+	u, err := url.Parse(strings.TrimRight(prometheusBaseURL, "/") + "/api/v1/query")
 	if err != nil {
 		logger.Error(err, "Failed to parse Prometheus URL")
 		return 0
@@ -209,13 +232,17 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	resources["s3-buckets"] = resource.MustParse("1")
 
 	// Query actual bucket sizes from SeaweedFS metrics via Prometheus.
+	// The monitoring endpoint is resolved from the namespace label
+	// namespace.cozystack.io/monitoring, which points to the tenant
+	// namespace hosting VictoriaMetrics.
 	// bc.Status.BucketName is the COSI Bucket name, which the COSI driver
 	// uses directly as the SeaweedFS bucket name.
 	if bn := bc.Status.BucketName; bn != "" {
-		if v := r.queryPrometheusMetric(ctx, fmt.Sprintf(`SeaweedFS_s3_bucket_size_bytes{bucket="%s"}`, bn)); v > 0 {
+		promURL := r.resolvePrometheusURL(ctx, bc.Namespace)
+		if v := r.queryPrometheusMetric(ctx, promURL, fmt.Sprintf(`SeaweedFS_s3_bucket_size_bytes{bucket="%s"}`, bn)); v > 0 {
 			resources["s3-storage-bytes"] = *resource.NewQuantity(v, resource.BinarySI)
 		}
-		if v := r.queryPrometheusMetric(ctx, fmt.Sprintf(`SeaweedFS_s3_bucket_physical_size_bytes{bucket="%s"}`, bn)); v > 0 {
+		if v := r.queryPrometheusMetric(ctx, promURL, fmt.Sprintf(`SeaweedFS_s3_bucket_physical_size_bytes{bucket="%s"}`, bn)); v > 0 {
 			resources["s3-physical-storage-bytes"] = *resource.NewQuantity(v, resource.BinarySI)
 		}
 	}
@@ -564,7 +591,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// Requeue periodically if there are BucketClaims to keep sizes up to date.
 	// Bucket sizes come from Prometheus metrics that update every 60s.
-	if len(bucketClaimList.Items) > 0 && r.PrometheusURL != "" {
+	if len(bucketClaimList.Items) > 0 {
 		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 

@@ -2,4 +2,3 @@ cozystackController:
   image: ghcr.io/cozystack/cozystack/cozystack-controller:v1.3.0-rc.1@sha256:5ab50893e9d0237d26f366c9d647da6337ca9b97bae764430571d4fb080f6200
   debug: false
   disableTelemetry: false
-  prometheusUrl: ""
