@@ -187,6 +187,11 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
+  # Allow the tenant's ingress-nginx to reach both the linstor-gui
+  # gatekeeper pods (for /oauth2/* and app traffic) AND the transient
+  # ACME http-01 solver pods that cert-manager spins up in the same
+  # namespace during certificate issuance/renewal. Matching the whole
+  # namespace mirrors allow-to-dashboard / allow-to-keycloak.
   name: allow-to-linstor-gui
   namespace: {{ include "tenant.name" . }}
 spec:
@@ -195,8 +200,6 @@ spec:
   - toEndpoints:
       - matchLabels:
           "k8s:io.kubernetes.pod.namespace": cozy-linstor
-          "k8s:app.kubernetes.io/instance": linstor-gui
-          "k8s:app.kubernetes.io/name": gatekeeper
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
