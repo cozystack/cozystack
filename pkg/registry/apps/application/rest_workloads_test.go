@@ -40,7 +40,7 @@ func newTestRESTWithSchemes(objs ...runtime.Object) *REST {
 
 func TestGetWorkloadsOperational_NoMonitors(t *testing.T) {
 	r := newTestRESTWithSchemes()
-	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb")
+	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestGetWorkloadsOperational_AllOperational(t *testing.T) {
 	}
 
 	r := newTestRESTWithSchemes(m1, m2)
-	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb")
+	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestGetWorkloadsOperational_SomeNotOperational(t *testing.T) {
 	}
 
 	r := newTestRESTWithSchemes(m1, m2)
-	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb")
+	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestGetWorkloadsOperational_OperationalNil(t *testing.T) {
 	}
 
 	r := newTestRESTWithSchemes(m)
-	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb")
+	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestGetWorkloadsOperational_MixedNilAndOperational(t *testing.T) {
 	}
 
 	r := newTestRESTWithSchemes(m1, m2)
-	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb")
+	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestGetWorkloadsOperational_MixedFailedAndPending(t *testing.T) {
 	}
 
 	r := newTestRESTWithSchemes(m1, m2)
-	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb")
+	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestConvertConditions_MixedFailedAndPendingShowsFalse(t *testing.T) {
 		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "ok"},
 	}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestGetWorkloadsOperational_DifferentApp_NotFound(t *testing.T) {
 	}
 
 	r := newTestRESTWithSchemes(m)
-	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb")
+	ws, err := r.getWorkloadsOperational(context.TODO(), "default", "mydb", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

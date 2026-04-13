@@ -61,7 +61,7 @@ func TestConvertConditions_WorkloadsReadyAdded(t *testing.T) {
 		{Type: "Released", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "Released"},
 	}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestConvertConditions_ReadyNotOverriddenWhenWorkloadsNotReady(t *testing.T)
 		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "Release applied"},
 	}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestConvertConditions_NoOverrideWhenNoMonitors(t *testing.T) {
 		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "Release applied"},
 	}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestConvertConditions_ReadyStaysTrue_WhenAllOperational(t *testing.T) {
 		{Type: "Released", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "Released"},
 	}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestConvertConditions_WorkloadsReadyTimestampIsNonZero(t *testing.T) {
 	// No Ready condition — HR still being reconciled
 	hr.Status.Conditions = []metav1.Condition{}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestConvertConditions_WorkloadsReadyUnknownWhenNilOperational(t *testing.T)
 		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "ok"},
 	}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestConvertConditions_WorkloadsReadyUnknownOnError(t *testing.T) {
 		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Succeeded", Message: "ok"},
 	}
 
-	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

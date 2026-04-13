@@ -144,7 +144,7 @@ func TestWatchIntegration_MonitorDeletionDropsWorkloadsReady(t *testing.T) {
 	r := newTestRESTWithSchemesFromClient(c)
 
 	// Step 1: With non-operational monitor, WorkloadsReady=False, Ready=True
-	app1, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app1, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestWatchIntegration_MonitorDeletionDropsWorkloadsReady(t *testing.T) {
 	}
 
 	// Step 3: WorkloadsReady should disappear, Ready stays True
-	app2, err := r.convertHelmReleaseToApplication(context.TODO(), hr)
+	app2, err := r.convertHelmReleaseToApplication(context.TODO(), hr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
