@@ -146,7 +146,12 @@ func (r *WorkloadMonitorReconciler) queryPrometheusMetric(ctx context.Context, p
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		logger.V(1).Info("Prometheus returned non-OK status", "query", promQL, "status", resp.StatusCode)
+		return 0
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		logger.Error(err, "Failed to read Prometheus response")
 		return 0

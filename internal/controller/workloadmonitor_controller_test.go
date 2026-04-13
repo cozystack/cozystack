@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -412,6 +413,19 @@ func TestQueryPrometheusMetricEmpty(t *testing.T) {
 	}
 }
 
+func TestQueryPrometheusMetricServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
+	size := reconciler.queryPrometheusMetric(context.TODO(), `SeaweedFS_s3_bucket_size_bytes{bucket="test"}`)
+	if size != 0 {
+		t.Errorf("expected 0 for server error, got %d", size)
+	}
+}
+
 func TestQueryPrometheusMetricNoURL(t *testing.T) {
 	reconciler := &WorkloadMonitorReconciler{PrometheusURL: ""}
 	size := reconciler.queryPrometheusMetric(context.TODO(), `anything`)
@@ -424,7 +438,7 @@ func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("query")
 		switch {
-		case len(query) > 0 && query[0:len("SeaweedFS_s3_bucket_physical")] == "SeaweedFS_s3_bucket_physical":
+		case strings.HasPrefix(query, "SeaweedFS_s3_bucket_physical"):
 			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"2147483648"]}]}}`)
 		default:
 			fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"1073741824"]}]}}`)
