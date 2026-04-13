@@ -37,7 +37,7 @@ tests:
             name: linstor-client-tls
             secret:
               secretName: linstor-client-tls
-              defaultMode: 0400
+              defaultMode: 0444
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
