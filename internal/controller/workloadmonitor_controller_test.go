@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -380,5 +383,130 @@ func TestReconcileNoBucketClaimSkips(t *testing.T) {
 		if w.Status.Kind == "bucket" {
 			t.Error("expected no bucket workloads to be created for postgres monitor")
 		}
+	}
+}
+
+func TestQueryBucketSizeBytes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"5368709120"]}]}}`)
+	}))
+	defer srv.Close()
+
+	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
+	size := reconciler.queryBucketSizeBytes(context.TODO(), "cosi-abc123")
+	if size != 5368709120 {
+		t.Errorf("expected 5368709120, got %d", size)
+	}
+}
+
+func TestQueryBucketSizeBytesEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	}))
+	defer srv.Close()
+
+	reconciler := &WorkloadMonitorReconciler{PrometheusURL: srv.URL}
+	size := reconciler.queryBucketSizeBytes(context.TODO(), "nonexistent")
+	if size != 0 {
+		t.Errorf("expected 0 for empty result, got %d", size)
+	}
+}
+
+func TestQueryBucketSizeBytesNoPrometheus(t *testing.T) {
+	reconciler := &WorkloadMonitorReconciler{PrometheusURL: ""}
+	size := reconciler.queryBucketSizeBytes(context.TODO(), "cosi-abc123")
+	if size != 0 {
+		t.Errorf("expected 0 when PrometheusURL is empty, got %d", size)
+	}
+}
+
+func TestReconcileBucketClaimWithPrometheus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"1073741824"]}]}}`)
+	}))
+	defer srv.Close()
+
+	s := newTestScheme()
+
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+		},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind: "bucket",
+			Type: "s3",
+			Selector: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+	}
+
+	bc := &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+		Spec: cosiv1alpha1.BucketClaimSpec{
+			BucketClassName: "seaweedfs",
+			Protocols:       []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3},
+		},
+		Status: cosiv1alpha1.BucketClaimStatus{
+			BucketReady: true,
+			BucketName:  "cosi-abc123",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(monitor, bc).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		PrometheusURL: srv.URL,
+	}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      "my-bucket",
+		Namespace: "tenant-demo",
+	}}
+
+	result, err := reconciler.Reconcile(context.TODO(), req)
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	if result.RequeueAfter == 0 {
+		t.Error("expected RequeueAfter > 0 when PrometheusURL is set and buckets exist")
+	}
+
+	workload := &cozyv1alpha1.Workload{}
+	err = fakeClient.Get(context.TODO(), types.NamespacedName{
+		Name:      "bucket-my-bucket",
+		Namespace: "tenant-demo",
+	}, workload)
+	if err != nil {
+		t.Fatalf("expected Workload to be created, got error: %v", err)
+	}
+
+	sizeQty, ok := workload.Status.Resources["s3-storage-bytes"]
+	if !ok {
+		t.Fatal("expected s3-storage-bytes resource to be set")
+	}
+	if sizeQty.Value() != 1073741824 {
+		t.Errorf("expected s3-storage-bytes=1073741824 (1 GiB), got %d", sizeQty.Value())
+	}
+
+	bucketsQty, ok := workload.Status.Resources["s3-buckets"]
+	if !ok {
+		t.Fatal("expected s3-buckets resource to be set")
+	}
+	if bucketsQty.Cmp(resource.MustParse("1")) != 0 {
+		t.Errorf("expected s3-buckets=1, got %s", bucketsQty.String())
 	}
 }

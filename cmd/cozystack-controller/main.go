@@ -70,6 +70,7 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
+	var prometheusURL string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -87,6 +88,9 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.StringVar(&prometheusURL, "prometheus-url", "",
+		"Prometheus-compatible API URL for querying SeaweedFS bucket metrics (e.g. http://vmselect:8481). "+
+			"If empty, S3 bucket size metrics are not collected.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -180,8 +184,9 @@ func main() {
 	}
 
 	if err = (&controller.WorkloadMonitorReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		PrometheusURL: prometheusURL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkloadMonitor")
 		os.Exit(1)

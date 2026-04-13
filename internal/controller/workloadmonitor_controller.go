@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"sort"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +33,9 @@ import (
 type WorkloadMonitorReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// PrometheusURL is the base URL of a Prometheus-compatible API for querying
+	// SeaweedFS bucket metrics. If empty, bucket size metrics are not collected.
+	PrometheusURL string
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -108,6 +115,76 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 	obj.SetOwnerReferences(owners)
 }
 
+// queryBucketSizeBytes queries Prometheus for the logical size of a SeaweedFS bucket.
+// Returns 0 if the metric is not available or PrometheusURL is not configured.
+func (r *WorkloadMonitorReconciler) queryBucketSizeBytes(ctx context.Context, seaweedBucketName string) int64 {
+	if r.PrometheusURL == "" || seaweedBucketName == "" {
+		return 0
+	}
+	logger := log.FromContext(ctx)
+
+	query := fmt.Sprintf(`SeaweedFS_s3_bucket_size_bytes{bucket="%s"}`, seaweedBucketName)
+	u, err := url.Parse(r.PrometheusURL + "/api/v1/query")
+	if err != nil {
+		logger.Error(err, "Failed to parse Prometheus URL")
+		return 0
+	}
+	u.RawQuery = url.Values{"query": {query}}.Encode()
+
+	httpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(httpCtx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		logger.Error(err, "Failed to create Prometheus request")
+		return 0
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.V(1).Info("Failed to query Prometheus for bucket size", "bucket", seaweedBucketName, "error", err)
+		return 0
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Error(err, "Failed to read Prometheus response")
+		return 0
+	}
+
+	// Parse Prometheus instant query response:
+	// {"status":"success","data":{"resultType":"vector","result":[{"metric":{...},"value":[timestamp,"value"]}]}}
+	var promResp struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []struct {
+				Value [2]json.RawMessage `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &promResp); err != nil {
+		logger.Error(err, "Failed to parse Prometheus response")
+		return 0
+	}
+	if promResp.Status != "success" || len(promResp.Data.Result) == 0 {
+		return 0
+	}
+
+	var valueStr string
+	if err := json.Unmarshal(promResp.Data.Result[0].Value[1], &valueStr); err != nil {
+		logger.Error(err, "Failed to parse Prometheus metric value")
+		return 0
+	}
+
+	qty, err := resource.ParseQuantity(valueStr)
+	if err != nil {
+		logger.Error(err, "Failed to parse metric value as quantity", "value", valueStr)
+		return 0
+	}
+	return qty.Value()
+}
+
 // reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
 func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	ctx context.Context,
@@ -125,6 +202,13 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 
 	resources := make(map[string]resource.Quantity)
 	resources["s3-buckets"] = resource.MustParse("1")
+
+	// Query actual bucket size from SeaweedFS metrics via Prometheus.
+	// bc.Status.BucketName is the COSI Bucket name, which the COSI driver
+	// uses directly as the SeaweedFS bucket name.
+	if sizeBytes := r.queryBucketSizeBytes(ctx, bc.Status.BucketName); sizeBytes > 0 {
+		resources["s3-storage-bytes"] = *resource.NewQuantity(sizeBytes, resource.BinarySI)
+	}
 
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
@@ -470,7 +554,12 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Return without requeue if we want purely event-driven reconciliations
+	// Requeue periodically if there are BucketClaims to keep sizes up to date.
+	// Bucket sizes come from Prometheus metrics that update every 60s.
+	if len(bucketClaimList.Items) > 0 && r.PrometheusURL != "" {
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
+	}
+
 	return ctrl.Result{}, nil
 }
 
