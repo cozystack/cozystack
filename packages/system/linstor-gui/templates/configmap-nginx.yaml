@@ -1,0 +1,82 @@
+{{/*
+Parse the LINSTOR endpoint so nginx can set `proxy_ssl_name` correctly.
+The endpoint is expected to be an https:// URL like
+  https://linstor-controller.cozy-linstor.svc:3371
+*/}}
+{{- $endpoint := trimPrefix "https://" (trimPrefix "http://" .Values.linstor.endpoint) -}}
+{{- $endpointHost := (splitList ":" $endpoint) | first -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: linstor-gui-nginx
+  labels:
+    {{- include "linstor-gui.labels" . | nindent 4 }}
+data:
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      include       /etc/nginx/mime.types;
+      default_type  application/octet-stream;
+      server_tokens off;
+
+      client_body_temp_path /tmp/client_body;
+      proxy_temp_path       /tmp/proxy;
+      fastcgi_temp_path     /tmp/fastcgi;
+      uwsgi_temp_path       /tmp/uwsgi;
+      scgi_temp_path        /tmp/scgi;
+
+      sendfile        on;
+      keepalive_timeout  65;
+
+      server {
+        listen 3373;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Static UI assets
+        location / {
+          try_files $uri $uri/ /index.html;
+        }
+
+        # Proxy LINSTOR REST API over mTLS to the controller
+        location /v1 {
+          proxy_pass {{ .Values.linstor.endpoint }};
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_ssl_certificate     /etc/linstor/client/tls.crt;
+          proxy_ssl_certificate_key /etc/linstor/client/tls.key;
+          proxy_ssl_trusted_certificate /etc/linstor/client/ca.crt;
+          proxy_ssl_verify       on;
+          proxy_ssl_verify_depth 2;
+          proxy_ssl_server_name  on;
+          proxy_ssl_name         {{ $endpointHost }};
+        }
+
+        location /metrics {
+          proxy_pass {{ .Values.linstor.endpoint }};
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_ssl_certificate     /etc/linstor/client/tls.crt;
+          proxy_ssl_certificate_key /etc/linstor/client/tls.key;
+          proxy_ssl_trusted_certificate /etc/linstor/client/ca.crt;
+          proxy_ssl_verify       on;
+          proxy_ssl_verify_depth 2;
+          proxy_ssl_server_name  on;
+          proxy_ssl_name         {{ $endpointHost }};
+        }
+
+        location = /healthz {
+          access_log off;
+          return 200 'ok';
+          add_header Content-Type text/plain;
+        }
+      }
+    }
