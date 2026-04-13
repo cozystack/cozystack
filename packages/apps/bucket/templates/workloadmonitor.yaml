@@ -1,0 +1,13 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: bucket
+  type: s3
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  version: {{ $.Chart.Version }}
