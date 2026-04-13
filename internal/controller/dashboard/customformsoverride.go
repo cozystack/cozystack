@@ -256,24 +256,28 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 		if sourceObj, ok := specProps["source"].(map[string]any); ok {
 			if imgProps, ok := sourceObj["properties"].(map[string]any); ok {
 				if imgName, ok := imgProps["image"].(map[string]any); ok {
-					imgName["properties"].(map[string]any)["name"] = map[string]any{
-						"type": "listInput",
-						"customProps": map[string]any{
-							"valueUri":    "/api/clusters/{cluster}/k8s/apis/cdi.kubevirt.io/v1beta1/namespaces/cozy-public/datavolumes",
-							"keysToValue": []any{"metadata", "annotations", "vm-default-images.cozystack.io/name"},
-							"keysToLabel": []any{"metadata", "annotations", "vm-default-images.cozystack.io/description"},
-						},
+					if imgNameProps, ok := imgName["properties"].(map[string]any); ok {
+						imgNameProps["name"] = map[string]any{
+							"type": "listInput",
+							"customProps": map[string]any{
+								"valueUri":    "/api/clusters/{cluster}/k8s/apis/cdi.kubevirt.io/v1beta1/namespaces/cozy-public/datavolumes",
+								"keysToValue": []any{"metadata", "annotations", "vm-default-images.cozystack.io/name"},
+								"keysToLabel": []any{"metadata", "annotations", "vm-default-images.cozystack.io/description"},
+							},
+						}
 					}
 				}
 				// Override source.disk.name to be an API-backed dropdown listing VMDisk resources
 				if diskName, ok := imgProps["disk"].(map[string]any); ok {
-					diskName["properties"].(map[string]any)["name"] = map[string]any{
-						"type": "listInput",
-						"customProps": map[string]any{
-							"valueUri":    "/api/clusters/{cluster}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{namespace}/vmdisks",
-							"keysToValue": []any{"metadata", "name"},
-							"keysToLabel": []any{"metadata", "name"},
-						},
+					if diskNameProps, ok := diskName["properties"].(map[string]any); ok {
+						diskNameProps["name"] = map[string]any{
+							"type": "listInput",
+							"customProps": map[string]any{
+								"valueUri":    "/api/clusters/{cluster}/k8s/apis/apps.cozystack.io/v1alpha1/namespaces/{namespace}/vmdisks",
+								"keysToValue": []any{"metadata", "name"},
+								"keysToLabel": []any{"metadata", "name"},
+							},
+						}
 					}
 				}
 			}
