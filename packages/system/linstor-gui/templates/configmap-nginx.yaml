@@ -60,22 +60,36 @@ data:
           try_files $uri $uri/ /index.html;
         }
 
-        # Block the LINSTOR controller's auth/identity management endpoints.
-        # The upstream linstor-gui exposes a "Users" / sign-in panel that
-        # POSTs to /v1/security/* on the controller. If a cozystack user
-        # enables HTTP auth via that panel, every subsequent REST call
-        # (including from this very GUI, which proxies via mTLS, not
-        # bearer tokens) starts returning 401 and the user is locked out
-        # of LINSTOR with no in-product recovery path.
+        # Lock the linstor-gui in-app authentication panel.
         #
-        # Authentication for cozystack is handled one layer up at the
-        # Ingress (oauth2-proxy + Keycloak), so the in-app auth is not
-        # only redundant but actively dangerous. Refuse the calls here so
-        # the setting cannot be turned on regardless of what the SPA UI
-        # shows.
-        location /v1/security {
+        # Unlike most LINSTOR features, the GUI's "authenticationEnabled"
+        # toggle and user list are NOT controller-side properties — they
+        # are persisted as ordinary KeyValueStore instances named
+        # `__gui__settings` and `__gui__users`. The SPA reads them on
+        # every page load and, if `authenticationEnabled=true`, gates the
+        # whole UI behind its own login screen against a self-managed
+        # admin user.
+        #
+        # Cozystack already enforces authentication at the Ingress
+        # (oauth2-proxy + Keycloak), and the in-app login is a foot-gun:
+        # if a user enables it and forgets/misconfigures the password, the
+        # only recovery is shelling into the linstor-controller pod and
+        # running `linstor key-value-store modify __gui__settings
+        # authenticationEnabled false`.
+        #
+        # We allow GETs (so the SPA can read state and render normally
+        # with auth=off) but reject every mutating method on those two
+        # KeyValueStore instances. Any other key-value-store entry the
+        # GUI uses (e.g. __gui__mode) keeps working as expected.
+        location ~ ^/v1/key-value-store/__gui__(settings|users)(/|$) {
           default_type application/json;
-          return 403 '{"ret_code":-1,"message":"LINSTOR auth setup is disabled by cozystack: authentication is enforced at the Ingress via Keycloak."}';
+          # `if ... return` is the one documented-safe use of `if` in
+          # nginx (see "If is Evil"), so it's fine here. We allow GET/HEAD
+          # for the SPA's read path and reject every mutating method.
+          if ($request_method !~ ^(GET|HEAD)$) {
+            return 403 '{"ret_code":-1,"message":"linstor-gui in-app authentication is disabled by cozystack: authentication is enforced at the Ingress via Keycloak."}';
+          }
+          proxy_pass {{ .Values.linstor.endpoint }};
         }
 
         # Proxy LINSTOR REST API over mTLS to the controller
