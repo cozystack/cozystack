@@ -25,6 +25,13 @@ metadata:
     acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
     {{- end }}
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    # Keycloak access+refresh+id tokens make the oauth2-proxy session
+    # cookie ~8–10 KB (split across multiple Set-Cookie headers), which
+    # overflows the default proxy_buffer_size and causes "upstream sent
+    # too big header" -> HTTP 502 on /oauth2/callback. Same numbers as
+    # dashboard ingress.
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 100m
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
