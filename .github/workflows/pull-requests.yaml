@@ -85,6 +85,14 @@ jobs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: actions/checkout@v4
@@ -111,7 +119,7 @@ jobs:
         id: fetch_assets
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = '${{ steps.get_tag.outputs.tag }}';
             const releases = await github.rest.repos.listReleases({
@@ -144,6 +152,15 @@ jobs:
     if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
 
     steps:
+      - name: Generate GitHub App token
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
       # ▸ Checkout and prepare the codebase
       - name: Checkout code
         uses: actions/checkout@v4
@@ -173,11 +190,11 @@ jobs:
         if: contains(github.event.pull_request.labels.*.name, 'release')
         run: |
           mkdir -p _out/assets
-          curl -sSL -H "Authorization: token ${GH_PAT}" -H "Accept: application/octet-stream" \
+          curl -sSL -H "Authorization: token ${APP_TOKEN}" -H "Accept: application/octet-stream" \
             -o _out/assets/nocloud-amd64.raw.xz \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.disk_id }}"
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
