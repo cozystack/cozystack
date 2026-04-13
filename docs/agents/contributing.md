@@ -1,167 +1,60 @@
-# Instructions for AI Agents
+# Contributing Conventions for AI Agents
 
-Guidelines for AI agents contributing to Cozystack.
+Project-side conventions for commits, branches, and pull requests in Cozystack.
 
 ## Checklist for Creating a Pull Request
 
-- [ ] Changes are made and tested
-- [ ] Commit message uses correct `[component]` prefix
+- [ ] Commit message follows Conventional Commits format
 - [ ] Commit is signed off with `--signoff`
 - [ ] Branch is rebased on `upstream/main` (no extra commits)
 - [ ] PR body includes description and release note
-- [ ] PR is pushed and created with `gh pr create`
 
-## How to Commit and Create Pull Requests
+## Commit Format
 
-### 1. Make Your Changes
-
-Edit the necessary files in the codebase.
-
-### 2. Commit with Proper Format
-
-Use the `[component]` prefix and `--signoff` flag:
+Follow [Conventional Commits](https://www.conventionalcommits.org/) with `--signoff`:
 
 ```bash
-git commit --signoff -m "[component] Brief description of changes"
+git commit --signoff -m "type(scope): brief description"
 ```
 
-**Component prefixes:**
-- System: `[dashboard]`, `[platform]`, `[cilium]`, `[kube-ovn]`, `[linstor]`, `[fluxcd]`, `[cluster-api]`
-- Apps: `[postgres]`, `[mariadb]`, `[redis]`, `[kafka]`, `[clickhouse]`, `[virtual-machine]`, `[kubernetes]`
-- Other: `[tests]`, `[ci]`, `[docs]`, `[maintenance]`
+**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`
+
+**Scopes:**
+- System: `dashboard`, `platform`, `cilium`, `kube-ovn`, `linstor`, `fluxcd`, `cluster-api`
+- Apps: `postgres`, `mariadb`, `redis`, `kafka`, `clickhouse`, `virtual-machine`, `kubernetes`
+- Other: `api`, `hack`, `tests`, `ci`, `docs`
+
+Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
 
 **Examples:**
 ```bash
-git commit --signoff -m "[dashboard] Add config hash annotations to restart pods on config changes"
-git commit --signoff -m "[postgres] Update operator to version 1.2.3"
-git commit --signoff -m "[docs] Add installation guide"
+git commit --signoff -m "feat(dashboard): add config hash annotations to restart pods on config changes"
+git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
+git commit --signoff -m "docs: add installation guide"
 ```
 
-### 3. Rebase on upstream/main (if needed)
+## Rebasing on upstream/main
 
-If your branch has extra commits, clean it up:
+If the branch has extra commits, clean it up:
 
 ```bash
-# Fetch latest
 git fetch upstream
-
-# Create clean branch from upstream/main
 git checkout -b my-feature upstream/main
-
-# Cherry-pick only your commit
 git cherry-pick <your-commit-hash>
-
-# Force push to your branch
 git push -f origin my-feature:my-branch-name
 ```
 
-### 4. Push Your Branch
+## Pull Request Body
 
-```bash
-git push origin <branch-name>
-```
+Fill in the template at [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). It includes the required `release-note` block.
 
-### 5. Create Pull Request
+Create the PR with `gh pr create --title "type(scope): brief description" --body-file <file>`.
 
-Write the PR body to a temporary file:
+## Fetching Unresolved Review Comments
 
-```bash
-cat > /tmp/pr_body.md << 'EOF'
-## What this PR does
+Cozystack uses GitHub review threads with resolution status. Only unresolved threads are actionable — resolved threads are already handled.
 
-Brief description of the changes.
-
-Changes:
-- Change 1
-- Change 2
-
-### Release note
-
-```release-note
-[component] Description for changelog
-```
-EOF
-```
-
-Create the PR:
-
-```bash
-gh pr create --title "[component] Brief description" --body-file /tmp/pr_body.md
-```
-
-Clean up:
-
-```bash
-rm /tmp/pr_body.md
-```
-
-## Addressing AI Bot Reviewer Comments
-
-When the user asks to fix comments from AI bot reviewers (like Qodo, Copilot, etc.):
-
-### 1. Get PR Comments
-
-View all comments on the pull request:
-
-```bash
-gh pr view <PR-number> --comments
-```
-
-Or for the current branch:
-
-```bash
-gh pr view --comments
-```
-
-### 2. Review Each Comment Carefully
-
-**Important**: Do NOT blindly apply all suggestions. Each comment should be evaluated:
-
-- **Consider context** - Does the suggestion make sense for this specific case?
-- **Check project conventions** - Does it align with Cozystack patterns?
-- **Evaluate impact** - Will this improve code quality or introduce issues?
-- **Question validity** - AI bots can be wrong or miss context
-
-**When to apply:**
-- ✅ Legitimate bugs or security issues
-- ✅ Clear improvements to code quality
-- ✅ Better error handling or edge cases
-- ✅ Conformance to project conventions
-
-**When to skip:**
-- ❌ Stylistic preferences that don't match project style
-- ❌ Over-engineering simple code
-- ❌ Changes that break existing patterns
-- ❌ Suggestions that show misunderstanding of the code
-
-### 3. Apply Valid Fixes
-
-Make changes addressing the valid comments. Use your judgment.
-
-### 4. Leave Changes Uncommitted
-
-**Critical**: Do NOT commit or push the changes automatically.
-
-Leave the changes in the working directory so the user can:
-- Review the fixes
-- Decide whether to commit them
-- Make additional adjustments if needed
-
-```bash
-# After making changes, show status but DON'T commit
-git status
-git diff
-```
-
-The user will commit and push when ready.
-
-## Code Review Comments
-
-When asked to fix code review comments, **always work only with unresolved (open) comments**. Resolved comments should be ignored as they have already been addressed.
-
-### Getting Unresolved Review Comments
-
-Use GitHub GraphQL API to fetch only unresolved review comments from a pull request:
+The REST endpoint `/pulls/{pr}/reviews` returns review summaries, not individual review comments. Use the GraphQL API to access `reviewThreads` with `isResolved` status:
 
 ```bash
 gh api graphql -F owner=cozystack -F repo=cozystack -F pr=<PR_NUMBER> -f query='
@@ -189,27 +82,7 @@ query($owner: String!, $repo: String!, $pr: Int!) {
 }' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[]'
 ```
 
-### Filtering for Unresolved Comments
-
-The key filter is `select(.isResolved == false)` which ensures only unresolved review threads are processed. Each thread can contain multiple comments, but if the thread is resolved, all its comments should be ignored.
-
-### Working with Review Comments
-
-1. **Fetch unresolved comments** using the GraphQL query above
-2. **Parse the results** to identify:
-   - File path (`path`)
-   - Line number (`line` or `originalLine`)
-   - Comment text (`bodyText`)
-   - Author (`author.login`)
-3. **Address each unresolved comment** by:
-   - Locating the relevant code section
-   - Making the requested changes
-   - Ensuring the fix addresses the concern raised
-4. **Do NOT process resolved comments** - they have already been handled
-
-### Example: Compact List of Unresolved Comments
-
-For a quick overview of unresolved comments:
+Compact one-line variant:
 
 ```bash
 gh api graphql -F owner=cozystack -F repo=cozystack -F pr=<PR_NUMBER> -f query='
@@ -233,43 +106,3 @@ query($owner: String!, $repo: String!, $pr: Int!) {
   }
 }' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | "\(.path):\(.line // "N/A") - \(.author.login): \(.bodyText[:150])"'
 ```
-
-### Important Notes
-
-- **REST API limitation**: The REST endpoint `/pulls/{pr}/reviews` returns review summaries, not individual review comments. Use GraphQL API for accessing `reviewThreads` with `isResolved` status.
-- **Thread-based resolution**: Comments are organized in threads. If a thread is resolved (`isResolved: true`), ignore all comments in that thread.
-- **Always filter**: Never process comments from resolved threads, even if they appear in the results.
-
-### Example Workflow
-
-```bash
-# Get PR comments
-gh pr view 1234 --comments
-
-# Review comments and identify valid ones
-# Make necessary changes to address valid comments
-# ... edit files ...
-
-# Show what was changed (but don't commit)
-git status
-git diff
-
-# Tell the user what was fixed and what was skipped
-```
-
-## Git Permissions
-
-Request these permissions when needed:
-- `git_write` - For commit, rebase, cherry-pick, branch operations
-- `network` - For push, fetch, pull operations
-
-## Common Issues
-
-**PR has extra commits?**  
-→ Rebase on `upstream/main` and cherry-pick only your commits
-
-**Wrong commit message?**  
-→ `git commit --amend --signoff -m "[correct] message"` then `git push -f`
-
-**Need to update PR?**  
-→ `gh pr edit <number> --body "new description"`

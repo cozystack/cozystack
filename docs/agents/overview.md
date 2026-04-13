@@ -78,11 +78,10 @@ packages/<category>/<package-name>/
 - Add proper error handling and structured logging
 
 ### Git Commits
-- Use format: `[component] Description`
+- Follow [Conventional Commits](https://www.conventionalcommits.org/) format: `type(scope): description`
 - Always use `--signoff` flag
 - Reference PR numbers when available
 - Keep commits atomic and focused
-- Follow conventional commit format for changelogs
 
 ### Documentation
 
