@@ -39,7 +39,7 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           git config user.name  "cozystack-ci[bot]"
-          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           git config --unset-all http.https://github.com/.extraheader || true
 
@@ -54,7 +54,7 @@ jobs:
 
             // Configure git to use GitHub App token for authentication
             execSync('git config user.name "cozystack-ci[bot]"', { encoding: 'utf8' });
-            execSync('git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"', { encoding: 'utf8' });
+            execSync('git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"', { encoding: 'utf8' });
             execSync(`git remote set-url origin https://x-access-token:${process.env.APP_TOKEN}@github.com/${process.env.GITHUB_REPOSITORY}`, { encoding: 'utf8' });
             // Remove GITHUB_TOKEN extraheader to ensure App token is used (needed to trigger other workflows)
             execSync('git config --unset-all http.https://github.com/.extraheader || true', { encoding: 'utf8' });
