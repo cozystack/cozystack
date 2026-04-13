@@ -1,0 +1,47 @@
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $host := index .Values._cluster "root-host" }}
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+
+{{- /*
+Only publish an Ingress when the operator has opted this service in AND
+OIDC is enabled cluster-wide. If OIDC is off we deliberately do not
+expose linstor-gui: without Keycloak there is no authentication layer in
+front of the LINSTOR REST API proxy. Users can still reach the UI via
+`kubectl port-forward` to the ClusterIP service.
+*/ -}}
+{{- if and (has "linstor-gui" $exposeServices) (eq $oidcEnabled "true") }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: linstor-gui-ingress
+  labels:
+    {{- include "linstor-gui.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- if eq $solver "http01" }}
+    acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
+    {{- end }}
+    nginx.ingress.kubernetes.io/proxy-body-size: 100m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: {{ $exposeIngress }}
+  rules:
+    - host: linstor-gui.{{ $host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: linstor-gui-gatekeeper
+                port:
+                  number: 8000
+  tls:
+    - hosts:
+        - linstor-gui.{{ $host }}
+      secretName: linstor-gui-ingress-tls
+{{- end }}

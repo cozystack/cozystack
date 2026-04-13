@@ -1,0 +1,74 @@
+{{- $host := index .Values._cluster "root-host" }}
+
+{{- /*
+Persist client + cookie secrets across upgrades: if the Secrets already
+exist, reuse their values; otherwise generate new random ones. The
+KeycloakClient CRD references the same client secret so Keycloak stays
+in sync with what oauth2-proxy reads.
+*/ -}}
+{{- $existingClientSecret := lookup "v1" "Secret" .Release.Namespace "linstor-gui-client" }}
+{{- $clientSecret := "" }}
+{{- if $existingClientSecret }}
+  {{- $clientSecret = index $existingClientSecret.data "client-secret-key" | b64dec }}
+{{- else }}
+  {{- $clientSecret = randAlphaNum 32 }}
+{{- end }}
+
+{{- $existingAuthConfig := lookup "v1" "Secret" .Release.Namespace "linstor-gui-auth-config" }}
+{{- $cookieSecret := "" }}
+{{- if $existingAuthConfig }}
+  {{- $cookieSecret = index $existingAuthConfig.data "cookieSecret" | b64dec }}
+{{- else }}
+  {{- $cookieSecret = randAlphaNum 16 }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: linstor-gui-client
+  labels:
+    {{- include "linstor-gui.labels" . | nindent 4 }}
+type: Opaque
+data:
+  client-secret-key: {{ $clientSecret | b64enc }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: linstor-gui-auth-config
+  labels:
+    {{- include "linstor-gui.labels" . | nindent 4 }}
+type: Opaque
+data:
+  cookieSecret: {{ $cookieSecret | b64enc }}
+{{- if .Capabilities.APIVersions.Has "v1.edp.epam.com/v1" }}
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClient
+metadata:
+  name: linstor-gui-client
+  annotations:
+    # Re-reconcile the Keycloak client if the random secret regenerates.
+    secret-hash: {{ $clientSecret | sha256sum }}
+spec:
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  secret: $linstor-gui-client:client-secret-key
+  advancedProtocolMappers: true
+  name: linstor-gui
+  clientId: linstor-gui
+  directAccess: true
+  public: false
+  webUrl: "https://linstor-gui.{{ $host }}"
+  defaultClientScopes:
+    - groups
+  optionalClientScopes:
+    - offline_access
+  attributes:
+    post.logout.redirect.uris: "+"
+    client.session.idle.timeout: "86400"
+    client.session.max.lifespan: "604800"
+  redirectUris:
+    - "https://linstor-gui.{{ $host }}/oauth2/callback/*"
+{{- end }}

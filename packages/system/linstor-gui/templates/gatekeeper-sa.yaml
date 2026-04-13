@@ -1,0 +1,12 @@
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- if eq $oidcEnabled "true" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: linstor-gui-gatekeeper
+  labels:
+    app.kubernetes.io/instance: linstor-gui
+    app.kubernetes.io/name: gatekeeper
+    {{- include "linstor-gui.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+{{- end }}
