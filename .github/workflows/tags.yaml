@@ -124,7 +124,7 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           git config user.name  "cozystack-ci[bot]"
-          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           git config --unset-all http.https://github.com/.extraheader || true
           git add .
@@ -140,7 +140,7 @@ jobs:
           VTAG="${{ steps.tag.outputs.tag }}"
           SUBTAG="api/apps/v1alpha1/${VTAG}"
           git config user.name  "cozystack-ci[bot]"
-          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           TARGET="$(git rev-parse "${VTAG}^{}")"
           git tag -f "${SUBTAG}" "$TARGET"
@@ -193,7 +193,7 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           git config user.name  "cozystack-ci[bot]"
-          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           BRANCH="release-${GITHUB_REF#refs/tags/v}"
           git branch -f "$BRANCH"
@@ -315,7 +315,7 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           git config user.name  "cozystack-ci[bot]"
-          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           
           CHANGELOG_FILE="docs/changelogs/v${{ steps.tag.outputs.version }}.md"
@@ -449,7 +449,7 @@ jobs:
         id: commit
         run: |
           git config user.name  "cozystack-ci[bot]"
-          git config user.email "3297617+cozystack-ci[bot]@users.noreply.github.com"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git add content
           if git diff --cached --quiet; then
             echo "No changes to commit"
