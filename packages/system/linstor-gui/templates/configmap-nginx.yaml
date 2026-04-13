@@ -60,6 +60,24 @@ data:
           try_files $uri $uri/ /index.html;
         }
 
+        # Block the LINSTOR controller's auth/identity management endpoints.
+        # The upstream linstor-gui exposes a "Users" / sign-in panel that
+        # POSTs to /v1/security/* on the controller. If a cozystack user
+        # enables HTTP auth via that panel, every subsequent REST call
+        # (including from this very GUI, which proxies via mTLS, not
+        # bearer tokens) starts returning 401 and the user is locked out
+        # of LINSTOR with no in-product recovery path.
+        #
+        # Authentication for cozystack is handled one layer up at the
+        # Ingress (oauth2-proxy + Keycloak), so the in-app auth is not
+        # only redundant but actively dangerous. Refuse the calls here so
+        # the setting cannot be turned on regardless of what the SPA UI
+        # shows.
+        location /v1/security {
+          default_type application/json;
+          return 403 '{"ret_code":-1,"message":"LINSTOR auth setup is disabled by cozystack: authentication is enforced at the Ingress via Keycloak."}';
+        }
+
         # Proxy LINSTOR REST API over mTLS to the controller
         location /v1 {
           proxy_pass {{ .Values.linstor.endpoint }};
