@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -205,12 +206,12 @@ func (r *WorkloadMonitorReconciler) queryPrometheusMetric(ctx context.Context, p
 		return 0
 	}
 
-	qty, err := resource.ParseQuantity(valueStr)
+	val, err := strconv.ParseFloat(valueStr, 64)
 	if err != nil {
-		logger.Error(err, "Failed to parse metric value as quantity", "value", valueStr)
+		logger.Error(err, "Failed to parse metric value", "value", valueStr)
 		return 0
 	}
-	return qty.Value()
+	return int64(val)
 }
 
 // reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
@@ -250,6 +251,9 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
 
+		if workload.Labels == nil {
+			workload.Labels = make(map[string]string)
+		}
 		for k, v := range bc.Labels {
 			workload.Labels[k] = v
 		}
