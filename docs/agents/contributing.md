@@ -33,6 +33,18 @@ git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
 git commit --signoff -m "docs: add installation guide"
 ```
 
+### AI Agent Attribution
+
+When an AI agent authors or materially assists with a commit, add an `Assisted-By:` trailer naming the model:
+
+```
+Assisted-By: Claude <noreply@anthropic.com>
+Assisted-By: GPT-5 <noreply@openai.com>
+Assisted-By: Gemini <noreply@google.com>
+```
+
+This sits alongside the `Signed-off-by:` trailer produced by `--signoff`. Use one trailer per model if multiple contributed.
+
 ## Rebasing on upstream/main
 
 If the branch has extra commits, clean it up:
