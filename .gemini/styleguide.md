@@ -46,11 +46,11 @@ Each commit must have a `Signed-off-by:` trailer (produced by `git commit --sign
 
 PR body must contain a release note block:
 
-```text
- ```release-note
- [component] Human-readable changelog entry
- ```
+````text
+```release-note
+[component] Human-readable changelog entry
 ```
+````
 
 Flag any PR whose commits lack the prefix or signoff, or whose body has no release-note block.
 
@@ -71,7 +71,7 @@ When reviewing `values.schema.json`:
 
 ## Sensitive Components
 
-**`packages/core/platform/`**: the platform chart that deploys everything. Changes here can require migration scripts in `scripts/migrations/`. Flag any change to this package that lacks a corresponding migration script or an explicit note that backward compatibility is preserved.
+**`packages/core/platform/`**: the platform chart that deploys everything. Changes here can require updates to the migration flow — the Helm hook in `packages/core/platform/templates/migration-hook.yaml` and the runner image with scripts in `packages/core/platform/images/migrations/`. Flag any change to this package that lacks a corresponding migration update or an explicit note that backward compatibility is preserved.
 
 **`api/apps/v1alpha1/`**: app CRD Kinds are registered at runtime from `ApplicationDefinition` resources and the matching `values.schema.json`. Suggest changes to the relevant package schema rather than hand-editing generated types.
 
