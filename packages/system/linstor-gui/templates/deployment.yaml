@@ -18,8 +18,6 @@ spec:
       maxSurge: 1
   template:
     metadata:
-      annotations:
-        checksum/nginx-config: {{ include (print $.Template.BasePath "/configmap-nginx.yaml") . | sha256sum }}
       labels:
         {{- include "linstor-gui.labels" . | nindent 8 }}
     spec:

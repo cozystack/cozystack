@@ -71,8 +71,11 @@ data:
 
         location = /healthz {
           access_log off;
+          # default_type must come BEFORE `return` — `add_header` after a
+          # `return` is silently dropped by nginx because the response is
+          # already finalized.
+          default_type text/plain;
           return 200 'ok';
-          add_header Content-Type text/plain;
         }
       }
     }
