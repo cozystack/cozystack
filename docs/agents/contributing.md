@@ -22,7 +22,7 @@ git commit --signoff -m "type(scope): brief description"
 **Scopes:**
 - System: `dashboard`, `platform`, `cilium`, `kube-ovn`, `linstor`, `fluxcd`, `cluster-api`
 - Apps: `postgres`, `mariadb`, `redis`, `kafka`, `clickhouse`, `virtual-machine`, `kubernetes`
-- Other: `api`, `hack`, `tests`, `ci`, `docs`
+- Other: `api`, `hack`, `tests`, `ci`, `docs`, `maintenance`
 
 Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
 
@@ -30,14 +30,14 @@ Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREA
 ```bash
 git commit --signoff -m "feat(dashboard): add config hash annotations to restart pods on config changes"
 git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
-git commit --signoff -m "docs: add installation guide"
+git commit --signoff -m "docs(contributing): add installation guide"
 ```
 
 ### AI Agent Attribution
 
 When an AI agent authors or materially assists with a commit, add an `Assisted-By:` trailer naming the model:
 
-```
+```text
 Assisted-By: Claude <noreply@anthropic.com>
 Assisted-By: GPT-5 <noreply@openai.com>
 Assisted-By: Gemini <noreply@google.com>
@@ -53,7 +53,7 @@ If the branch has extra commits, clean it up:
 git fetch upstream
 git checkout -b my-feature upstream/main
 git cherry-pick <your-commit-hash>
-git push -f origin my-feature:my-branch-name
+git push -f origin my-feature
 ```
 
 ## Pull Request Body

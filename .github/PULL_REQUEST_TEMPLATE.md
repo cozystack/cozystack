@@ -1,9 +1,9 @@
 <!-- Thank you for making a contribution! Here are some tips for you:
 - Use Conventional Commits for the PR title: `type(scope): description`
   - Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore
-  - Scopes for system components: platform, system, linstor, cilium, kube-ovn, dashboard, cluster-api, etc.
-  - Scopes for managed apps: apps, tenant, kubernetes, postgres, virtual-machine, etc.
-  - Scopes for development and maintenance: tests, ci, docs, maintenance
+  - Scopes for system components: dashboard, platform, cilium, kube-ovn, linstor, fluxcd, cluster-api
+  - Scopes for managed apps: postgres, mariadb, redis, kafka, clickhouse, virtual-machine, kubernetes
+  - Scopes for development and maintenance: api, hack, tests, ci, docs, maintenance
   - Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer
 - If it's a work in progress, consider creating this PR as a draft.
 - Don't hesistate to ask for opinion and review in the community chats, even if it's still a draft.
