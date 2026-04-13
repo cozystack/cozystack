@@ -112,7 +112,7 @@ images:
     architecture: amd64
     description: "Debian 13 (Trixie) generic cloud image"
   - name: centos-stream-9
-    url: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-9-latest.x86_64.qcow2
+    url: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2
     storage: 20Gi
     os:
       family: Linux
@@ -121,7 +121,7 @@ images:
     architecture: amd64
     description: "CentOS Stream 9 GenericCloud image"
   - name: centos-stream-10
-    url: https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-10-latest.x86_64.qcow2
+    url: https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2
     storage: 20Gi
     os:
       family: Linux
