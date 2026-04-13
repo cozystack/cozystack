@@ -425,6 +425,14 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createTimestampColumn("Taken At", ".spec.takenAt"),
 			createTimestampColumn("Created", ".metadata.creationTimestamp"),
 		}),
+
+		// Stock namespace backups cozystack io v1alpha1 restorejobs
+		createCustomColumnsOverride("stock-namespace-/backups.cozystack.io/v1alpha1/restorejobs", []any{
+			createCustomColumnWithJsonPath("Name", ".metadata.name", "RestoreJob", "", "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/restorejob-details/{reqsJsonPath[0]['.metadata.name']['-']}"),
+			createStringColumn("Phase", ".status.phase"),
+			createStringColumn("Backup", ".spec.backupRef.name"),
+			createTimestampColumn("Created", ".metadata.creationTimestamp"),
+		}),
 	}
 }
 
@@ -545,6 +553,31 @@ func CreateAllCustomFormsOverrides() []*dashboardv1alpha1.CustomFormsOverride {
 			},
 			"schema": createSchema(map[string]any{
 				"backupClassName": listInputScemaItemBackupClass(),
+			}),
+		}),
+
+		// RestoreJobs form override - backups.cozystack.io/v1alpha1
+		createCustomFormsOverride("default-/backups.cozystack.io/v1alpha1/restorejobs", map[string]any{
+			"formItems": []any{
+				createFormItem("metadata.name", "Name", "text"),
+				createFormItem("metadata.namespace", "Namespace", "text"),
+				createFormItem("spec.backupRef.name", "Backup", "text"),
+				// Target application: leave empty to restore into the same application
+				// as referenced by the selected Backup. Fill all three only to rename
+				// or restore into a different application.
+				createFormItem("spec.targetApplicationRef.apiGroup", "Target Application API Group (optional, only for rename)", "text"),
+				createFormItem("spec.targetApplicationRef.kind", "Target Application Kind (optional, only for rename)", "text"),
+				createFormItem("spec.targetApplicationRef.name", "Target Application Name (optional, only for rename)", "text"),
+				// Driver-specific options (key-value editor). Known keys for VMInstance:
+				// targetNamespace, failIfTargetExists, keepOriginalPVC, keepOriginalIpAndMac.
+				createFormItem("spec.options", "Options (VMInstance keys: targetNamespace, failIfTargetExists, keepOriginalPVC, keepOriginalIpAndMac)", "object"),
+			},
+			"schema": createSchema(map[string]any{
+				"backupRef": map[string]any{
+					"properties": map[string]any{
+						"name": listInputSchemaItemBackup(),
+					},
+				},
 			}),
 		}),
 	}
@@ -1937,6 +1970,174 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 	}
 	backupSpec := createUnifiedFactory(backupConfig, backupTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/backups/{6}"})
 
+	// RestoreJob details factory using unified approach
+	restoreJobConfig := UnifiedResourceConfig{
+		Name:         "restorejob-details",
+		ResourceType: "factory",
+		Kind:         "RestoreJob",
+		Plural:       "restorejobs",
+		Title:        "restorejob",
+	}
+	restoreJobTabs := []any{
+		map[string]any{
+			"key":   "details",
+			"label": "Details",
+			"children": []any{
+				contentCard("details-card", map[string]any{
+					"marginBottom": "24px",
+				}, []any{
+					antdText("details-title", true, "RestoreJob details", map[string]any{
+						"fontSize":     20,
+						"marginBottom": "12px",
+					}),
+					spacer("details-spacer", 16),
+					antdRow("details-grid", []any{48, 12}, []any{
+						antdCol("col-left", 12, []any{
+							antdFlexVertical("col-left-stack", 24, []any{
+								antdFlexVertical("meta-name-block", 4, []any{
+									antdText("meta-name-label", true, "Name", nil),
+									parsedText("meta-name-value", "{reqsJsonPath[0]['.metadata.name']['-']}", nil),
+								}),
+								antdFlexVertical("meta-namespace-block", 8, []any{
+									antdText("meta-namespace-label", true, "Namespace", nil),
+									antdFlex("header-row", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":    "header-badge",
+												"text":  "NS",
+												"title": "namespace",
+												"style": map[string]any{
+													"backgroundColor": "#a25792ff",
+													"borderRadius":    "20px",
+													"color":           "#fff",
+													"display":         "inline-block",
+													"fontFamily":      "RedHatDisplay, Overpass, overpass, helvetica, arial, sans-serif",
+													"fontSize":        "15px",
+													"fontWeight":      400,
+													"lineHeight":      "24px",
+													"minWidth":        24,
+													"padding":         "0 9px",
+													"textAlign":       "center",
+													"whiteSpace":      "nowrap",
+												},
+											},
+										},
+										map[string]any{
+											"type": "antdLink",
+											"data": map[string]any{
+												"id":   "namespace-link",
+												"text": "{reqsJsonPath[0]['.metadata.namespace']['-']}",
+												"href": "/openapi-ui/{2}/{reqsJsonPath[0]['.metadata.namespace']['-']}/factory/marketplace",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("meta-created-block", 4, []any{
+									antdText("time-label", true, "Created", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.metadata.creationTimestamp']['-']}",
+											},
+										},
+									}),
+								}),
+							}),
+						}),
+						antdCol("col-right", 12, []any{
+							antdFlexVertical("col-right-stack", 24, []any{
+								antdFlexVertical("status-phase-block", 4, []any{
+									antdText("phase-label", true, "Phase", nil),
+									parsedText("phase-value", "{reqsJsonPath[0]['.status.phase']['-']}", nil),
+								}),
+								antdFlexVertical("spec-backup-ref-block", 4, []any{
+									antdText("backup-ref-label", true, "Backup Ref", nil),
+									parsedText("backup-ref-value", "{reqsJsonPath[0]['.spec.backupRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-target-application-ref-block", 4, []any{
+									antdText("target-application-ref-label", true, "Target Application", nil),
+									parsedText("target-application-ref-value", "{reqsJsonPath[0]['.spec.targetApplicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.targetApplicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.targetApplicationRef.name']['-']}", nil),
+								}),
+								antdFlexVertical("spec-options-target-namespace-block", 4, []any{
+									antdText("options-target-namespace-label", true, "Target Namespace", nil),
+									parsedText("options-target-namespace-value", "{reqsJsonPath[0]['.spec.options.targetNamespace']['-']}", nil),
+								}),
+								antdFlexVertical("spec-options-fail-if-target-exists-block", 4, []any{
+									antdText("options-fail-if-target-exists-label", true, "Fail If Target Exists", nil),
+									parsedText("options-fail-if-target-exists-value", "{reqsJsonPath[0]['.spec.options.failIfTargetExists']['-']}", nil),
+								}),
+								antdFlexVertical("spec-options-keep-original-pvc-block", 4, []any{
+									antdText("options-keep-original-pvc-label", true, "Keep Original PVC", nil),
+									parsedText("options-keep-original-pvc-value", "{reqsJsonPath[0]['.spec.options.keepOriginalPVC']['-']}", nil),
+								}),
+								antdFlexVertical("spec-options-keep-original-ip-mac-block", 4, []any{
+									antdText("options-keep-original-ip-mac-label", true, "Keep Original IP/MAC", nil),
+									parsedText("options-keep-original-ip-mac-value", "{reqsJsonPath[0]['.spec.options.keepOriginalIpAndMac']['-']}", nil),
+								}),
+								antdFlexVertical("status-started-at-block", 4, []any{
+									antdText("started-at-label", true, "Started At", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.status.startedAt']['-']}",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("status-completed-at-block", 4, []any{
+									antdText("completed-at-label", true, "Completed At", nil),
+									antdFlex("time-block", 6, []any{
+										map[string]any{
+											"type": "antdText",
+											"data": map[string]any{
+												"id":   "time-icon",
+												"text": "🌐",
+											},
+										},
+										map[string]any{
+											"type": "parsedText",
+											"data": map[string]any{
+												"formatter": "timestamp",
+												"id":        "time-value",
+												"text":      "{reqsJsonPath[0]['.status.completedAt']['-']}",
+											},
+										},
+									}),
+								}),
+								antdFlexVertical("status-message-block", 4, []any{
+									antdText("message-label", true, "Message", nil),
+									parsedText("message-value", "{reqsJsonPath[0]['.status.message']['-']}", nil),
+								}),
+							}),
+						}),
+					}),
+				}),
+			},
+		},
+	}
+	restoreJobSpec := createUnifiedFactory(restoreJobConfig, restoreJobTabs, []any{"/api/clusters/{2}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{3}/restorejobs/{6}"})
+
 	// External IPs factory (filtered services)
 	externalIPsTabs := []any{
 		map[string]any{
@@ -1989,6 +2190,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 		createFactory("plan-details", planSpec),
 		createFactory("backupjob-details", backupJobSpec),
 		createFactory("backup-details", backupSpec),
+		createFactory("restorejob-details", restoreJobSpec),
 		createFactory("external-ips", externalIPsSpec),
 	}
 }
@@ -2008,9 +2210,10 @@ func CreateAllNavigations() []*dashboardv1alpha1.Navigation {
 		"base-factory-namespaced-api-networking.k8s.io-v1-ingresses":         "kube-ingress-details",
 		"base-factory-namespaced-api-cozystack.io-v1alpha1-workloadmonitors": "workloadmonitor-details",
 		// Backup resources (not ApplicationDefinitions, so ensureNavigation doesn't cover them)
-		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-plans":      "plan-details",
-		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-backupjobs": "backupjob-details",
-		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-backups":    "backup-details",
+		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-plans":       "plan-details",
+		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-backupjobs":  "backupjob-details",
+		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-backups":     "backup-details",
+		"base-factory-namespaced-api-backups.cozystack.io-v1alpha1-restorejobs": "restorejob-details",
 	}
 
 	return []*dashboardv1alpha1.Navigation{
@@ -2129,6 +2332,19 @@ func listInputScemaItemBackupClass() map[string]any {
 		"type": "listInput",
 		"customProps": map[string]any{
 			"valueUri":    "/api/clusters/{cluster}/k8s/apis/backups.cozystack.io/v1alpha1/backupclasses",
+			"keysToValue": []any{"metadata", "name"},
+			"keysToLabel": []any{"metadata", "name"},
+		},
+	}
+}
+
+// listInputSchemaItemBackup returns a listInput schema overlay for selecting a Backup
+// from the current namespace (used by RestoreJob form for spec.backupRef.name).
+func listInputSchemaItemBackup() map[string]any {
+	return map[string]any{
+		"type": "listInput",
+		"customProps": map[string]any{
+			"valueUri":    "/api/clusters/{cluster}/k8s/apis/backups.cozystack.io/v1alpha1/namespaces/{namespace}/backups",
 			"keysToValue": []any{"metadata", "name"},
 			"keysToLabel": []any{"metadata", "name"},
 		},
