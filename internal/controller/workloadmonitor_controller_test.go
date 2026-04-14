@@ -377,69 +377,73 @@ func TestReconcileNoBucketClaimSkips(t *testing.T) {
 	}
 }
 
-func TestQueryPrometheusMetric(t *testing.T) {
+func TestQueryAllBucketMetrics(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"cosi-abc123"},"value":[1713000000,"5368709120"]}]}}`)
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{"__name__":"SeaweedFS_s3_bucket_size_bytes","bucket":"bucket-aaa"},"value":[1713000000,"10485864"]},
+			{"metric":{"__name__":"SeaweedFS_s3_bucket_physical_size_bytes","bucket":"bucket-aaa"},"value":[1713000000,"20971728"]},
+			{"metric":{"__name__":"SeaweedFS_s3_bucket_size_bytes","bucket":"bucket-bbb"},"value":[1713000000,"0"]}
+		]}}`)
 	}))
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	size, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="cosi-abc123"}`)
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL)
+
+	bm, ok := metrics["bucket-aaa"]
 	if !ok {
-		t.Fatal("expected ok=true for valid metric")
+		t.Fatal("expected bucket-aaa in metrics")
 	}
-	if size != 5368709120 {
-		t.Errorf("expected 5368709120, got %d", size)
+	if !bm.HasLogical || bm.LogicalSize != 10485864 {
+		t.Errorf("expected logical=10485864, got %d", bm.LogicalSize)
+	}
+	if !bm.HasPhysical || bm.PhysicalSize != 20971728 {
+		t.Errorf("expected physical=20971728, got %d", bm.PhysicalSize)
+	}
+
+	bm2, ok := metrics["bucket-bbb"]
+	if !ok {
+		t.Fatal("expected bucket-bbb in metrics")
+	}
+	if !bm2.HasLogical || bm2.LogicalSize != 0 {
+		t.Errorf("expected logical=0 for empty bucket, got %d", bm2.LogicalSize)
+	}
+	if bm2.HasPhysical {
+		t.Error("expected no physical size for bucket-bbb")
 	}
 }
 
-func TestQueryPrometheusMetricZeroValue(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"empty"},"value":[1713000000,"0"]}]}}`)
-	}))
-	defer srv.Close()
-
-	reconciler := &WorkloadMonitorReconciler{}
-	size, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="empty"}`)
-	if !ok {
-		t.Fatal("expected ok=true for zero-value metric (empty bucket)")
-	}
-	if size != 0 {
-		t.Errorf("expected 0, got %d", size)
-	}
-}
-
-func TestQueryPrometheusMetricEmpty(t *testing.T) {
+func TestQueryAllBucketMetricsEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 	}))
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	_, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="nonexistent"}`)
-	if ok {
-		t.Error("expected ok=false for empty result")
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL)
+	if len(metrics) != 0 {
+		t.Errorf("expected empty metrics, got %d", len(metrics))
 	}
 }
 
-func TestQueryPrometheusMetricServerError(t *testing.T) {
+func TestQueryAllBucketMetricsServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	_, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="test"}`)
-	if ok {
-		t.Error("expected ok=false for server error")
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL)
+	if len(metrics) != 0 {
+		t.Errorf("expected empty metrics on error, got %d", len(metrics))
 	}
 }
 
-func TestQueryPrometheusMetricNoURL(t *testing.T) {
+func TestQueryAllBucketMetricsNoURL(t *testing.T) {
 	reconciler := &WorkloadMonitorReconciler{}
-	_, ok := reconciler.queryPrometheusMetric(context.TODO(), "", `anything`)
-	if ok {
-		t.Error("expected ok=false when PrometheusURL is empty")
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), "")
+	if len(metrics) != 0 {
+		t.Errorf("expected empty metrics when URL is empty, got %d", len(metrics))
 	}
 }
 
