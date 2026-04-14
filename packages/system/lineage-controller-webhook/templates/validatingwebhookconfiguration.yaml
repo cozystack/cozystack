@@ -1,0 +1,53 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: deletion-protection
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/lineage-controller-webhook
+  labels:
+    app: lineage-controller-webhook
+webhooks:
+  - name: deletion-protection.cozystack.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    clientConfig:
+      service:
+        name: lineage-controller-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-deletion
+    rules:
+      - operations: ["DELETE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["namespaces", "configmaps"]
+        scope: "*"
+      - operations: ["DELETE"]
+        apiGroups: ["helm.toolkit.fluxcd.io"]
+        apiVersions: ["v2"]
+        resources: ["helmreleases"]
+        scope: Namespaced
+      - operations: ["DELETE"]
+        apiGroups: ["apiextensions.k8s.io"]
+        apiVersions: ["v1"]
+        resources: ["customresourcedefinitions"]
+        scope: Cluster
+      - operations: ["DELETE"]
+        apiGroups: ["piraeus.io"]
+        apiVersions: ["v1"]
+        resources: ["linstorclusters"]
+        scope: "*"
+      - operations: ["DELETE"]
+        apiGroups: ["cert-manager.io"]
+        apiVersions: ["v1"]
+        resources: ["clusterissuers"]
+        scope: Cluster
+      - operations: ["DELETE"]
+        apiGroups: ["source.toolkit.fluxcd.io"]
+        apiVersions: ["v1"]
+        resources: ["ocirepositories"]
+        scope: "*"
+    failurePolicy: Fail
+    timeoutSeconds: 5
+    objectSelector:
+      matchLabels:
+        cozystack.io/deletion-protected: "true"
