@@ -388,7 +388,7 @@ func TestQueryAllBucketMetrics(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL)
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
 
 	bm, ok := metrics["bucket-aaa"]
 	if !ok {
@@ -420,7 +420,7 @@ func TestQueryAllBucketMetricsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL)
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
 	if len(metrics) != 0 {
 		t.Errorf("expected empty metrics, got %d", len(metrics))
 	}
@@ -433,7 +433,7 @@ func TestQueryAllBucketMetricsServerError(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL)
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), srv.URL, []string{"bucket-aaa", "bucket-bbb"})
 	if len(metrics) != 0 {
 		t.Errorf("expected empty metrics on error, got %d", len(metrics))
 	}
@@ -441,7 +441,7 @@ func TestQueryAllBucketMetricsServerError(t *testing.T) {
 
 func TestQueryAllBucketMetricsNoURL(t *testing.T) {
 	reconciler := &WorkloadMonitorReconciler{}
-	metrics := reconciler.queryAllBucketMetrics(context.TODO(), "")
+	metrics := reconciler.queryAllBucketMetrics(context.TODO(), "", nil)
 	if len(metrics) != 0 {
 		t.Errorf("expected empty metrics when URL is empty, got %d", len(metrics))
 	}

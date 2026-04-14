@@ -151,17 +151,18 @@ type bucketMetrics struct {
 	HasPhysical  bool
 }
 
-// queryAllBucketMetrics fetches all SeaweedFS bucket size metrics in a single
-// Prometheus query and returns them keyed by bucket name. This avoids 2×N HTTP
-// round-trips when there are N buckets.
-func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, prometheusBaseURL string) map[string]*bucketMetrics {
+// queryAllBucketMetrics fetches SeaweedFS bucket size metrics for the given
+// bucket names in a single Prometheus query and returns them keyed by bucket
+// name. The query is scoped to only the requested buckets to avoid fetching
+// metrics for buckets belonging to other WorkloadMonitors.
+func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, prometheusBaseURL string, bucketNames []string) map[string]*bucketMetrics {
 	result := make(map[string]*bucketMetrics)
-	if prometheusBaseURL == "" {
+	if prometheusBaseURL == "" || len(bucketNames) == 0 {
 		return result
 	}
 	logger := log.FromContext(ctx)
 
-	query := `{__name__=~"SeaweedFS_s3_bucket_(size|physical_size)_bytes"}`
+	query := fmt.Sprintf(`{__name__=~"SeaweedFS_s3_bucket_(size|physical_size)_bytes",bucket=~"%s"}`, strings.Join(bucketNames, "|"))
 	u, err := url.Parse(strings.TrimRight(prometheusBaseURL, "/") + "/api/v1/query")
 	if err != nil {
 		logger.Error(err, "Failed to parse Prometheus URL")
@@ -591,7 +592,13 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	if len(bucketClaimList.Items) > 0 {
 		bucketPromURL := r.resolvePrometheusURL(ctx, monitor.Namespace)
-		allBucketMetrics := r.queryAllBucketMetrics(ctx, bucketPromURL)
+		var bucketNames []string
+		for _, bc := range bucketClaimList.Items {
+			if bc.Status.BucketName != "" {
+				bucketNames = append(bucketNames, bc.Status.BucketName)
+			}
+		}
+		allBucketMetrics := r.queryAllBucketMetrics(ctx, bucketPromURL, bucketNames)
 		for _, bc := range bucketClaimList.Items {
 			if err := r.reconcileBucketClaimForMonitor(ctx, monitor, bc, allBucketMetrics); err != nil {
 				logger.Error(err, "Failed to reconcile Workload for BucketClaim", "BucketClaim", bc.Name)
