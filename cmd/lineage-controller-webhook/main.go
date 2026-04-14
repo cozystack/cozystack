@@ -160,6 +160,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	deletionProtectionWebhook := &lcw.DeletionProtectionWebhook{}
+	mgr.GetWebhookServer().Register("/validate-deletion", &webhook.Admission{Handler: deletionProtectionWebhook})
+	setupLog.Info("registered deletion protection webhook at /validate-deletion")
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
