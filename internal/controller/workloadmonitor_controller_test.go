@@ -9,7 +9,6 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -263,14 +262,6 @@ func TestReconcileBucketClaimCreatesWorkload(t *testing.T) {
 	}
 	if !workload.Status.Operational {
 		t.Error("expected Operational=true for ready BucketClaim")
-	}
-
-	qty, ok := workload.Status.Resources["s3-buckets"]
-	if !ok {
-		t.Fatal("expected s3-buckets resource to be set")
-	}
-	if qty.Cmp(resource.MustParse("1")) != 0 {
-		t.Errorf("expected s3-buckets=1, got %s", qty.String())
 	}
 }
 
@@ -552,16 +543,11 @@ func TestReconcileBucketClaimRequeuesWhenBucketsExist(t *testing.T) {
 		t.Fatalf("expected Workload to be created, got error: %v", err)
 	}
 
-	// Without monitoring label on namespace, only s3-buckets should be set (no size metrics)
+	// Without monitoring label on namespace, no size metrics should be set
 	if _, ok := workload.Status.Resources["s3-storage-bytes"]; ok {
 		t.Error("expected no s3-storage-bytes when monitoring is not configured")
 	}
-
-	bucketsQty, ok := workload.Status.Resources["s3-buckets"]
-	if !ok {
-		t.Fatal("expected s3-buckets resource to be set")
-	}
-	if bucketsQty.Cmp(resource.MustParse("1")) != 0 {
-		t.Errorf("expected s3-buckets=1, got %s", bucketsQty.String())
+	if len(workload.Status.Resources) != 0 {
+		t.Errorf("expected empty resources without monitoring, got %v", workload.Status.Resources)
 	}
 }

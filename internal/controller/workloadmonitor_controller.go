@@ -230,7 +230,6 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	}
 
 	resources := make(map[string]resource.Quantity)
-	resources["s3-buckets"] = resource.MustParse("1")
 
 	// Query actual bucket sizes from SeaweedFS metrics via Prometheus.
 	// The monitoring endpoint is resolved from the namespace label
