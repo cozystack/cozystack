@@ -2,8 +2,10 @@
 
 apiVersion: cert-manager.io/v1 
 kind: ClusterIssuer  
-metadata:  
-  name: letsencrypt-prod  
+metadata:
+  name: letsencrypt-prod
+  labels:
+    cozystack.io/deletion-protected: "true"
 spec:  
   acme:  
     privateKeySecretRef:  
@@ -26,8 +28,10 @@ spec:
 
 apiVersion: cert-manager.io/v1  
 kind: ClusterIssuer  
-metadata:  
-  name: letsencrypt-stage  
+metadata:
+  name: letsencrypt-stage
+  labels:
+    cozystack.io/deletion-protected: "true"
 spec:  
   acme:  
     privateKeySecretRef:  
@@ -50,7 +54,9 @@ spec:
 
 apiVersion: cert-manager.io/v1  
 kind: ClusterIssuer  
-metadata:  
-  name: selfsigned-cluster-issuer  
+metadata:
+  name: selfsigned-cluster-issuer
+  labels:
+    cozystack.io/deletion-protected: "true"
 spec:  
   selfSigned: {}
