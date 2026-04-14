@@ -42,6 +42,10 @@ const (
 	vmSelectPath    = "/select/0/prometheus"
 )
 
+// prometheusHTTPClient is a dedicated HTTP client for Prometheus queries,
+// avoiding the shared http.DefaultClient global.
+var prometheusHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 // WorkloadMonitorReconciler reconciles a WorkloadMonitor object
 type WorkloadMonitorReconciler struct {
 	client.Client
@@ -179,7 +183,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		return result
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := prometheusHTTPClient.Do(req)
 	if err != nil {
 		logger.V(1).Info("Failed to query Prometheus for bucket metrics", "error", err)
 		return result
