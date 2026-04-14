@@ -95,7 +95,6 @@ func TestDeletionProtectionWebhook_Handle(t *testing.T) {
 				AdmissionRequest: admissionv1.AdmissionRequest{
 					Operation: admissionv1.Delete,
 					Name:      "linstorcluster",
-					Namespace: "cozy-linstor",
 					Kind: metav1.GroupVersionKind{
 						Group:   "piraeus.io",
 						Version: "v1",
@@ -147,7 +146,7 @@ func TestKindToResourceArg(t *testing.T) {
 		{"ConfigMap", "cozy-system", "configmap -n cozy-system"},
 		{"HelmRelease", "tenant-root", "helmrelease.helm.toolkit.fluxcd.io -n tenant-root"},
 		{"CustomResourceDefinition", "", "crd"},
-		{"LinstorCluster", "cozy-linstor", "linstorcluster.piraeus.io -n cozy-linstor"},
+		{"LinstorCluster", "", "linstorcluster.piraeus.io"},
 		{"ClusterIssuer", "", "clusterissuer.cert-manager.io"},
 		{"OCIRepository", "cozy-system", "ocirepository.source.toolkit.fluxcd.io -n cozy-system"},
 		{"Unknown", "ns", "Unknown -n ns"},

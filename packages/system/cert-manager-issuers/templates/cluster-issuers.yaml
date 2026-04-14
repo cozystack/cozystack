@@ -1,7 +1,7 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 
-apiVersion: cert-manager.io/v1 
-kind: ClusterIssuer  
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
 metadata:
   name: letsencrypt-prod
   labels:
@@ -26,8 +26,8 @@ spec:
 
 ---  
 
-apiVersion: cert-manager.io/v1  
-kind: ClusterIssuer  
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
 metadata:
   name: letsencrypt-stage
   labels:
@@ -52,8 +52,8 @@ spec:
 
 ---  
 
-apiVersion: cert-manager.io/v1  
-kind: ClusterIssuer  
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
 metadata:
   name: selfsigned-cluster-issuer
   labels:

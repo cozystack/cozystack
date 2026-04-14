@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	DeletionProtectedLabel = "cozystack.io/deletion-protected"
+	deletionProtectedLabel = "cozystack.io/deletion-protected"
 )
 
 // DeletionProtectionWebhook denies DELETE requests on resources that carry
@@ -59,10 +59,11 @@ func (h *DeletionProtectionWebhook) Handle(ctx context.Context, req admission.Re
 	msg := fmt.Sprintf(
 		"deletion of %s is protected by cozystack. "+
 			"To force-delete, first remove the label: "+
-			"kubectl label %s %s cozystack.io/deletion-protected-",
+			"kubectl label %s %s %s-",
 		identifier,
 		kindToResourceArg(req.Kind.Kind, req.Namespace),
 		req.Name,
+		deletionProtectedLabel,
 	)
 
 	logger.Info("DENIED deletion of protected resource", "resource", identifier)
@@ -91,7 +92,7 @@ func kindToResourceArg(kind, namespace string) string {
 	case "CustomResourceDefinition":
 		return "crd"
 	case "LinstorCluster":
-		return "linstorcluster.piraeus.io -n " + namespace
+		return "linstorcluster.piraeus.io"
 	case "ClusterIssuer":
 		return "clusterissuer.cert-manager.io"
 	case "OCIRepository":

@@ -35,7 +35,7 @@ webhooks:
         apiGroups: ["piraeus.io"]
         apiVersions: ["v1"]
         resources: ["linstorclusters"]
-        scope: "*"
+        scope: Cluster
       - operations: ["DELETE"]
         apiGroups: ["cert-manager.io"]
         apiVersions: ["v1"]
@@ -45,7 +45,7 @@ webhooks:
         apiGroups: ["source.toolkit.fluxcd.io"]
         apiVersions: ["v1"]
         resources: ["ocirepositories"]
-        scope: "*"
+        scope: Namespaced
     failurePolicy: Fail
     timeoutSeconds: 5
     objectSelector:
