@@ -224,6 +224,7 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	ctx context.Context,
 	monitor *cozyv1alpha1.WorkloadMonitor,
 	bc cosiv1alpha1.BucketClaim,
+	promURL string,
 ) error {
 	logger := log.FromContext(ctx)
 	workload := &cozyv1alpha1.Workload{
@@ -243,7 +244,6 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	// bc.Status.BucketName is the COSI Bucket name, which the COSI driver
 	// uses directly as the SeaweedFS bucket name.
 	if bn := bc.Status.BucketName; bn != "" {
-		promURL := r.resolvePrometheusURL(ctx, bc.Namespace)
 		if v, ok := r.queryPrometheusMetric(ctx, promURL, fmt.Sprintf(`SeaweedFS_s3_bucket_size_bytes{bucket="%s"}`, bn)); ok {
 			resources["s3-storage-bytes"] = *resource.NewQuantity(v, resource.BinarySI)
 		}
@@ -563,8 +563,9 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	bucketPromURL := r.resolvePrometheusURL(ctx, monitor.Namespace)
 	for _, bc := range bucketClaimList.Items {
-		if err := r.reconcileBucketClaimForMonitor(ctx, monitor, bc); err != nil {
+		if err := r.reconcileBucketClaimForMonitor(ctx, monitor, bc, bucketPromURL); err != nil {
 			logger.Error(err, "Failed to reconcile Workload for BucketClaim", "BucketClaim", bc.Name)
 			continue
 		}
