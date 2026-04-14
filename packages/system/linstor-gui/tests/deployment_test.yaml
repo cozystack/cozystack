@@ -77,7 +77,7 @@ tests:
           pattern: "proxy_pass https://linstor-controller.cozy-linstor.svc:3371"
       - matchRegex:
           path: data["nginx.conf"]
-          pattern: "proxy_ssl_certificate     /etc/linstor/client/tls.crt"
+          pattern: "proxy_ssl_certificate\\s+/etc/linstor/client/tls.crt"
 
   - it: overrides linstor endpoint and client secret
     template: templates/configmap-nginx.yaml
