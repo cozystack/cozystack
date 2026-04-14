@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/ubuntu-container-disk:v1.30@sha256:51e272db23d64eb20bc44e38cdbb70199fd00a49a958b76c2a89d4a46fec9256
+ghcr.io/cozystack/cozystack/ubuntu-container-disk:v1.30@sha256:9474613009b8c10f2653a22c4ebf83977768c593079478933a4dd9376f6dd68b
