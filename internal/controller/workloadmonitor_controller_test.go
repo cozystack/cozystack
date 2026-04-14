@@ -384,9 +384,28 @@ func TestQueryPrometheusMetric(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	size := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="cosi-abc123"}`)
+	size, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="cosi-abc123"}`)
+	if !ok {
+		t.Fatal("expected ok=true for valid metric")
+	}
 	if size != 5368709120 {
 		t.Errorf("expected 5368709120, got %d", size)
+	}
+}
+
+func TestQueryPrometheusMetricZeroValue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"bucket":"empty"},"value":[1713000000,"0"]}]}}`)
+	}))
+	defer srv.Close()
+
+	reconciler := &WorkloadMonitorReconciler{}
+	size, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="empty"}`)
+	if !ok {
+		t.Fatal("expected ok=true for zero-value metric (empty bucket)")
+	}
+	if size != 0 {
+		t.Errorf("expected 0, got %d", size)
 	}
 }
 
@@ -397,9 +416,9 @@ func TestQueryPrometheusMetricEmpty(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	size := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="nonexistent"}`)
-	if size != 0 {
-		t.Errorf("expected 0 for empty result, got %d", size)
+	_, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="nonexistent"}`)
+	if ok {
+		t.Error("expected ok=false for empty result")
 	}
 }
 
@@ -410,17 +429,17 @@ func TestQueryPrometheusMetricServerError(t *testing.T) {
 	defer srv.Close()
 
 	reconciler := &WorkloadMonitorReconciler{}
-	size := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="test"}`)
-	if size != 0 {
-		t.Errorf("expected 0 for server error, got %d", size)
+	_, ok := reconciler.queryPrometheusMetric(context.TODO(), srv.URL, `SeaweedFS_s3_bucket_size_bytes{bucket="test"}`)
+	if ok {
+		t.Error("expected ok=false for server error")
 	}
 }
 
 func TestQueryPrometheusMetricNoURL(t *testing.T) {
 	reconciler := &WorkloadMonitorReconciler{}
-	size := reconciler.queryPrometheusMetric(context.TODO(), "", `anything`)
-	if size != 0 {
-		t.Errorf("expected 0 when PrometheusURL is empty, got %d", size)
+	_, ok := reconciler.queryPrometheusMetric(context.TODO(), "", `anything`)
+	if ok {
+		t.Error("expected ok=false when PrometheusURL is empty")
 	}
 }
 
