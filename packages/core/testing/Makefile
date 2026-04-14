@@ -42,6 +42,12 @@ test-openapi:
 test-apps-%:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
 
+UPGRADE_TARGET_TAG ?=
+upgrade-cozystack: ## Run the upgrade test (previous minor → current version)
+	docker exec \
+		$(if $(UPGRADE_TARGET_TAG),-e UPGRADE_TARGET_TAG="$(UPGRADE_TARGET_TAG)") \
+		"${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-upgrade-cozystack.bats'
+
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
 	mkdir -p ../../../_out
