@@ -8,6 +8,7 @@ kind: Namespace
 metadata:
   name: cozy-system
   labels:
+    cozystack.io/deletion-protected: "true"
     cozystack.io/system: "true"
     pod-security.kubernetes.io/enforce: privileged
   annotations:
