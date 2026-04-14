@@ -13,5 +13,7 @@ kind: {{ $kind }}
 metadata:
   name: cozystack-packages
   namespace: cozy-system
+  labels:
+    cozystack.io/deletion-protected: "true"
 spec:
 {{- $sourceRepo.spec | toYaml | nindent 2 }}

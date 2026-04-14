@@ -6,6 +6,8 @@ kind: ConfigMap
 metadata:
   name: cozystack-version
   namespace: {{ .Release.Namespace }}
+  labels:
+    cozystack.io/deletion-protected: "true"
   annotations:
     helm.sh/resource-policy: keep
 data:
