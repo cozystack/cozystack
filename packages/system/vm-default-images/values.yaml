@@ -3,7 +3,9 @@
 ##
 
 ## @param {string} storageClass - Default StorageClass for all images. If empty, uses the cluster default StorageClass.
-storageClass: ""
+## NOTE: The default set of images requires approximately 320Gi of storage (16 images × 20Gi each).
+## Adjust the image list or per-image storage sizes to match your cluster capacity.
+storageClass: "replicated"
 
 ## @typedef {struct} ImageOS - Operating system metadata for a Golden Image.
 ## @field {string} [family] - OS family (e.g. "Linux", "Windows").
