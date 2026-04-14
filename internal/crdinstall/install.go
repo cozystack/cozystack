@@ -89,6 +89,16 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 		}
 	}
 
+	// Add deletion protection label to all CRDs
+	for _, obj := range objects {
+		labels := obj.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		labels["cozystack.io/deletion-protected"] = "true"
+		obj.SetLabels(labels)
+	}
+
 	logger.Info("Applying Cozystack CRDs", "count", len(objects))
 	for _, obj := range objects {
 		patchOptions := &client.PatchOptions{
