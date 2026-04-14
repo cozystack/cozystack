@@ -589,12 +589,14 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	bucketPromURL := r.resolvePrometheusURL(ctx, monitor.Namespace)
-	allBucketMetrics := r.queryAllBucketMetrics(ctx, bucketPromURL)
-	for _, bc := range bucketClaimList.Items {
-		if err := r.reconcileBucketClaimForMonitor(ctx, monitor, bc, allBucketMetrics); err != nil {
-			logger.Error(err, "Failed to reconcile Workload for BucketClaim", "BucketClaim", bc.Name)
-			continue
+	if len(bucketClaimList.Items) > 0 {
+		bucketPromURL := r.resolvePrometheusURL(ctx, monitor.Namespace)
+		allBucketMetrics := r.queryAllBucketMetrics(ctx, bucketPromURL)
+		for _, bc := range bucketClaimList.Items {
+			if err := r.reconcileBucketClaimForMonitor(ctx, monitor, bc, allBucketMetrics); err != nil {
+				logger.Error(err, "Failed to reconcile Workload for BucketClaim", "BucketClaim", bc.Name)
+				continue
+			}
 		}
 	}
 
