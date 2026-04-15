@@ -8,7 +8,7 @@
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.kubevirt" "default" $ $kubevirtComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.vm-default-images" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.vm-default-images" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.gpu-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-operator" $) }}
