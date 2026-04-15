@@ -224,10 +224,13 @@ func CreateAllCustomColumnsOverrides() []*dashboardv1alpha1.CustomColumnsOverrid
 			createStringColumn("Name", ".name"),
 		}),
 
-		// Factory details events
+		// Factory details events. Event Time falls back to `.firstTimestamp`
+		// because core/v1 Events (Helm, controller-runtime) populate only the
+		// legacy timestamps while events.k8s.io/v1 Events populate only
+		// `.eventTime`; taking the first non-null of the two covers both.
 		createCustomColumnsOverride("factory-details-events", []any{
-			createTimestampColumn("Last Seen", ".lastTimestamp"),
-			createTimestampColumn("Event Time", ".eventTime"),
+			createTimestampColumn("Last Seen", ".lastTimestamp", ".eventTime"),
+			createTimestampColumn("Event Time", ".eventTime", ".firstTimestamp"),
 			createStringColumn("Type", ".type"),
 			createStringColumn("Reason", ".reason"),
 			createStringColumn("Object", ".involvedObject.kind"),

@@ -650,12 +650,31 @@ func createStringColumn(name, jsonPath string) map[string]any {
 	}
 }
 
-// createTimestampColumn creates a timestamp column with custom formatting
-func createTimestampColumn(name, jsonPath string) map[string]any {
+// createTimestampColumn creates a timestamp column with custom formatting.
+// Extra jsonPaths act as ordered fallbacks: the first non-null path wins,
+// and `-` is used only when every path is null. Depth is capped at two
+// because the template parser's non-greedy matcher cannot track more than
+// one level of alternating quotes in a nested reqsJsonPath fallback.
+func createTimestampColumn(name string, jsonPaths ...string) map[string]any {
+	if len(jsonPaths) == 0 {
+		panic("createTimestampColumn requires at least one jsonPath")
+	}
+	if len(jsonPaths) > 2 {
+		panic("createTimestampColumn supports at most two jsonPaths (primary + one fallback)")
+	}
+
+	var text string
+	switch len(jsonPaths) {
+	case 1:
+		text = "{reqsJsonPath[0]['" + jsonPaths[0] + "']['-']}"
+	case 2:
+		text = "{reqsJsonPath[0]['" + jsonPaths[0] + "'][\"{reqsJsonPath[0]['" + jsonPaths[1] + "']['-']}\"]}"
+	}
+
 	return map[string]any{
 		"name":     name,
 		"type":     "factory",
-		"jsonPath": jsonPath,
+		"jsonPath": jsonPaths[0],
 		"customProps": map[string]any{
 			"disableEventBubbling": true,
 			"items": []any{
@@ -673,7 +692,7 @@ func createTimestampColumn(name, jsonPath string) map[string]any {
 							"data": map[string]any{
 								"formatter": "timestamp",
 								"id":        "time-value",
-								"text":      "{reqsJsonPath[0]['" + jsonPath + "']['-']}",
+								"text":      text,
 							},
 						},
 					},
