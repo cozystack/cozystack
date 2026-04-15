@@ -13,6 +13,11 @@
 ## What this PR does
 
 
+### Screenshots
+
+<!-- REQUIRED for UI changes: attach screenshots or screen recordings demonstrating
+the visual impact of your changes. PRs with UI changes without screenshots will not be merged. -->
+
 ### Release note
 
 <!--  Write a release note:
