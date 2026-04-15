@@ -33,14 +33,18 @@ Similarly, never propose edits to:
 
 ## Commit and PR Requirements
 
-Each commit must start with a component prefix: `[component] Brief description`.
+Each commit must follow [Conventional Commits](https://www.conventionalcommits.org/) format: `type(scope): brief description`.
 
-Valid prefixes:
+Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`.
 
-- System: `[dashboard]`, `[platform]`, `[cilium]`, `[kube-ovn]`, `[linstor]`, `[fluxcd]`, `[cluster-api]`
-- Apps: `[postgres]`, `[mariadb]`, `[redis]`, `[kafka]`, `[clickhouse]`, `[kubernetes]`, `[virtual-machine]`
-- Meta: `[tests]`, `[ci]`, `[docs]`, `[maintenance]`
-- Package-specific: any `[<package-name>]` matching a directory under `packages/`
+Valid scopes:
+
+- System: `dashboard`, `platform`, `cilium`, `kube-ovn`, `linstor`, `fluxcd`, `cluster-api`
+- Apps: `postgres`, `mariadb`, `redis`, `kafka`, `clickhouse`, `kubernetes`, `virtual-machine`
+- Meta: `api`, `hack`, `tests`, `ci`, `docs`
+- Package-specific: any `<package-name>` matching a directory under `packages/`
+
+Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
 
 Each commit must have a `Signed-off-by:` trailer (produced by `git commit --signoff`).
 
@@ -48,11 +52,11 @@ PR body must contain a release note block:
 
 ````text
 ```release-note
-[component] Human-readable changelog entry
+type(scope): human-readable changelog entry
 ```
 ````
 
-Flag any PR whose commits lack the prefix or signoff, or whose body has no release-note block.
+Flag any PR whose commits lack the Conventional Commits format or signoff, or whose body has no release-note block.
 
 ## Helm Chart Conventions
 

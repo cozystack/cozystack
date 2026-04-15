@@ -53,7 +53,7 @@ working with the **Cozystack** project.
 ### Conventions
 - **Helm Charts**: Umbrella pattern, vendored upstream charts in `charts/`
 - **Go Code**: Controller-runtime patterns, kubebuilder style
-- **Git Commits**: `[component] Description` format with `--signoff`
+- **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`
 
 ### What NOT to Do
 - ❌ Edit `/vendor/`, `zz_generated.*.go`, upstream charts directly
