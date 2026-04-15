@@ -35,7 +35,8 @@ EOF
   kubectl -n tenant-test delete vmdisks.apps.cozystack.io $clone --ignore-not-found --timeout=2m || true
   kubectl -n tenant-test delete vmdisks.apps.cozystack.io $base --ignore-not-found --timeout=2m || true
 
-  # Create the base disk via source.http (fast URL re-used from vminstance.bats)
+  # Create the base disk via source.http. Alpine is ~50MB vs Ubuntu noble's ~600MB,
+  # which keeps this test fast; the assertion here is the clone step, not the HTTP import.
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMDisk
@@ -45,7 +46,7 @@ metadata:
 spec:
   source:
     http:
-      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+      url: https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.6-x86_64-bios-cloudinit-r0.qcow2
   optical: false
   storage: 5Gi
   storageClass: replicated
