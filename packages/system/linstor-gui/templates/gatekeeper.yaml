@@ -1,0 +1,142 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- $oidcInsecureSkipVerify := index .Values._cluster "oidc-insecure-skip-verify" }}
+{{- $keycloakInternalUrl := index .Values._cluster "keycloak-internal-url" | default "" }}
+
+{{- /*
+Gatekeeper (oauth2-proxy) fronts the linstor-gui Service and handles the
+OIDC flow against the cluster Keycloak realm. The Ingress below points at
+this Service — not at linstor-gui directly — so every external request
+authenticates before hitting nginx/mTLS→controller.
+
+Only rendered when oidc-enabled=true. If the cluster has OIDC disabled we
+deliberately do not ship an unauthenticated token-proxy fallback (unlike
+dashboard): linstor-gui surfaces raw storage state and should not be
+reachable via Ingress without Keycloak login.
+*/ -}}
+{{- if eq $oidcEnabled "true" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: linstor-gui-gatekeeper
+  labels:
+    app.kubernetes.io/instance: linstor-gui
+    app.kubernetes.io/name: gatekeeper
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: cozystack
+  annotations:
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: linstor-gui
+      app.kubernetes.io/name: gatekeeper
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: linstor-gui
+        app.kubernetes.io/name: gatekeeper
+    spec:
+      serviceAccountName: linstor-gui-gatekeeper
+      automountServiceAccountToken: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/instance: linstor-gui
+                    app.kubernetes.io/name: gatekeeper
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: auth-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --provider=oidc
+            - --upstream=http://linstor-gui.{{ .Release.Namespace }}.svc:80
+            - --http-address=0.0.0.0:8000
+            - --redirect-url=https://linstor-gui.{{ $host }}/oauth2/callback
+            - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
+            {{- if $keycloakInternalUrl }}
+            - --skip-oidc-discovery
+            - --login-url=https://keycloak.{{ $host }}/realms/cozy/protocol/openid-connect/auth
+            - --redeem-url={{ $keycloakInternalUrl }}/protocol/openid-connect/token
+            - --oidc-jwks-url={{ $keycloakInternalUrl }}/protocol/openid-connect/certs
+            - --validate-url={{ $keycloakInternalUrl }}/protocol/openid-connect/userinfo
+            - --backend-logout-url={{ $keycloakInternalUrl }}/protocol/openid-connect/logout?id_token_hint={id_token}
+            {{- else }}
+            - --backend-logout-url=https://keycloak.{{ $host }}/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+            {{- end }}
+            - --whitelist-domain=keycloak.{{ $host }}
+            - --email-domain=*
+            - --pass-access-token=true
+            - --pass-authorization-header=true
+            - --cookie-refresh=3m
+            - --cookie-name=kc-access
+            - --cookie-secure=true
+            - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+            - --skip-provider-button
+            - --scope=openid email profile offline_access
+            {{- if eq $oidcInsecureSkipVerify "true" }}
+            - --ssl-insecure-skip-verify=true
+            {{- end }}
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              value: linstor-gui
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: linstor-gui-client
+                  key: client-secret-key
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: linstor-gui-auth-config
+                  key: cookieSecret
+          ports:
+            - name: proxy
+              containerPort: 8000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+{{- end }}

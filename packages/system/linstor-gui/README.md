@@ -9,10 +9,28 @@ using mTLS with the `linstor-client-tls` secret created by the `linstor` package
 
 ## Exposing the UI
 
-This package only creates a `ClusterIP` Service. It does **not** ship an ingress,
-because authentication depends on the deployment's Keycloak / OIDC setup and
-LINSTOR's controller API is a privileged cluster-wide storage management
-surface. Cluster admins should wire up ingress + auth explicitly, for example:
+### Option 1 — Keycloak-protected Ingress (recommended)
+
+The chart ships an `oauth2-proxy` based gatekeeper plus a `KeycloakClient` CRD
+so the UI can be published on `linstor-gui.<root-host>` behind the cluster
+Keycloak realm. Access is granted to any user who can authenticate against the
+`cozy` realm.
+
+To turn it on, add `linstor-gui` to `publishing.exposedServices` in the core
+`cozystack` values (same list that controls `dashboard`). OIDC must be
+enabled (`authentication.oidc.enabled: true`) — if it is not, the Ingress and
+gatekeeper Deployment are deliberately **not** rendered, because the LINSTOR
+REST API surface must not be exposed unauthenticated.
+
+Once enabled, the UI is reachable at `https://linstor-gui.<root-host>` and
+authentication is delegated to Keycloak via the `linstor-gui` client
+(auto-provisioned through the `KeycloakClient` CRD; the client secret is
+persisted in the `linstor-gui-client` Secret in `cozy-linstor`).
+
+### Option 2 — Port-forward
+
+If you have not set up Keycloak or want ad-hoc access, use the `ClusterIP`
+Service:
 
 ```bash
 kubectl -n cozy-linstor port-forward svc/linstor-gui 3373:80

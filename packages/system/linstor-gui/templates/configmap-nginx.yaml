@@ -60,6 +60,38 @@ data:
           try_files $uri $uri/ /index.html;
         }
 
+        # Lock the linstor-gui in-app authentication panel.
+        #
+        # Unlike most LINSTOR features, the GUI's "authenticationEnabled"
+        # toggle and user list are NOT controller-side properties — they
+        # are persisted as ordinary KeyValueStore instances named
+        # `__gui__settings` and `__gui__users`. The SPA reads them on
+        # every page load and, if `authenticationEnabled=true`, gates the
+        # whole UI behind its own login screen against a self-managed
+        # admin user.
+        #
+        # Cozystack already enforces authentication at the Ingress
+        # (oauth2-proxy + Keycloak), and the in-app login is a foot-gun:
+        # if a user enables it and forgets/misconfigures the password, the
+        # only recovery is shelling into the linstor-controller pod and
+        # running `linstor key-value-store modify __gui__settings
+        # authenticationEnabled false`.
+        #
+        # We allow GETs (so the SPA can read state and render normally
+        # with auth=off) but reject every mutating method on those two
+        # KeyValueStore instances. Any other key-value-store entry the
+        # GUI uses (e.g. __gui__mode) keeps working as expected.
+        location ~ ^/v1/key-value-store/__gui__(settings|users)(/|$) {
+          default_type application/json;
+          # `if ... return` is the one documented-safe use of `if` in
+          # nginx (see "If is Evil"), so it's fine here. We allow GET/HEAD
+          # for the SPA's read path and reject every mutating method.
+          if ($request_method !~ ^(GET|HEAD)$) {
+            return 403 '{"ret_code":-1,"message":"linstor-gui in-app authentication is disabled by cozystack: authentication is enforced at the Ingress via Keycloak."}';
+          }
+          proxy_pass {{ .Values.linstor.endpoint }};
+        }
+
         # Proxy LINSTOR REST API over mTLS to the controller
         location /v1 {
           proxy_pass {{ .Values.linstor.endpoint }};

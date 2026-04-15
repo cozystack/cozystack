@@ -1,0 +1,171 @@
+suite: linstor-gui ingress + keycloak auth
+templates:
+  - templates/ingress.yaml
+  - templates/gatekeeper.yaml
+  - templates/gatekeeper-svc.yaml
+  - templates/gatekeeper-sa.yaml
+  - templates/keycloakclient.yaml
+
+release:
+  name: linstor-gui
+  namespace: cozy-linstor
+
+tests:
+  - it: does not render an Ingress when OIDC is disabled cluster-wide
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "false"
+        expose-services: "linstor-gui"
+        expose-ingress: "tenant-root"
+        issuer-name: "letsencrypt-prod"
+        solver: "http01"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render an Ingress when linstor-gui is not in expose-services
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        expose-services: "dashboard,api"
+        expose-ingress: "tenant-root"
+        issuer-name: "letsencrypt-prod"
+        solver: "http01"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an Ingress to the gatekeeper service when exposed and OIDC enabled
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: dev10.example.org
+        oidc-enabled: "true"
+        expose-services: "dashboard,linstor-gui"
+        expose-ingress: "tenant-root"
+        issuer-name: "letsencrypt-prod"
+        solver: "http01"
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: tenant-root
+      - equal:
+          path: spec.rules[0].host
+          value: linstor-gui.dev10.example.org
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: linstor-gui-gatekeeper
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8000
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+
+  - it: does not render the gatekeeper Deployment when OIDC is disabled
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "false"
+        expose-services: "linstor-gui"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an oauth2-proxy Deployment pointing at the cluster Keycloak realm
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: dev10.example.org
+        oidc-enabled: "true"
+        oidc-insecure-skip-verify: "false"
+        keycloak-internal-url: ""
+        expose-services: "linstor-gui"
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: linstor-gui-gatekeeper
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^quay\\.io/oauth2-proxy/oauth2-proxy:"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --provider=oidc
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --upstream=http://linstor-gui.cozy-linstor.svc:80
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redirect-url=https://linstor-gui.dev10.example.org/oauth2/callback
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/cozy
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH2_PROXY_CLIENT_ID
+            value: linstor-gui
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: creates client + cookie Secrets and a KeycloakClient CRD
+    template: templates/keycloakclient.yaml
+    capabilities:
+      apiVersions:
+        - v1.edp.epam.com/v1
+    set:
+      _cluster:
+        root-host: dev10.example.org
+    asserts:
+      - hasDocuments:
+          count: 3
+      - documentIndex: 0
+        isKind:
+          of: Secret
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: linstor-gui-client
+      - documentIndex: 1
+        isKind:
+          of: Secret
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: linstor-gui-auth-config
+      - documentIndex: 2
+        isKind:
+          of: KeycloakClient
+      - documentIndex: 2
+        equal:
+          path: spec.clientId
+          value: linstor-gui
+      - documentIndex: 2
+        contains:
+          path: spec.redirectUris
+          content: "https://linstor-gui.dev10.example.org/oauth2/callback/*"
+
+  - it: skips the KeycloakClient CRD when the API is absent, still creates Secrets
+    template: templates/keycloakclient.yaml
+    set:
+      _cluster:
+        root-host: example.org
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Secret
+      - documentIndex: 1
+        isKind:
+          of: Secret
