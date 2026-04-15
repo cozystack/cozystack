@@ -1,0 +1,81 @@
+{{/*
+Parse the LINSTOR endpoint so nginx can set `proxy_ssl_name` correctly.
+The endpoint must be an https:// URL — http:// would downgrade the
+mTLS-protected controller path.
+*/}}
+{{- if not (hasPrefix "https://" .Values.linstor.endpoint) -}}
+{{- fail "linstor.endpoint must start with https:// to enforce mTLS to the LINSTOR controller" -}}
+{{- end -}}
+{{- $endpoint := trimPrefix "https://" .Values.linstor.endpoint -}}
+{{- $endpointHost := (splitList ":" $endpoint) | first -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: linstor-gui-nginx
+  labels:
+    {{- include "linstor-gui.labels" . | nindent 4 }}
+data:
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      include       /etc/nginx/mime.types;
+      default_type  application/octet-stream;
+      server_tokens off;
+
+      client_body_temp_path /tmp/client_body;
+      proxy_temp_path       /tmp/proxy;
+      fastcgi_temp_path     /tmp/fastcgi;
+      uwsgi_temp_path       /tmp/uwsgi;
+      scgi_temp_path        /tmp/scgi;
+
+      sendfile        on;
+      keepalive_timeout  65;
+
+      server {
+        listen 3373;
+        server_name _;
+
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # Shared proxy + mTLS settings for the LINSTOR controller upstream
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_ssl_certificate         /etc/linstor/client/tls.crt;
+        proxy_ssl_certificate_key     /etc/linstor/client/tls.key;
+        proxy_ssl_trusted_certificate /etc/linstor/client/ca.crt;
+        proxy_ssl_verify       on;
+        proxy_ssl_verify_depth 2;
+        proxy_ssl_server_name  on;
+        proxy_ssl_name         {{ $endpointHost }};
+
+        # Static UI assets
+        location / {
+          try_files $uri $uri/ /index.html;
+        }
+
+        # Proxy LINSTOR REST API over mTLS to the controller
+        location /v1 {
+          proxy_pass {{ .Values.linstor.endpoint }};
+        }
+
+        location /metrics {
+          proxy_pass {{ .Values.linstor.endpoint }};
+        }
+
+        location = /healthz {
+          access_log off;
+          # default_type must come BEFORE `return` — `add_header` after a
+          # `return` is silently dropped by nginx because the response is
+          # already finalized.
+          default_type text/plain;
+          return 200 'ok';
+        }
+      }
+    }
