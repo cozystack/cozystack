@@ -2,6 +2,14 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: kubernetes
+  annotations:
+    # Kubernetes tenants boot a Kamaji control plane whose admin-kubeconfig
+    # Secret is provisioned asynchronously. Cold Kamaji start (image pull +
+    # etcd + apiserver Ready) plus admin-kubeconfig generation can exceed
+    # Flux helm-controller's default wait budget, causing remediation loops
+    # that uninstall the Cluster CR. This override applied by cozystack-api
+    # to the HelmRelease Spec.Install.Timeout and Spec.Upgrade.Timeout.
+    release.cozystack.io/helm-install-timeout: "15m"
 spec:
   application:
     kind: Kubernetes

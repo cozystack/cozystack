@@ -160,6 +160,31 @@ func (o *CozyServerOptions) Complete() error {
 	// Convert to ResourceConfig
 	o.ResourceConfig = &config.ResourceConfig{}
 	for _, crd := range crdList.Items {
+		release := config.ReleaseConfig{
+			Prefix: crd.Spec.Release.Prefix,
+			Labels: crd.Spec.Release.Labels,
+			ChartRef: config.ChartRefConfig{
+				Kind:      crd.Spec.Release.ChartRef.Kind,
+				Name:      crd.Spec.Release.ChartRef.Name,
+				Namespace: crd.Spec.Release.ChartRef.Namespace,
+			},
+		}
+		// Per-Application HelmRelease Install/Upgrade timeout. Applications
+		// whose parent chart contains asynchronously-provisioned resources
+		// the chart itself depends on (for example, the Kamaji-provisioned
+		// admin-kubeconfig Secret for Kubernetes tenants) need a longer
+		// wait budget than the Flux default. Consumed by the REST storage
+		// layer when building the HelmRelease Spec.
+		if raw, ok := crd.Annotations["release.cozystack.io/helm-install-timeout"]; ok && raw != "" {
+			d, err := time.ParseDuration(raw)
+			if err != nil {
+				return fmt.Errorf(
+					"ApplicationDefinition %q has invalid release.cozystack.io/helm-install-timeout %q: %w",
+					crd.Name, raw, err,
+				)
+			}
+			release.HelmInstallTimeout = d
+		}
 		resource := config.Resource{
 			Application: config.ApplicationConfig{
 				Kind:          crd.Spec.Application.Kind,
@@ -168,15 +193,7 @@ func (o *CozyServerOptions) Complete() error {
 				ShortNames:    []string{}, // TODO: implement shortnames
 				OpenAPISchema: crd.Spec.Application.OpenAPISchema,
 			},
-			Release: config.ReleaseConfig{
-				Prefix: crd.Spec.Release.Prefix,
-				Labels: crd.Spec.Release.Labels,
-				ChartRef: config.ChartRefConfig{
-					Kind:      crd.Spec.Release.ChartRef.Kind,
-					Name:      crd.Spec.Release.ChartRef.Name,
-					Namespace: crd.Spec.Release.ChartRef.Namespace,
-				},
-			},
+			Release: release,
 		}
 		o.ResourceConfig.Resources = append(o.ResourceConfig.Resources, resource)
 	}

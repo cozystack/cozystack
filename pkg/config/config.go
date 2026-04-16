@@ -16,6 +16,8 @@ limitations under the License.
 
 package config
 
+import "time"
+
 // ResourceConfig represents the structure of the configuration file.
 type ResourceConfig struct {
 	Resources []Resource `yaml:"resources"`
@@ -41,6 +43,12 @@ type ReleaseConfig struct {
 	Prefix   string            `yaml:"prefix"`
 	Labels   map[string]string `yaml:"labels"`
 	ChartRef ChartRefConfig    `yaml:"chartRef"`
+	// HelmInstallTimeout overrides the Flux HelmRelease Install.Timeout and
+	// Upgrade.Timeout for this Application kind. When zero, flux defaults
+	// apply. Populated from the
+	// release.cozystack.io/helm-install-timeout annotation on the
+	// ApplicationDefinition at start-up.
+	HelmInstallTimeout time.Duration `yaml:"helmInstallTimeout,omitempty"`
 }
 
 // ChartRefConfig references a Flux source artifact for the Helm chart.

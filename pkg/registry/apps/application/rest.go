@@ -1528,16 +1528,17 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		},
 	}
 
-	// The Kubernetes Application's parent chart creates CAPI/Kamaji resources
-	// whose admin-kubeconfig Secret is provisioned asynchronously and mounted
-	// by Deployments in the same chart. On a cold node, Kamaji control-plane
-	// bootstrap routinely exceeds flux helm-controller's default wait budget,
-	// so install remediation loops uninstall the Cluster CR and churn. Extend
-	// the wait budget to 15m for Kubernetes only - other Application kinds
-	// without this race keep flux defaults, so their failed installs do not
-	// linger unnecessarily before remediation fires.
-	if r.kindName == "Kubernetes" {
-		timeout := metav1.Duration{Duration: 15 * time.Minute}
+	// Per-Application HelmRelease wait budget. When an ApplicationDefinition
+	// sets release.cozystack.io/helm-install-timeout, the annotation is
+	// parsed at startup into ReleaseConfig.HelmInstallTimeout and applied
+	// to both Install and Upgrade here. Applications that leave it unset
+	// (the common case) keep flux defaults, so their failed installs
+	// remediate on the normal cadence. Needed for the Kubernetes kind
+	// because its parent chart contains CAPI/Kamaji resources whose
+	// admin-kubeconfig Secret is provisioned asynchronously and Kamaji
+	// cold-start routinely exceeds flux's default wait budget.
+	if r.releaseConfig.HelmInstallTimeout > 0 {
+		timeout := metav1.Duration{Duration: r.releaseConfig.HelmInstallTimeout}
 		helmRelease.Spec.Install.Timeout = &timeout
 		helmRelease.Spec.Upgrade.Timeout = &timeout
 	}

@@ -10,7 +10,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
-func newRESTForKind(kind, prefix string) *REST {
+func newRESTForTimeout(kind, prefix string, helmInstallTimeout time.Duration) *REST {
 	return &REST{
 		kindName: kind,
 		releaseConfig: config.ReleaseConfig{
@@ -20,76 +20,93 @@ func newRESTForKind(kind, prefix string) *REST {
 				Name:      "x",
 				Namespace: "cozy-system",
 			},
+			HelmInstallTimeout: helmInstallTimeout,
 		},
 	}
 }
 
-func TestConvertApplicationToHelmRelease_KubernetesKindGetsLongTimeout(t *testing.T) {
-	r := newRESTForKind("Kubernetes", "kubernetes-")
-	app := &appsv1alpha1.Application{
-		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "tenant-root"},
+// Table-driven: every Application kind carries a per-CRD HelmRelease wait
+// budget. The Kubernetes kind's parent chart contains CAPI/Kamaji resources
+// whose admin-kubeconfig Secret is provisioned asynchronously, so its
+// ApplicationDefinition sets release.cozystack.io/helm-install-timeout=15m
+// (or longer). Other kinds leave the annotation unset and keep flux defaults
+// so their failed installs remediate on the normal cadence. The test must
+// cover both paths: a kind with the timeout set and one without.
+func TestConvertApplicationToHelmRelease_AppliesReleaseConfigTimeout(t *testing.T) {
+	cases := []struct {
+		name       string
+		kind       string
+		prefix     string
+		configured time.Duration
+		wantSet    bool
+	}{
+		{
+			name:       "Kubernetes kind with 15m configured gets Install and Upgrade Timeout",
+			kind:       "Kubernetes",
+			prefix:     "kubernetes-",
+			configured: 15 * time.Minute,
+			wantSet:    true,
+		},
+		{
+			name:       "Qdrant kind without configured timeout keeps flux defaults",
+			kind:       "Qdrant",
+			prefix:     "qdrant-",
+			configured: 0,
+			wantSet:    false,
+		},
+		{
+			name:       "arbitrary future kind with 20m configured gets 20m",
+			kind:       "TalosCluster",
+			prefix:     "talos-",
+			configured: 20 * time.Minute,
+			wantSet:    true,
+		},
 	}
 
-	hr, err := r.convertApplicationToHelmRelease(app)
-	if err != nil {
-		t.Fatalf("convertApplicationToHelmRelease returned error: %v", err)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRESTForTimeout(tc.kind, tc.prefix, tc.configured)
+			app := &appsv1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "tenant-root"},
+			}
 
-	if hr.Spec.Install == nil {
-		t.Fatal("Spec.Install must not be nil")
-	}
-	if hr.Spec.Install.Timeout == nil {
-		t.Fatal("Spec.Install.Timeout must be set for Kubernetes kind")
-	}
-	if hr.Spec.Install.Timeout.Duration < 15*time.Minute {
-		t.Errorf("Spec.Install.Timeout must be >= 15m for Kubernetes, got %v", hr.Spec.Install.Timeout.Duration)
-	}
+			hr, err := r.convertApplicationToHelmRelease(app)
+			if err != nil {
+				t.Fatalf("convertApplicationToHelmRelease returned error: %v", err)
+			}
 
-	if hr.Spec.Upgrade == nil {
-		t.Fatal("Spec.Upgrade must not be nil")
-	}
-	if hr.Spec.Upgrade.Timeout == nil {
-		t.Fatal("Spec.Upgrade.Timeout must be set for Kubernetes kind")
-	}
-	if hr.Spec.Upgrade.Timeout.Duration < 15*time.Minute {
-		t.Errorf("Spec.Upgrade.Timeout must be >= 15m for Kubernetes, got %v", hr.Spec.Upgrade.Timeout.Duration)
-	}
+			if hr.Spec.Install == nil || hr.Spec.Upgrade == nil {
+				t.Fatalf("Spec.Install/Upgrade must be non-nil")
+			}
 
-	if hr.Spec.Install.Remediation == nil || hr.Spec.Install.Remediation.Retries != -1 {
-		t.Errorf("Spec.Install.Remediation.Retries must remain -1, got %+v", hr.Spec.Install.Remediation)
-	}
-	if hr.Spec.Upgrade.Remediation == nil || hr.Spec.Upgrade.Remediation.Retries != -1 {
-		t.Errorf("Spec.Upgrade.Remediation.Retries must remain -1, got %+v", hr.Spec.Upgrade.Remediation)
-	}
-}
+			if tc.wantSet {
+				if hr.Spec.Install.Timeout == nil {
+					t.Fatalf("Spec.Install.Timeout must be set when HelmInstallTimeout=%v", tc.configured)
+				}
+				if hr.Spec.Install.Timeout.Duration != tc.configured {
+					t.Errorf("Spec.Install.Timeout = %v, want %v", hr.Spec.Install.Timeout.Duration, tc.configured)
+				}
+				if hr.Spec.Upgrade.Timeout == nil {
+					t.Fatalf("Spec.Upgrade.Timeout must be set when HelmInstallTimeout=%v", tc.configured)
+				}
+				if hr.Spec.Upgrade.Timeout.Duration != tc.configured {
+					t.Errorf("Spec.Upgrade.Timeout = %v, want %v", hr.Spec.Upgrade.Timeout.Duration, tc.configured)
+				}
+			} else {
+				if hr.Spec.Install.Timeout != nil {
+					t.Errorf("Spec.Install.Timeout must be nil when HelmInstallTimeout=0, got %v", hr.Spec.Install.Timeout.Duration)
+				}
+				if hr.Spec.Upgrade.Timeout != nil {
+					t.Errorf("Spec.Upgrade.Timeout must be nil when HelmInstallTimeout=0, got %v", hr.Spec.Upgrade.Timeout.Duration)
+				}
+			}
 
-func TestConvertApplicationToHelmRelease_NonKubernetesKindKeepsFluxDefaults(t *testing.T) {
-	// For Applications whose parent chart has no admin-kubeconfig race
-	// (Qdrant, MongoDB, Postgres, etc.), do NOT extend the helm-wait
-	// budget - otherwise failed installs would block three times as long
-	// before Flux starts remediating.
-	r := newRESTForKind("Qdrant", "qdrant-")
-	app := &appsv1alpha1.Application{
-		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "tenant-root"},
-	}
-
-	hr, err := r.convertApplicationToHelmRelease(app)
-	if err != nil {
-		t.Fatalf("convertApplicationToHelmRelease returned error: %v", err)
-	}
-
-	if hr.Spec.Install != nil && hr.Spec.Install.Timeout != nil {
-		t.Errorf("Spec.Install.Timeout must be unset for non-Kubernetes kinds, got %v", hr.Spec.Install.Timeout.Duration)
-	}
-	if hr.Spec.Upgrade != nil && hr.Spec.Upgrade.Timeout != nil {
-		t.Errorf("Spec.Upgrade.Timeout must be unset for non-Kubernetes kinds, got %v", hr.Spec.Upgrade.Timeout.Duration)
-	}
-
-	// But remediation must still be -1 across the board.
-	if hr.Spec.Install.Remediation == nil || hr.Spec.Install.Remediation.Retries != -1 {
-		t.Errorf("Spec.Install.Remediation.Retries must remain -1, got %+v", hr.Spec.Install.Remediation)
-	}
-	if hr.Spec.Upgrade.Remediation == nil || hr.Spec.Upgrade.Remediation.Retries != -1 {
-		t.Errorf("Spec.Upgrade.Remediation.Retries must remain -1, got %+v", hr.Spec.Upgrade.Remediation)
+			if hr.Spec.Install.Remediation == nil || hr.Spec.Install.Remediation.Retries != -1 {
+				t.Errorf("Spec.Install.Remediation.Retries must remain -1, got %+v", hr.Spec.Install.Remediation)
+			}
+			if hr.Spec.Upgrade.Remediation == nil || hr.Spec.Upgrade.Remediation.Retries != -1 {
+				t.Errorf("Spec.Upgrade.Remediation.Retries must remain -1, got %+v", hr.Spec.Upgrade.Remediation)
+			}
+		})
 	}
 }
