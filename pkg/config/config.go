@@ -16,7 +16,47 @@ limitations under the License.
 
 package config
 
-import "time"
+import (
+	"fmt"
+	"regexp"
+	"time"
+)
+
+// HelmInstallTimeoutAnnotation is the ApplicationDefinition metadata
+// annotation key that overrides the Flux HelmRelease Install.Timeout and
+// Upgrade.Timeout for a given Application kind.
+const HelmInstallTimeoutAnnotation = "release.cozystack.io/helm-install-timeout"
+
+// helmTimeoutPattern mirrors the CRD validation pattern used by Flux
+// helm-controller on HelmReleaseSpec.Install.Timeout (ms/s/m/h units only).
+// time.ParseDuration accepts ns/us/µs, but Flux rejects them - parsing here
+// with the same shape avoids feeding the controller a value it will later
+// reject at webhook time. See
+// github.com/fluxcd/helm-controller/api/v2 HelmReleaseSpec.Install.Timeout
+// in the go module cache.
+var helmTimeoutPattern = regexp.MustCompile(`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$`)
+
+// ParseHelmInstallTimeoutAnnotation parses the value of the
+// release.cozystack.io/helm-install-timeout annotation. The empty string is
+// treated as "unset" and returns (0, nil) so callers can leave
+// HelmInstallTimeout zeroed and let flux defaults apply. Values accepted by
+// time.ParseDuration but rejected by Flux (ns/us/µs) return a helpful
+// error instead of silently parsing and failing later at HelmRelease
+// admission.
+func ParseHelmInstallTimeoutAnnotation(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	if !helmTimeoutPattern.MatchString(raw) {
+		return 0, fmt.Errorf("must match %s (Flux accepts ms/s/m/h units only), got %q",
+			helmTimeoutPattern, raw)
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("time.ParseDuration(%q): %w", raw, err)
+	}
+	return d, nil
+}
 
 // ResourceConfig represents the structure of the configuration file.
 type ResourceConfig struct {

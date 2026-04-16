@@ -174,17 +174,20 @@ func (o *CozyServerOptions) Complete() error {
 		// the chart itself depends on (for example, the Kamaji-provisioned
 		// admin-kubeconfig Secret for Kubernetes tenants) need a longer
 		// wait budget than the Flux default. Consumed by the REST storage
-		// layer when building the HelmRelease Spec.
-		if raw, ok := crd.Annotations["release.cozystack.io/helm-install-timeout"]; ok && raw != "" {
-			d, err := time.ParseDuration(raw)
-			if err != nil {
-				return fmt.Errorf(
-					"ApplicationDefinition %q has invalid release.cozystack.io/helm-install-timeout %q: %w",
-					crd.Name, raw, err,
-				)
-			}
-			release.HelmInstallTimeout = d
+		// layer when building the HelmRelease Spec. The parser rejects
+		// units Flux would reject at webhook time, so a bad annotation
+		// surfaces as a loud startup failure instead of a silent drop to
+		// defaults.
+		d, err := config.ParseHelmInstallTimeoutAnnotation(
+			crd.Annotations[config.HelmInstallTimeoutAnnotation],
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"ApplicationDefinition %q has invalid %s annotation: %w",
+				crd.Name, config.HelmInstallTimeoutAnnotation, err,
+			)
 		}
+		release.HelmInstallTimeout = d
 		resource := config.Resource{
 			Application: config.ApplicationConfig{
 				Kind:          crd.Spec.Application.Kind,
