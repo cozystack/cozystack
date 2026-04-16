@@ -142,14 +142,6 @@ spec:
                 required:
                 - uri
                 type: object
-              underlyingResources:
-                description: |-
-                  Holds application-specific resource metadata discovered during backup.
-                  The payload is a self-typed JSON object carrying an inlined TypeMeta
-                  (kind/apiVersion) so the consuming controller can dispatch on the
-                  application kind.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
               conditions:
                 description: Conditions represents the latest available observations
                   of a Backup's state.
@@ -213,6 +205,14 @@ spec:
                   Phase is a simple, high-level summary of the backup's state.
                   Typical values are: Pending, Ready, Failed.
                 type: string
+              underlyingResources:
+                description: |-
+                  UnderlyingResources holds application-specific resource metadata discovered
+                  during backup (e.g., VM disks, network configuration). The payload is a
+                  self-typed JSON object carrying an inlined TypeMeta (kind/apiVersion) so
+                  the consuming controller can dispatch on the application kind.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
             type: object
         type: object
     selectableFields:

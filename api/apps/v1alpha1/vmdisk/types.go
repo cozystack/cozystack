@@ -32,12 +32,19 @@ type ConfigSpec struct {
 }
 
 type Source struct {
+	// Clone an existing vm-disk.
+	Disk *SourceDisk `json:"disk,omitempty"`
 	// Download image from an HTTP source.
 	Http *SourceHTTP `json:"http,omitempty"`
-	// Use image by name.
+	// Use image by name from default collection.
 	Image *SourceImage `json:"image,omitempty"`
 	// Upload local image.
 	Upload *SourceUpload `json:"upload,omitempty"`
+}
+
+type SourceDisk struct {
+	// Name of the vm-disk to clone.
+	Name string `json:"name"`
 }
 
 type SourceHTTP struct {
@@ -46,7 +53,7 @@ type SourceHTTP struct {
 }
 
 type SourceImage struct {
-	// Name of the image to use (uploaded as "golden image" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, `talos`).
+	// Name of the image to use.
 	Name string `json:"name"`
 }
 

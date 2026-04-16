@@ -1,0 +1,52 @@
+#!/bin/sh
+# Migration 38 --> 39
+# Rename DataVolumes/PVCs in cozy-public from vm-image-<name> to vm-default-images-<name>.
+#
+# The vm-disk package previously looked up golden images with the prefix "vm-image-".
+# The new vm-default-images package uses the prefix "vm-default-images-".
+# This migration renames any existing DataVolumes so that live vm-disk resources
+# continue to resolve their source PVC after upgrade.
+
+set -euo pipefail
+
+NAMESPACE="cozy-public"
+
+# Skip if CDI DataVolume CRD is not installed
+if ! kubectl api-resources --api-group=cdi.kubevirt.io -o name 2>/dev/null | grep -q '^datavolumes\.'; then
+  echo "CDI DataVolume CRD not found, skipping rename"
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=39 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+
+# Find DataVolumes whose name starts with "vm-image-"
+DVNAMES=$(kubectl get datavolumes.cdi.kubevirt.io -n "$NAMESPACE" \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+  | grep '^vm-image-' || true)
+
+if [ -z "$DVNAMES" ]; then
+  echo "No vm-image-* DataVolumes found in $NAMESPACE, nothing to rename"
+else
+  for DVNAME in $DVNAMES; do
+    NEWNAME="vm-default-images-${DVNAME#vm-image-}"
+    echo "Renaming DataVolume $DVNAME -> $NEWNAME in namespace $NAMESPACE"
+
+    # Export existing DV spec, swap name, and apply as new object
+    kubectl get datavolumes.cdi.kubevirt.io -n "$NAMESPACE" "$DVNAME" -o json \
+      | jq --arg new "$NEWNAME" '
+          del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp,
+              .metadata.generation, .metadata.selfLink, .metadata.managedFields,
+              .status)
+          | .metadata.name = $new
+        ' \
+      | kubectl apply -f -
+
+    # Delete the old DataVolume
+    kubectl delete datavolumes.cdi.kubevirt.io -n "$NAMESPACE" "$DVNAME" --ignore-not-found=true
+    echo "Renamed $DVNAME -> $NEWNAME"
+  done
+fi
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=39 --dry-run=client -o yaml | kubectl apply -f-
