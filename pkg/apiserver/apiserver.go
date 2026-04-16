@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -78,6 +79,11 @@ func init() {
 	}
 	if err := rbacv1.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("Failed to add RBAC types to scheme: %w", err))
+	}
+
+	// Register Cozystack types for WorkloadMonitor queries.
+	if err := cozyv1alpha1.AddToScheme(mgrScheme); err != nil {
+		panic(fmt.Errorf("failed to add Cozystack types to scheme: %w", err))
 	}
 	// Add unversioned types.
 	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
@@ -168,6 +174,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 		&corev1.Namespace{},
 		&corev1.Service{},
 		&rbacv1.RoleBinding{},
+		&cozyv1alpha1.WorkloadMonitor{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to get informers: %w", err)
 	}

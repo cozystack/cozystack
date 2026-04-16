@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -703,13 +704,48 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 	customW.underlying = helmWatcher
 
+	// Start watch on WorkloadMonitor to detect pod readiness changes.
+	// For Tenant applications the WorkloadMonitor lives in a computed child
+	// namespace (see computeTenantNamespace), not in the HelmRelease namespace,
+	// so scoping the watch to `namespace` would miss all events. Use a
+	// cluster-wide watch in that case — label selectors still restrict the
+	// stream to the relevant kind/group.
+	wmLabelSelector := labels.NewSelector().Add(*appKindReq, *appGroupReq)
+	wmList := &cozyv1alpha1.WorkloadMonitorList{}
+	wmListOpts := &client.ListOptions{LabelSelector: wmLabelSelector}
+	if r.kindName != "Tenant" {
+		wmListOpts.Namespace = namespace
+	}
+	wmWatcher, err := r.w.Watch(ctx, wmList, wmListOpts)
+	if err != nil {
+		klog.Warningf("Failed to set up WorkloadMonitor watch, workload status changes won't trigger events: %v", err)
+		// Non-fatal: proceed without WorkloadMonitor watch
+		wmWatcher = nil
+	}
+
 	go func() {
+		// Capture wmWatcher for cleanup; the variable may be set to nil
+		// inside the loop when the channel closes, so defer must use this copy.
+		wmWatcherForCleanup := wmWatcher
 		defer close(customW.resultChan)
 		defer customW.underlying.Stop()
+		if wmWatcherForCleanup != nil {
+			defer wmWatcherForCleanup.Stop()
+		}
 
 		// Track whether we've sent the initial-events-end bookmark
 		initialEventsEndSent := !sendInitialEvents // If not sendInitialEvents, consider it already sent
 		var lastResourceVersion string
+
+		// Buffer of WorkloadMonitor events that arrived before the initial
+		// snapshot finished. The watch-list contract requires the stream to
+		// deliver all ADDED events followed by the initial-events-end bookmark
+		// before any live updates, so we hold WM-triggered Modified events and
+		// replay them once the bookmark has been emitted. Without this, a
+		// workload whose status flips during the snapshot window (after the
+		// Application ADDED but before the bookmark) and then stops changing
+		// would leave the client with a stale WorkloadsReady forever.
+		var pendingWMEvents []watch.Event
 
 		// Get the starting resourceVersion from options
 		// If client provides resourceVersion (e.g., from a previous List), we should skip
@@ -719,6 +755,19 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 			if rv, err := strconv.ParseUint(options.ResourceVersion, 10, 64); err == nil {
 				startingRV = rv
 			}
+		}
+
+		drainPendingWMEvents := func() {
+			for _, ev := range pendingWMEvents {
+				select {
+				case customW.resultChan <- ev:
+				case <-customW.stopChan:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+			pendingWMEvents = nil
 		}
 
 		// Helper function to send initial-events-end bookmark
@@ -745,8 +794,11 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 			select {
 			case customW.resultChan <- bookmarkEvent:
 			case <-customW.stopChan:
+				return
 			case <-ctx.Done():
+				return
 			}
+			drainPendingWMEvents()
 		}
 
 		// Process watch events
@@ -774,8 +826,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 							APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
 							Kind:       r.kindName,
 						}
+						justFlipped := false
 						if !initialEventsEndSent {
 							initialEventsEndSent = true
+							justFlipped = true
 							bookmarkApp.SetAnnotations(map[string]string{
 								"k8s.io/initial-events-end": "true",
 							})
@@ -791,6 +845,9 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 							return
 						case <-ctx.Done():
 							return
+						}
+						if justFlipped {
+							drainPendingWMEvents()
 						}
 					}
 					continue
@@ -879,6 +936,104 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					return
 				}
 
+			case wmEvent, ok := <-wmResultChan(wmWatcher):
+				if !ok {
+					klog.V(4).Info("WorkloadMonitor watcher closed")
+					wmWatcher = nil
+					continue
+				}
+				if wmEvent.Type == watch.Bookmark || wmEvent.Type == watch.Error {
+					if wmEvent.Type == watch.Error {
+						klog.V(4).Infof("WorkloadMonitor watch error event: %v", wmEvent.Object)
+					}
+					continue
+				}
+				wm, ok := wmEvent.Object.(*cozyv1alpha1.WorkloadMonitor)
+				if !ok {
+					continue
+				}
+				// All WM event types (Added/Modified/Deleted) produce a Modified
+				// Application event because the Application itself is what changed
+				// from the client's perspective.
+				wmAppName, hasLabel := wm.Labels[ApplicationNameLabel]
+				if !hasLabel {
+					continue
+				}
+				// Filter: skip WorkloadMonitor events for applications not matching
+				// the watch scope (single-resource or field-selector filtered watches)
+				hrName := r.releaseConfig.Prefix + wmAppName
+				if filterByName != "" && hrName != filterByName {
+					continue
+				}
+				if resourceName != "" && wmAppName != resourceName {
+					continue
+				}
+
+				// Locate the owning HelmRelease. For most application kinds the
+				// WorkloadMonitor and its HelmRelease live in the same namespace,
+				// but Tenant workloads live in a child namespace (see
+				// computeTenantNamespace) while the HelmRelease remains in the
+				// parent/requested namespace — so the WM-to-HR namespace mapping
+				// differs.
+				hrNS := wm.Namespace
+				if r.kindName == "Tenant" {
+					hrNS = namespace
+					// Filter out WM events whose child namespace does not
+					// correspond to the Tenant in our watched namespace, since
+					// the cluster-wide WM watch delivers events for all tenants.
+					if r.computeTenantNamespace(namespace, wmAppName) != wm.Namespace {
+						continue
+					}
+					if !fieldFilter.MatchesNamespace(hrNS) {
+						continue
+					}
+				} else if !fieldFilter.MatchesNamespace(hrNS) {
+					continue
+				}
+				hr := &helmv2.HelmRelease{}
+				if err := r.c.Get(ctx, client.ObjectKey{Namespace: hrNS, Name: hrName}, hr); err != nil {
+					klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, err)
+					continue
+				}
+				// Pass the fresh WorkloadMonitor so conversion uses the latest
+				// operational status even if the cache (r.c) has not yet
+				// observed this watch event.
+				app, err := r.ConvertHelmReleaseToApplicationWithMonitor(ctx, hr, wm)
+				if err != nil {
+					klog.V(4).Infof("Error converting HelmRelease for WorkloadMonitor event: %v", err)
+					continue
+				}
+				// Apply label selector filtering (same as HelmRelease event path)
+				if options.LabelSelector != nil {
+					sel, err := labels.Parse(options.LabelSelector.String())
+					if err != nil {
+						klog.Errorf("Invalid label selector: %v", err)
+						continue
+					}
+					if !sel.Matches(labels.Set(app.Labels)) {
+						continue
+					}
+				}
+				// Use the WorkloadMonitor's ResourceVersion for the emitted event
+				// so clients see a monotonically increasing RV and don't skip this update.
+				app.SetResourceVersion(wm.GetResourceVersion())
+				outEvent := watch.Event{Type: watch.Modified, Object: &app}
+				// Buffer WM-triggered events that arrive before the
+				// initial-events-end bookmark. They will be replayed in order
+				// immediately after the bookmark is emitted.
+				if !initialEventsEndSent {
+					pendingWMEvents = append(pendingWMEvents, outEvent)
+					continue
+				}
+				lastResourceVersion = wm.GetResourceVersion()
+				select {
+				case customW.resultChan <- outEvent:
+				case <-customW.stopChan:
+					return
+				case <-ctx.Done():
+					return
+				}
+
 			case <-customW.stopChan:
 				return
 			case <-ctx.Done():
@@ -889,6 +1044,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 
 	klog.V(6).Infof("Custom watch established successfully")
 	return customW, nil
+}
+
+// wmResultChan returns the result channel of a WorkloadMonitor watcher, or a nil
+// channel (which blocks forever in select) if the watcher is nil.
+func wmResultChan(w watch.Interface) <-chan watch.Event {
+	if w == nil {
+		return nil
+	}
+	return w.ResultChan()
 }
 
 // customWatcher wraps the original watcher and filters/converts events
@@ -994,12 +1158,21 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	return processed
 }
 
-// ConvertHelmReleaseToApplication converts a HelmRelease to an Application
+// ConvertHelmReleaseToApplication converts a HelmRelease to an Application.
 func (r *REST) ConvertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+	return r.ConvertHelmReleaseToApplicationWithMonitor(ctx, hr, nil)
+}
+
+// ConvertHelmReleaseToApplicationWithMonitor converts a HelmRelease to an
+// Application, optionally overriding the cached copy of a WorkloadMonitor with
+// a fresher version received from the watch client. This prevents the emitted
+// Application object from carrying stale WorkloadsReady data when r.c (cache)
+// lags behind r.w (watch).
+func (r *REST) ConvertHelmReleaseToApplicationWithMonitor(ctx context.Context, hr *helmv2.HelmRelease, freshMonitor *cozyv1alpha1.WorkloadMonitor) (appsv1alpha1.Application, error) {
 	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
 
 	// Convert HelmRelease struct to Application struct
-	app, err := r.convertHelmReleaseToApplication(ctx, hr)
+	app, err := r.convertHelmReleaseToApplication(ctx, hr, freshMonitor)
 	if err != nil {
 		klog.Errorf("Error converting from HelmRelease to Application: %v", err)
 		return appsv1alpha1.Application{}, err
@@ -1112,8 +1285,11 @@ func (r *REST) validateTenantNamespaceLength(currentNamespace, tenantName string
 	return allErrs
 }
 
-// convertHelmReleaseToApplication implements the actual conversion logic
-func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+// convertHelmReleaseToApplication implements the actual conversion logic.
+// The optional freshMonitor is used to override the cache copy of a
+// WorkloadMonitor when a newer version was delivered via the watch client —
+// see ConvertHelmReleaseToApplicationWithMonitor for the rationale.
+func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease, freshMonitor *cozyv1alpha1.WorkloadMonitor) (appsv1alpha1.Application, error) {
 	// Filter out internal keys (starting with "_") from spec
 	filteredSpec := filterInternalKeys(hr.Spec.Values)
 
@@ -1150,6 +1326,77 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			})
 		}
 	}
+	// Enrich conditions with WorkloadMonitor operational status.
+	// Tenant workloads live in a child namespace (computed from the Tenant name),
+	// not in the same namespace as the owning HelmRelease — look there instead.
+	workloadsNS := hr.Namespace
+	if r.kindName == "Tenant" {
+		workloadsNS = r.computeTenantNamespace(hr.Namespace, app.Name)
+	}
+	ws, wsErr := r.getWorkloadsOperational(ctx, workloadsNS, app.Name, freshMonitor)
+	// Derive a stable LastTransitionTime: use the owning HelmRelease's own
+	// condition update time (or CreationTimestamp as a floor) so that repeated
+	// conversions of the same underlying state produce identical timestamps.
+	wrTransition := hr.CreationTimestamp
+	for _, c := range hr.GetConditions() {
+		if c.LastTransitionTime.After(wrTransition.Time) {
+			wrTransition = c.LastTransitionTime
+		}
+	}
+	if ws.transitionTime.After(wrTransition.Time) {
+		wrTransition = ws.transitionTime
+	}
+	if wrTransition.IsZero() {
+		// Fallback for objects that somehow have no timestamps at all
+		// (e.g. hand-crafted test fixtures). In production HelmReleases
+		// always carry a CreationTimestamp, so the stable branch above
+		// is used.
+		wrTransition = metav1.Now()
+	}
+	if wsErr != nil {
+		// Fail-open: if we can't query WorkloadMonitors (e.g., informer cache not ready),
+		// don't override Ready. Prefer operational availability over safety.
+		// The WorkloadsReady=Unknown condition still signals the issue to the user.
+		klog.Warningf("Failed to check workload monitors for %s/%s: %v", workloadsNS, app.Name, wsErr)
+		conditions = append(conditions, metav1.Condition{
+			Type:               "WorkloadsReady",
+			Status:             metav1.ConditionUnknown,
+			LastTransitionTime: wrTransition,
+			Reason:             "Error",
+			Message:            fmt.Sprintf("Failed to check workload status: %v", wsErr),
+		})
+	} else if ws.found {
+		workloadsCondition := metav1.Condition{
+			Type:               "WorkloadsReady",
+			LastTransitionTime: wrTransition,
+			Reason:             "WorkloadMonitorCheck",
+		}
+		switch {
+		case !ws.operational:
+			// Concrete failure takes priority over unknown/pending state
+			workloadsCondition.Status = metav1.ConditionFalse
+			workloadsCondition.Message = "One or more workloads are not operational"
+		case ws.unknown:
+			workloadsCondition.Status = metav1.ConditionUnknown
+			workloadsCondition.Reason = "Pending"
+			workloadsCondition.Message = "One or more workloads have not been reconciled yet"
+		default:
+			workloadsCondition.Status = metav1.ConditionTrue
+			workloadsCondition.Message = "All workloads are operational"
+		}
+		conditions = append(conditions, workloadsCondition)
+
+		// Intentionally do NOT override the Ready condition based on WorkloadsReady.
+		// Ready continues to reflect HelmRelease state only, which:
+		//   - preserves backward compatibility with existing tooling (kubectl wait,
+		//     GitOps health checks) that expect Ready to match HelmRelease
+		//   - avoids false-negative Ready=False during normal startup windows where
+		//     pods are still coming up but WorkloadMonitor has already reported
+		//     Operational=false due to availableReplicas < MinReplicas
+		// WorkloadsReady is a separate condition that surfaces workload health
+		// independently — users and dashboards can observe it for operational visibility.
+	}
+
 	app.SetConditions(conditions)
 
 	// Add namespace field for Tenant applications
@@ -1164,6 +1411,79 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 	}
 
 	return app, nil
+}
+
+// workloadsStatus holds the aggregated operational status of WorkloadMonitors.
+type workloadsStatus struct {
+	operational bool
+	found       bool
+	unknown     bool // true when at least one monitor has nil Operational (not yet reconciled)
+	// transitionTime is the most recent metadata update time across the
+	// matching monitors. Used as WorkloadsReady.LastTransitionTime so that
+	// repeated conversions for the same underlying state produce stable
+	// timestamps (preserving the Kubernetes contract that identical
+	// resource versions represent identical content).
+	transitionTime metav1.Time
+}
+
+// getWorkloadsOperational checks WorkloadMonitor resources for an application and returns
+// aggregated operational status. If no monitors exist, returns found=false.
+// When freshOverride is non-nil, its status replaces the cached copy for the
+// corresponding monitor — this keeps the result consistent with watch events
+// when the cache (r.c) lags behind the watch client (r.w).
+func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName string, freshOverride *cozyv1alpha1.WorkloadMonitor) (workloadsStatus, error) {
+	monitors := &cozyv1alpha1.WorkloadMonitorList{}
+	if err := r.c.List(ctx, monitors,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			appsv1alpha1.ApplicationKindLabel:  r.kindName,
+			appsv1alpha1.ApplicationGroupLabel: r.gvk.Group,
+			appsv1alpha1.ApplicationNameLabel:  appName,
+		},
+	); err != nil {
+		return workloadsStatus{}, err
+	}
+	// Ensure the freshOverride is represented in the aggregation even when
+	// the cache has not yet observed it (brand-new resource) or is behind.
+	replaced := false
+	if freshOverride != nil {
+		for i := range monitors.Items {
+			if monitors.Items[i].UID == freshOverride.UID ||
+				(monitors.Items[i].Name == freshOverride.Name && monitors.Items[i].Namespace == freshOverride.Namespace) {
+				monitors.Items[i] = *freshOverride
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			monitors.Items = append(monitors.Items, *freshOverride)
+		}
+	}
+	if len(monitors.Items) == 0 {
+		return workloadsStatus{operational: true, found: false}, nil
+	}
+	operational := true
+	unknown := false
+	var latest metav1.Time
+	for _, m := range monitors.Items {
+		if m.Status.Operational == nil {
+			unknown = true
+		} else if !*m.Status.Operational {
+			operational = false
+		}
+		// Pick the most recent monitor mtime as a stable transition time.
+		if t := latestMonitorTime(&m); t.After(latest.Time) {
+			latest = t
+		}
+	}
+	return workloadsStatus{operational: operational, found: true, unknown: unknown, transitionTime: latest}, nil
+}
+
+// latestMonitorTime returns the most recent timestamp associated with a
+// WorkloadMonitor — currently only the object creation time is guaranteed.
+// Status does not carry a transition time, so we fall back to CreationTimestamp.
+func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
+	return m.CreationTimestamp
 }
 
 // convertApplicationToHelmRelease implements the actual conversion logic

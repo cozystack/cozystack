@@ -388,10 +388,12 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		fresh.Status.ObservedReplicas = observedReplicas
 		fresh.Status.AvailableReplicas = availableReplicas
 
-		// Default to operational = true, but check MinReplicas if set
-		monitor.Status.Operational = pointer.Bool(true)
-		if monitor.Spec.MinReplicas != nil && availableReplicas < *monitor.Spec.MinReplicas {
-			monitor.Status.Operational = pointer.Bool(false)
+		// Default to operational = true, but check MinReplicas if set.
+		// Use fresh.Spec to avoid making decisions based on a stale cached copy
+		// when the spec was updated between the initial read and this retry.
+		fresh.Status.Operational = pointer.Bool(true)
+		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
+			fresh.Status.Operational = pointer.Bool(false)
 		}
 		return r.Status().Update(ctx, fresh)
 	})

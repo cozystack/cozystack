@@ -190,7 +190,7 @@ func TestConvertHelmReleaseToApplication_TenantNamespaceKindGate(t *testing.T) {
 			},
 		}
 
-		app, err := r.convertHelmReleaseToApplication(context.Background(), hr)
+		app, err := r.convertHelmReleaseToApplication(context.Background(), hr, nil)
 		if err != nil {
 			t.Fatalf("convertHelmReleaseToApplication: %v", err)
 		}
@@ -208,7 +208,7 @@ func TestConvertHelmReleaseToApplication_TenantNamespaceKindGate(t *testing.T) {
 			},
 		}
 
-		app, err := r.convertHelmReleaseToApplication(context.Background(), hr)
+		app, err := r.convertHelmReleaseToApplication(context.Background(), hr, nil)
 		if err != nil {
 			t.Fatalf("convertHelmReleaseToApplication: %v", err)
 		}
