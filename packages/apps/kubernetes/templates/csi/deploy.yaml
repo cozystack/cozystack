@@ -24,6 +24,22 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: "NoSchedule"
+      initContainers:
+        - name: wait-for-kubeconfig
+          image: "{{ $.Files.Get "images/busybox.tag" | trim }}"
+          command:
+          - sh
+          - -c
+          - |
+            set -eu
+            until [ -s /etc/kubernetes/kubeconfig/super-admin.svc ]; do
+              echo "waiting for admin kubeconfig to be provisioned by Kamaji..."
+              sleep 5
+            done
+          volumeMounts:
+          - name: kubeconfig
+            mountPath: /etc/kubernetes/kubeconfig
+            readOnly: true
       containers:
         - name: csi-driver
           imagePullPolicy: Always
@@ -234,4 +250,5 @@ spec:
           emptyDir: {}
         - secret:
             secretName: {{ .Release.Name }}-admin-kubeconfig
+            optional: true
           name: kubeconfig
