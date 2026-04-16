@@ -336,9 +336,17 @@ EOF
   # types are github.com/fluxcd/helm-controller/api v2 Snapshot.
   history_statuses=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" \
     -ojsonpath='{range .status.history[*]}{.status}{"\n"}{end}')
+  # Always emit the raw value so a silent future-Flux field rename shows
+  # up as "empty history on a Ready HR" in CI logs rather than vanishing.
+  echo "Parent HelmRelease history statuses:"
+  printf '%s\n' "${history_statuses:-<empty>}"
+  if [ -z "${history_statuses}" ]; then
+    echo "Unexpected empty .status.history on a Ready HelmRelease - Flux API shape may have changed." >&2
+    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
   if helmrelease_has_remediation_cycle "${history_statuses}"; then
-    echo "Parent HelmRelease entered remediation cycle. History statuses:" >&2
-    printf '%s\n' "${history_statuses}" >&2
+    echo "Parent HelmRelease entered remediation cycle." >&2
     kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
     exit 1
   fi

@@ -26,14 +26,14 @@ helmrelease_has_remediation_cycle() {
     if [ -z "${statuses}" ]; then
         return 1
     fi
-    while IFS= read -r status; do
-        case "${status}" in
-            failed|uninstalled)
-                return 0
-                ;;
-        esac
-    done <<EOF
-${statuses}
-EOF
+    # printf + grep over the pipe, rather than a heredoc plus while read.
+    # printf %s treats the status string as a literal payload, so any stray
+    # $ in a future caller's input does not trigger shell expansion. grep
+    # returns 0 iff at least one line matches the allowlist, which is
+    # exactly the contract the caller wants, so we can return its exit
+    # status directly.
+    if printf '%s\n' "${statuses}" | grep --extended-regexp --quiet '^(failed|uninstalled)$'; then
+        return 0
+    fi
     return 1
 }

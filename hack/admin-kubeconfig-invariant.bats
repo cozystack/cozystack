@@ -85,13 +85,7 @@
 
   helm template invariant packages/apps/kubernetes \
     --namespace tenant-root \
-    --set _namespace.etcd="" \
-    --set _namespace.monitoring="" \
-    --set _namespace.ingress="" \
-    --set _namespace.seaweedfs="" \
-    --set _namespace.host="" \
-    --set _cluster.cluster-domain=cozy.local \
-    --set 'nodeGroups=null' \
+    --values packages/apps/kubernetes/tests/values-ci-no-etcd.yaml \
     2>/dev/null > "$tmp/rendered.yaml"
 
   matched=$(
@@ -128,13 +122,7 @@
 
   helm template invariant packages/apps/kubernetes \
     --namespace tenant-root \
-    --set _namespace.etcd="" \
-    --set _namespace.monitoring="" \
-    --set _namespace.ingress="" \
-    --set _namespace.seaweedfs="" \
-    --set _namespace.host="" \
-    --set _cluster.cluster-domain=cozy.local \
-    --set 'nodeGroups=null' \
+    --values packages/apps/kubernetes/tests/values-ci-no-etcd.yaml \
     2>/dev/null > "$tmp/rendered.yaml"
 
   matched=$(
