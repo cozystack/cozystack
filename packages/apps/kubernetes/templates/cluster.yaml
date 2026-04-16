@@ -1,6 +1,6 @@
 {{- $etcd := .Values._namespace.etcd }}
 {{- if not $etcd }}
-{{- fail "Kubernetes tenant requires a parent tenant with etcd enabled: set .Values.etcd=true on tenant-root (or any ancestor tenant), wait for the etcd HelmRelease to reconcile (DataStore CR appears in the tenant namespace), then retry." }}
+{{- fail "Kubernetes tenant requires a parent Tenant application with etcd: true so the etcd module deploys a DataStore CR in the tenant namespace. Set spec.etcd: true on the root Tenant (or any ancestor Tenant), wait for the etcd HelmRelease to reconcile and the DataStore CR to appear, then retry." }}
 {{- end }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}

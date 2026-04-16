@@ -32,7 +32,12 @@ spec:
           - -c
           - |
             set -eu
+            deadline=$(( $(date +%s) + 1200 ))
             until [ -s /etc/kubernetes/kubeconfig/super-admin.svc ]; do
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "admin kubeconfig was not provisioned within 20m; exiting so the pod goes CrashLoopBackOff and surfaces in dashboards" >&2
+                exit 1
+              fi
               echo "waiting for admin kubeconfig to be provisioned by Kamaji..."
               sleep 5
             done
