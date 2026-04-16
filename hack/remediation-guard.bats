@@ -81,7 +81,7 @@
     fi
 }
 
-@test "installFailures extraction pins HR v2 status.history shape" {
+@test "status.history extraction pins HR v2 status.history shape" {
     # Pins the Flux HelmRelease v2 .status.history[].status shape that
     # run-kubernetes.sh relies on. If a future flux release renames the
     # field, the jsonpath returns nothing, the guard reports no cycle,
