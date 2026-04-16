@@ -326,6 +326,13 @@ EOF
   # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
   # admin-kubeconfig was still being provisioned, which would trigger uninstall remediation
   # and churn the Cluster CR.
+  # Flux helm-controller v2 status shape: .status.installFailures and
+  # .status.upgradeFailures are counters populated by the controller on
+  # every failed install/upgrade. If a future flux release renames them,
+  # kubectl returns the empty string and the guard silently passes. The
+  # shape is pinned by hack/remediation-guard.bats (see that file for
+  # details), and the vendored API types live under
+  # vendor/github.com/fluxcd/helm-controller/api/v2.
   install_failures=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" -ojsonpath='{.status.installFailures}')
   upgrade_failures=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" -ojsonpath='{.status.upgradeFailures}')
   if helmrelease_has_remediation_cycle "${install_failures}" "${upgrade_failures}"; then
