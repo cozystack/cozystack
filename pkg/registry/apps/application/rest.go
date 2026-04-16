@@ -1509,11 +1509,13 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Interval: metav1.Duration{Duration: 5 * time.Minute},
 			Install: &helmv2.Install{
+				Timeout: &metav1.Duration{Duration: 15 * time.Minute},
 				Remediation: &helmv2.InstallRemediation{
 					Retries: -1,
 				},
 			},
 			Upgrade: &helmv2.Upgrade{
+				Timeout: &metav1.Duration{Duration: 15 * time.Minute},
 				Remediation: &helmv2.UpgradeRemediation{
 					Retries: -1,
 				},
