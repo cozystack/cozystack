@@ -240,7 +240,10 @@ spec:
           className: {{ $ingress }}
           host: {{ .Values.host | default (printf "s3.%s" $host) }}
           annotations:
-            nginx.ingress.kubernetes.io/proxy-body-size: "0"
+            # Limit single PUT request to 5GB to enforce multipart uploads for large files.
+            # This prevents issues with large file uploads and reduces support load.
+            # For files >5GB, clients must use S3 multipart upload API.
+            nginx.ingress.kubernetes.io/proxy-body-size: "5g"
             nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
             {{- if eq $solver "http01" }}
             acme.cert-manager.io/http01-ingress-class: {{ $ingress }}
