@@ -320,6 +320,19 @@ EOF
     done
     kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
 
+  # Guard: parent HelmRelease must not have entered an install/upgrade remediation cycle.
+  # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
+  # admin-kubeconfig was still being provisioned, which would trigger uninstall remediation
+  # and churn the Cluster CR.
+  install_failures=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" -ojsonpath='{.status.installFailures}')
+  upgrade_failures=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" -ojsonpath='{.status.upgradeFailures}')
+  if [ "${install_failures:-0}" != "0" ] && [ -n "${install_failures}" ] || \
+     [ "${upgrade_failures:-0}" != "0" ] && [ -n "${upgrade_failures}" ]; then
+    echo "Parent HelmRelease entered remediation cycle: installFailures=${install_failures:-0}, upgradeFailures=${upgrade_failures:-0}" >&2
+    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
+
   # Clean up
   pkill -f "port-forward.*${port}:" 2>/dev/null || true
   rm -f "tenantkubeconfig-${test_name}"
