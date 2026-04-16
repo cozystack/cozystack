@@ -11,7 +11,7 @@
 
 # Cozystack
 
-**Cozystack** is a free PaaS platform and framework for building clouds.
+**Cozystack** is a free platform and framework for building clouds.
 
 Cozystack is a [CNCF Sandbox Level Project](https://www.cncf.io/sandbox-projects/) that was originally built and sponsored by [Ænix](https://aenix.io/).
 
