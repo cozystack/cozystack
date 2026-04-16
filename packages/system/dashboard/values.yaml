@@ -1,6 +1,6 @@
 openapiUI:
-  image: ghcr.io/cozystack/cozystack/openapi-ui:v1.2.1@sha256:a77c502c4b67fa5f0698f66a82eb2ad30e138f9bd2700aa40a63f73cb86a559d
+  image: ghcr.io/cozystack/cozystack/openapi-ui:v1.3.0-rc.1@sha256:69dcecbea0cfff681043c75e3508c84f03a01b7be3e3a425deb740d629d3ab04
 openapiUIK8sBff:
-  image: ghcr.io/cozystack/cozystack/openapi-ui-k8s-bff:v1.2.1@sha256:1b3ea6d4c7dbbe6a8def3b2807fffdfab2ac4afc39d7a846e57dd491fa168f92
+  image: ghcr.io/cozystack/cozystack/openapi-ui-k8s-bff:v1.3.0-rc.1@sha256:873cf834deddaa3954b6d9c5d520a8e03714b77178eff44826d93540561f599e
 tokenProxy:
-  image: ghcr.io/cozystack/cozystack/token-proxy:v1.2.1@sha256:2e280991e07853ea48f97b0a42946afffa10d03d6a83d41099ed83e6ffc94fdc
+  image: ghcr.io/cozystack/cozystack/token-proxy:v1.3.0-rc.1@sha256:2e280991e07853ea48f97b0a42946afffa10d03d6a83d41099ed83e6ffc94fdc
