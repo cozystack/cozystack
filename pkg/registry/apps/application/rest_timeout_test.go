@@ -48,9 +48,13 @@ func TestConvertApplicationToHelmRelease_AppliesReleaseConfigTimeout(t *testing.
 			wantSet:    true,
 		},
 		{
-			name:       "Qdrant kind without configured timeout keeps flux defaults",
-			kind:       "Qdrant",
-			prefix:     "qdrant-",
+			// Fictional kind on purpose: the test is about the unset path
+			// regardless of which real Application kind ends up needing a
+			// timeout override. Using a real kind name would create false
+			// coupling to that Application's ApplicationDefinition.
+			name:       "unrelated kind without configured timeout keeps flux defaults",
+			kind:       "PlaceholderKindForDefaults",
+			prefix:     "placeholder-",
 			configured: 0,
 			wantSet:    false,
 		},

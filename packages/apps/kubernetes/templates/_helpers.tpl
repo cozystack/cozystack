@@ -60,9 +60,16 @@ exits only when super-admin.svc appears, which happens after kubelet's
 optional-Secret refresh cycle.
 
 The 10m deadline stays strictly below the 15m HelmRelease
-Install.Timeout scoped to the Kubernetes Application kind so the
+Install.Timeout set by cozystack-api for the Kubernetes kind (via the
+release.cozystack.io/helm-install-timeout annotation) so the
 CrashLoopBackOff surfaces before flux remediation fires and uninstalls
 the Cluster CR.
+
+The pinned busybox image in images/busybox.tag points directly at
+docker.io by digest (not mirrored to ghcr.io like the other .tag files
+here): the payload is a one-shot sh loop, the digest pin makes the
+pull immutable, and the cost of maintaining a private mirror of a tiny
+upstream image that does not move often is not worth it.
 
 Call site owns the surrounding volumes block; the kubeconfig volume
 must exist on the pod and mount at /etc/kubernetes/kubeconfig.
