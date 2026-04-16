@@ -1,24 +1,39 @@
 # Helpers for asserting that a Flux HelmRelease did not fall into an
 # install/upgrade remediation cycle during an e2e run.
 #
-# A non-zero installFailures/upgradeFailures counter means flux
-# helm-controller hit its wait timeout, ran remediation (uninstall),
-# and re-installed. That is exactly the race this guard is meant to
-# catch, so the function returns success (0) when a cycle is detected
-# and failure (1) otherwise.
+# Background: Flux helm-controller's ClearFailures() zeroes
+# .status.installFailures / .status.upgradeFailures on every successful
+# reconciliation (see the upstream ClearFailures method on
+# HelmReleaseStatus). That makes those counters useless for a guard that
+# runs after the HelmRelease has reached Ready - the values are always 0.
 #
-# Both arguments may be empty strings, the literal "0", or a positive
-# integer. Shell's && and || have equal precedence with left-to-right
-# associativity, so each half of the disjunction is grouped explicitly
-# to avoid (A && B) || C && D parsing that masks the common
-# install_failures=1, upgrade_failures="" case.
+# What survives a successful reconciliation is .status.history, a bounded
+# list of release Snapshots. Each Snapshot carries a status field that
+# tracks the Helm release state: deployed, superseded, failed, uninstalled,
+# and so on. A remediation cycle leaves the footprint behind: a snapshot
+# with status "uninstalled" (from install/upgrade remediation) or "failed"
+# (Helm release failure that remediation then uninstalled). Those stay in
+# history even after a subsequent successful reinstall.
+#
+# helmrelease_has_remediation_cycle takes a newline-delimited list of
+# snapshot statuses (whatever the caller extracted via kubectl -o jsonpath
+# or equivalent) and returns 0 (detected) when any entry is "failed" or
+# "uninstalled", 1 otherwise. Empty input is treated as "no history yet,
+# no cycle observed".
 
 helmrelease_has_remediation_cycle() {
-    install_failures="$1"
-    upgrade_failures="$2"
-    if { [ -n "${install_failures}" ] && [ "${install_failures}" != "0" ]; } || \
-       { [ -n "${upgrade_failures}" ] && [ "${upgrade_failures}" != "0" ]; }; then
-        return 0
+    statuses="$1"
+    if [ -z "${statuses}" ]; then
+        return 1
     fi
+    while IFS= read -r status; do
+        case "${status}" in
+            failed|uninstalled)
+                return 0
+                ;;
+        esac
+    done <<EOF
+${statuses}
+EOF
     return 1
 }
