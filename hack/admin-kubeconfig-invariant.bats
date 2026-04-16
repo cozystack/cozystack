@@ -115,3 +115,43 @@
 
   echo "No admin-kubeconfig Deployments rendered for empty etcd (as expected)"
 }
+
+@test "chart emits zero admin-kubeconfig HelmReleases when tenant has no etcd DataStore" {
+  # Same principle as the Deployment variant above, extended to every child
+  # HelmRelease (cilium, coredns, csi, cert-manager, ...). They reference
+  # *-admin-kubeconfig via kubeConfig.secretRef and would otherwise sit in
+  # NotReady forever on an etcd-less tenant, polluting the HelmRelease list
+  # the operator sees and contradicting the "awaiting-etcd beacon only"
+  # contract of the soft-skip path.
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  helm template invariant packages/apps/kubernetes \
+    --namespace tenant-root \
+    --set _namespace.etcd="" \
+    --set _namespace.monitoring="" \
+    --set _namespace.ingress="" \
+    --set _namespace.seaweedfs="" \
+    --set _namespace.host="" \
+    --set _cluster.cluster-domain=cozy.local \
+    --set 'nodeGroups=null' \
+    2>/dev/null > "$tmp/rendered.yaml"
+
+  matched=$(
+    yq --output-format=json eval-all '.' "$tmp/rendered.yaml" \
+      | jq -s '
+          map(select(.kind == "HelmRelease")) |
+          map(select(.spec.kubeConfig.secretRef.name | test("-admin-kubeconfig$")?)) |
+          length
+        '
+  )
+
+  if [ "$matched" -ne 0 ]; then
+    echo "Expected zero HelmReleases referencing *-admin-kubeconfig when etcd is empty, got $matched:" >&2
+    yq --output-format=json eval-all '.' "$tmp/rendered.yaml" \
+      | jq -s 'map(select(.kind == "HelmRelease") | .metadata.name)' >&2
+    exit 1
+  fi
+
+  echo "No admin-kubeconfig HelmReleases rendered for empty etcd (as expected)"
+}
