@@ -4,6 +4,9 @@ KUBERNETES_PKG_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 generate:
 	cozyvalues-gen -m 'kubernetes' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/kubernetes/types.go
 	../../../hack/update-crd.sh
