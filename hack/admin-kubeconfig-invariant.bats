@@ -70,3 +70,48 @@
 
   echo "Invariant holds for $matched Deployment(s)"
 }
+
+@test "chart emits zero admin-kubeconfig Deployments when tenant has no etcd DataStore" {
+  # Without a DataStore (parent Tenant has not populated _namespace.etcd yet)
+  # the control-plane-side Deployments must NOT render at all. If they did,
+  # the wait-for-kubeconfig init would CrashLoopBackOff indefinitely - there
+  # would be no KamajiControlPlane to provision the Secret - consuming the
+  # HelmRelease wait budget and triggering exactly the remediation cycle the
+  # rest of this chart tries to avoid. This test renders the whole chart
+  # with etcd empty and asserts no Deployment references the admin-kubeconfig
+  # Secret.
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  helm template invariant packages/apps/kubernetes \
+    --namespace tenant-root \
+    --set _namespace.etcd="" \
+    --set _namespace.monitoring="" \
+    --set _namespace.ingress="" \
+    --set _namespace.seaweedfs="" \
+    --set _namespace.host="" \
+    --set _cluster.cluster-domain=cozy.local \
+    --set 'nodeGroups=null' \
+    2>/dev/null > "$tmp/rendered.yaml"
+
+  matched=$(
+    yq --output-format=json eval-all '.' "$tmp/rendered.yaml" \
+      | jq -s '
+          map(select(.kind == "Deployment")) |
+          map(select(
+            (.spec.template.spec.volumes // [])
+              | any(.secret.secretName | test("-admin-kubeconfig$")?)
+          )) |
+          length
+        '
+  )
+
+  if [ "$matched" -ne 0 ]; then
+    echo "Expected zero Deployments mounting *-admin-kubeconfig when etcd is empty, got $matched:" >&2
+    yq --output-format=json eval-all '.' "$tmp/rendered.yaml" \
+      | jq -s 'map(select(.kind == "Deployment") | .metadata.name)' >&2
+    exit 1
+  fi
+
+  echo "No admin-kubeconfig Deployments rendered for empty etcd (as expected)"
+}

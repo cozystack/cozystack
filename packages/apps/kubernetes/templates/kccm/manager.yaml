@@ -1,3 +1,4 @@
+{{- if .Values._namespace.etcd }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -60,3 +61,4 @@ spec:
           optional: true
         name: kubeconfig
       serviceAccountName: {{ .Release.Name }}-kccm
+{{- end }}

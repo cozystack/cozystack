@@ -1,3 +1,4 @@
+{{- if .Values._namespace.etcd }}
 kind: Deployment
 apiVersion: apps/v1
 metadata:
@@ -238,3 +239,4 @@ spec:
             secretName: {{ .Release.Name }}-admin-kubeconfig
             optional: true
           name: kubeconfig
+{{- end }}
