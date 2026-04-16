@@ -1509,13 +1509,11 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Interval: metav1.Duration{Duration: 5 * time.Minute},
 			Install: &helmv2.Install{
-				Timeout: &metav1.Duration{Duration: 15 * time.Minute},
 				Remediation: &helmv2.InstallRemediation{
 					Retries: -1,
 				},
 			},
 			Upgrade: &helmv2.Upgrade{
-				Timeout: &metav1.Duration{Duration: 15 * time.Minute},
 				Remediation: &helmv2.UpgradeRemediation{
 					Retries: -1,
 				},
@@ -1528,6 +1526,20 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Values: app.Spec,
 		},
+	}
+
+	// The Kubernetes Application's parent chart creates CAPI/Kamaji resources
+	// whose admin-kubeconfig Secret is provisioned asynchronously and mounted
+	// by Deployments in the same chart. On a cold node, Kamaji control-plane
+	// bootstrap routinely exceeds flux helm-controller's default wait budget,
+	// so install remediation loops uninstall the Cluster CR and churn. Extend
+	// the wait budget to 15m for Kubernetes only - other Application kinds
+	// without this race keep flux defaults, so their failed installs do not
+	// linger unnecessarily before remediation fires.
+	if r.kindName == "Kubernetes" {
+		timeout := metav1.Duration{Duration: 15 * time.Minute}
+		helmRelease.Spec.Install.Timeout = &timeout
+		helmRelease.Spec.Upgrade.Timeout = &timeout
 	}
 
 	return helmRelease, nil
