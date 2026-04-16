@@ -15,7 +15,7 @@ update:
 	hack/update-versions.sh
 	make generate
 
-image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
+image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler image-busybox
 
 image-ubuntu-container-disk:
 	$(foreach ver,$(KUBERNETES_VERSIONS), \
@@ -70,3 +70,15 @@ image-cluster-autoscaler:
 	echo "$(REGISTRY)/cluster-autoscaler:$(call settag,$(KUBERNETES_PKG_TAG))@$$(yq e '."containerimage.digest"' images/cluster-autoscaler.json -o json -r)" \
 		> images/cluster-autoscaler.tag
 	rm -f images/cluster-autoscaler.json
+
+image-busybox:
+	docker buildx build images/busybox \
+		--tag $(REGISTRY)/busybox:$(call settag,$(KUBERNETES_PKG_TAG)) \
+		--tag $(REGISTRY)/busybox:$(call settag,$(KUBERNETES_PKG_TAG)-$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/busybox:latest \
+		--cache-to type=inline \
+		--metadata-file images/busybox.json \
+		$(BUILDX_ARGS)
+	echo "$(REGISTRY)/busybox:$(call settag,$(KUBERNETES_PKG_TAG))@$$(yq e '."containerimage.digest"' images/busybox.json -o json -r)" \
+		> images/busybox.tag
+	rm -f images/busybox.json
