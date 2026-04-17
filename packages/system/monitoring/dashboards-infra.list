@@ -33,3 +33,5 @@ hubble/dns-namespace
 hubble/l7-http-metrics
 hubble/network-overview
 gpu/gpu-performance
+gpu/gpu-efficiency
+gpu/gpu-quotas

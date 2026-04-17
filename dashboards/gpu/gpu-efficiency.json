@@ -31,6 +31,12 @@
     },
     {
       "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
       "id": "timeseries",
       "name": "Time series",
       "version": ""
@@ -52,6 +58,7 @@
       }
     ]
   },
+  "description": "Tensor saturation, util/watt and throttling \u2014 reveals inefficient GPU workloads",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -68,142 +75,15 @@
       },
       "id": 1,
       "panels": [],
-      "title": "Overview",
+      "title": "\u041e\u0431\u0449\u0438\u0435 \u043c\u0435\u0442\u0440\u0438\u043a\u0438 \u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u043e\u0441\u0442\u0438",
       "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$ds_prometheus"
+        "uid": "${ds_prometheus}"
       },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 1
-      },
-      "id": 2,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "expr": "cluster:gpu_count:total",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds_prometheus"
-          }
-        }
-      ],
-      "title": "Total GPUs",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_VM-SHORTTERM}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 1
-      },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "expr": "cluster:gpu_count:allocated",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_VM-SHORTTERM}"
-          }
-        }
-      ],
-      "title": "Allocated",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$ds_prometheus"
-      },
+      "description": "\u0421\u0440\u0435\u0434\u043d\u044f\u044f \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0442\u0435\u043d\u0437\u043e\u0440\u043d\u044b\u0445 \u044f\u0434\u0435\u0440. <10% \u2014 GPU \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u044e\u0442\u0441\u044f \u043d\u0435\u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u043e (\u043a\u043b\u0438\u0435\u043d\u0442\u044b \u043c\u043e\u0433\u043b\u0438 \u0431\u044b \u043f\u0435\u0440\u0435\u0435\u0445\u0430\u0442\u044c \u043d\u0430 CPU \u0438\u043b\u0438 \u043e\u043f\u0442\u0438\u043c\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043a\u043e\u0434).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -216,16 +96,20 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "blue",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "green",
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "yellow",
                 "value": 30
               },
               {
-                "color": "orange",
-                "value": 80
+                "color": "green",
+                "value": 60
               }
             ]
           },
@@ -234,14 +118,14 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
+        "h": 5,
+        "w": 8,
+        "x": 0,
         "y": 1
       },
-      "id": 4,
+      "id": 2,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "area",
         "justifyMode": "auto",
         "orientation": "auto",
@@ -260,15 +144,15 @@
       "pluginVersion": "11.4.0",
       "targets": [
         {
-          "expr": "cluster:gpu_util:avg",
+          "expr": "avg(pod:tensor_saturation:avg5m)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "$ds_prometheus"
+            "uid": "${ds_prometheus}"
           }
         }
       ],
-      "title": "Average utilization",
+      "title": "Cluster Tensor Saturation",
       "type": "stat"
     },
     {
@@ -276,35 +160,44 @@
         "type": "prometheus",
         "uid": "${DS_VM-SHORTTERM}"
       },
+      "description": "NVML utilization % \u043d\u0430 \u043a\u0430\u0436\u0434\u044b\u0439 \u0432\u0430\u0442\u0442. \u0412\u044b\u0441\u043e\u043a\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 = \u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u0430\u044f \u043d\u0430\u0433\u0440\u0443\u0437\u043a\u0430.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 0,
+          "decimals": 3,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 1
               }
             ]
           },
-          "unit": "watt"
+          "unit": "none"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
+        "h": 5,
+        "w": 8,
+        "x": 8,
         "y": 1
       },
-      "id": 5,
+      "id": 3,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "area",
         "justifyMode": "auto",
         "orientation": "auto",
@@ -323,7 +216,7 @@
       "pluginVersion": "11.4.0",
       "targets": [
         {
-          "expr": "cluster:gpu_power_watts:sum",
+          "expr": "avg(pod:util_per_watt:avg5m)",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -331,7 +224,81 @@
           }
         }
       ],
-      "title": "Power draw",
+      "title": "Avg Utilization per Watt",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "description": "\u0414\u043e\u043b\u044f \u0432\u0440\u0435\u043c\u0435\u043d\u0438, \u043a\u043e\u0433\u0434\u0430 GPU \u0443\u043f\u0438\u0440\u0430\u044e\u0442\u0441\u044f \u0432 TDP \u0438 \u0442\u0435\u0440\u044f\u044e\u0442 \u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c. >5% \u2014 \u043a\u043b\u0438\u0435\u043d\u0442\u044b \u043d\u0435\u0434\u043e\u043f\u043e\u043b\u0443\u0447\u0430\u044e\u0442 FLOPS.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "expr": "avg(gpu:power_throttle_fraction:rate5m) * 100",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          }
+        }
+      ],
+      "title": "Avg Power Throttling",
       "type": "stat"
     },
     {
@@ -340,18 +307,19 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 6
       },
       "id": 10,
       "panels": [],
-      "title": "Utilization",
+      "title": "NVML vs Tensor (\u043a\u0442\u043e \u043e\u0431\u043c\u0430\u043d\u044b\u0432\u0430\u0435\u0442\u0441\u044f)",
       "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$ds_prometheus"
+        "uid": "${DS_VM-SHORTTERM}"
       },
+      "description": "\u041a\u043b\u0430\u0441\u0441\u0438\u0447\u0435\u0441\u043a\u0430\u044f \u043c\u0435\u0442\u0440\u0438\u043a\u0430 \u0443\u0442\u0438\u043b\u0438\u0437\u0430\u0446\u0438\u0438. \u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442 \u0437\u0430\u043d\u044f\u0442\u043e\u0441\u0442\u044c \u043b\u044e\u0431\u043e\u0433\u043e \u0434\u0432\u0438\u0436\u043a\u0430 (SM, copy, encoder).",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -414,7 +382,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 7
       },
       "id": 11,
       "options": {
@@ -435,23 +403,24 @@
       "pluginVersion": "11.4.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_UTIL{Hostname=~\"$Hostname\", namespace=~\"$namespace\"}",
-          "legendFormat": "{{Hostname}}/{{gpu}} {{pod}}",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{namespace=~\"$namespace\", namespace!=\"\"}",
+          "legendFormat": "{{namespace}}/{{pod}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "$ds_prometheus"
+            "uid": "${DS_VM-SHORTTERM}"
           }
         }
       ],
-      "title": "GPU Utilization (NVML)",
+      "title": "NVML GPU Utilization",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_VM-SHORTTERM}"
+        "uid": "${ds_prometheus}"
       },
+      "description": "\u0420\u0435\u0430\u043b\u044c\u043d\u0430\u044f \u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u0442\u0435\u043d\u0437\u043e\u0440\u043d\u044b\u0445 \u044f\u0434\u0435\u0440 (HMMA). \u0414\u043b\u044f AI/LLM \u0438\u043d\u0444\u0435\u0440\u0435\u043d\u0441\u0430 \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u226520%, \u0438\u043d\u0430\u0447\u0435 workload \u043d\u0435 \u043e\u043f\u0442\u0438\u043c\u0438\u0437\u0438\u0440\u043e\u0432\u0430\u043d.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -514,7 +483,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 7
       },
       "id": 12,
       "options": {
@@ -535,216 +504,16 @@
       "pluginVersion": "11.4.0",
       "targets": [
         {
-          "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{Hostname=~\"$Hostname\", namespace=~\"$namespace\"} * 100",
-          "legendFormat": "{{Hostname}}/{{gpu}} {{pod}}",
+          "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace=~\"$namespace\", namespace!=\"\"} * 100",
+          "legendFormat": "{{namespace}}/{{pod}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_VM-SHORTTERM}"
+            "uid": "${ds_prometheus}"
           }
         }
       ],
-      "title": "Tensor Pipe Active (realistic load for LLM/AI)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$ds_prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "max": 100,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 14
-      },
-      "id": 13,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "expr": "DCGM_FI_PROF_GR_ENGINE_ACTIVE{Hostname=~\"$Hostname\", namespace=~\"$namespace\"} * 100",
-          "legendFormat": "{{Hostname}}/{{gpu}} {{pod}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds_prometheus"
-          }
-        }
-      ],
-      "title": "Graphics Engine Active",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_VM-SHORTTERM}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "max": 100,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 14
-      },
-      "id": 14,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "expr": "DCGM_FI_DEV_MEM_COPY_UTIL{Hostname=~\"$Hostname\", namespace=~\"$namespace\"}",
-          "legendFormat": "{{Hostname}}/{{gpu}} {{pod}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_VM-SHORTTERM}"
-          }
-        }
-      ],
-      "title": "Memory Copy Utilization",
+      "title": "Tensor Pipe Active",
       "type": "timeseries"
     },
     {
@@ -753,22 +522,358 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 15
       },
       "id": 20,
       "panels": [],
-      "title": "Memory",
+      "title": "Per-pod \u0440\u0435\u0439\u0442\u0438\u043d\u0433",
       "type": "row"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "$ds_prometheus"
+        "uid": "${DS_VM-SHORTTERM}"
       },
+      "description": "\u041a\u0442\u043e \u0436\u043c\u0451\u0442 \u0442\u0435\u043d\u0437\u043e\u0440\u043d\u044b\u0435 \u044f\u0434\u0440\u0430, \u0430 \u043a\u0442\u043e \u043d\u0435\u0442. \u0421\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043e\u0442 \u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c\u0430.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Saturation"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "gauge"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 10
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 30
+                    },
+                    {
+                      "color": "green",
+                      "value": 60
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 21,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Saturation"
+          }
+        ]
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "expr": "topk(20, pod:tensor_saturation:avg5m)",
+          "format": "table",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_VM-SHORTTERM}"
+          }
+        }
+      ],
+      "title": "Tensor Saturation per pod (5m avg)",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Hostname": true,
+              "Time": true,
+              "UUID": true,
+              "__name__": true,
+              "cluster": true,
+              "container": true,
+              "endpoint": true,
+              "gpu": true,
+              "instance": true,
+              "job": true,
+              "modelName": true,
+              "prometheus": true,
+              "service": true,
+              "tenant": true,
+              "tier": true,
+              "uid": true,
+              "unit": true
+            },
+            "indexByName": {
+              "Value": 2,
+              "namespace": 0,
+              "pod": 1
+            },
+            "renameByName": {
+              "Value": "Saturation",
+              "namespace": "Namespace",
+              "pod": "Pod"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "description": "\u041d\u0430\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u044d\u0444\u0444\u0435\u043a\u0442\u0438\u0432\u043d\u043e \u043a\u0430\u0436\u0434\u044b\u0439 \u043f\u043e\u0434 \u0442\u0440\u0430\u0442\u0438\u0442 \u0432\u0430\u0442\u0442\u044b. \u041d\u0438\u0437\u043a\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 = \u043f\u043b\u043e\u0445\u0430\u044f \u043e\u043f\u0442\u0438\u043c\u0438\u0437\u0430\u0446\u0438\u044f.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Util/Watt"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1.5
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "gauge"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 22,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Util/Watt"
+          }
+        ]
+      },
+      "pluginVersion": "11.4.0",
+      "targets": [
+        {
+          "expr": "topk(20, pod:util_per_watt:avg5m)",
+          "format": "table",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          }
+        }
+      ],
+      "title": "Utilization / Watt per pod (5m avg)",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Hostname": true,
+              "Time": true,
+              "UUID": true,
+              "__name__": true,
+              "cluster": true,
+              "container": true,
+              "endpoint": true,
+              "gpu": true,
+              "instance": true,
+              "job": true,
+              "modelName": true,
+              "prometheus": true,
+              "service": true,
+              "tenant": true,
+              "tier": true,
+              "uid": true,
+              "unit": true
+            },
+            "indexByName": {
+              "Value": 2,
+              "namespace": 0,
+              "pod": 1
+            },
+            "renameByName": {
+              "Value": "Util/Watt",
+              "namespace": "Namespace",
+              "pod": "Pod"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 30,
+      "panels": [],
+      "title": "Throttling",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_VM-SHORTTERM}"
+      },
+      "description": "\u0414\u043e\u043b\u044f \u0432\u0440\u0435\u043c\u0435\u043d\u0438, \u043a\u043e\u0433\u0434\u0430 GPU \u0434\u0440\u043e\u0441\u0441\u0435\u043b\u0438\u0440\u043e\u0432\u0430\u043d\u0430 \u043f\u043e \u043f\u0438\u0442\u0430\u043d\u0438\u044e. 1.0 = \u043f\u043e\u0441\u0442\u043e\u044f\u043d\u043d\u043e.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "custom": {
             "axisBorderShow": false,
@@ -804,6 +909,8 @@
             }
           },
           "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -812,221 +919,16 @@
                 "value": null
               },
               {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 23
-      },
-      "id": 21,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "expr": "DCGM_FI_DEV_FB_USED{Hostname=~\"$Hostname\", namespace=~\"$namespace\"} * 1048576",
-          "legendFormat": "{{Hostname}}/{{gpu}} {{pod}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds_prometheus"
-          }
-        }
-      ],
-      "title": "VRAM Used",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_VM-SHORTTERM}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
+                "color": "yellow",
+                "value": 0.05
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 0.2
               }
             ]
           },
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 23
-      },
-      "id": 22,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "min"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "11.4.0",
-      "targets": [
-        {
-          "expr": "DCGM_FI_DEV_FB_FREE{Hostname=~\"$Hostname\"} * 1048576",
-          "legendFormat": "{{Hostname}}/{{gpu}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_VM-SHORTTERM}"
-          }
-        }
-      ],
-      "title": "VRAM Free",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 31
-      },
-      "id": 30,
-      "panels": [],
-      "title": "Power & Temperature",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$ds_prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "watt"
+          "unit": "percentunit"
         },
         "overrides": []
       },
@@ -1034,7 +936,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 25
       },
       "id": 31,
       "options": {
@@ -1055,27 +957,28 @@
       "pluginVersion": "11.4.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_POWER_USAGE{Hostname=~\"$Hostname\"}",
+          "expr": "gpu:power_throttle_fraction:rate5m",
           "legendFormat": "{{Hostname}}/{{gpu}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "$ds_prometheus"
+            "uid": "${DS_VM-SHORTTERM}"
           }
         }
       ],
-      "title": "Power Usage per GPU",
+      "title": "Power throttle fraction per GPU",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_VM-SHORTTERM}"
+        "uid": "${ds_prometheus}"
       },
+      "description": "\u0414\u043e\u043b\u044f \u0432\u0440\u0435\u043c\u0435\u043d\u0438, \u043a\u043e\u0433\u0434\u0430 GPU \u0434\u0440\u043e\u0441\u0441\u0435\u043b\u0438\u0440\u043e\u0432\u0430\u043d\u0430 \u043f\u043e \u0442\u0435\u043c\u043f\u0435\u0440\u0430\u0442\u0443\u0440\u0435.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "custom": {
             "axisBorderShow": false,
@@ -1086,7 +989,7 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 10,
+            "fillOpacity": 25,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
@@ -1111,8 +1014,8 @@
             }
           },
           "mappings": [],
-          "max": 100,
-          "min": 20,
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -1122,15 +1025,15 @@
               },
               {
                 "color": "yellow",
-                "value": 75
+                "value": 0.05
               },
               {
                 "color": "red",
-                "value": 85
+                "value": 0.2
               }
             ]
           },
-          "unit": "celsius"
+          "unit": "percentunit"
         },
         "overrides": []
       },
@@ -1138,7 +1041,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 25
       },
       "id": 32,
       "options": {
@@ -1159,182 +1062,16 @@
       "pluginVersion": "11.4.0",
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_TEMP{Hostname=~\"$Hostname\"}",
+          "expr": "gpu:thermal_throttle_fraction:rate5m",
           "legendFormat": "{{Hostname}}/{{gpu}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_VM-SHORTTERM}"
+            "uid": "${ds_prometheus}"
           }
         }
       ],
-      "title": "GPU Temperature",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 40
-      },
-      "id": 40,
-      "panels": [],
-      "title": "Health",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$ds_prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green"
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 0,
-        "y": 41
-      },
-      "id": 41,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "targets": [
-        {
-          "expr": "max by (Hostname, gpu) (DCGM_FI_DEV_XID_ERRORS{Hostname=~\"$Hostname\"})",
-          "legendFormat": "{{Hostname}}/{{gpu}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds_prometheus"
-          }
-        }
-      ],
-      "title": "XID errors (latest)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_VM-SHORTTERM}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "linear",
-            "showPoints": "never"
-          },
-          "unit": "µs"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 8,
-        "y": 41
-      },
-      "id": 42,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "expr": "rate(DCGM_FI_DEV_POWER_VIOLATION{Hostname=~\"$Hostname\"}[5m])",
-          "legendFormat": "{{Hostname}}/{{gpu}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_VM-SHORTTERM}"
-          }
-        }
-      ],
-      "title": "Power Violation (µs/s throttled due to power)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$ds_prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "linear",
-            "showPoints": "never"
-          },
-          "unit": "µs"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 16,
-        "y": 41
-      },
-      "id": 43,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "expr": "rate(DCGM_FI_DEV_THERMAL_VIOLATION{Hostname=~\"$Hostname\"}[5m])",
-          "legendFormat": "{{Hostname}}/{{gpu}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds_prometheus"
-          }
-        }
-      ],
-      "title": "Thermal Violation (µs/s throttled due to thermals)",
+      "title": "Thermal throttle fraction per GPU",
       "type": "timeseries"
     }
   ],
@@ -1342,19 +1079,20 @@
   "schemaVersion": 40,
   "tags": [
     "gpu",
-    "dcgm"
+    "efficiency",
+    "finops"
   ],
   "templating": {
     "list": [
       {
         "current": {},
         "includeAll": false,
-        "label": "Prometheus",
+        "label": "Datasource",
         "name": "ds_prometheus",
         "options": [],
         "query": "prometheus",
         "refresh": 1,
-        "regex": "",
+        "regex": "vm-.*",
         "type": "datasource"
       },
       {
@@ -1362,27 +1100,6 @@
         "datasource": {
           "type": "prometheus",
           "uid": "${DS_VM-SHORTTERM}"
-        },
-        "definition": "label_values(DCGM_FI_DEV_GPU_UTIL, Hostname)",
-        "includeAll": true,
-        "label": "Host",
-        "multi": true,
-        "name": "Hostname",
-        "options": [],
-        "query": {
-          "query": "label_values(DCGM_FI_DEV_GPU_UTIL, Hostname)",
-          "refId": "StandardVariableQuery"
-        },
-        "refresh": 2,
-        "regex": "",
-        "sort": 1,
-        "type": "query"
-      },
-      {
-        "current": {},
-        "datasource": {
-          "type": "prometheus",
-          "uid": "$ds_prometheus"
         },
         "definition": "label_values(DCGM_FI_DEV_GPU_UTIL{namespace!=\"\",namespace!~\"cozy-.*|kube-.*\"}, namespace)",
         "includeAll": true,
@@ -1407,8 +1124,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "GPU Performance",
-  "uid": "gpu-performance",
+  "title": "GPU Efficiency Score",
+  "uid": "gpu-efficiency",
   "version": 2,
   "weekStart": ""
 }
