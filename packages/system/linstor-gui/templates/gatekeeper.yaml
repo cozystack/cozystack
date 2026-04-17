@@ -13,6 +13,11 @@ Only rendered when oidc-enabled=true. If the cluster has OIDC disabled we
 deliberately do not ship an unauthenticated token-proxy fallback (unlike
 dashboard): linstor-gui surfaces raw storage state and should not be
 reachable via Ingress without Keycloak login.
+
+Access is further restricted to the cozystack-cluster-admin group
+(--allowed-group below). The proxy authenticates with a static mTLS client
+cert and LINSTOR itself has no per-user RBAC, so group membership is the
+only boundary between a realm user and raw storage state.
 */ -}}
 {{- if eq $oidcEnabled "true" }}
 apiVersion: apps/v1
@@ -84,7 +89,8 @@ spec:
             - --cookie-secure=true
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
             - --skip-provider-button
-            - --scope=openid email profile offline_access
+            - --scope=openid email profile groups offline_access
+            - --allowed-group=cozystack-cluster-admin
             {{- if eq $oidcInsecureSkipVerify "true" }}
             - --ssl-insecure-skip-verify=true
             {{- end }}

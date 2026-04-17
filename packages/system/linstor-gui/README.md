@@ -13,8 +13,11 @@ using mTLS with the `linstor-client-tls` secret created by the `linstor` package
 
 The chart ships an `oauth2-proxy` based gatekeeper plus a `KeycloakClient` CRD
 so the UI can be published on `linstor-gui.<root-host>` behind the cluster
-Keycloak realm. Access is granted to any user who can authenticate against the
-`cozy` realm.
+Keycloak realm. Access is restricted to members of the
+`cozystack-cluster-admin` Keycloak group — the same group that grants
+cluster-admin RBAC on the host cluster. Authenticating against the `cozy`
+realm alone is not sufficient; users outside that group receive a 403 from
+oauth2-proxy before any request reaches the UI or the LINSTOR controller.
 
 To turn it on, add `linstor-gui` to `publishing.exposedServices` in the core
 `cozystack` values (same list that controls `dashboard`). OIDC must be
