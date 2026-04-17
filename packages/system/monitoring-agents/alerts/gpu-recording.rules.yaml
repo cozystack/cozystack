@@ -1,0 +1,57 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-gpu-recording.rules
+spec:
+  groups:
+    - name: gpu.recording.30s
+      interval: 30s
+      rules:
+        - record: gpu:util:avg
+          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_GPU_UTIL)
+        - record: gpu:mem_copy_util:avg
+          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_MEM_COPY_UTIL)
+        - record: gpu:fb_used_bytes:max
+          expr: max by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_FB_USED) * 1048576
+        - record: gpu:fb_free_bytes:max
+          expr: max by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_FB_FREE) * 1048576
+        - record: gpu:power_watts:avg
+          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_POWER_USAGE)
+        - record: gpu:temp_celsius:max
+          expr: max by (Hostname, gpu, UUID, modelName) (DCGM_FI_DEV_GPU_TEMP)
+        - record: gpu:tensor_active:avg
+          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE)
+        - record: gpu:gr_engine_active:avg
+          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_PROF_GR_ENGINE_ACTIVE)
+
+    - name: gpu.recording.cluster.1m
+      interval: 1m
+      rules:
+        - record: cluster:gpu_count:total
+          expr: count(group by (UUID) (DCGM_FI_DEV_GPU_UTIL))
+        - record: cluster:gpu_count:allocated
+          expr: count(group by (UUID) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}))
+        - record: cluster:gpu_count:free
+          expr: cluster:gpu_count:total - (cluster:gpu_count:allocated or vector(0))
+        - record: cluster:gpu_util:avg
+          expr: avg(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
+        - record: cluster:gpu_power_watts:sum
+          expr: sum(DCGM_FI_DEV_POWER_USAGE)
+
+    - name: gpu.recording.namespace.1m
+      interval: 1m
+      rules:
+        - record: namespace:gpu_count:sum
+          expr: count by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
+        - record: namespace:gpu_util:avg
+          expr: avg by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
+        - record: namespace:tensor_active:avg
+          expr: avg by (namespace) (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"})
+        - record: namespace:fb_used_bytes:sum
+          expr: sum by (namespace) (DCGM_FI_DEV_FB_USED{namespace!="", namespace!~"cozy-.*|kube-.*"}) * 1048576
+        - record: namespace:power_watts:sum
+          expr: sum by (namespace) (DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"})
+        - record: namespace:energy_joules:sum
+          expr: sum by (namespace) (DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION{namespace!="", namespace!~"cozy-.*|kube-.*"}) / 1000
+        - record: namespace:gpu_allocated_count:gauge
+          expr: count by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
