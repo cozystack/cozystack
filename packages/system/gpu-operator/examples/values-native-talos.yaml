@@ -1,0 +1,45 @@
+# Cozystack Package values for running GPU workloads natively in pods
+# on Talos. This is the counterpart to values-talos.yaml, which targets
+# the sandbox (VFIO passthrough) scenario.
+#
+# Prerequisites:
+#   - NVIDIA Talos system extension installed on GPU nodes.
+#   - examples/nvidia-driver-compat.yaml deployed to stage driver files
+#     where the gpu-operator validator looks for them.
+#   - examples/dcgm-custom-metrics.yaml applied so DCGM Exporter exports
+#     the full set of metrics used by the dashboard and recording rules.
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.gpu-operator
+spec:
+  variant: default
+  components:
+    gpu-operator:
+      values:
+        gpu-operator:
+          # The compat DaemonSet stages libnvidia-ml.so.1 and nvidia-smi
+          # under /var/nvidia-driver. Point the validator at that path.
+          hostPaths:
+            driverInstallDir: "/var/nvidia-driver"
+          # Disable the sandbox path — workloads run in pods, not VMs.
+          sandboxWorkloads:
+            enabled: false
+          vfioManager:
+            enabled: false
+          # The Talos extension provides the driver and runtime hooks,
+          # so the operator's own toolkit and driver components must be
+          # switched off to avoid conflicting installations.
+          toolkit:
+            enabled: false
+          devicePlugin:
+            enabled: true
+          # Export full set of DCGM metrics using the ConfigMap in
+          # examples/dcgm-custom-metrics.yaml.
+          dcgmExporter:
+            serviceMonitor:
+              enabled: true
+              interval: "15s"
+              honorLabels: true
+            config:
+              name: dcgm-custom-metrics
