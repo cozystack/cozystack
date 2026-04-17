@@ -42,6 +42,7 @@ import (
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -56,6 +57,7 @@ func init() {
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(dashboard.AddToScheme(scheme))
 	utilruntime.Must(helmv2.AddToScheme(scheme))
+	utilruntime.Must(cosiv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
