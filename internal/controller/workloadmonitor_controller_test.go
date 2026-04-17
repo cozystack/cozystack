@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -138,6 +139,199 @@ func TestReconcile_OperationalTrue_WhenEnoughReplicas(t *testing.T) {
 	}
 	if !*updated.Status.Operational {
 		t.Error("Expected Operational=true (1 available >= 1 minReplicas), got false")
+	}
+}
+
+func TestGetMonitorLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   map[string]string
+		expected map[string]string
+	}{
+		{
+			name:     "nil labels",
+			labels:   nil,
+			expected: map[string]string{},
+		},
+		{
+			name: "only workloads.cozystack.io/* labels are propagated",
+			labels: map[string]string{
+				"workloads.cozystack.io/resource-preset": "medium",
+				"app.kubernetes.io/name":                 "postgres",
+				"custom.example.com/team":                "platform",
+			},
+			expected: map[string]string{
+				"workloads.cozystack.io/resource-preset": "medium",
+			},
+		},
+		{
+			name: "monitor label is reserved and excluded",
+			labels: map[string]string{
+				"workloads.cozystack.io/resource-preset": "small",
+				"workloads.cozystack.io/monitor":         "should-be-dropped",
+			},
+			expected: map[string]string{
+				"workloads.cozystack.io/resource-preset": "small",
+			},
+		},
+		{
+			name: "multiple workloads.cozystack.io labels propagate",
+			labels: map[string]string{
+				"workloads.cozystack.io/resource-preset": "large",
+				"workloads.cozystack.io/tier":            "db",
+			},
+			expected: map[string]string{
+				"workloads.cozystack.io/resource-preset": "large",
+				"workloads.cozystack.io/tier":            "db",
+			},
+		},
+		{
+			name: "no matching labels returns empty map",
+			labels: map[string]string{
+				"app.kubernetes.io/name": "postgres",
+			},
+			expected: map[string]string{},
+		},
+	}
+
+	r := &WorkloadMonitorReconciler{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			monitor := &cozyv1alpha1.WorkloadMonitor{
+				ObjectMeta: metav1.ObjectMeta{Labels: tc.labels},
+			}
+			got := r.getMonitorLabels(monitor)
+			if len(got) != len(tc.expected) {
+				t.Fatalf("expected %d labels, got %d (%v)", len(tc.expected), len(got), got)
+			}
+			for k, v := range tc.expected {
+				if gv, ok := got[k]; !ok || gv != v {
+					t.Errorf("expected label %q=%q, got %q", k, v, gv)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcile_MonitorLabelsPropagatedToPodWorkload(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = cozyv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-monitor",
+			Namespace: "default",
+			Labels: map[string]string{
+				"workloads.cozystack.io/resource-preset": "medium",
+				"app.kubernetes.io/name":                 "ignored-not-propagated",
+			},
+		},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Selector: map[string]string{"app": "test"},
+			Kind:     "postgres",
+			Type:     "postgres",
+		},
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-1",
+			Namespace: "default",
+			Labels: map[string]string{
+				"app":                    "test",
+				"app.kubernetes.io/name": "pod-wins-on-conflict",
+			},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(monitor, pod).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: scheme}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-monitor", Namespace: "default"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	workload := &cozyv1alpha1.Workload{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: "pod-test-pod-1", Namespace: "default"}, workload); err != nil {
+		t.Fatalf("Failed to get Workload: %v", err)
+	}
+
+	if got := workload.Labels["workloads.cozystack.io/resource-preset"]; got != "medium" {
+		t.Errorf("expected monitor label propagated, got %q", got)
+	}
+	// Non-workloads.cozystack.io monitor labels must not be copied
+	if _, ok := workload.Labels["app.kubernetes.io/name"]; !ok {
+		t.Error("expected pod label to be present on Workload")
+	}
+	// Source-object label takes precedence on conflict
+	if got := workload.Labels["app.kubernetes.io/name"]; got != "pod-wins-on-conflict" {
+		t.Errorf("expected pod label to win on conflict, got %q", got)
+	}
+	// Reserved monitor label is always set from the monitor name
+	if got := workload.Labels["workloads.cozystack.io/monitor"]; got != "test-monitor" {
+		t.Errorf("expected monitor-name label, got %q", got)
+	}
+}
+
+func TestReconcile_BackwardCompat_NoMonitorLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = cozyv1alpha1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-monitor",
+			Namespace: "default",
+		},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Selector: map[string]string{"app": "test"},
+		},
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-1",
+			Namespace: "default",
+			Labels:    map[string]string{"app": "test"},
+		},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(monitor, pod).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: scheme}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-monitor", Namespace: "default"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	workload := &cozyv1alpha1.Workload{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: "pod-test-pod-1", Namespace: "default"}, workload); err != nil {
+		t.Fatalf("Failed to get Workload: %v", err)
+	}
+	for k := range workload.Labels {
+		if strings.HasPrefix(k, "workloads.cozystack.io/") && k != "workloads.cozystack.io/monitor" {
+			t.Errorf("unexpected workload label present: %q", k)
+		}
 	}
 }
 
@@ -327,6 +521,82 @@ func TestReconcileBucketClaimNotReady(t *testing.T) {
 
 	if workload.Status.Operational {
 		t.Error("expected Operational=false for not-ready BucketClaim")
+	}
+}
+
+func TestReconcile_MonitorLabelsPropagatedToBucketClaimWorkload(t *testing.T) {
+	s := newTestScheme()
+
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+			Labels: map[string]string{
+				"workloads.cozystack.io/resource-preset": "medium",
+				"app.kubernetes.io/name":                 "ignored-not-propagated",
+			},
+		},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind: "bucket",
+			Type: "s3",
+			Selector: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+			},
+		},
+	}
+
+	bc := &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-bucket",
+			Namespace: "tenant-demo",
+			Labels: map[string]string{
+				"app.kubernetes.io/instance": "my-bucket",
+				"app.kubernetes.io/name":     "bucket-wins-on-conflict",
+			},
+		},
+		Spec: cosiv1alpha1.BucketClaimSpec{
+			BucketClassName: "seaweedfs",
+			Protocols:       []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3},
+		},
+		Status: cosiv1alpha1.BucketClaimStatus{
+			BucketReady: true,
+			BucketName:  "cosi-abc123",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(monitor, bc).
+		WithStatusSubresource(monitor).
+		Build()
+
+	reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{
+		Name:      "my-bucket",
+		Namespace: "tenant-demo",
+	}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	workload := &cozyv1alpha1.Workload{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{
+		Name:      "bucket-my-bucket",
+		Namespace: "tenant-demo",
+	}, workload); err != nil {
+		t.Fatalf("Failed to get Workload: %v", err)
+	}
+
+	if got := workload.Labels["workloads.cozystack.io/resource-preset"]; got != "medium" {
+		t.Errorf("expected monitor label propagated, got %q", got)
+	}
+	// Source-object label takes precedence on conflict
+	if got := workload.Labels["app.kubernetes.io/name"]; got != "bucket-wins-on-conflict" {
+		t.Errorf("expected bucket claim label to win on conflict, got %q", got)
+	}
+	// Reserved monitor label is always set from the monitor name
+	if got := workload.Labels["workloads.cozystack.io/monitor"]; got != "my-bucket" {
+		t.Errorf("expected monitor-name label, got %q", got)
 	}
 }
 

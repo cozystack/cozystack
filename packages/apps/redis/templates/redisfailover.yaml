@@ -75,6 +75,8 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-redis
   namespace: {{ $.Release.Namespace }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
   minReplicas: 1
   replicas: {{ .Values.replicas }}
@@ -90,6 +92,8 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-sentinel
   namespace: {{ $.Release.Namespace }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
   minReplicas: 2
   replicas: 3

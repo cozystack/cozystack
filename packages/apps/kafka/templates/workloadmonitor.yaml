@@ -3,6 +3,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.kafka.resourcesPreset | quote }}
 spec:
   replicas: {{ .Values.replicas }}
   minReplicas: 1
@@ -19,6 +21,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-zookeeper
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.zookeeper.resourcesPreset | quote }}
 spec:
   replicas: {{ .Values.replicas }}
   minReplicas: 1
