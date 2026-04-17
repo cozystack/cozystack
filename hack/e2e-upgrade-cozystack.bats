@@ -64,26 +64,16 @@ find_previous_release() {
   echo "$PREV_RELEASE" > "$STATE_DIR/prev-release"
 }
 
-@test "Extract and install previous version of Cozystack" {
+@test "Install previous version of Cozystack from OCI" {
   PREV_RELEASE=$(cat "$STATE_DIR/prev-release")
+  local prev_version="${PREV_RELEASE#v}"
 
-  # Extract installer chart from the previous release tag
-  local prev_installer="$STATE_DIR/prev-installer"
-  rm -rf "$prev_installer"
-  mkdir -p "$prev_installer/templates"
+  echo "Installing Cozystack ${PREV_RELEASE} from oci://ghcr.io/cozystack/cozystack/cozy-installer"
 
-  git show "${PREV_RELEASE}:packages/core/installer/Chart.yaml" \
-    > "$prev_installer/Chart.yaml"
-  git show "${PREV_RELEASE}:packages/core/installer/values.yaml" \
-    > "$prev_installer/values.yaml"
-  git show "${PREV_RELEASE}:packages/core/installer/templates/cozystack-operator.yaml" \
-    > "$prev_installer/templates/cozystack-operator.yaml"
-
-  echo "Operator image (previous): $(yq '.cozystackOperator.image' "$prev_installer/values.yaml")"
-
-  # Install previous version via Helm (same mechanism users use)
-  helm upgrade installer "$prev_installer" \
-    --install \
+  # Install the same way end users do — pull the published OCI chart
+  helm upgrade --install cozystack \
+    oci://ghcr.io/cozystack/cozystack/cozy-installer \
+    --version "${prev_version}" \
     --namespace cozy-system \
     --create-namespace \
     --wait \
@@ -338,6 +328,20 @@ EOF
   kubectl get hr -A --no-headers | wc -l > "$STATE_DIR/pre-hr-count"
   echo "Pre-upgrade HelmRelease count: $(cat "$STATE_DIR/pre-hr-count")"
 
+  # Baseline sets for post-upgrade delta comparison. In the CI sandbox these
+  # are empty (clean start); on long-lived clusters they capture pre-existing
+  # noise so we only fail on upgrade-caused regressions.
+  kubectl get hr -A --no-headers 2>/dev/null \
+    | awk '$4 != "True" {print $1"/"$2}' | sort > "$STATE_DIR/pre-hr-not-ready"
+  kubectl get pods -A --no-headers 2>/dev/null \
+    | awk '/CrashLoopBackOff/ {print $1"/"$2}' | sort > "$STATE_DIR/pre-crashloop-pods"
+  kubectl get pv --no-headers 2>/dev/null \
+    | awk '$5 != "Bound" {print $1}' | sort > "$STATE_DIR/pre-unbound-pvs"
+
+  # Pre-upgrade cozystack migration version (for post-upgrade assertion)
+  kubectl get cm cozystack-version -n cozy-system -o jsonpath='{.data.version}' \
+    > "$STATE_DIR/pre-cozystack-version" 2>/dev/null || echo "0" > "$STATE_DIR/pre-cozystack-version"
+
   # Snapshot pod state (for debugging if upgrade breaks things)
   kubectl get pods -A --no-headers > "$STATE_DIR/pre-pods"
   echo "Pre-upgrade pod count: $(wc -l < "$STATE_DIR/pre-pods")"
@@ -349,11 +353,17 @@ EOF
 
 @test "Upgrade Cozystack to current version" {
   PREV_RELEASE=$(cat "$STATE_DIR/prev-release")
-  echo "Upgrading from $PREV_RELEASE to current version"
-  echo "Operator image (current): $(yq '.cozystackOperator.image' packages/core/installer/values.yaml)"
+  local current_tag="${UPGRADE_TARGET_TAG:-}"
+  if [ -z "$current_tag" ]; then
+    current_tag=$(git describe --tags --exact-match --match 'v*' 2>/dev/null)
+  fi
+  local current_version="${current_tag#v}"
+  echo "Upgrading from $PREV_RELEASE to $current_tag (oci://ghcr.io/cozystack/cozystack/cozy-installer:${current_version})"
 
-  helm upgrade installer packages/core/installer \
-    --install \
+  # Pull the published OCI chart — same mechanism users run during upgrades
+  helm upgrade cozystack \
+    oci://ghcr.io/cozystack/cozystack/cozy-installer \
+    --version "${current_version}" \
     --namespace cozy-system \
     --wait \
     --timeout 2m
@@ -370,64 +380,97 @@ EOF
 # Phase 4: Post-upgrade validation
 # ===================================================================
 
-@test "Wait for all HelmReleases to reconcile after upgrade" {
+@test "Wait for HelmReleases to reconcile after upgrade (no new failures)" {
   # Give Flux time to detect the new package source and start reconciling
   sleep 10
 
-  # Wait for all HelmReleases to become Ready (generous timeout for full reconciliation)
   local max_wait=900  # 15 minutes
   local interval=10
   local elapsed=0
+  local pre_not_ready="$STATE_DIR/pre-hr-not-ready"
 
+  # Wait until no HRs are newly not-ready (i.e., not present in the pre-upgrade baseline)
   while [ $elapsed -lt $max_wait ]; do
-    local not_ready
-    not_ready=$(kubectl get hr -A --no-headers 2>/dev/null | grep -v " True " | wc -l)
-    if [ "$not_ready" -eq 0 ]; then
-      echo "All HelmReleases are Ready after ${elapsed}s"
+    local new_not_ready
+    new_not_ready=$(comm -23 \
+      <(kubectl get hr -A --no-headers 2>/dev/null | awk '$4 != "True" {print $1"/"$2}' | sort) \
+      "$pre_not_ready")
+    if [ -z "$new_not_ready" ]; then
+      echo "No HelmReleases newly not-ready after ${elapsed}s"
       break
     fi
-    echo "Waiting for $not_ready HelmReleases to reconcile (${elapsed}s / ${max_wait}s)..."
+    local count
+    count=$(printf '%s\n' "$new_not_ready" | grep -c . || true)
+    echo "Waiting for $count newly not-ready HelmReleases (${elapsed}s / ${max_wait}s)..."
     sleep "$interval"
     elapsed=$((elapsed + interval))
   done
 
-  # Final check: fail if any HR is still not ready
-  if kubectl get hr -A --no-headers | grep -v " True "; then
-    echo "HelmReleases still not ready after ${max_wait}s:" >&2
+  # Final check: fail only on HRs that weren't already failing pre-upgrade
+  local new_not_ready
+  new_not_ready=$(comm -23 \
+    <(kubectl get hr -A --no-headers 2>/dev/null | awk '$4 != "True" {print $1"/"$2}' | sort) \
+    "$pre_not_ready")
+  if [ -n "$new_not_ready" ]; then
+    echo "HelmReleases newly not-ready after upgrade:" >&2
+    echo "$new_not_ready" >&2
     kubectl get hr -A >&2
     exit 1
   fi
 }
 
-@test "Verify no CrashLoopBackOff pods after upgrade" {
+@test "Verify migration state after upgrade" {
+  local expected actual previous
+  # Target version from the upgraded platform chart
+  expected=$(yq '.migrations.targetVersion' packages/core/platform/values.yaml)
+  actual=$(kubectl get cm cozystack-version -n cozy-system -o jsonpath='{.data.version}')
+  previous=$(cat "$STATE_DIR/pre-cozystack-version")
+
+  echo "cozystack-version: pre=$previous post=$actual chart_target=$expected"
+
+  # Version must match what the new platform chart expects (catches silent skips / wrong image)
+  [ "$actual" = "$expected" ]
+  # Version must not regress
+  [ "$actual" -ge "$previous" ]
+
+  # If a migration was required, verify the Job completed successfully
+  if [ "$previous" -lt "$expected" ]; then
+    kubectl wait job/cozystack-migration-hook -n cozy-system \
+      --for=condition=Complete --timeout=5m
+  fi
+}
+
+@test "Verify no new CrashLoopBackOff pods after upgrade" {
   # Allow a brief settling period for pods to restart
   sleep 10
 
-  local crashloop_pods
-  crashloop_pods=$(kubectl get pods -A --no-headers 2>/dev/null \
-    | grep -i "CrashLoopBackOff" || true)
+  local new_crashloop
+  new_crashloop=$(comm -23 \
+    <(kubectl get pods -A --no-headers 2>/dev/null | awk '/CrashLoopBackOff/ {print $1"/"$2}' | sort) \
+    "$STATE_DIR/pre-crashloop-pods")
 
-  if [ -n "$crashloop_pods" ]; then
-    echo "CrashLoopBackOff pods detected after upgrade:" >&2
-    echo "$crashloop_pods" >&2
+  if [ -n "$new_crashloop" ]; then
+    echo "New CrashLoopBackOff pods detected after upgrade:" >&2
+    echo "$new_crashloop" >&2
     exit 1
   fi
 
-  echo "No CrashLoopBackOff pods found"
+  echo "No new CrashLoopBackOff pods"
 }
 
-@test "Verify all PersistentVolumes are Bound after upgrade" {
-  local unbound_pvs
-  unbound_pvs=$(kubectl get pv --no-headers 2>/dev/null \
-    | grep -v "Bound" || true)
+@test "Verify no new unbound PersistentVolumes after upgrade" {
+  local new_unbound
+  new_unbound=$(comm -23 \
+    <(kubectl get pv --no-headers 2>/dev/null | awk '$5 != "Bound" {print $1}' | sort) \
+    "$STATE_DIR/pre-unbound-pvs")
 
-  if [ -n "$unbound_pvs" ]; then
-    echo "Unbound PersistentVolumes detected after upgrade:" >&2
-    echo "$unbound_pvs" >&2
+  if [ -n "$new_unbound" ]; then
+    echo "New unbound PersistentVolumes detected after upgrade:" >&2
+    echo "$new_unbound" >&2
     exit 1
   fi
 
-  echo "All PersistentVolumes are Bound"
+  echo "No new unbound PersistentVolumes"
 }
 
 @test "Verify PostgreSQL data survived upgrade" {
