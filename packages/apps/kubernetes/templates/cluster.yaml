@@ -283,6 +283,13 @@ spec:
             system-reserved: "memory={{ $systemReservedMemory }},cpu={{ $systemReservedCpu }}"
             kube-reserved: "memory={{ $kubeReservedMemory }},cpu={{ $kubeReservedCpu }}"
             eviction-hard: "memory.available<{{ $evictionHardMemory }}"
+            eviction-soft: "memory.available<1Gi"
+            eviction-soft-grace-period: "memory.available=1m30s"
+            eviction-minimum-reclaim: "memory.available=256Mi"
+            enforce-node-allocatable: "pods,system-reserved,kube-reserved"
+            cgroups-per-qos: "true"
+            cgroup-driver: "systemd"
+            kernel-memcg-notification: "true"
           # Ignore this for 1.31
           ignorePreflightErrors:
           - FileExisting-conntrack
