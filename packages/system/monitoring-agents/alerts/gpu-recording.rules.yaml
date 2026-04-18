@@ -25,11 +25,6 @@ spec:
     - name: gpu.recording.namespace.1m
       interval: 1m
       rules:
-        # DCGM-visible GPU count per namespace — counts GPUs that are actually
-        # running a tenant pod right now (driver loaded, scheduler placed it).
-        # Differs from :allocated when pods are Pending or stuck.
-        - record: namespace:gpu_count:sum
-          expr: count by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
         # Kube-requested GPU count per namespace — billable view, includes
         # Pending pods. Use this for GPU-hour reporting via
         # sum_over_time(...[1h:1m])/60.
@@ -62,8 +57,6 @@ spec:
           expr: sum by (namespace) (DCGM_FI_DEV_FB_USED{namespace!="", namespace!~"cozy-.*|kube-.*"}) * 1048576
         - record: namespace:power_watts:sum
           expr: sum by (namespace) (DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"})
-        - record: namespace:energy_joules:sum
-          expr: sum by (namespace) (DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION{namespace!="", namespace!~"cozy-.*|kube-.*"}) / 1000
 
     - name: gpu.recording.efficiency.1m
       interval: 1m
@@ -75,19 +68,6 @@ spec:
             avg by (Hostname, gpu, UUID, namespace, pod) (
               avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
             ) * 100
-
-        # NVML vs tensor gap — ratio <10% means NVML lies: user thinks GPU
-        # is busy but specialized hardware is idle (cheap tenant signal).
-        - record: pod:tensor_to_nvml_ratio:avg5m
-          expr: |
-            (
-              avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]) * 100
-            )
-            /
-            clamp_min(
-              avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]),
-              1
-            )
 
         # Power efficiency — utilization per watt, reveals unoptimized clients.
         - record: pod:util_per_watt:avg5m
