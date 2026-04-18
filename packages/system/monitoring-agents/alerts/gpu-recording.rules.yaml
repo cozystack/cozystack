@@ -4,33 +4,17 @@ metadata:
   name: alerts-gpu-recording.rules
 spec:
   groups:
-    - name: gpu.recording.30s
-      interval: 30s
-      rules:
-        - record: gpu:util:avg
-          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_GPU_UTIL)
-        - record: gpu:mem_copy_util:avg
-          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_MEM_COPY_UTIL)
-        - record: gpu:fb_used_bytes:max
-          expr: max by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_FB_USED) * 1048576
-        - record: gpu:fb_free_bytes:max
-          expr: max by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_FB_FREE) * 1048576
-        - record: gpu:power_watts:avg
-          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_DEV_POWER_USAGE)
-        - record: gpu:temp_celsius:max
-          expr: max by (Hostname, gpu, UUID, modelName) (DCGM_FI_DEV_GPU_TEMP)
-        - record: gpu:tensor_active:avg
-          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE)
-        - record: gpu:gr_engine_active:avg
-          expr: avg by (Hostname, gpu, UUID, modelName, namespace, pod) (DCGM_FI_PROF_GR_ENGINE_ACTIVE)
-
     - name: gpu.recording.cluster.1m
       interval: 1m
       rules:
         - record: cluster:gpu_count:total
           expr: count(group by (UUID) (DCGM_FI_DEV_GPU_UTIL))
+        # Kube-allocated GPU count: GPUs requested by *all* pods regardless of
+        # phase (Pending+Running). Source of truth for "what tenants asked for"
+        # — used for capacity planning and billing. Includes system pods so it
+        # stays consistent with cluster:gpu_count:total when computing :free.
         - record: cluster:gpu_count:allocated
-          expr: count(group by (UUID) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}))
+          expr: sum(kube_pod_container_resource_requests{resource="nvidia_com_gpu"})
         - record: cluster:gpu_count:free
           expr: cluster:gpu_count:total - (cluster:gpu_count:allocated or vector(0))
         - record: cluster:gpu_util:avg
@@ -41,8 +25,16 @@ spec:
     - name: gpu.recording.namespace.1m
       interval: 1m
       rules:
+        # DCGM-visible GPU count per namespace — counts GPUs that are actually
+        # running a tenant pod right now (driver loaded, scheduler placed it).
+        # Differs from :allocated when pods are Pending or stuck.
         - record: namespace:gpu_count:sum
           expr: count by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
+        # Kube-requested GPU count per namespace — billable view, includes
+        # Pending pods. Use this for GPU-hour reporting via
+        # sum_over_time(...[1h:1m])/60.
+        - record: namespace:gpu_count:allocated
+          expr: sum by (namespace) (kube_pod_container_resource_requests{resource="nvidia_com_gpu"})
         - record: namespace:gpu_util:avg
           expr: avg by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
         - record: namespace:tensor_active:avg
@@ -53,5 +45,49 @@ spec:
           expr: sum by (namespace) (DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"})
         - record: namespace:energy_joules:sum
           expr: sum by (namespace) (DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION{namespace!="", namespace!~"cozy-.*|kube-.*"}) / 1000
-        - record: namespace:gpu_allocated_count:gauge
-          expr: count by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
+
+    - name: gpu.recording.efficiency.1m
+      interval: 1m
+      rules:
+        # Tensor hardware saturation — the honest "am I using the GPU" metric
+        # for AI/LLM workloads. Unlike NVML, idle tensor cores are visible.
+        - record: pod:tensor_saturation:avg5m
+          expr: |
+            avg by (Hostname, gpu, UUID, namespace, pod) (
+              avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
+            ) * 100
+
+        # NVML vs tensor gap — ratio <10% means NVML lies: user thinks GPU
+        # is busy but specialized hardware is idle (cheap tenant signal).
+        - record: pod:tensor_to_nvml_ratio:avg5m
+          expr: |
+            (
+              avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]) * 100
+            )
+            /
+            clamp_min(
+              avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]),
+              1
+            )
+
+        # Power efficiency — utilization per watt, reveals unoptimized clients.
+        - record: pod:util_per_watt:avg5m
+          expr: |
+            avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
+            /
+            clamp_min(
+              avg_over_time(DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]),
+              1
+            )
+
+        # Fraction of time power-throttled (TDP cap) — 1.0 = fully throttled.
+        # DCGM_FI_DEV_*_VIOLATION is documented as µs but on A10/DCGM 3.x the
+        # counter grows in nanoseconds in practice — divide by 1e9 to get a
+        # 0..1 fraction (verified empirically when /1e6 yielded >100× reality).
+        # clamp_max protects against rate() artefacts at counter resets.
+        - record: gpu:power_throttle_fraction:rate5m
+          expr: clamp_max(rate(DCGM_FI_DEV_POWER_VIOLATION[5m]) / 1e9, 1)
+
+        # Fraction of time thermal-throttled.
+        - record: gpu:thermal_throttle_fraction:rate5m
+          expr: clamp_max(rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9, 1)
