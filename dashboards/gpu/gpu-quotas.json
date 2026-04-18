@@ -86,7 +86,7 @@
       "id": 3,
       "targets": [
         {
-          "expr": "sum(kube_pod_container_resource_requests{resource=\"nvidia_com_gpu\"})",
+          "expr": "cluster:gpu_count:allocated",
           "refId": "A"
         }
       ],
@@ -143,7 +143,7 @@
       "id": 4,
       "targets": [
         {
-          "expr": "sum(kube_pod_container_resource_requests{resource=\"nvidia_com_gpu\"}) / sum(kube_node_status_allocatable{resource=\"nvidia_com_gpu\"}) * 100",
+          "expr": "cluster:gpu_count:allocated / sum(kube_node_status_allocatable{resource=\"nvidia_com_gpu\"}) * 100",
           "refId": "A"
         }
       ],

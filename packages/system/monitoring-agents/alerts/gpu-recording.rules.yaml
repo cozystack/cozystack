@@ -2,6 +2,7 @@ apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMRule
 metadata:
   name: alerts-gpu-recording.rules
+  namespace: cozy-monitoring
 spec:
   groups:
     - name: gpu.recording.cluster.1m

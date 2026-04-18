@@ -35,12 +35,12 @@
       "id": 2,
       "targets": [
         {
-          "expr": "avg(pod:tensor_saturation:avg5m)",
+          "expr": "avg(pod:tensor_saturation:avg5m{namespace=~\"$namespace\"})",
           "refId": "A"
         }
       ],
-      "title": "Cluster Tensor Saturation",
-      "description": "Mean tensor core saturation. \u003c10% means GPUs are used inefficiently (tenants could move to CPU or optimize their code).",
+      "title": "Avg Tensor Saturation",
+      "description": "Mean tensor core saturation across selected namespaces. \u003c10% means GPUs are used inefficiently (tenants could move to CPU or optimize their code).",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -103,12 +103,12 @@
       "id": 3,
       "targets": [
         {
-          "expr": "avg(pod:util_per_watt:avg5m)",
+          "expr": "avg(pod:util_per_watt:avg5m{namespace=~\"$namespace\"})",
           "refId": "A"
         }
       ],
       "title": "Avg Utilization per Watt",
-      "description": "NVML utilization % per watt. Higher value = more efficient workload.",
+      "description": "NVML utilization % per watt across selected namespaces. Higher value = more efficient workload.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -166,7 +166,7 @@
       "id": 4,
       "targets": [
         {
-          "expr": "avg(gpu:power_throttle_fraction:rate5m)",
+          "expr": "avg(gpu:power_throttle_fraction:rate5m{namespace=~\"$namespace\"})",
           "refId": "A"
         }
       ],
