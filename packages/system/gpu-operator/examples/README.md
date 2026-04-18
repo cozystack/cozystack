@@ -21,16 +21,10 @@ Talos.
   ConfigMap.
 - [`dcgm-custom-metrics.yaml`](./dcgm-custom-metrics.yaml) — `ConfigMap`
   with a DCGM metrics CSV that adds profiling, ECC, throttling and
-  energy counters on top of the upstream defaults. The CSV is the
-  superset needed for full dashboard coverage; the **recording rules
-  themselves** only require the profiling subset
-  (`DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`, `DCGM_FI_PROF_GR_ENGINE_ACTIVE`)
-  on top of the upstream `default-counters.csv` — every other DCGM
-  series the rules consume (utilization, FB used/free, power,
-  temperature, energy) is already in the default set. The
-  `gpu/gpu-performance` dashboard additionally needs the throttle
-  counters (`DCGM_FI_DEV_POWER_VIOLATION`,
-  `DCGM_FI_DEV_THERMAL_VIOLATION`), which are not in the default set.
+  energy counters on top of the upstream defaults. The CSV is a
+  superset needed for full coverage of the `gpu/gpu-performance`
+  dashboard. Which parts are actually required depends on which
+  dashboards you ship — see the table below.
 - [`nvidia-driver-compat.yaml`](./nvidia-driver-compat.yaml) — DaemonSet
   that stages `libnvidia-ml.so.1` and `nvidia-smi` from the Talos glibc
   tree into a path where the NVIDIA GPU Operator validator expects
@@ -62,32 +56,46 @@ files into a directory the validator does inspect and creates the
 
 [1]: https://github.com/NVIDIA/gpu-operator/issues/1687
 
+## Dashboards and what DCGM metrics they need
+
+Five GPU dashboards live under `gpu/*` in
+`packages/system/monitoring/dashboards-infra.list`. All of them share
+`packages/system/monitoring-agents/alerts/gpu-recording.rules.yaml` as
+their source of aggregated series. The recording rules are safe to
+ship on any cluster — they evaluate to empty series when DCGM is not
+scraped, or when optional counters are missing.
+
+What each dashboard needs on top of the upstream DCGM Exporter
+[`default-counters.csv`][default-csv]:
+
+| Dashboard         | Scope                              | Needs beyond defaults                                                                        |
+| ----------------- | ---------------------------------- | -------------------------------------------------------------------------------------------- |
+| `gpu-performance` | Per-node, per-GPU deep dive        | `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`, `DCGM_FI_PROF_GR_ENGINE_ACTIVE`, `DCGM_FI_DEV_POWER_VIOLATION`, `DCGM_FI_DEV_THERMAL_VIOLATION` |
+| `gpu-efficiency`  | Per-workload util vs tensor active | `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`                                                            |
+| `gpu-fleet`       | Cluster-wide admin inventory       | nothing (works on default counters)                                                          |
+| `gpu-quotas`      | Kube-quota vs live usage           | nothing (kube-state-metrics + default counters)                                              |
+| `gpu-tenants`     | Per-namespace tenant view          | `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE` for the tensor-saturation panel; other panels work on defaults |
+
+The throttling counters (`DCGM_FI_DEV_POWER_VIOLATION`,
+`DCGM_FI_DEV_THERMAL_VIOLATION`) are only required by `gpu-performance`.
+The profiling counters (`DCGM_FI_PROF_*`) are required by
+`gpu-performance` and `gpu-efficiency`, and unlock the tensor panel in
+`gpu-tenants`. Everything else the recording rules consume —
+utilization, FB used/free, power, temperature, energy — is already in
+the default counter set.
+
 ## Verification status
 
 > **Pending verification on an updated GPU Operator release.**
 >
-> The minimum-CSV claim above (only `DCGM_FI_PROF_*` is needed beyond
-> the upstream default counters) is derived by cross-referencing
-> `gpu-recording.rules.yaml` against the DCGM Exporter
-> [`default-counters.csv`][default-csv] for the version pinned in the
-> currently shipped `gpu-operator` package. The package in this branch
-> is **not** the latest GPU Operator release; once we move to a newer
-> version, the claim must be re-checked because the upstream default
-> set occasionally adds or removes counters between releases. Until
-> then, treat the CSV in `dcgm-custom-metrics.yaml` as a known-good
-> superset rather than a minimal config.
+> The minimum-CSV claims above are derived by cross-referencing
+> `gpu-recording.rules.yaml` and each dashboard against the DCGM
+> Exporter [`default-counters.csv`][default-csv] for the version pinned
+> in the currently shipped `gpu-operator` package. The package in this
+> branch is **not** the latest GPU Operator release; once we move to a
+> newer version, the claims must be re-checked because the upstream
+> default set occasionally adds or removes counters between releases.
+> Until then, treat the CSV in `dcgm-custom-metrics.yaml` as a
+> known-good superset rather than a minimal config.
 
 [default-csv]: https://github.com/NVIDIA/dcgm-exporter/blob/main/etc/default-counters.csv
-
-## How the dashboard and recording rules fit in
-
-- `dashboards/gpu/gpu-performance.json` expects `DCGM_FI_*` metrics,
-  including profiling series (`DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`,
-  `DCGM_FI_PROF_GR_ENGINE_ACTIVE`) and throttling counters
-  (`DCGM_FI_DEV_POWER_VIOLATION`, `DCGM_FI_DEV_THERMAL_VIOLATION`).
-  These are only emitted when DCGM Exporter is started with the custom
-  CSV in `dcgm-custom-metrics.yaml`.
-- `packages/system/monitoring-agents/alerts/gpu-recording.rules.yaml`
-  precomputes cluster-wide and per-namespace aggregations used by the
-  overview panels of the dashboard. The rules are safe to ship on any
-  cluster — they evaluate to empty series when DCGM is not scraped.
