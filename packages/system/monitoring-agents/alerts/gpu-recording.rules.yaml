@@ -128,3 +128,33 @@ spec:
         # Fraction of time thermal-throttled.
         - record: gpu:thermal_throttle_fraction:rate5m
           expr: clamp_max(max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9), 1)
+
+    # Regression watch — the /1e9 divisor on *_VIOLATION was derived
+    # empirically against DCGM 3.x on A10. If a future DCGM version
+    # restores the documented µs units, pre-clamp values would exceed 1.0
+    # while clamp_max(..., 1) silently masks the drift — recorded
+    # throttle fractions would plateau at 1.0 and consumers would think
+    # every GPU is always throttled. This alert fires on that condition
+    # so we can rescale to /1e6 before dashboards start lying.
+    - name: gpu.recording.throttle.validation.5m
+      interval: 5m
+      params: {}
+      rules:
+        - alert: GPUThrottleFractionOverOne
+          expr: |
+            max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_POWER_VIOLATION[5m]) / 1e9) > 1
+            or
+            max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9) > 1
+          for: 15m
+          labels:
+            severity: warning
+            component: gpu-monitoring
+          annotations:
+            summary: "DCGM throttle fraction exceeds 1.0 pre-clamp on {{ $labels.Hostname }}/{{ $labels.gpu }}"
+            description: |
+              gpu:{power,thermal}_throttle_fraction:rate5m clamps to 1.0, but the raw
+              rate(DCGM_FI_DEV_*_VIOLATION)/1e9 value is already >1 on this GPU — the
+              empirical nanosecond assumption is broken. Likely the DCGM exporter
+              version changed and the counter now grows in its documented µs units.
+              Re-verify on the exporter Pod and adjust the divisor (/1e9 → /1e6) in
+              gpu.recording.efficiency.1m before dashboards plateau at 100% throttle.
