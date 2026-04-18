@@ -21,9 +21,16 @@ Talos.
   ConfigMap.
 - [`dcgm-custom-metrics.yaml`](./dcgm-custom-metrics.yaml) — `ConfigMap`
   with a DCGM metrics CSV that adds profiling, ECC, throttling and
-  energy counters on top of the upstream defaults. Required by the
-  recording rules in `packages/system/monitoring-agents/alerts/gpu-recording.rules.yaml`
-  and by several panels in the `gpu/gpu-performance` dashboard.
+  energy counters on top of the upstream defaults. The CSV is the
+  superset needed for full dashboard coverage; the **recording rules
+  themselves** only require the profiling subset
+  (`DCGM_FI_PROF_PIPE_TENSOR_ACTIVE`, `DCGM_FI_PROF_GR_ENGINE_ACTIVE`)
+  on top of the upstream `default-counters.csv` — every other DCGM
+  series the rules consume (utilization, FB used/free, power,
+  temperature, energy) is already in the default set. The
+  `gpu/gpu-performance` dashboard additionally needs the throttle
+  counters (`DCGM_FI_DEV_POWER_VIOLATION`,
+  `DCGM_FI_DEV_THERMAL_VIOLATION`), which are not in the default set.
 - [`nvidia-driver-compat.yaml`](./nvidia-driver-compat.yaml) — DaemonSet
   that stages `libnvidia-ml.so.1` and `nvidia-smi` from the Talos glibc
   tree into a path where the NVIDIA GPU Operator validator expects
@@ -54,6 +61,23 @@ files into a directory the validator does inspect and creates the
 `.driver-ctr-ready` flag file so the validator proceeds.
 
 [1]: https://github.com/NVIDIA/gpu-operator/issues/1687
+
+## Verification status
+
+> **Pending verification on an updated GPU Operator release.**
+>
+> The minimum-CSV claim above (only `DCGM_FI_PROF_*` is needed beyond
+> the upstream default counters) is derived by cross-referencing
+> `gpu-recording.rules.yaml` against the DCGM Exporter
+> [`default-counters.csv`][default-csv] for the version pinned in the
+> currently shipped `gpu-operator` package. The package in this branch
+> is **not** the latest GPU Operator release; once we move to a newer
+> version, the claim must be re-checked because the upstream default
+> set occasionally adds or removes counters between releases. Until
+> then, treat the CSV in `dcgm-custom-metrics.yaml` as a known-good
+> superset rather than a minimal config.
+
+[default-csv]: https://github.com/NVIDIA/dcgm-exporter/blob/main/etc/default-counters.csv
 
 ## How the dashboard and recording rules fit in
 
