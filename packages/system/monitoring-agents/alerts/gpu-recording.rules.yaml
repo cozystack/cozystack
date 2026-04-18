@@ -64,20 +64,24 @@ spec:
       rules:
         # Tensor hardware saturation — the honest "am I using the GPU" metric
         # for AI/LLM workloads. Unlike NVML, idle tensor cores are visible.
+        # Stored as a 0..1 ratio to stay consistent with namespace:tensor_active:avg
+        # and DCGM's native units. Consumers multiply by 100 at display time.
         - record: pod:tensor_saturation:avg5m
           expr: |
             avg by (Hostname, gpu, UUID, namespace, pod) (
               avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
-            ) * 100
+            )
 
         # Power efficiency — utilization per watt, reveals unoptimized clients.
         - record: pod:util_per_watt:avg5m
           expr: |
-            avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
-            /
-            clamp_min(
-              avg_over_time(DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]),
-              1
+            avg by (Hostname, gpu, UUID, namespace, pod) (
+              avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
+              /
+              clamp_min(
+                avg_over_time(DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]),
+                1
+              )
             )
 
         # Fraction of time power-throttled (TDP cap) — 1.0 = fully throttled.
