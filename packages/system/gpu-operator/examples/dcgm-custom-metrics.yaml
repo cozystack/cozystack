@@ -26,6 +26,7 @@ data:
 
     # Power
     DCGM_FI_DEV_POWER_USAGE,              gauge, Power draw (in W).
+    DCGM_FI_DEV_POWER_MGMT_LIMIT,         gauge, Current power management limit (in W).
     DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION, counter, Total energy consumption since boot (in mJ).
 
     # PCIE
