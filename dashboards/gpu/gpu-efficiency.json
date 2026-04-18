@@ -363,7 +363,7 @@
       "id": 21,
       "targets": [
         {
-          "expr": "topk(20, pod:tensor_saturation:avg5m * 100)",
+          "expr": "topk(20, pod:tensor_saturation:avg5m{namespace=~\"$namespace\"} * 100)",
           "instant": true,
           "range": false,
           "format": "table",
@@ -501,7 +501,7 @@
       "id": 22,
       "targets": [
         {
-          "expr": "topk(20, pod:util_per_watt:avg5m)",
+          "expr": "topk(20, pod:util_per_watt:avg5m{namespace=~\"$namespace\"})",
           "instant": true,
           "range": false,
           "format": "table",
