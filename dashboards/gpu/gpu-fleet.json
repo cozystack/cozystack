@@ -268,7 +268,7 @@
         }
       ],
       "title": "Average utilization",
-      "description": "NVML utilization across all tenant GPUs (engine-active %).",
+      "description": "Legacy NVML utilization across all tenant GPUs.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
