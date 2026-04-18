@@ -10,14 +10,29 @@ spec:
       rules:
         - record: cluster:gpu_count:total
           expr: count(group by (UUID) (DCGM_FI_DEV_GPU_UTIL))
-        # Kube-allocated GPU count: GPUs requested by *all* pods regardless of
-        # phase (Pending+Running). Source of truth for "what tenants asked for"
-        # — used for capacity planning and billing. Includes system pods so it
-        # stays consistent with cluster:gpu_count:total when computing :free.
+        # Kube-allocated GPU count: GPUs requested by *active* pods — Pending
+        # and Running only. Source of truth for "what tenants asked for" — used
+        # for capacity planning and billing. Includes system pods so it stays
+        # consistent with cluster:gpu_count:total when computing :free.
+        #
+        # Phase filter via group_left() on kube_pod_status_phase matches the
+        # canonical pattern from k8s.rules.container_resource.yaml. Without it
+        # kube-state-metrics keeps series for Failed/Succeeded pods until the
+        # apiserver garbage-collects them, which inflates billing hours and
+        # can push :free negative.
         - record: cluster:gpu_count:allocated
-          expr: sum(kube_pod_container_resource_requests{resource="nvidia_com_gpu"})
+          expr: |
+            sum(
+              kube_pod_container_resource_requests{resource="nvidia_com_gpu"}
+              * on (namespace, pod) group_left() max by (namespace, pod) (
+                kube_pod_status_phase{phase=~"Pending|Running"} == 1
+              )
+            )
+        # clamp_min guards against transients at DCGM/kube-state-metrics
+        # restart where cluster:gpu_count:total dips before :allocated catches
+        # up, or rare label drift between the two sources.
         - record: cluster:gpu_count:free
-          expr: cluster:gpu_count:total - (cluster:gpu_count:allocated or vector(0))
+          expr: clamp_min(cluster:gpu_count:total - (cluster:gpu_count:allocated or vector(0)), 0)
         - record: cluster:gpu_util:avg
           expr: avg(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
         - record: cluster:gpu_power_watts:sum
@@ -50,7 +65,13 @@ spec:
         # keeps system pods to stay aligned with cluster:gpu_count:total
         # when computing :free.
         - record: namespace:gpu_count:allocated
-          expr: sum by (namespace) (kube_pod_container_resource_requests{resource="nvidia_com_gpu", namespace!="", namespace!~"cozy-.*|kube-.*"})
+          expr: |
+            sum by (namespace) (
+              kube_pod_container_resource_requests{resource="nvidia_com_gpu", namespace!="", namespace!~"cozy-.*|kube-.*"}
+              * on (namespace, pod) group_left() max by (namespace, pod) (
+                kube_pod_status_phase{phase=~"Pending|Running"} == 1
+              )
+            )
         - record: namespace:gpu_util:avg
           expr: avg by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
         - record: namespace:tensor_active:avg
