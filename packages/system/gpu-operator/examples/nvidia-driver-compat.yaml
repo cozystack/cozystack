@@ -35,6 +35,13 @@ spec:
       # cluster uses to mark GPU hosts.
       nodeSelector:
         nvidia.com/gpu.present: "true"
+      # Tolerate-all is intentionally broad: the nodeSelector above already
+      # confines scheduling to GPU nodes, so the "Exists" toleration only
+      # matters when those nodes carry extra taints (dedicated=gpu:NoSchedule,
+      # nvidia.com/gpu:NoSchedule from the GPU Operator's default policy,
+      # etc.). This mirrors the stance of the upstream nvidia-driver-daemonset
+      # and nvidia-device-plugin DaemonSets — blanket tolerations plus a
+      # narrow nodeSelector.
       tolerations:
         - operator: Exists
       initContainers:
