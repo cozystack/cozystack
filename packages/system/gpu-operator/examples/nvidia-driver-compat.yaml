@@ -27,6 +27,14 @@ spec:
     spec:
       hostPID: true
       priorityClassName: system-node-critical
+      # Restrict to GPU nodes only. Without this the DaemonSet schedules onto
+      # every node (including control-plane and CPU-only workers) and burns
+      # resources on hosts where the compat tree is meaningless.
+      # The label is published by Node Feature Discovery / GPU Operator's NFD
+      # subchart; if NFD is disabled, replace this with whatever label your
+      # cluster uses to mark GPU hosts.
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
       tolerations:
         - operator: Exists
       initContainers:
@@ -60,12 +68,26 @@ spec:
               echo "Done"
           securityContext:
             privileged: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
           volumeMounts:
             - name: host-root
               mountPath: /host
       containers:
         - name: pause
           image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 16Mi
       volumes:
         - name: host-root
           hostPath:
