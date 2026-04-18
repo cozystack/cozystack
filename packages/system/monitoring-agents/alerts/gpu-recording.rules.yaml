@@ -33,8 +33,27 @@ spec:
         # Kube-requested GPU count per namespace — billable view, includes
         # Pending pods. Use this for GPU-hour reporting via
         # sum_over_time(...[1h:1m])/60.
+        #
+        # Filters cozy-*/kube-* so the namespace set here matches every
+        # other namespace:* rule below. This keeps the $namespace variable
+        # in the tenant dashboard consistent with panels that read filtered
+        # rules — otherwise picking a system ns from the dropdown leaves
+        # half the panels empty while others show values.
+        #
+        # Trade-off: per-namespace GPU accounting for system workloads is
+        # no longer available here. If it's ever needed (e.g. operator
+        # pods pinning tenant GPUs), add a separate rule like
+        # system:gpu_count:allocated rather than widening this one — the
+        # "billable tenant view" invariant is relied on by tenants.json
+        # and keeping it narrow protects consumers from the asymmetry
+        # that triggered this filter in the first place.
+        #
+        # Note: sum(namespace:gpu_count:allocated) no longer equals
+        # cluster:gpu_count:allocated — the cluster-level rule intentionally
+        # keeps system pods to stay aligned with cluster:gpu_count:total
+        # when computing :free.
         - record: namespace:gpu_count:allocated
-          expr: sum by (namespace) (kube_pod_container_resource_requests{resource="nvidia_com_gpu"})
+          expr: sum by (namespace) (kube_pod_container_resource_requests{resource="nvidia_com_gpu", namespace!="", namespace!~"cozy-.*|kube-.*"})
         - record: namespace:gpu_util:avg
           expr: avg by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
         - record: namespace:tensor_active:avg
