@@ -96,11 +96,14 @@ spec:
             )
 
         # Power efficiency — utilization per watt, reveals unoptimized clients.
+        # Explicit on(...) pins the bigop matching set to the labels we
+        # group by — protects against empty results if dcgm-exporter
+        # relabeling ever diverges between the two metrics.
         - record: pod:util_per_watt:avg5m
           expr: |
             avg by (Hostname, gpu, UUID, namespace, pod) (
               avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
-              /
+              / on (Hostname, gpu, UUID, namespace, pod)
               clamp_min(
                 avg_over_time(DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]),
                 1
@@ -112,9 +115,16 @@ spec:
         # counter grows in nanoseconds in practice — divide by 1e9 to get a
         # 0..1 fraction (verified empirically when /1e6 yielded >100× reality).
         # clamp_max protects against rate() artefacts at counter resets.
+        #
+        # max by (Hostname, gpu, UUID) collapses duplicate series from
+        # dcgm-exporter's pod-mapping labels (one physical GPU may appear
+        # under multiple pod/container labels during restarts or under
+        # MIG/MPS). Throttling is a physical-GPU property; taking max
+        # keeps consumer avg(...) honest — a naive avg() would dilute the
+        # signal by the number of pods sharing the GPU.
         - record: gpu:power_throttle_fraction:rate5m
-          expr: clamp_max(rate(DCGM_FI_DEV_POWER_VIOLATION[5m]) / 1e9, 1)
+          expr: clamp_max(max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_POWER_VIOLATION[5m]) / 1e9), 1)
 
         # Fraction of time thermal-throttled.
         - record: gpu:thermal_throttle_fraction:rate5m
-          expr: clamp_max(rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9, 1)
+          expr: clamp_max(max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9), 1)
