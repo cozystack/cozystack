@@ -209,12 +209,12 @@
       "id": 5,
       "targets": [
         {
-          "expr": "count(kube_node_labels{label_nvidia_com_gpu_present=\"true\"})",
+          "expr": "count(count by (Hostname) (DCGM_FI_DEV_GPU_UTIL))",
           "refId": "A"
         }
       ],
       "title": "Nodes with GPU",
-      "description": "Kubernetes nodes advertising nvidia.com/gpu.present=true.",
+      "description": "Nodes reporting at least one GPU to DCGM. Counted via DCGM_FI_DEV_GPU_UTIL because kube-state-metrics does not expose node labels by default.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
