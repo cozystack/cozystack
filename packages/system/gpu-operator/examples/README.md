@@ -56,6 +56,14 @@ files into a directory the validator does inspect and creates the
 
 [1]: https://github.com/NVIDIA/gpu-operator/issues/1687
 
+The compat DaemonSet runs privileged and bind-mounts host paths, so
+the target namespace must allow privileged pods. On clusters that
+enforce the Kubernetes Pod Security Standards at `baseline` or
+`restricted`, label the namespace with
+`pod-security.kubernetes.io/enforce: privileged` (and the matching
+`audit`/`warn` labels if the admission webhook is configured to
+surface violations) before applying the manifest.
+
 ## Dashboards and what DCGM metrics they need
 
 Five GPU dashboards live under `gpu/*` in
@@ -83,8 +91,20 @@ any CSV override. The three counters listed in the table — throttling
 violations and the power management limit — are the only extras the
 tracked dashboards need. The recording rules in
 `gpu-recording.rules.yaml` consume utilization, FB used, power,
-temperature and the tensor-active profiling counter, all of which are
-in the default set.
+temperature and the tensor-active profiling counter from the default
+set, plus `DCGM_FI_DEV_POWER_VIOLATION` and
+`DCGM_FI_DEV_THERMAL_VIOLATION` — used by the
+`gpu.recording.efficiency.1m` group to derive the
+`gpu:power_throttle_fraction:rate5m` and
+`gpu:thermal_throttle_fraction:rate5m` series consumed by the
+throttling panels on the efficiency and fleet dashboards.
+
+The `gpu.recording.throttle.validation.5m` group additionally ships the
+`GPUThrottleFractionOverOne` alert (severity `warning`) as a regression
+detector: it fires when either throttle-fraction series exceeds 1.0,
+which would indicate that DCGM changed the scale/divisor of the
+underlying violation counters and the recording rules need to be
+re-derived.
 
 ## Verification status
 
