@@ -62,6 +62,10 @@ extract_rules() {
 # whole expression must contain at least two ':' characters.
 extract_refs() {
   json_file=$1
+  # Prometheus convention allows 2-segment rule names (level:metric); this
+  # regex is tuned to the 3+ segment convention used in this repo
+  # (level:metric:op — e.g. cluster:gpu_count:total). Update if future
+  # rules use 2 segments, otherwise they will be silently skipped.
   grep -hoE '[a-z][a-z0-9_]*:[a-z0-9_]+:[a-z0-9_]+' "$json_file" | sort -u
 }
 
