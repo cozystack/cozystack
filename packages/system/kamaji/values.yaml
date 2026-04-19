@@ -8,9 +8,32 @@ kamaji:
   resources:
     limits:
       cpu: 200m
-      memory: 500Mi
+      memory: 512Mi
     requests:
       cpu: 100m
-      memory: 100Mi
+      memory: 256Mi
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: healthcheck
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 12
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: healthcheck
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    timeoutSeconds: 1
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: healthcheck
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 1
   extraArgs:
     - --migrate-image=ghcr.io/cozystack/cozystack/kamaji:v1.3.0-rc.1@sha256:8c9af083b60600c0800eb56a2cda75f26007b7272a1cf019140de003bfce1a4d
