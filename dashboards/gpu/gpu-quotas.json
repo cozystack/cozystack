@@ -423,7 +423,7 @@
       "id": 21,
       "targets": [
         {
-          "expr": "kube_pod_container_resource_requests{resource=\"nvidia_com_gpu\", namespace=~\"$namespace\"} * on(namespace, pod) group_left(phase) (kube_pod_status_phase{phase=~\"Running|Pending|Failed|Succeeded\"} == 1)",
+          "expr": "kube_pod_container_resource_requests{resource=\"nvidia_com_gpu\", namespace=~\"$namespace\"} * on(namespace, pod) group_left(phase) (kube_pod_status_phase{phase=~\"Running|Pending\"} == 1)",
           "instant": true,
           "range": false,
           "format": "table",
