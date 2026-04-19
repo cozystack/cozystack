@@ -70,8 +70,10 @@ data:
     DCGM_FI_DEV_LOW_UTIL_VIOLATION,    counter, Throttling duration due to low utilization (in us).
     DCGM_FI_DEV_RELIABILITY_VIOLATION, counter, Throttling duration due to reliability constraints (in us).
 
-    # NVLink — enable only for GPUs that actually have NVLink (A10 has none).
-    # DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL, counter, Total number of NVLink bandwidth counters for all lanes.
+    # NVLink — DCGM silently drops this metric on GPUs without NVLink, so
+    # enabling it unconditionally is safe and keeps this file reusable
+    # across GPU families.
+    DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL, counter, Total number of NVLink bandwidth counters for all lanes.
 
     # DCP (profiling) metrics — supported from Ampere onwards.
     DCGM_FI_PROF_GR_ENGINE_ACTIVE,   gauge, Ratio of time the graphics engine is active.
