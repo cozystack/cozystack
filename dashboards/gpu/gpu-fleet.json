@@ -467,13 +467,13 @@
       "id": 12,
       "targets": [
         {
-          "expr": "sum by (Hostname) (DCGM_FI_DEV_POWER_USAGE) / sum by (Hostname) (DCGM_FI_DEV_POWER_MGMT_LIMIT) * 100",
+          "expr": "sum by (Hostname) (DCGM_FI_DEV_POWER_USAGE) / clamp_min(sum by (Hostname) (DCGM_FI_DEV_POWER_MGMT_LIMIT), 1) * 100",
           "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
       "title": "Power draw per node (% of TDP)",
-      "description": "GPU power usage as a fraction of the node's combined TDP cap. Works across GPU SKUs without per-model thresholds.",
+      "description": "GPU power usage as a fraction of the node's combined TDP cap. Works across GPU SKUs without per-model thresholds. Requires DCGM_FI_DEV_POWER_MGMT_LIMIT from custom DCGM CSV (see packages/system/gpu-operator/examples/dcgm-custom-metrics.yaml).",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
