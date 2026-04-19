@@ -81,7 +81,7 @@ What each dashboard needs on top of the upstream DCGM Exporter
 | `gpu-performance` | Per-node, per-GPU deep dive        | `DCGM_FI_DEV_POWER_VIOLATION`, `DCGM_FI_DEV_THERMAL_VIOLATION`          |
 | `gpu-efficiency`  | Per-workload util vs tensor active | `DCGM_FI_DEV_POWER_VIOLATION`, `DCGM_FI_DEV_THERMAL_VIOLATION` (via `gpu:*_throttle_fraction:rate5m` recording rules) |
 | `gpu-fleet`       | Cluster-wide admin inventory       | `DCGM_FI_DEV_POWER_MGMT_LIMIT` (for the TDP vs draw panel)              |
-| `gpu-quotas`      | Kube-quota vs live usage           | nothing (kube-state-metrics + default counters)                         |
+| `gpu-quotas`      | Kube-quota vs live usage           | `kube_pod_container_resource_requests`, `kube_pod_status_phase`, `DCGM_FI_DEV_GPU_UTIL` (via `namespace:gpu_count:allocated` / `cluster:gpu_count:*` recording rules) |
 | `gpu-tenants`     | Per-namespace tenant view          | nothing (works on default counters)                                     |
 
 `DCGM_FI_PROF_PIPE_TENSOR_ACTIVE` and `DCGM_FI_PROF_GR_ENGINE_ACTIVE`
