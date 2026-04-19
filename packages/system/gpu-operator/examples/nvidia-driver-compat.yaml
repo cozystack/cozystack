@@ -24,8 +24,11 @@ spec:
     metadata:
       labels:
         app: nvidia-driver-compat
+    # DaemonSet rather than a one-shot Job: staging is idempotent per-node,
+    # must re-run after every Talos reboot (hostPath contents are wiped on
+    # reboot when the system extension re-installs), and the pause container
+    # keeps the pod visible for operator observability (kubectl get pods).
     spec:
-      hostPID: true
       priorityClassName: system-node-critical
       # Restrict to GPU nodes only. Without this the DaemonSet schedules onto
       # every node (including control-plane and CPU-only workers) and burns
