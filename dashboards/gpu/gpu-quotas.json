@@ -278,7 +278,7 @@
       "id": 11,
       "targets": [
         {
-          "expr": "sum by (namespace) (kube_pod_container_resource_requests{resource=\"nvidia_com_gpu\", namespace=~\"$namespace\"})",
+          "expr": "sum by (namespace) (namespace:gpu_count:allocated{namespace=~\"$namespace\"})",
           "legendFormat": "{{namespace}}",
           "refId": "A"
         }
@@ -346,7 +346,7 @@
           "refId": "A"
         },
         {
-          "expr": "sum(kube_pod_container_resource_requests{resource=\"nvidia_com_gpu\", namespace=~\"$namespace\"})",
+          "expr": "sum(namespace:gpu_count:allocated{namespace=~\"$namespace\"})",
           "legendFormat": "Requested",
           "refId": "B"
         }
