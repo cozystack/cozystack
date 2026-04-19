@@ -166,12 +166,12 @@
       "id": 4,
       "targets": [
         {
-          "expr": "avg(gpu:power_throttle_fraction:rate5m{namespace=~\"$namespace\"})",
+          "expr": "avg(gpu:power_throttle_fraction:rate5m)",
           "refId": "A"
         }
       ],
       "title": "Avg Power Throttling",
-      "description": "Fraction of time GPUs hit the TDP cap and lose performance. \u003e5% means tenants underutilize billed FLOPS.",
+      "description": "Fraction of time GPUs hit the TDP cap and lose performance. \u003e5% means tenants underutilize billed FLOPS. Cluster-wide — rule aggregates by (Hostname, gpu, UUID) and drops namespace label.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -658,7 +658,7 @@
         }
       ],
       "title": "Power throttle fraction per GPU",
-      "description": "Fraction of time the GPU was power-throttled. 1.0 = always throttled.",
+      "description": "Fraction of time the GPU was power-throttled. 1.0 = always throttled. Cluster-wide — rule aggregates by (Hostname, gpu, UUID) and drops namespace label.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -729,7 +729,7 @@
         }
       ],
       "title": "Thermal throttle fraction per GPU",
-      "description": "Fraction of time the GPU was thermal-throttled.",
+      "description": "Fraction of time the GPU was thermal-throttled. Cluster-wide — rule aggregates by (Hostname, gpu, UUID) and drops namespace label.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
