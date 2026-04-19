@@ -33,6 +33,24 @@ spec:
         # up, or rare label drift between the two sources.
         - record: cluster:gpu_count:free
           expr: clamp_min(cluster:gpu_count:total - (cluster:gpu_count:allocated or vector(0)), 0)
+        # Cluster-layer filter asymmetry — intentional, not a bug:
+        #
+        #   * cluster:gpu_count:total and cluster:gpu_power_watts:sum do NOT
+        #     filter cozy-*/kube-* namespaces because they describe the
+        #     physical hardware fleet. A GPU draws power and occupies a
+        #     slot regardless of which namespace's pod happens to hold it;
+        #     excluding infra pods would under-report raw capacity and
+        #     break capacity-planning math.
+        #
+        #   * cluster:gpu_util:avg DOES filter infra namespaces because it
+        #     is a tenant-oriented KPI. Admins want to see the mean
+        #     utilization of tenant workloads, not have it diluted by
+        #     GPU Operator DaemonSet pods whose containers hold a GPU
+        #     handle but do no useful compute.
+        #
+        # Do not "normalize" by adding the filter to the hardware rules —
+        # downstream consumers (capacity planning, billing) rely on the
+        # raw totals.
         - record: cluster:gpu_util:avg
           expr: avg(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
         - record: cluster:gpu_power_watts:sum
