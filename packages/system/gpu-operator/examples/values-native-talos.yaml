@@ -39,6 +39,9 @@ spec:
           dcgmExporter:
             serviceMonitor:
               enabled: true
+              # Matches the 1m evaluation cadence of GPU recording rules with
+              # 4x oversampling headroom. DCGM_FI_PROF_* counters have
+              # documented overhead concerns below 1s; 15s is safe.
               interval: "15s"
               honorLabels: true
             config:
