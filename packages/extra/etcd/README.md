@@ -1,5 +1,13 @@
 # Etcd-cluster
 
+## Backups
+
+When `backup.enabled` is set to `true`, the chart renders an `EtcdBackupSchedule` (etcd.aenix.io/v1alpha1) and an S3 credentials `Secret`. The etcd-operator v0.4.3+ reconciles the schedule into a `CronJob` that periodically snapshots the cluster to S3.
+
+Enabling backup requires explicit values for `backup.s3AccessKey`, `backup.s3SecretKey`, `backup.destinationPath` (must start with `s3://` and have no `//` segments), and `backup.endpointURL`. The chart intentionally `fail`s at template time if any of these are left at their placeholder defaults — this avoids silently shipping a Secret containing the literal string `<your-access-key>` to the backup job, which would later fail with an opaque S3 403.
+
+**Restore** (`EtcdCluster.spec.bootstrap`) is not yet exposed through this chart — restoring from a snapshot currently requires hand-applying an `EtcdCluster` with the bootstrap block.
+
 ## Parameters
 
 ### Common parameters

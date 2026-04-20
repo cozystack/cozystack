@@ -1,5 +1,10 @@
 #!/usr/bin/env bats
 
+# The etcd chart pins the Helm release name to 'etcd' via
+# packages/extra/etcd/templates/check-release-name.yaml, so every test
+# must apply its Etcd with metadata.name: etcd. setup() clears any
+# prior run so tests remain independent despite the singleton name.
+
 setup() {
   kubectl -n tenant-test delete etcd.apps.cozystack.io --all --ignore-not-found --timeout=2m || true
 }
@@ -12,12 +17,11 @@ dump_diagnostics() {
 }
 
 @test "Create Etcd" {
-  name='test'
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Etcd
 metadata:
-  name: $name
+  name: etcd
   namespace: tenant-test
 spec:
   size: 1Gi
@@ -28,18 +32,16 @@ spec:
     memory: 128Mi
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr etcd-$name --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
+  kubectl -n tenant-test wait hr etcd --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
   kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
-  kubectl -n tenant-test delete etcd.apps.cozystack.io $name
 }
 
 @test "Create Etcd with empty backup block (disabled by default)" {
-  name='test-backup-default'
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Etcd
 metadata:
-  name: $name
+  name: etcd
   namespace: tenant-test
 spec:
   size: 1Gi
@@ -51,22 +53,20 @@ spec:
   backup: {}
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr etcd-$name --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
+  kubectl -n tenant-test wait hr etcd --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
   # With backup disabled, neither the schedule nor the secret should be created.
   run kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd
   [ "$status" -ne 0 ]
   run kubectl -n tenant-test get secret etcd-s3-creds
   [ "$status" -ne 0 ]
-  kubectl -n tenant-test delete etcd.apps.cozystack.io $name
 }
 
 @test "Create Etcd with backup schedule" {
-  name='test-backup'
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Etcd
 metadata:
-  name: $name
+  name: etcd
   namespace: tenant-test
 spec:
   size: 1Gi
@@ -80,6 +80,7 @@ spec:
     schedule: "*/1 * * * *"
     destinationPath: "s3://test-bucket/etcd-backups/"
     endpointURL: "http://minio-e2e.tenant-test.svc:9000"
+    region: "us-east-1"
     forcePathStyle: true
     s3AccessKey: "e2e-access-key"
     s3SecretKey: "e2e-secret-key"
@@ -87,11 +88,13 @@ spec:
     failedJobsHistoryLimit: 1
 EOF
   sleep 5
-  kubectl -n tenant-test wait hr etcd-$name --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
+  kubectl -n tenant-test wait hr etcd --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
   kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
   kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd || { dump_diagnostics; false; }
+  # Verify the region field propagated to the EtcdBackupSchedule.
+  REGION=$(kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd -o jsonpath='{.spec.destination.s3.region}')
+  [ "$REGION" = "us-east-1" ]
   kubectl -n tenant-test get secret etcd-s3-creds -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d | grep -q '^e2e-access-key$'
   # The etcd-operator generates a CronJob from the EtcdBackupSchedule. Wait for it.
   timeout 120 sh -ec "until [ \"\$(kubectl -n tenant-test get cronjob -l etcd.aenix.io/etcdbackupschedule-name=etcd -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)\" != '' ]; do sleep 5; done" || { dump_diagnostics; false; }
-  kubectl -n tenant-test delete etcd.apps.cozystack.io $name
 }
