@@ -1,4 +1,5 @@
 {{- if .Values.backup.enabled }}
+{{- if not (hasPrefix "s3://" .Values.backup.destinationPath) }}{{ fail "backup.destinationPath must start with s3://" }}{{- end }}
 {{- $path := .Values.backup.destinationPath | trimPrefix "s3://" | trimSuffix "/" -}}
 {{- $parts := splitList "/" $path -}}
 {{- $bucket := first $parts -}}

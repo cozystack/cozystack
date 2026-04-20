@@ -6,9 +6,6 @@
       "description": "Backup configuration.",
       "type": "object",
       "default": {},
-      "required": [
-        "enabled"
-      ],
       "properties": {
         "destinationPath": {
           "description": "Destination path for backups (e.g. s3://bucket/path/).",

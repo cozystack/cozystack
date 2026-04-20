@@ -25,7 +25,7 @@ resources:
 ##
 
 ## @typedef {struct} Backup - Backup configuration.
-## @field {bool} enabled - Enable scheduled S3 backups.
+## @field {bool} [enabled] - Enable scheduled S3 backups.
 ## @field {string} [schedule] - Cron schedule for automated backups.
 ## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
 ## @field {string} [endpointURL] - S3 endpoint URL for uploads.
