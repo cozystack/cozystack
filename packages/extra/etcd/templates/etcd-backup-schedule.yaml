@@ -7,7 +7,7 @@
 apiVersion: etcd.aenix.io/v1alpha1
 kind: EtcdBackupSchedule
 metadata:
-  name: {{ .Release.Name }}
+  name: etcd
 spec:
   clusterRef:
     name: etcd
@@ -26,5 +26,5 @@ spec:
       {{- end }}
       forcePathStyle: {{ .Values.backup.forcePathStyle }}
       credentialsSecretRef:
-        name: {{ .Release.Name }}-s3-creds
+        name: etcd-s3-creds
 {{- end }}
