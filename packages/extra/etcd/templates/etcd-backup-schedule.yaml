@@ -1,13 +1,12 @@
 {{- if .Values.backup.enabled }}
-{{- /* All backup-related guards live here (alphabetically first of the backup templates) so ordering relative to backup-secret.yaml doesn't matter. */ -}}
-{{- if regexMatch "^<.*>$" .Values.backup.s3AccessKey }}{{ fail "backup.s3AccessKey must be set to a real value when backup.enabled=true" }}{{- end }}
-{{- if regexMatch "^<.*>$" .Values.backup.s3SecretKey }}{{ fail "backup.s3SecretKey must be set to a real value when backup.enabled=true" }}{{- end }}
-{{- if not (hasPrefix "s3://" .Values.backup.destinationPath) }}{{ fail "backup.destinationPath must start with s3:// when backup.enabled=true" }}{{- end }}
-{{- $rawPath := .Values.backup.destinationPath | trimPrefix "s3://" | trimSuffix "/" -}}
-{{- if or (eq $rawPath "bucket/path/to/folder") (contains "//" $rawPath) }}{{ fail "backup.destinationPath must be set to a real s3:// URL without '//' segments when backup.enabled=true" }}{{- end }}
-{{- if or (eq .Values.backup.endpointURL "") (eq .Values.backup.endpointURL "http://minio-gateway-service:9000") }}{{ fail "backup.endpointURL must be set to a real S3 endpoint when backup.enabled=true" }}{{- end }}
+{{- $endpointURL := required "backup.endpointURL is required when backup.enabled=true" .Values.backup.endpointURL -}}
+{{- $destPath := required "backup.destinationPath is required when backup.enabled=true" .Values.backup.destinationPath -}}
+{{- if not (hasPrefix "s3://" $destPath) }}{{ fail "backup.destinationPath must start with s3://" }}{{- end }}
+{{- $rawPath := $destPath | trimPrefix "s3://" | trimSuffix "/" -}}
+{{- if contains "//" $rawPath }}{{ fail "backup.destinationPath must not contain '//' segments" }}{{- end }}
 {{- $parts := splitList "/" $rawPath -}}
 {{- $bucket := first $parts -}}
+{{- if eq $bucket "" }}{{ fail "backup.destinationPath must contain a bucket (e.g. s3://bucket/path/)" }}{{- end }}
 {{- $key := rest $parts | join "/" -}}
 ---
 apiVersion: etcd.aenix.io/v1alpha1
@@ -22,8 +21,8 @@ spec:
   failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
   destination:
     s3:
-      endpoint: {{ .Values.backup.endpointURL | quote }}
-      bucket: {{ required "backup.destinationPath must contain a bucket (e.g. s3://bucket/path/)" $bucket | quote }}
+      endpoint: {{ $endpointURL | quote }}
+      bucket: {{ $bucket | quote }}
       {{- with $key }}
       key: {{ . | quote }}
       {{- end }}

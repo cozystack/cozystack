@@ -40,11 +40,11 @@ resources:
 backup:
   enabled: false
   schedule: "0 2 * * *"
-  destinationPath: "s3://bucket/path/to/folder/"
-  endpointURL: "http://minio-gateway-service:9000"
+  destinationPath: ""
+  endpointURL: ""
   region: ""
   forcePathStyle: true
-  s3AccessKey: "<your-access-key>"
-  s3SecretKey: "<your-secret-key>"
+  s3AccessKey: ""
+  s3SecretKey: ""
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1

@@ -7,6 +7,11 @@
 
 setup() {
   kubectl -n tenant-test delete etcd.apps.cozystack.io --all --ignore-not-found --timeout=2m || true
+  # HelmRelease teardown is async relative to the CR deletion above; wait for
+  # downstream resources so the next test starts from a clean state.
+  kubectl -n tenant-test wait hr/etcd --for=delete --timeout=2m --ignore-not-found || true
+  kubectl -n tenant-test wait secret/etcd-s3-creds --for=delete --timeout=1m --ignore-not-found || true
+  kubectl -n tenant-test wait etcdbackupschedule.etcd.aenix.io/etcd --for=delete --timeout=1m --ignore-not-found || true
 }
 
 dump_diagnostics() {
@@ -78,8 +83,12 @@ spec:
   backup:
     enabled: true
     schedule: "*/1 * * * *"
+    # This test verifies that the chart renders EtcdBackupSchedule/Secret and
+    # that the etcd-operator materializes a CronJob from the schedule — it does
+    # NOT verify that backups reach S3. The endpoint below intentionally
+    # resolves nowhere to keep the test self-contained.
     destinationPath: "s3://test-bucket/etcd-backups/"
-    endpointURL: "http://minio-e2e.tenant-test.svc:9000"
+    endpointURL: "http://no-such-endpoint.invalid:9000"
     region: "us-east-1"
     forcePathStyle: true
     s3AccessKey: "e2e-access-key"
