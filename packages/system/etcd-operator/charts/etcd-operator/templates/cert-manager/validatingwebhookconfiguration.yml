@@ -13,6 +13,46 @@ webhooks:
       service:
         name: {{ include "etcd-operator.fullname" . }}-webhook-service
         namespace: {{ .Release.Namespace }}
+        path: /validate-etcd-aenix-io-v1alpha1-etcdbackup
+    failurePolicy: Fail
+    name: vetcdbackup.kb.io
+    rules:
+      - apiGroups:
+          - etcd.aenix.io
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - etcdbackups
+    sideEffects: None
+  - admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: {{ include "etcd-operator.fullname" . }}-webhook-service
+        namespace: {{ .Release.Namespace }}
+        path: /validate-etcd-aenix-io-v1alpha1-etcdbackupschedule
+    failurePolicy: Fail
+    name: vetcdbackupschedule.kb.io
+    rules:
+      - apiGroups:
+          - etcd.aenix.io
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - etcdbackupschedules
+    sideEffects: None
+  - admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: {{ include "etcd-operator.fullname" . }}-webhook-service
+        namespace: {{ .Release.Namespace }}
         path: /validate-etcd-aenix-io-v1alpha1-etcdcluster
     failurePolicy: Fail
     name: vetcdcluster.kb.io
