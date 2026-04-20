@@ -41,6 +41,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ .Release.Name }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
   minReplicas: 1
   replicas: {{ .Values.replicas }}

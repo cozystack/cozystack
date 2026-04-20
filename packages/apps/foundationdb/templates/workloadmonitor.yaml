@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/name: foundationdb
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
   replicas: {{ .Values.cluster.processCounts.storage }}
   minReplicas: {{ include "foundationdb.minReplicas" . }}

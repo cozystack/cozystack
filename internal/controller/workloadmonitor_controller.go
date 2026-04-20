@@ -35,6 +35,11 @@ const (
 	// namespaceMonitoringLabel is the namespace label that indicates which tenant
 	// namespace hosts the monitoring stack (VictoriaMetrics/Prometheus).
 	namespaceMonitoringLabel = "namespace.cozystack.io/monitoring"
+	workloadLabelPrefix      = "workloads.cozystack.io/"
+	// workloadMonitorLabel is reserved: it names the WorkloadMonitor that owns
+	// the Workload and is always set by the reconciler, so it is never copied
+	// from monitor labels.
+	workloadMonitorLabel = workloadLabelPrefix + "monitor"
 	// vmSelectService is the well-known service name for VictoriaMetrics vmselect
 	// within a monitoring namespace. Port 8481, path /select/0/prometheus.
 	vmSelectService = "vmselect-shortterm"
@@ -283,16 +288,21 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		}
 	}
 
+	monitorLabels := r.getMonitorLabels(monitor)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
 
 		if workload.Labels == nil {
 			workload.Labels = make(map[string]string)
 		}
+		// Apply monitor-level labels first so source-object labels can override on conflict
+		for k, v := range monitorLabels {
+			workload.Labels[k] = v
+		}
 		for k, v := range bc.Labels {
 			workload.Labels[k] = v
 		}
-		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
+		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		workload.Status.Kind = monitor.Spec.Kind
 		workload.Status.Type = monitor.Spec.Type
@@ -345,14 +355,22 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 	resourceLabel = fmt.Sprintf("%s.ipaddresspool.metallb.io/requests.ipaddresses", resourceLabel)
 	resources[resourceLabel] = quantity
 
+	monitorLabels := r.getMonitorLabels(monitor)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), &svc)
 
+		// Apply monitor-level labels first so source-object labels can override on conflict
+		if workload.Labels == nil {
+			workload.Labels = make(map[string]string)
+		}
+		for k, v := range monitorLabels {
+			workload.Labels[k] = v
+		}
 		for k, v := range svc.Labels {
 			workload.Labels[k] = v
 		}
-		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
+		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -396,14 +414,22 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 		resources[resourceLabel] = resourceQuantity
 	}
 
+	monitorLabels := r.getMonitorLabels(monitor)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), &pvc)
 
+		// Apply monitor-level labels first so source-object labels can override on conflict
+		if workload.Labels == nil {
+			workload.Labels = make(map[string]string)
+		}
+		for k, v := range monitorLabels {
+			workload.Labels[k] = v
+		}
 		for k, v := range pvc.Labels {
 			workload.Labels[k] = v
 		}
-		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
+		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		// Fill Workload status fields:
 		workload.Status.Kind = monitor.Spec.Kind
@@ -470,14 +496,22 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 	}
 
 	metaLabels := r.getWorkloadMetadata(&pod)
+	monitorLabels := r.getMonitorLabels(monitor)
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
 		// Update owner references with the new monitor
 		updateOwnerReferences(workload.GetObjectMeta(), &pod)
 
+		// Apply monitor-level labels first so source-object labels can override on conflict
+		if workload.Labels == nil {
+			workload.Labels = make(map[string]string)
+		}
+		for k, v := range monitorLabels {
+			workload.Labels[k] = v
+		}
 		for k, v := range pod.Labels {
 			workload.Labels[k] = v
 		}
-		workload.Labels["workloads.cozystack.io/monitor"] = monitor.Name
+		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		// Add workload meta to labels
 		for k, v := range metaLabels {
@@ -717,6 +751,24 @@ func (r *WorkloadMonitorReconciler) getWorkloadMetadata(obj client.Object) map[s
 	}
 	if instanceProfile, ok := annotations["kubevirt.io/cluster-instanceprofile-name"]; ok {
 		labels["workloads.cozystack.io/kubevirt-vmi-instance-profile"] = instanceProfile
+	}
+	return labels
+}
+
+// getMonitorLabels extracts workloads.cozystack.io/* labels from a WorkloadMonitor
+// so they can be propagated onto Workload objects created for pods, PVCs, services,
+// or bucket claims. The monitor label "workloads.cozystack.io/monitor" is reserved
+// and set separately per Workload, so it is excluded here.
+func (r *WorkloadMonitorReconciler) getMonitorLabels(monitor *cozyv1alpha1.WorkloadMonitor) map[string]string {
+	labels := make(map[string]string)
+	for k, v := range monitor.GetLabels() {
+		if !strings.HasPrefix(k, workloadLabelPrefix) {
+			continue
+		}
+		if k == workloadMonitorLabel {
+			continue
+		}
+		labels[k] = v
 	}
 	return labels
 }

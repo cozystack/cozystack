@@ -158,6 +158,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-core
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.core.resourcesPreset | quote }}
 spec:
   replicas: 1
   minReplicas: 1
@@ -174,6 +176,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-registry
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.registry.resourcesPreset | quote }}
 spec:
   replicas: 1
   minReplicas: 1
