@@ -18,6 +18,9 @@ spec:
   {{- with $pdb.maxUnavailable }}
   maxUnavailable: {{ . }}
   {{- end }}
+  {{- with $pdb.unhealthyPodEvictionPolicy }}
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
   selector:
     matchLabels: {{ include "vm.selectorLabels" $ctx | nindent 6 }}
 {{- end }}

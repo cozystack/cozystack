@@ -18,9 +18,12 @@ metadata:
   annotations: {{ toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: {{.Values.replicaCount }}
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels: {{ include "vm.selectorLabels" $ctx | nindent 6 }}
+  {{- with .Values.strategy }}
+  strategy: {{ toYaml . | nindent 4 }}
+  {{- end }}
   template:
     metadata:
       {{- with .Values.annotations }}
