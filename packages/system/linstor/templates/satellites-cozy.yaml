@@ -17,6 +17,7 @@ spec:
         startupProbe:
           tcpSocket:
             port: linstor
+          periodSeconds: 10
           failureThreshold: 30
         securityContext:
           # real-world installations need some debugging from time to time
