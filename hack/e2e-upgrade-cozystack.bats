@@ -40,10 +40,11 @@ find_previous_release() {
 
   local prev_minor=$((minor - 1))
 
-  # Latest stable (non-prerelease) tag from the previous minor line
+  # Latest stable (non-prerelease) tag from the previous minor line.
+  # Per SemVer, any tag containing a hyphen is a pre-release.
   local prev_release
   prev_release=$(git tag -l "v${major}.${prev_minor}.*" --sort=-v:refname \
-    | grep -v -E '-(rc|alpha|beta)\.' | head -1)
+    | grep -v -- '-' | head -1)
 
   if [ -z "$prev_release" ]; then
     echo "ERROR: No stable release found for v${major}.${prev_minor}.*" >&2
@@ -112,16 +113,25 @@ spec:
           apiServerEndpoint: "https://192.168.123.10:6443"
 EOF
 
-  # Wait until HelmReleases appear & reconcile
+  # Wait until HelmReleases appear & reconcile. The 10-release floor is a
+  # conservative signal that the operator has started creating HRs for the
+  # isp-full variant (which produces many more); below 10 means the operator
+  # isn't reconciling yet.
   timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
   sleep 5
   kubectl get hr -A \
     | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' \
     | sh -ex
 
+  # Fail fast on a broken baseline when STRICT_BASELINE=1 (CI). On long-lived
+  # dev clusters, leave as a warning so pre-existing noise doesn't block runs.
   if kubectl get hr -A | grep -v " True " | grep -v NAME; then
     kubectl get hr -A
-    echo "Some HelmReleases failed to reconcile (previous version)" >&2
+    if [ "${STRICT_BASELINE:-0}" = "1" ]; then
+      echo "ERROR: HelmReleases failed to reconcile (previous version)" >&2
+      exit 1
+    fi
+    echo "WARNING: Some HelmReleases not reconciled (previous version); continuing with tolerant baseline" >&2
   fi
 }
 
@@ -297,6 +307,7 @@ EOF
     -l "cnpg.io/cluster=postgres-${name}" \
     --field-selector=status.phase=Running \
     -o jsonpath='{.items[0].metadata.name}')
+  [ -n "$pg_pod" ] || { echo "No running PostgreSQL pod found for postgres-${name}" >&2; exit 1; }
 
   kubectl exec -n tenant-test "$pg_pod" -- \
     psql -U postgres -d upgradedb -c "
@@ -321,6 +332,252 @@ EOF
   echo "upgrade-pg" > "$STATE_DIR/pg-instance-name"
 }
 
+@test "Deploy MariaDB with test data" {
+  local name='upgrade-mariadb'
+
+  kubectl -n tenant-test delete mariadbs.apps.cozystack.io "$name" --ignore-not-found --timeout=2m || true
+
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MariaDB
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  external: false
+  size: 10Gi
+  replicas: 2
+  storageClass: ""
+  users:
+    upgradeuser:
+      maxUserConnections: 100
+      password: upgrade-test-pw
+  databases:
+    upgradedb:
+      roles:
+        admin:
+        - upgradeuser
+  backup:
+    enabled: false
+    s3Region: us-east-1
+    s3Bucket: s3.example.org/mariadb-backups
+    schedule: "0 2 * * *"
+    cleanupStrategy: "--keep-last=3"
+    s3AccessKey: placeholder
+    s3SecretKey: placeholder
+    resticPassword: placeholder
+  resources: {}
+  resourcesPreset: "nano"
+EOF
+
+  sleep 5
+  kubectl -n tenant-test wait hr "mariadb-$name" --timeout=120s --for=condition=ready
+  kubectl -n tenant-test wait statefulset.apps/mariadb-$name --timeout=5m --for=jsonpath='{.status.readyReplicas}'=2
+  timeout 60 sh -ec "until kubectl -n tenant-test get endpoints mariadb-${name} -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 5; done"
+
+  local my_pod
+  my_pod=$(kubectl get pods -n tenant-test \
+    -l "app.kubernetes.io/instance=mariadb-${name}" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{.items[0].metadata.name}')
+  [ -n "$my_pod" ] || { echo "No running MariaDB pod found for mariadb-${name}" >&2; exit 1; }
+
+  # Seed 3 known rows via the primary service (handles replica topology)
+  local root_pw
+  root_pw=$(kubectl get secret mariadb-${name}-credentials -n tenant-test \
+    -o jsonpath='{.data.root}' | base64 -d)
+  kubectl exec -n tenant-test "$my_pod" -- \
+    env MYSQL_PWD="$root_pw" mysql -h "mariadb-${name}-primary" -u root upgradedb -e "
+      CREATE TABLE IF NOT EXISTS upgrade_canary (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        data VARCHAR(64) NOT NULL
+      );
+      INSERT INTO upgrade_canary (data) VALUES
+        ('mariadb-pre-upgrade-row-1'),
+        ('mariadb-pre-upgrade-row-2'),
+        ('mariadb-pre-upgrade-row-3');
+    "
+
+  local count
+  count=$(kubectl exec -n tenant-test "$my_pod" -- \
+    env MYSQL_PWD="$root_pw" mysql -h "mariadb-${name}-primary" -u root -N -B upgradedb -e "SELECT count(*) FROM upgrade_canary;")
+  echo "MariaDB pre-upgrade row count: $count"
+  [ "$count" -eq 3 ]
+
+  echo "upgrade-mariadb" > "$STATE_DIR/mariadb-instance-name"
+}
+
+@test "Deploy Kafka cluster" {
+  local name='upgrade-kafka'
+
+  kubectl -n tenant-test delete kafkas.apps.cozystack.io "$name" --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test wait kafkas.apps.cozystack.io "$name" --for=delete --timeout=2m 2>/dev/null || true
+
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kafka
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  external: false
+  kafka:
+    size: 5Gi
+    replicas: 2
+    storageClass: ""
+    resources: {}
+    resourcesPreset: "nano"
+  zookeeper:
+    size: 5Gi
+    replicas: 2
+    storageClass: ""
+    resources: {}
+    resourcesPreset: "nano"
+  topics:
+    - name: upgradeCanary
+      partitions: 1
+      replicas: 2
+      config:
+        min.insync.replicas: 1
+EOF
+
+  sleep 5
+  kubectl -n tenant-test wait hr "kafka-$name" --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait kafka "$name" --timeout=5m --for=condition=ready
+
+  # Record the Kafka CR generation so we can check it survives untouched
+  kubectl get kafka -n tenant-test "$name" \
+    -o jsonpath='{.metadata.uid}' > "$STATE_DIR/kafka-uid"
+  echo "$name" > "$STATE_DIR/kafka-instance-name"
+}
+
+@test "Deploy VirtualMachine" {
+  local name='upgrade-vm'
+
+  kubectl -n tenant-test delete vminstances.apps.cozystack.io "$name" --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test delete vmdisks.apps.cozystack.io "$name" --ignore-not-found --timeout=2m || true
+
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMDisk
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  optical: false
+  storage: 5Gi
+  storageClass: replicated
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMInstance
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  external: false
+  running: true
+  instanceType: "u1.medium"
+  instanceProfile: ubuntu
+  disks:
+    - name: $name
+  gpus: []
+  sshKeys: []
+  cloudInit: |
+    #cloud-config
+    users:
+      - name: cozy
+        shell: /bin/bash
+  cloudInitSeed: ""
+EOF
+
+  kubectl -n tenant-test wait hr "vm-disk-$name" --timeout=30s --for=condition=ready
+  kubectl -n tenant-test wait dv "vm-disk-$name" --timeout=5m --for=condition=ready
+  kubectl -n tenant-test wait pvc "vm-disk-$name" --timeout=3m --for=jsonpath='{.status.phase}'=Bound
+  kubectl -n tenant-test wait hr "vm-instance-$name" --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait vm "vm-instance-$name" --timeout=2m --for=condition=Ready
+
+  # Record VMI UID so we can verify the instance itself survives (not just a recreate)
+  kubectl get vmi -n tenant-test "vm-instance-$name" \
+    -o jsonpath='{.metadata.uid}' > "$STATE_DIR/vm-uid"
+  echo "$name" > "$STATE_DIR/vm-instance-name"
+}
+
+@test "Deploy tenant Kubernetes cluster" {
+  local name='upgrade-k8s'
+  local k8s_version
+  k8s_version=$(yq 'keys | sort_by(.) | .[-1]' packages/apps/kubernetes/files/versions.yaml)
+
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "$name" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "$name" --for=delete --timeout=2m 2>/dev/null || true
+
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kubernetes
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  addons:
+    certManager:
+      enabled: false
+      valuesOverride: {}
+    cilium:
+      valuesOverride: {}
+    fluxcd:
+      enabled: false
+      valuesOverride: {}
+    gatewayAPI:
+      enabled: false
+    gpuOperator:
+      enabled: false
+      valuesOverride: {}
+    ingressNginx:
+      enabled: false
+      hosts: []
+      valuesOverride: {}
+    monitoringAgents:
+      enabled: false
+      valuesOverride: {}
+    verticalPodAutoscaler:
+      valuesOverride: {}
+  controlPlane:
+    apiServer:
+      resources: {}
+      resourcesPreset: small
+    controllerManager:
+      resources: {}
+      resourcesPreset: micro
+    konnectivity:
+      server:
+        resources: {}
+        resourcesPreset: micro
+    replicas: 2
+    scheduler:
+      resources: {}
+      resourcesPreset: micro
+  host: ""
+  nodeGroups: {}
+  storageClass: replicated
+  version: "${k8s_version}"
+EOF
+
+  # Wait for the Kamaji control plane to spin up. We skip waiting for the
+  # tenant-node-dependent add-ons (nodeGroups is empty) — just verifying the
+  # control plane CR survives the upgrade is enough to catch CRD breakage.
+  timeout 120 sh -ec 'until kubectl get kamajicontrolplane -n tenant-test "kubernetes-'"$name"'" >/dev/null 2>&1; do sleep 2; done'
+  kubectl wait --for=condition=TenantControlPlaneCreated \
+    kamajicontrolplane -n tenant-test "kubernetes-$name" --timeout=5m
+  kubectl wait tcp -n tenant-test "kubernetes-$name" \
+    --timeout=5m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+
+  kubectl get tcp -n tenant-test "kubernetes-$name" \
+    -o jsonpath='{.metadata.uid}' > "$STATE_DIR/k8s-tcp-uid"
+  echo "$name" > "$STATE_DIR/k8s-instance-name"
+}
+
 @test "Record pre-upgrade state" {
   mkdir -p "$STATE_DIR"
 
@@ -338,9 +595,12 @@ EOF
   kubectl get pv --no-headers 2>/dev/null \
     | awk '$5 != "Bound" {print $1}' | sort > "$STATE_DIR/pre-unbound-pvs"
 
-  # Pre-upgrade cozystack migration version (for post-upgrade assertion)
-  kubectl get cm cozystack-version -n cozy-system -o jsonpath='{.data.version}' \
-    > "$STATE_DIR/pre-cozystack-version" 2>/dev/null || echo "0" > "$STATE_DIR/pre-cozystack-version"
+  # Pre-upgrade cozystack migration version (for post-upgrade assertion).
+  # Coalesce missing CM, kubectl failure, and empty stdout all to "0".
+  local previous_version
+  previous_version=$(kubectl get cm cozystack-version -n cozy-system \
+    -o jsonpath='{.data.version}' 2>/dev/null || true)
+  echo "${previous_version:-0}" > "$STATE_DIR/pre-cozystack-version"
 
   # Snapshot pod state (for debugging if upgrade breaks things)
   kubectl get pods -A --no-headers > "$STATE_DIR/pre-pods"
@@ -360,13 +620,15 @@ EOF
   local current_version="${current_tag#v}"
   echo "Upgrading from $PREV_RELEASE to $current_tag (oci://ghcr.io/cozystack/cozystack/cozy-installer:${current_version})"
 
-  # Pull the published OCI chart — same mechanism users run during upgrades
+  # Pull the published OCI chart — same mechanism users run during upgrades.
+  # Timeout is generous: the installer renders cozystack-migration-hook as a
+  # pre-upgrade Job (backoffLimit=3), and helm --wait blocks on it.
   helm upgrade cozystack \
     oci://ghcr.io/cozystack/cozystack/cozy-installer \
     --version "${current_version}" \
     --namespace cozy-system \
     --wait \
-    --timeout 2m
+    --timeout 10m
 
   # Verify the new operator is available
   kubectl wait deployment/cozystack-operator -n cozy-system \
@@ -485,6 +747,7 @@ EOF
     -l "cnpg.io/cluster=postgres-${name}" \
     --field-selector=status.phase=Running \
     -o jsonpath='{.items[0].metadata.name}')
+  [ -n "$pg_pod" ] || { echo "No running PostgreSQL pod found for postgres-${name} after upgrade" >&2; exit 1; }
 
   # Check that the 3 pre-upgrade rows are still there
   local count
@@ -504,6 +767,101 @@ EOF
   echo "$data" | grep -q "pre-upgrade-row-3"
 
   echo "PostgreSQL data integrity verified"
+}
+
+@test "Verify MariaDB data survived upgrade" {
+  local name
+  name=$(cat "$STATE_DIR/mariadb-instance-name")
+
+  # Wait for MariaDB to stabilize after upgrade
+  timeout 180 sh -ec "until kubectl -n tenant-test get endpoints mariadb-${name} -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 5; done"
+  kubectl -n tenant-test wait statefulset.apps/mariadb-$name --timeout=5m --for=jsonpath='{.status.readyReplicas}'=2
+
+  local my_pod
+  my_pod=$(kubectl get pods -n tenant-test \
+    -l "app.kubernetes.io/instance=mariadb-${name}" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{.items[0].metadata.name}')
+  [ -n "$my_pod" ] || { echo "No running MariaDB pod found for mariadb-${name} after upgrade" >&2; exit 1; }
+
+  local root_pw
+  root_pw=$(kubectl get secret mariadb-${name}-credentials -n tenant-test \
+    -o jsonpath='{.data.root}' | base64 -d)
+
+  local count
+  count=$(kubectl exec -n tenant-test "$my_pod" -- \
+    env MYSQL_PWD="$root_pw" mysql -h "mariadb-${name}-primary" -u root -N -B upgradedb -e "SELECT count(*) FROM upgrade_canary;")
+  echo "MariaDB post-upgrade row count: $count"
+  [ "$count" -eq 3 ]
+
+  local data
+  data=$(kubectl exec -n tenant-test "$my_pod" -- \
+    env MYSQL_PWD="$root_pw" mysql -h "mariadb-${name}-primary" -u root -N -B upgradedb -e "SELECT data FROM upgrade_canary ORDER BY id;")
+  echo "MariaDB post-upgrade data:"
+  echo "$data"
+  echo "$data" | grep -q "mariadb-pre-upgrade-row-1"
+  echo "$data" | grep -q "mariadb-pre-upgrade-row-2"
+  echo "$data" | grep -q "mariadb-pre-upgrade-row-3"
+
+  echo "MariaDB data integrity verified"
+}
+
+@test "Verify Kafka cluster survived upgrade" {
+  local name
+  name=$(cat "$STATE_DIR/kafka-instance-name")
+  local pre_uid
+  pre_uid=$(cat "$STATE_DIR/kafka-uid")
+
+  kubectl -n tenant-test wait kafka "$name" --timeout=10m --for=condition=ready
+
+  local post_uid
+  post_uid=$(kubectl get kafka -n tenant-test "$name" -o jsonpath='{.metadata.uid}')
+  [ "$pre_uid" = "$post_uid" ] || { echo "Kafka UID changed during upgrade: $pre_uid → $post_uid" >&2; exit 1; }
+
+  # Topic should still be present on the broker — check via the Strimzi KafkaTopic CR
+  kubectl get kafkatopic -n tenant-test \
+    -l "strimzi.io/cluster=kafka-${name}" \
+    -o jsonpath='{.items[*].spec.topicName}' | grep -qw 'upgradeCanary'
+
+  echo "Kafka cluster and topic survived upgrade"
+}
+
+@test "Verify VirtualMachine survived upgrade" {
+  local name
+  name=$(cat "$STATE_DIR/vm-instance-name")
+  local pre_uid
+  pre_uid=$(cat "$STATE_DIR/vm-uid")
+
+  kubectl -n tenant-test wait vm "vm-instance-$name" --timeout=5m --for=condition=Ready
+
+  local post_uid
+  post_uid=$(kubectl get vmi -n tenant-test "vm-instance-$name" \
+    -o jsonpath='{.metadata.uid}')
+  [ "$pre_uid" = "$post_uid" ] || { echo "VMI UID changed during upgrade: $pre_uid → $post_uid" >&2; exit 1; }
+
+  local phase
+  phase=$(kubectl get vmi -n tenant-test "vm-instance-$name" \
+    -o jsonpath='{.status.phase}')
+  [ "$phase" = "Running" ] || { echo "VMI phase is $phase, expected Running" >&2; exit 1; }
+
+  echo "VirtualMachine survived upgrade (same UID, still Running)"
+}
+
+@test "Verify tenant Kubernetes cluster survived upgrade" {
+  local name
+  name=$(cat "$STATE_DIR/k8s-instance-name")
+  local pre_uid
+  pre_uid=$(cat "$STATE_DIR/k8s-tcp-uid")
+
+  kubectl wait tcp -n tenant-test "kubernetes-$name" \
+    --timeout=10m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+
+  local post_uid
+  post_uid=$(kubectl get tcp -n tenant-test "kubernetes-$name" \
+    -o jsonpath='{.metadata.uid}')
+  [ "$pre_uid" = "$post_uid" ] || { echo "TenantControlPlane UID changed during upgrade: $pre_uid → $post_uid" >&2; exit 1; }
+
+  echo "Tenant Kubernetes control plane survived upgrade"
 }
 
 @test "Verify Cozystack API available after upgrade" {

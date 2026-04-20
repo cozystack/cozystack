@@ -317,7 +317,9 @@ jobs:
             echo "Attempt $attempt failed, retrying..."
           done
 
-      # Run the upgrade test: install previous version -> upgrade -> validate
+      # Run the upgrade test: install previous version -> upgrade -> validate.
+      # STRICT_BASELINE=1 makes Phase 1 fail fast on reconcile errors — the CI
+      # sandbox is always pristine, so any baseline failure is a real bug.
       - name: Run upgrade test
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
@@ -326,6 +328,7 @@ jobs:
           make -C packages/core/testing \
             SANDBOX_NAME=$SANDBOX_NAME \
             UPGRADE_TARGET_TAG="${RELEASE_TAG}" \
+            STRICT_BASELINE=1 \
             upgrade-cozystack
 
       # Collect debug information (always runs)
@@ -353,11 +356,11 @@ jobs:
   generate-changelog:
     name: Generate Changelog
     runs-on: [self-hosted]
-    needs: [prepare-release]
+    needs: [prepare-release, upgrade-test]
     permissions:
       contents: write
       pull-requests: write
-    if: needs.prepare-release.result == 'success'
+    if: needs.prepare-release.result == 'success' && needs.upgrade-test.result == 'success'
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -518,8 +521,8 @@ jobs:
   update-website-docs:
     name: Update Website Docs
     runs-on: [self-hosted]
-    needs: [generate-changelog, prepare-release]
-    if: needs.generate-changelog.result == 'success' && needs.prepare-release.outputs.skip != 'true'
+    needs: [generate-changelog, prepare-release, upgrade-test]
+    if: needs.generate-changelog.result == 'success' && needs.prepare-release.outputs.skip != 'true' && needs.upgrade-test.result == 'success'
     permissions:
       contents: read
     steps:
