@@ -287,8 +287,12 @@ Both `systemReservedMemory` and `kubeReservedMemory` receive the same auto-compu
 | `kubeReservedCpu` | `100m` | CPU reserved for kubelet and container runtime |
 | `evictionHardMemory` | `7%` | Hard eviction threshold for memory |
 | `evictionSoftMemory` | `10%` | Soft eviction threshold for memory |
+| `evictionSoftGracePeriod` | `1m30s` *(hardcoded)* | Duration a soft eviction threshold must be breached before triggering eviction |
+| `evictionMinimumReclaim` | `256Mi` *(hardcoded)* | Minimum amount of memory reclaimed per eviction action |
 
 Eviction thresholds can be specified as percentages (e.g., `7%`) or absolute values (e.g., `200Mi`). Both thresholds must use the same unit type. The hard threshold must be strictly less than the soft threshold.
+
+The `evictionSoftGracePeriod` and `evictionMinimumReclaim` parameters are currently hardcoded in the chart template and cannot be overridden through values.
 
 #### Example: Override kubelet reservations
 
