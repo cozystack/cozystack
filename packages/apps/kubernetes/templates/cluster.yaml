@@ -211,6 +211,19 @@ metadata:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default "100m" }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+{{/* Validate reservation field formats */}}
+{{- if and $kubeletOverride.systemReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei)?$` ($kubeletOverride.systemReservedMemory | toString))) }}
+{{-   fail (printf "nodeGroup %s: invalid systemReservedMemory value %q — must be a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)" $groupName ($kubeletOverride.systemReservedMemory | toString)) }}
+{{- end }}
+{{- if and $kubeletOverride.kubeReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei)?$` ($kubeletOverride.kubeReservedMemory | toString))) }}
+{{-   fail (printf "nodeGroup %s: invalid kubeReservedMemory value %q — must be a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)" $groupName ($kubeletOverride.kubeReservedMemory | toString)) }}
+{{- end }}
+{{- if and $kubeletOverride.systemReservedCpu (not (regexMatch `^[0-9]+(\.[0-9]+)?m?$` ($kubeletOverride.systemReservedCpu | toString))) }}
+{{-   fail (printf "nodeGroup %s: invalid systemReservedCpu value %q — must be a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)" $groupName ($kubeletOverride.systemReservedCpu | toString)) }}
+{{- end }}
+{{- if and $kubeletOverride.kubeReservedCpu (not (regexMatch `^[0-9]+(\.[0-9]+)?m?$` ($kubeletOverride.kubeReservedCpu | toString))) }}
+{{-   fail (printf "nodeGroup %s: invalid kubeReservedCpu value %q — must be a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)" $groupName ($kubeletOverride.kubeReservedCpu | toString)) }}
+{{- end }}
 {{- if and (hasSuffix "%" $evictionHardMemory) (hasSuffix "%" $evictionSoftMemory) }}
 {{-   $hardPct := trimSuffix "%" $evictionHardMemory | float64 }}
 {{-   $softPct := trimSuffix "%" $evictionSoftMemory | float64 }}
@@ -223,6 +236,8 @@ metadata:
 {{-   if ge $hardBytes $softBytes }}
 {{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{-   end }}
+{{- else }}
+{{-   fail (printf "nodeGroup %s: evictionHardMemory and evictionSoftMemory must use the same unit type (both percentage or both absolute) — got evictionHardMemory=%s, evictionSoftMemory=%s" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{- end }}
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1

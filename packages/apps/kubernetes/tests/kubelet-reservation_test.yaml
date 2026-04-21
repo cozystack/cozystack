@@ -720,3 +720,208 @@ tests:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-minimum-reclaim
           value: "memory.available=256Mi"
         documentIndex: 4
+
+  ################################################
+  # Mixed eviction threshold types must be rejected
+  ################################################
+
+  - it: rejects mixed eviction types (hard absolute, soft percentage)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "1Gi"
+            evictionSoftMemory: "10%"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionHardMemory and evictionSoftMemory must use the same unit type (both percentage or both absolute) — got evictionHardMemory=1Gi, evictionSoftMemory=10%"
+
+  - it: rejects mixed eviction types reversed (hard percentage, soft absolute)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "10%"
+            evictionSoftMemory: "1Gi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionHardMemory and evictionSoftMemory must use the same unit type (both percentage or both absolute) — got evictionHardMemory=10%, evictionSoftMemory=1Gi"
+
+  ################################################
+  # Reservation field format validation          #
+  ################################################
+
+  - it: rejects invalid CPU format for kubeReservedCpu
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            kubeReservedCpu: "banana"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: invalid kubeReservedCpu value \"banana\" — must be a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)"
+
+  - it: rejects invalid memory format for systemReservedMemory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            systemReservedMemory: "abc"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: invalid systemReservedMemory value \"abc\" — must be a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)"
+
+  ################################################
+  # Multi-nodeGroup isolation test               #
+  ################################################
+
+  - it: renders independent kubelet args for multiple node groups
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+        md1:
+          minReplicas: 1
+          maxReplicas: 5
+          instanceType: ""
+          ephemeralStorage: 40Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            systemReservedMemory: "512Mi"
+            kubeReservedMemory: "256Mi"
+            systemReservedCpu: "200m"
+            kubeReservedCpu: "150m"
+            evictionHardMemory: "5%"
+            evictionSoftMemory: "15%"
+    asserts:
+      # md0 at documentIndex 4: defaults
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: metadata.name
+          value: test-k8s-md0
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=64Mi,cpu=100m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=64Mi,cpu=100m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
+          value: "memory.available<7%"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
+          value: "memory.available<10%"
+        documentIndex: 4
+      # md1 at documentIndex 9: custom overrides
+      # (each nodeGroup emits 5 documents: KubeadmConfigTemplate, KubevirtMachineTemplate,
+      #  MachineDeployment, MachineHealthCheck, WorkloadMonitor)
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 9
+      - equal:
+          path: metadata.name
+          value: test-k8s-md1
+        documentIndex: 9
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=512Mi,cpu=200m"
+        documentIndex: 9
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=256Mi,cpu=150m"
+        documentIndex: 9
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
+          value: "memory.available<5%"
+        documentIndex: 9
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
+          value: "memory.available<15%"
+        documentIndex: 9
