@@ -6,7 +6,7 @@ package kubernetes
 
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -189,7 +189,7 @@ type KonnectivityServer struct {
 
 type Kubelet struct {
 	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 10%).
-	// +kubebuilder:default:="10%"
+	// +kubebuilder:default:="7%"
 	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
 	// CPU reserved for kubelet and container runtime.
 	// +kubebuilder:default:="100m"

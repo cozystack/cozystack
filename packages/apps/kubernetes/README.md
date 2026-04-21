@@ -109,7 +109,7 @@ See the reference for components utilized in this service:
 | `nodeGroups[name].kubelet.kubeReservedMemory`   | Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.   | `string`            | `""`        |
 | `nodeGroups[name].kubelet.systemReservedCpu`    | CPU reserved for host OS.                                                                      | `string`            | `100m`      |
 | `nodeGroups[name].kubelet.kubeReservedCpu`      | CPU reserved for kubelet and container runtime.                                                | `string`            | `100m`      |
-| `nodeGroups[name].kubelet.evictionHardMemory`   | Hard eviction threshold for memory (absolute like 200Mi or percentage like 10%).               | `string`            | `10%`       |
+| `nodeGroups[name].kubelet.evictionHardMemory`   | Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).                | `string`            | `7%`        |
 | `version`                                       | Kubernetes major.minor version to deploy                                                       | `string`            | `v1.35`     |
 | `host`                                          | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty. | `string`            | `""`        |
 

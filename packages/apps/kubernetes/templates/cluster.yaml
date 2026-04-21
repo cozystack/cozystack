@@ -190,14 +190,14 @@ metadata:
 {{-   end }}
 {{- end }}
 {{/* Compute kubelet reservations: explicit resources.memory wins over instanceType.spec.memory.guest.
-     Auto-computed system/kube reserved = 5% of effective memory, clamped to [256Mi, 1Gi]. */}}
+     Auto-computed system/kube reserved = 5% of effective memory, clamped to [64Mi, 1Gi]. */}}
 {{- $effectiveMemory := "" }}
 {{- if and $group.resources $group.resources.memory }}
 {{-   $effectiveMemory = $group.resources.memory | toString }}
 {{- else if $instanceType }}
 {{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
 {{- end }}
-{{- $autoReservedMi := 256 }}
+{{- $autoReservedMi := 64 }}
 {{- if $effectiveMemory }}
 {{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
 {{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
@@ -209,7 +209,7 @@ metadata:
 {{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
 {{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default "100m" }}
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default "100m" }}
-{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "10%" }}
+{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate
