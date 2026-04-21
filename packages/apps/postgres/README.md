@@ -133,13 +133,13 @@ See:
 
 ### Bootstrap (recovery) parameters
 
-| Name                     | Description                                                                                                                                        | Type     | Value   |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
-| `bootstrap`              | Bootstrap configuration.                                                                                                                           | `object` | `{}`    |
-| `bootstrap.enabled`      | Whether to restore from a backup.                                                                                                                  | `bool`   | `false` |
-| `bootstrap.recoveryTime` | Timestamp (RFC3339) for point-in-time recovery; empty means latest.                                                                                | `string` | `""`    |
-| `bootstrap.oldName`      | Previous cluster name before deletion (matches serverName in backup.info).                                                                         | `string` | `""`    |
-| `bootstrap.serverName`   | Barman server name from the old cluster's backup.info. Use when the original cluster used a different serverName than its Kubernetes cluster name. | `string` | `""`    |
+| Name                     | Description                                                                                                                                                                                                                  | Type     | Value   |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `bootstrap`              | Bootstrap configuration.                                                                                                                                                                                                     | `object` | `{}`    |
+| `bootstrap.enabled`      | Whether to restore from a backup.                                                                                                                                                                                            | `bool`   | `false` |
+| `bootstrap.recoveryTime` | Timestamp (RFC3339) for point-in-time recovery; empty means latest.                                                                                                                                                          | `string` | `""`    |
+| `bootstrap.oldName`      | Previous cluster name before deletion.                                                                                                                                                                                       | `string` | `""`    |
+| `bootstrap.serverName`   | Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name. | `string` | `""`    |
 
 
 ## Parameter examples and reference
