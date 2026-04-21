@@ -563,14 +563,14 @@ func CreateAllCustomFormsOverrides() []*dashboardv1alpha1.CustomFormsOverride {
 				createFormItem("metadata.namespace", "Namespace", "text"),
 				createFormItem("spec.backupRef.name", "Backup", "text"),
 				// Target application: leave empty to restore into the same application
-				// as referenced by the selected Backup. Fill all three only to rename
-				// or restore into a different application.
-				createFormItem("spec.targetApplicationRef.apiGroup", "Target Application API Group (optional, only for rename)", "text"),
-				createFormItem("spec.targetApplicationRef.kind", "Target Application Kind (optional, only for rename)", "text"),
-				createFormItem("spec.targetApplicationRef.name", "Target Application Name (optional, only for rename)", "text"),
-				// Driver-specific options (key-value editor). Known keys for VMInstance:
-				// targetNamespace, failIfTargetExists, keepOriginalPVC, keepOriginalIpAndMac.
-				createFormItem("spec.options", "Options (VMInstance keys: targetNamespace, failIfTargetExists, keepOriginalPVC, keepOriginalIpAndMac)", "object"),
+				// as referenced by the selected Backup. Fill all three to restore into
+				// a different application (e.g. rename, or restore into a new target).
+				createFormItem("spec.targetApplicationRef.apiGroup", "Target Application API Group (optional, used to restore into a different application)", "text"),
+				createFormItem("spec.targetApplicationRef.kind", "Target Application Kind (optional, used to restore into a different application)", "text"),
+				createFormItem("spec.targetApplicationRef.name", "Target Application Name (optional, used to restore into a different application)", "text"),
+				// Driver-specific options (key-value editor). Refer to the backup driver
+				// documentation for supported keys.
+				createFormItem("spec.options", "Options (driver-specific key/value pairs)", "object"),
 			},
 			"schema": createSchema(map[string]any{
 				"backupRef": map[string]any{
@@ -2034,12 +2034,12 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 									}),
 								}),
 								antdFlexVertical("meta-created-block", 4, []any{
-									antdText("time-label", true, "Created", nil),
-									antdFlex("time-block", 6, []any{
+									antdText("created-time-label", true, "Created", nil),
+									antdFlex("created-time-block", 6, []any{
 										map[string]any{
 											"type": "antdText",
 											"data": map[string]any{
-												"id":   "time-icon",
+												"id":   "created-time-icon",
 												"text": "🌐",
 											},
 										},
@@ -2047,7 +2047,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 											"type": "parsedText",
 											"data": map[string]any{
 												"formatter": "timestamp",
-												"id":        "time-value",
+												"id":        "created-time-value",
 												"text":      "{reqsJsonPath[0]['.metadata.creationTimestamp']['-']}",
 											},
 										},
@@ -2067,7 +2067,10 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 								}),
 								antdFlexVertical("spec-target-application-ref-block", 4, []any{
 									antdText("target-application-ref-label", true, "Target Application", nil),
-									parsedText("target-application-ref-value", "{reqsJsonPath[0]['.spec.targetApplicationRef.kind']['-']}.{reqsJsonPath[0]['.spec.targetApplicationRef.apiGroup']['-']}/{reqsJsonPath[0]['.spec.targetApplicationRef.name']['-']}", nil),
+									// targetApplicationRef is optional — when absent, the restore targets
+									// the same application as the selected Backup. Show a single friendly
+									// fallback in that case instead of rendering "-.-/-".
+									parsedText("target-application-ref-value", "{reqsJsonPath[0]['.spec.targetApplicationRef.name']['Same as backup']}", nil),
 								}),
 								antdFlexVertical("spec-options-target-namespace-block", 4, []any{
 									antdText("options-target-namespace-label", true, "Target Namespace", nil),
@@ -2087,11 +2090,11 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 								}),
 								antdFlexVertical("status-started-at-block", 4, []any{
 									antdText("started-at-label", true, "Started At", nil),
-									antdFlex("time-block", 6, []any{
+									antdFlex("started-at-time-block", 6, []any{
 										map[string]any{
 											"type": "antdText",
 											"data": map[string]any{
-												"id":   "time-icon",
+												"id":   "started-at-time-icon",
 												"text": "🌐",
 											},
 										},
@@ -2099,7 +2102,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 											"type": "parsedText",
 											"data": map[string]any{
 												"formatter": "timestamp",
-												"id":        "time-value",
+												"id":        "started-at-time-value",
 												"text":      "{reqsJsonPath[0]['.status.startedAt']['-']}",
 											},
 										},
@@ -2107,11 +2110,11 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 								}),
 								antdFlexVertical("status-completed-at-block", 4, []any{
 									antdText("completed-at-label", true, "Completed At", nil),
-									antdFlex("time-block", 6, []any{
+									antdFlex("completed-at-time-block", 6, []any{
 										map[string]any{
 											"type": "antdText",
 											"data": map[string]any{
-												"id":   "time-icon",
+												"id":   "completed-at-time-icon",
 												"text": "🌐",
 											},
 										},
@@ -2119,7 +2122,7 @@ func CreateAllFactories() []*dashboardv1alpha1.Factory {
 											"type": "parsedText",
 											"data": map[string]any{
 												"formatter": "timestamp",
-												"id":        "time-value",
+												"id":        "completed-at-time-value",
 												"text":      "{reqsJsonPath[0]['.status.completedAt']['-']}",
 											},
 										},
