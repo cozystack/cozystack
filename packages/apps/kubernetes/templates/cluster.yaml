@@ -217,6 +217,12 @@ metadata:
 {{-   if ge $hardPct $softPct }}
 {{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{-   end }}
+{{- else if and (not (hasSuffix "%" $evictionHardMemory)) (not (hasSuffix "%" $evictionSoftMemory)) }}
+{{-   $hardBytes := include "cozy-lib.resources.toFloat" $evictionHardMemory | float64 }}
+{{-   $softBytes := include "cozy-lib.resources.toFloat" $evictionSoftMemory | float64 }}
+{{-   if ge $hardBytes $softBytes }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
+{{-   end }}
 {{- end }}
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1

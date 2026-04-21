@@ -243,7 +243,7 @@ tests:
           value: "memory.available<10%"
         documentIndex: 4
 
-  - it: allows absolute eviction thresholds without percentage validation
+  - it: allows valid absolute eviction thresholds (hard < soft)
     release:
       name: test-k8s
       namespace: tenant-test
@@ -264,17 +264,44 @@ tests:
             - worker
           resources: {}
           kubelet:
-            evictionHardMemory: "500Mi"
-            evictionSoftMemory: "200Mi"
+            evictionHardMemory: "200Mi"
+            evictionSoftMemory: "500Mi"
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<500Mi"
+          value: "memory.available<200Mi"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<200Mi"
+          value: "memory.available<500Mi"
         documentIndex: 4
+
+  - it: rejects absolute eviction thresholds where hard >= soft
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "1Gi"
+            evictionSoftMemory: "200Mi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionHardMemory (1Gi) must be strictly less than evictionSoftMemory (200Mi)"
 
   ############################################
   # Auto-computation from resources.memory   #
