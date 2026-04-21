@@ -1201,10 +1201,10 @@ tests:
         documentIndex: 4
 
   ####################################################
-  # instanceType with nil lookup falls back to 256Mi   #
+  # instanceType validation: must exist in cluster     #
   ####################################################
 
-  - it: falls back to 256Mi floor when instanceType is set but lookup returns nil
+  - it: fails when instanceType is specified but not found in cluster
     release:
       name: test-k8s
       namespace: tenant-test
@@ -1225,11 +1225,5 @@ tests:
             - worker
           resources: {}
     asserts:
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
-        documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
-        documentIndex: 4
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: specified instanceType \"u1.medium\" not found in cluster"
