@@ -12,7 +12,7 @@ Within a tenant cluster, users can take advantage of LoadBalancer services and e
 The control-plane operates within containers, while the worker nodes are deployed as virtual machines, all seamlessly managed by the application.
 
 Kubernetes version in tenant clusters is independent of Kubernetes in the management cluster.
-Users can select the latest patch versions from 1.28 to 1.33.
+Users can select the latest patch versions from 1.30 to 1.35.
 
 ## Why Use a Managed Kubernetes Cluster?
 
@@ -259,6 +259,49 @@ The following instanceType resources are provided by Cozystack:
 | `u1.nano`     | 1     | 512Mi  |
 | `u1.small`    | 1     | 2Gi    |
 | `u1.xlarge`   | 4     | 16Gi   |
+
+### Kubelet Resource Reservations
+
+Each node group supports a `kubelet` object that configures how much memory and CPU the kubelet reserves for the host OS and the Kubernetes/system components running on the worker node.
+
+When `systemReservedMemory` or `kubeReservedMemory` are left empty, they are **auto-computed** using the following formula:
+
+1. Determine the **effective memory** of the node:
+   - If `resources.memory` is explicitly set, use that value.
+   - Otherwise, look up the `instanceType` and use its `memory.guest` value.
+   - If neither is available, the reservation falls back to the minimum (64Mi).
+2. Calculate **5%** of the effective memory (in MiB, rounded down).
+3. **Clamp** the result to the range **[64Mi, 1Gi]**:
+   - Nodes with 1.28 GiB or less get the minimum 64Mi reservation.
+   - Nodes with 20 GiB or more get the maximum 1Gi reservation.
+
+Both `systemReservedMemory` and `kubeReservedMemory` receive the same auto-computed value by default.
+
+#### Kubelet Defaults
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `systemReservedMemory` | auto-computed | Memory reserved for host OS |
+| `kubeReservedMemory` | auto-computed | Memory reserved for kubelet and container runtime |
+| `systemReservedCpu` | `100m` | CPU reserved for host OS |
+| `kubeReservedCpu` | `100m` | CPU reserved for kubelet and container runtime |
+| `evictionHardMemory` | `7%` | Hard eviction threshold for memory |
+| `evictionSoftMemory` | `10%` | Soft eviction threshold for memory |
+
+Eviction thresholds can be specified as percentages (e.g., `7%`) or absolute values (e.g., `200Mi`). Both thresholds must use the same unit type. The hard threshold must be strictly less than the soft threshold.
+
+#### Example: Override kubelet reservations
+
+```yaml
+nodeGroups:
+  md0:
+    instanceType: "u1.large"
+    kubelet:
+      systemReservedMemory: "256Mi"
+      kubeReservedMemory: "256Mi"
+      evictionHardMemory: "500Mi"
+      evictionSoftMemory: "1Gi"
+```
 
 ### U Series: Universal
 
