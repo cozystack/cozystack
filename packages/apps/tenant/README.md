@@ -92,7 +92,15 @@ tenant-u1
 The `resourceQuotas` parameter allows you to limit resources available to the tenant. Supported keys include:
 
 **Compute resources** (converted to `requests.X` and `limits.X`):
-- `cpu` - Total CPU cores (e.g., `"4"` or `"500m"`)
+- `cpu` - Total CPU cores (e.g., `"4"` or `"500m"`). `requests.cpu` is derived
+  as `cpu / cpuAllocationRatio` (default ratio is 10), matching KubeVirt's
+  behavior for regular VMs and burstable containers.
+- `dedicatedCPU` - Additional CPU cores reserved for workloads that pin
+  physical cores and cannot be oversubscribed (KubeVirt instance types with
+  `dedicatedCPUPlacement`, pods with `Guaranteed` QoS). The value is added to
+  both `limits.cpu` and `requests.cpu` at a 1:1 ratio, so that one dedicated
+  core consumes one full unit of `requests.cpu` quota. Can be combined with
+  `cpu`.
 - `memory` - Total memory (e.g., `"4Gi"` or `"512Mi"`)
 - `ephemeral-storage` - Ephemeral storage limit (e.g., `"10Gi"`)
 - `storage` - Total persistent storage (e.g., `"100Gi"`)
@@ -115,3 +123,17 @@ resourceQuotas:
   services.loadbalancers: "3"
   pods: "50"
 ```
+
+**Example with dedicated CPU** (for tenants that run VMs from the `cx*`
+instance-type series or other `dedicatedCPUPlacement` workloads):
+
+```yaml
+resourceQuotas:
+  cpu: 10          # 10 cores of oversubscribable (burstable) CPU budget
+  dedicatedCPU: 2  # plus 2 cores of dedicated physical CPU
+  memory: 16Gi
+```
+
+With the default `cpuAllocationRatio=10` this produces a `ResourceQuota` of
+`limits.cpu=12`, `requests.cpu=3` — enough for either 12 cores of regular VMs
+(plus burst headroom) or 3 cores of dedicated VMs, or any mix in between.

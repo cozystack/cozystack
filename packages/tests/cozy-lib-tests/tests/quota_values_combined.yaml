@@ -1,0 +1,6 @@
+quota:
+  cpu: "10"
+  dedicatedCPU: "2"
+
+_cluster: {}
+_namespace: {}

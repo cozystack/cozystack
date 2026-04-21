@@ -67,6 +67,12 @@
 
       {{ include "cozy-lib.resources.sanitize" list (.Values.resources $) }}
 
+  The optional **dedicatedCPU** key is sugar for workloads with
+  `dedicatedCPUPlacement` (KubeVirt CX-series, Guaranteed-QoS pods). Its value
+  is added to **both** `limits.cpu` and `requests.cpu` at a 1:1 ratio (the
+  CPU-allocation ratio does not apply), reflecting that such workloads pin
+  physical cores and cannot be oversubscribed.
+
   Example input:
   ==============
   cpu: "2"
@@ -83,6 +89,18 @@
     cpu: 200m                 # 2 / 10
     memory: 256Mi             # = limit
     devices.com/nvidia: "1"   # = limit
+
+  Example input with dedicatedCPU:
+  ================================
+  cpu: "10"
+  dedicatedCPU: "2"
+
+  Example output (cpuAllocationRatio = 10):
+  =========================================
+  limits:
+    cpu: "12"                 # 10 + 2
+  requests:
+    cpu: "3"                  # 10/10 + 2
 */}}
 {{- define "cozy-lib.resources.sanitize" }}
 {{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
@@ -99,6 +117,8 @@
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
 {{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
 {{-       $_ := set $output.limits $k ($v | toString) }}
+{{-     else if eq $k "dedicatedCPU" }}
+{{- /* merged into cpu after the loop */}}
 {{-     else if eq $k "memory" }}
 {{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $memoryRequestF64 := divf $vMemoryRequestF64 $memoryAllocationRatio }}
@@ -113,6 +133,13 @@
 {{-       $_ := set $output.requests $k $v }}
 {{-       $_ := set $output.limits $k $v }}
 {{-     end }}
+{{-   end }}
+{{-   if hasKey $args "dedicatedCPU" }}
+{{-     $dedicatedF := (include "cozy-lib.resources.toFloat" (index $args "dedicatedCPU")) | float64 }}
+{{-     $curLimitF := (include "cozy-lib.resources.toFloat" (dig "cpu" "0" $output.limits)) | float64 }}
+{{-     $curRequestF := (include "cozy-lib.resources.toFloat" (dig "cpu" "0" $output.requests)) | float64 }}
+{{-     $_ := set $output.limits "cpu" (addf $curLimitF $dedicatedF | toString) }}
+{{-     $_ := set $output.requests "cpu" (addf $curRequestF $dedicatedF | toString) }}
 {{-   end }}
 {{-   $output | toYaml }}
 {{- end  }}

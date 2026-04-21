@@ -48,3 +48,41 @@ tests:
 
       - notExists:
           path: spec.hard["requests.services.loadbalancers"]
+
+  - it: dedicatedCPU alone produces 1:1 cpu quota
+    values:
+      - quota_values_dedicated.yaml
+
+    release:
+      name: myrelease
+      namespace: default
+      revision: 1
+      isUpgrade: false
+
+    asserts:
+      - equal:
+          path: spec.hard["limits.cpu"]
+          value: "2"
+
+      - equal:
+          path: spec.hard["requests.cpu"]
+          value: "2"
+
+  - it: cpu and dedicatedCPU are summed with correct ratios
+    values:
+      - quota_values_combined.yaml
+
+    release:
+      name: myrelease
+      namespace: default
+      revision: 1
+      isUpgrade: false
+
+    asserts:
+      - equal:
+          path: spec.hard["limits.cpu"]
+          value: "12"
+
+      - equal:
+          path: spec.hard["requests.cpu"]
+          value: "3"
