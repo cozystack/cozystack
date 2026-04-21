@@ -201,8 +201,7 @@ metadata:
 {{- if $effectiveMemory }}
 {{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
 {{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
-{{-   if gt $fivePercentMi $autoReservedMi }}{{- $autoReservedMi = $fivePercentMi }}{{- end }}
-{{-   if gt $autoReservedMi 1024 }}{{- $autoReservedMi = 1024 }}{{- end }}
+{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
 {{- end }}
 {{- $kubeletOverride := $group.kubelet | default dict }}
 {{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
