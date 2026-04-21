@@ -925,3 +925,188 @@ tests:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
           value: "memory.available<15%"
         documentIndex: 9
+
+  ################################################
+  # Absolute eviction format validation          #
+  ################################################
+
+  - it: rejects invalid format for absolute evictionHardMemory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "banana"
+            evictionSoftMemory: "500Mi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: invalid evictionHardMemory value \"banana\" — must be a percentage (e.g. 7%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi)"
+
+  - it: rejects invalid format for absolute evictionSoftMemory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "200Mi"
+            evictionSoftMemory: "not-a-quantity"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: invalid evictionSoftMemory value \"not-a-quantity\" — must be a percentage (e.g. 10%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi)"
+
+  - it: accepts valid absolute eviction thresholds with correct format
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "500Mi"
+            evictionSoftMemory: "1Gi"
+    asserts:
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
+          value: "memory.available<500Mi"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
+          value: "memory.available<1Gi"
+        documentIndex: 4
+
+  ####################################################
+  # Reserved memory exceeds node memory validation   #
+  ####################################################
+
+  - it: rejects reserved memory exceeding effective node memory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "1Gi"
+          kubelet:
+            systemReservedMemory: "512Mi"
+            kubeReservedMemory: "600Mi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=512Mi + kubeReservedMemory=600Mi) must be less than effective node memory (1Gi)"
+
+  - it: rejects reserved memory equal to effective node memory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "1Gi"
+          kubelet:
+            systemReservedMemory: "512Mi"
+            kubeReservedMemory: "512Mi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=512Mi + kubeReservedMemory=512Mi) must be less than effective node memory (1Gi)"
+
+  - it: allows reserved memory within effective node memory bounds
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "4Gi"
+          kubelet:
+            systemReservedMemory: "512Mi"
+            kubeReservedMemory: "512Mi"
+    asserts:
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=512Mi,cpu=100m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=512Mi,cpu=100m"
+        documentIndex: 4
