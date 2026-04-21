@@ -144,6 +144,9 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 	// Add sidebar for backups.cozystack.io Backup resource
 	keysAndTags["backups"] = []any{"backup-sidebar"}
 
+	// Add sidebar for backups.cozystack.io RestoreJob resource
+	keysAndTags["restorejobs"] = []any{"restorejob-sidebar"}
+
 	// 3) Sort items within each category by Weight (desc), then Label (A→Z)
 	for cat := range categories {
 		sort.Slice(categories[cat], func(i, j int) bool {
@@ -215,6 +218,11 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 				"label": "Backups",
 				"link":  "/openapi-ui/{cluster}/{namespace}/api-table/backups.cozystack.io/v1alpha1/backups",
 			},
+			map[string]any{
+				"key":   "restorejobs",
+				"label": "RestoreJobs",
+				"link":  "/openapi-ui/{cluster}/{namespace}/api-table/backups.cozystack.io/v1alpha1/restorejobs",
+			},
 		},
 	})
 
@@ -258,6 +266,7 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 		"stock-project-factory-plan-details",
 		"stock-project-factory-backupjob-details",
 		"stock-project-factory-backup-details",
+		"stock-project-factory-restorejob-details",
 		"stock-project-factory-external-ips",
 		"stock-project-api-form",
 		"stock-project-api-table",
@@ -272,7 +281,12 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 		"stock-instance-builtin-table",
 	}
 
-	// Add details sidebars for all CRDs with dashboard config
+	// Add details sidebars for all CRDs with dashboard config, and collect
+	// the set of IDs that are genuinely CRD-backed (dynamic). The hardcoded
+	// `-details` IDs above (e.g. kube-* and backup/backupjob/plan/restorejob)
+	// are not tied to an ApplicationDefinition and must be treated as static
+	// so they receive consistent labels via upsertMultipleSidebars().
+	dynamicDetailsIDs := map[string]bool{}
 	for i := range all {
 		def := &all[i]
 		if def.Spec.Dashboard == nil {
@@ -282,17 +296,22 @@ func (m *Manager) ensureSidebar(ctx context.Context, crd *cozyv1alpha1.Applicati
 		lowerKind := strings.ToLower(kind)
 		detailsID := fmt.Sprintf("stock-project-factory-%s-details", lowerKind)
 		targetIDs = append(targetIDs, detailsID)
+		dynamicDetailsIDs[detailsID] = true
 	}
 
 	// 7) Upsert all target sidebars with identical menuItems and keysAndTags
-	return m.upsertMultipleSidebars(ctx, crd, targetIDs, keysAndTags, menuItems)
+	return m.upsertMultipleSidebars(ctx, crd, targetIDs, dynamicDetailsIDs, keysAndTags, menuItems)
 }
 
 // upsertMultipleSidebars creates/updates several Sidebar resources with the same menu spec.
+// dynamicDetailsIDs identifies `stock-project-factory-<kind>-details` sidebars that are
+// backed by an ApplicationDefinition and should therefore be owned by that CRD.
+// Any other ID is treated as a static sidebar (managed-by labels, no owner ref).
 func (m *Manager) upsertMultipleSidebars(
 	ctx context.Context,
 	crd *cozyv1alpha1.ApplicationDefinition,
 	ids []string,
+	dynamicDetailsIDs map[string]bool,
 	keysAndTags map[string]any,
 	menuItems []any,
 ) error {
@@ -308,8 +327,10 @@ func (m *Manager) upsertMultipleSidebars(
 
 		if _, err := controllerutil.CreateOrUpdate(ctx, m.Client, obj, func() error {
 			// Only set owner reference for dynamic sidebars (stock-project-factory-{kind}-details)
-			// Static sidebars (stock-instance-*, stock-project-*) should not have owner references
-			if strings.HasPrefix(id, "stock-project-factory-") && strings.HasSuffix(id, "-details") {
+			// that are actually backed by an ApplicationDefinition. Static sidebars — including
+			// hardcoded details sidebars for built-in/backup resources — must fall through to the
+			// static-label branch so they're managed consistently.
+			if strings.HasPrefix(id, "stock-project-factory-") && strings.HasSuffix(id, "-details") && dynamicDetailsIDs[id] {
 				// This is a dynamic sidebar, set owner reference only if it matches the current CRD
 				_, _, kind := pickGVK(crd)
 				lowerKind := strings.ToLower(kind)
