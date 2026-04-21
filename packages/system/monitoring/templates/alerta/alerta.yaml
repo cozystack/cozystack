@@ -181,7 +181,7 @@ metadata:
     app: alerta
   annotations:
     {{- if eq $solver "http01" }}
-    acme.cert-manager.io/http01-ingress-class: {{ $ingress }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
     {{- end }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
 spec:

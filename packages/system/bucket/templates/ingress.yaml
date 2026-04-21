@@ -12,7 +12,7 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "99999"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "99999"
     {{- if eq $solver "http01" }}
-    acme.cert-manager.io/http01-ingress-class: {{ $ingress }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
     {{- end }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
 spec:

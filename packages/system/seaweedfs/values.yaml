@@ -111,7 +111,7 @@ seaweedfs:
         nginx.ingress.kubernetes.io/client-body-timeout: "3600"
         nginx.ingress.kubernetes.io/client-header-timeout: "120"
         nginx.ingress.kubernetes.io/service-upstream: "true"
-        acme.cert-manager.io/http01-ingress-class: tenant-root
+        acme.cert-manager.io/http01-ingress-ingressclassname: tenant-root
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls:
         - hosts:
