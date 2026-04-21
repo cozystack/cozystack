@@ -251,14 +251,25 @@ metadata:
 {{- else }}
 {{-   fail (printf "nodeGroup %s: evictionHardMemory and evictionSoftMemory must use the same unit type (both percentage or both absolute) — got evictionHardMemory=%s, evictionSoftMemory=%s" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{- end }}
-{{/* Validate that reserved memory does not exceed effective node memory */}}
+{{/* Resolve eviction hard threshold to bytes for arithmetic.
+     Percentage is relative to effective node memory; absolute values are used as-is. */}}
+{{- $evictionHardBytes := 0.0 }}
+{{- if $effectiveMemory }}
+{{-   if hasSuffix "%" $evictionHardMemory }}
+{{-     $evictionPct := trimSuffix "%" $evictionHardMemory | float64 }}
+{{-     $evictionHardBytes = mulf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) (divf $evictionPct 100.0) }}
+{{-   else }}
+{{-     $evictionHardBytes = include "cozy-lib.resources.toFloat" $evictionHardMemory | float64 }}
+{{-   end }}
+{{- end }}
+{{/* Validate that total reserved memory (system + kube + eviction) does not exceed effective node memory */}}
 {{- if $effectiveMemory }}
 {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
 {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
-{{-   $totalReservedBytes := addf $sysBytes $kubeBytes }}
+{{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
 {{-   $effectiveMemBytes := include "cozy-lib.resources.toFloat" $effectiveMemory | float64 }}
 {{-   if ge $totalReservedBytes $effectiveMemBytes }}
-{{-     fail (printf "nodeGroup %s: total reserved memory (systemReservedMemory=%s + kubeReservedMemory=%s) must be less than effective node memory (%s)" $groupName $systemReservedMemory $kubeReservedMemory $effectiveMemory) }}
+{{-     fail (printf "nodeGroup %s: total reserved memory (systemReservedMemory=%s + kubeReservedMemory=%s + evictionHardMemory=%s) must be less than effective node memory (%s)" $groupName $systemReservedMemory $kubeReservedMemory $evictionHardMemory $effectiveMemory) }}
 {{-   end }}
 {{- end }}
 ---
@@ -377,7 +388,14 @@ metadata:
   annotations:
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ $group.minReplicas }}"
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
-    {{- if and $group.resources $group.resources.memory }}
+    {{- if $effectiveMemory }}
+    {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
+    {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
+    {{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
+    {{-   $allocatableBytes := subf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) $totalReservedBytes }}
+    {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | int }}
+    capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
+    {{- else if and $group.resources $group.resources.memory }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $group.resources.memory }}"
     {{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $instanceType.spec.memory.guest }}"

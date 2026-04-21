@@ -429,9 +429,9 @@ tests:
           resources:
             memory: "512Mi"
     asserts:
-      # 512Mi, 5% = 25Mi, but floor is 256Mi -> 256Mi+256Mi = 512Mi >= 512Mi -> fails validation
+      # 512Mi, 5% = 25Mi, but floor is 256Mi -> 256Mi+256Mi+7%eviction(35Mi) = 547Mi > 512Mi -> fails validation
       - failedTemplate:
-          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=256Mi + kubeReservedMemory=256Mi) must be less than effective node memory (512Mi)"
+          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=256Mi + kubeReservedMemory=256Mi + evictionHardMemory=7%) must be less than effective node memory (512Mi)"
 
   ##################################
   # Clamp logic: 1024Mi ceiling    #
@@ -1040,8 +1040,9 @@ tests:
             systemReservedMemory: "512Mi"
             kubeReservedMemory: "600Mi"
     asserts:
+      # 1Gi = 1024Mi, 512+600+71(7% eviction) = 1183 > 1024
       - failedTemplate:
-          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=512Mi + kubeReservedMemory=600Mi) must be less than effective node memory (1Gi)"
+          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=512Mi + kubeReservedMemory=600Mi + evictionHardMemory=7%) must be less than effective node memory (1Gi)"
 
   - it: rejects reserved memory equal to effective node memory
     release:
@@ -1068,8 +1069,9 @@ tests:
             systemReservedMemory: "512Mi"
             kubeReservedMemory: "512Mi"
     asserts:
+      # 1Gi = 1024Mi, 512+512+71(7% eviction) = 1095 > 1024
       - failedTemplate:
-          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=512Mi + kubeReservedMemory=512Mi) must be less than effective node memory (1Gi)"
+          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=512Mi + kubeReservedMemory=512Mi + evictionHardMemory=7%) must be less than effective node memory (1Gi)"
 
   - it: allows reserved memory within effective node memory bounds
     release:
@@ -1109,7 +1111,7 @@ tests:
   # Eviction thresholds interaction with explicit reservations
   #############################################################
 
-  - it: renders aggressive absolute eviction with explicit reservations on small node
+  - it: renders aggressive absolute eviction with explicit reservations on node
     release:
       name: test-k8s
       namespace: tenant-test
@@ -1129,15 +1131,14 @@ tests:
           roles:
             - worker
           resources:
-            memory: "4Gi"
+            memory: "8Gi"
           kubelet:
             systemReservedMemory: "512Mi"
             kubeReservedMemory: "512Mi"
             evictionHardMemory: "3Gi"
             evictionSoftMemory: "3.5Gi"
     asserts:
-      # 4Gi node, 1Gi reserved, 3Gi hard eviction — only ~3Gi for workloads.
-      # Valid config: template allows aggressive eviction relative to reservations.
+      # 8Gi node, 1Gi reserved, 3Gi hard eviction — total 4Gi < 8Gi, passes validation.
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
           value: "memory=512Mi,cpu=100m"
