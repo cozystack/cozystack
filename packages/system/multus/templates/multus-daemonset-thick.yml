@@ -155,7 +155,7 @@ spec:
       serviceAccountName: multus
       containers:
         - name: kube-multus
-          image: ghcr.io/cozystack/cozystack/multus-cni:v1.2.2@sha256:d76cc81c9ef1521e1317aacdc98360325f4fbecdfc687b97852e2f5c275551b1
+          image: ghcr.io/cozystack/cozystack/multus-cni:v1.2.3@sha256:d76cc81c9ef1521e1317aacdc98360325f4fbecdfc687b97852e2f5c275551b1
           command: [ "/usr/src/multus-cni/bin/multus-daemon" ]
           resources:
             requests:
@@ -201,7 +201,7 @@ spec:
                   fieldPath: spec.nodeName
       initContainers:
         - name: install-multus-binary
-          image: ghcr.io/cozystack/cozystack/multus-cni:v1.2.2@sha256:d76cc81c9ef1521e1317aacdc98360325f4fbecdfc687b97852e2f5c275551b1
+          image: ghcr.io/cozystack/cozystack/multus-cni:v1.2.3@sha256:d76cc81c9ef1521e1317aacdc98360325f4fbecdfc687b97852e2f5c275551b1
           command:
             - "/usr/src/multus-cni/bin/install_multus"
             - "-d"
