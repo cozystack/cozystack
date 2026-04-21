@@ -1,7 +1,7 @@
 annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/changes: |
-    - allow setting global labels for each resource using `.Values.global.extraLabels`. See [#2607](https://github.com/VictoriaMetrics/helm-charts/issues/2607).
+    - reverted usage of `app` label in `vm.selectorLabels`
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: Sources
@@ -11,7 +11,8 @@ annotations:
   artifacthub.io/readme: |
     # VictoriaMetrics Common Helm chart
 
-    Chart documentation is available [here](https://docs.victoriametrics.com/helm/victoria-metrics-common/)
+    Chart documentation is available [here](https://docs.victoriametrics.com/helm/victoria-metrics-common/).
+    Changelog is [here](https://docs.victoriametrics.com/helm/victoria-metrics-common/changelog/).
 apiVersion: v2
 description: VictoriaMetrics Common - contains shared templates for all Victoria Metrics
   helm charts
@@ -29,4 +30,4 @@ name: victoria-metrics-common
 sources:
 - https://github.com/VictoriaMetrics/helm-charts
 type: library
-version: 0.0.46
+version: 0.3.0

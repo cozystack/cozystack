@@ -125,7 +125,7 @@ crds:
     #   whenUnsatisfiable: DoNotSchedule
     #   labelSelector:
     #     matchLabels:
-    #       app: alertmanager
+    #       app.kubernetes.io/component: alertmanager
 
     # -- Labels to add to the upgrade job
     labels: {}
@@ -276,8 +276,12 @@ service:
 # -- See `kubectl explain poddisruptionbudget.spec` for more or check [these docs](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)
 podDisruptionBudget:
   enabled: false
-  # minAvailable: 1
-  # maxUnavailable: 1
+  # -- min number or percentage of pods that can be unavailable
+  minAvailable: 0
+  # -- max number or percentage of pods that can be unavailable
+  maxUnavailable: 0
+  # -- Defines criteria when unhealthy pods should be considered for eviction
+  unhealthyPodEvictionPolicy:
   labels: {}
 
 # -- Graceful pod termination timeout. See [this article](https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/#hook-handler-execution) for details.
@@ -298,6 +302,13 @@ resources:
 
 # -- Pod's node selector. Details are [here](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector)
 nodeSelector: {}
+
+# -- Deployment strategy, set to standard k8s default
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 25%
+    maxUnavailable: 25%
 
 # -- Name of Priority Class
 priorityClassName: ""
@@ -364,6 +375,8 @@ shareProcessNamespace: false
 admissionWebhooks:
   # -- Enables validation webhook.
   enabled: true
+  # -- Annotations for webhook. Can be used to define Helm or ArgoCD annotations.
+  annotations: {}
   # -- List of CRD names to disable validation for
   disabledFor: []
   # - vmagent

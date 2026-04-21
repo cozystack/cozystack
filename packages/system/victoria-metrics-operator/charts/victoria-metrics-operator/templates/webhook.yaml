@@ -1,22 +1,31 @@
-{{- if .Values.admissionWebhooks.enabled }}
+{{- $webhooks := .Values.admissionWebhooks }}
+{{- if $webhooks.enabled }}
 {{- $ctx := dict "helm" . "extraLabels" .Values.extraLabels }}
 {{- $tls := fromYaml (include "vm-operator.certs" $ctx) }}
 {{- $fullname := include "vm.plain.fullname" $ctx }}
 {{- $domain := ((.Values.global).cluster).dnsDomain }}
 {{- $ns := include "vm.namespace" $ctx }}
-{{- $certManager := .Values.admissionWebhooks.certManager }}
+{{- $certManager := $webhooks.certManager }}
 {{- $files := .Files }}
 {{- $crds := $files.Get "crd.yaml" | splitList "---" }}
-{{- $disabledFor := .Values.admissionWebhooks.disabledFor | default list }}
+{{- $disabledFor := $webhooks.disabledFor | default list }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
   name:  {{ $fullname }}-admission
-  {{- if $certManager.enabled }}
+  {{- if or $certManager.enabled $webhooks.annotations }}
   annotations:
+    {{- if $certManager.enabled }}
     certmanager.k8s.io/inject-ca-from: {{ printf "%s/%s-validation" $ns $fullname | quote }}
     cert-manager.io/inject-ca-from: {{ printf "%s/%s-validation" $ns $fullname | quote }}
+    {{- end }}
+    {{- with $certManager.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with $webhooks.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
   labels: {{ include "vm.labels" $ctx | nindent 4 }}
 webhooks:
@@ -34,7 +43,7 @@ webhooks:
       {{- if not $certManager.enabled }}
       caBundle: {{ $tls.caCert }}
       {{- end }}
-    failurePolicy: {{ $.Values.admissionWebhooks.policy }}
+    failurePolicy: {{ $webhooks.policy }}
     name: '{{ $crd.metadata.name }}'
     admissionReviewVersions:
       - v1
