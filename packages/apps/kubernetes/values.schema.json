@@ -79,6 +79,11 @@
                 "type": "string",
                 "default": "7%"
               },
+              "evictionSoftMemory": {
+                "description": "Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).",
+                "type": "string",
+                "default": "10%"
+              },
               "kubeReservedCpu": {
                 "description": "CPU reserved for kubelet and container runtime.",
                 "type": "string",

@@ -210,6 +210,7 @@ metadata:
 {{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default "100m" }}
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default "100m" }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
+{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate
@@ -283,7 +284,7 @@ spec:
             system-reserved: "memory={{ $systemReservedMemory }},cpu={{ $systemReservedCpu }}"
             kube-reserved: "memory={{ $kubeReservedMemory }},cpu={{ $kubeReservedCpu }}"
             eviction-hard: "memory.available<{{ $evictionHardMemory }}"
-            eviction-soft: "memory.available<1Gi"
+            eviction-soft: "memory.available<{{ $evictionSoftMemory }}"
             eviction-soft-grace-period: "memory.available=1m30s"
             eviction-minimum-reclaim: "memory.available=256Mi"
             enforce-node-allocatable: "pods,system-reserved,kube-reserved"

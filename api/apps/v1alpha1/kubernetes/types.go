@@ -191,6 +191,9 @@ type Kubelet struct {
 	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 10%).
 	// +kubebuilder:default:="7%"
 	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
+	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
+	// +kubebuilder:default:="10%"
+	EvictionSoftMemory string `json:"evictionSoftMemory,omitempty"`
 	// CPU reserved for kubelet and container runtime.
 	// +kubebuilder:default:="100m"
 	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
