@@ -11,7 +11,7 @@ metadata:
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- if eq $solver "http01" }}
-    acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $exposeIngress }}
     {{- end }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
     {{- toYaml . | nindent 4 }}

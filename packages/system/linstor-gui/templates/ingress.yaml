@@ -22,7 +22,7 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
     {{- if eq $solver "http01" }}
-    acme.cert-manager.io/http01-ingress-class: {{ $exposeIngress }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $exposeIngress }}
     {{- end }}
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
     # Keycloak access+refresh+id tokens make the oauth2-proxy session
