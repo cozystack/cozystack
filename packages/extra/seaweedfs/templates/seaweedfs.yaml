@@ -243,7 +243,7 @@ spec:
             nginx.ingress.kubernetes.io/proxy-body-size: "0"
             nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
             {{- if eq $solver "http01" }}
-            acme.cert-manager.io/http01-ingress-class: {{ $ingress }}
+            acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
             {{- end }}
             cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
           tls:
