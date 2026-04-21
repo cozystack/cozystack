@@ -187,14 +187,14 @@ metadata:
 {{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
 {{- end }}
 {{/* Compute kubelet reservations: explicit resources.memory wins over instanceType.spec.memory.guest.
-     Auto-computed system/kube reserved = 5% of effective memory, clamped to [64Mi, 1Gi]. */}}
+     Auto-computed system/kube reserved = 5% of effective memory, clamped to [256Mi, 1Gi]. */}}
 {{- $effectiveMemory := "" }}
 {{- if and $group.resources $group.resources.memory }}
 {{-   $effectiveMemory = $group.resources.memory | toString }}
 {{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
 {{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
 {{- end }}
-{{- $autoReservedMi := 64 }}
+{{- $autoReservedMi := 256 }}
 {{- if $effectiveMemory }}
 {{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
 {{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}

@@ -38,11 +38,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -105,11 +105,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -147,11 +147,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
 
   ###############################
@@ -232,7 +232,7 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -307,7 +307,7 @@ tests:
   # Auto-computation from resources.memory   #
   ############################################
 
-  - it: auto-computes reservation from resources.memory (4Gi -> 204Mi)
+  - it: auto-computes reservation from resources.memory (4Gi -> 256Mi, clamped from 204Mi)
     release:
       name: test-k8s
       namespace: tenant-test
@@ -329,14 +329,14 @@ tests:
           resources:
             memory: "4Gi"
     asserts:
-      # 4Gi = 4096Mi, 5% = 204Mi (truncated from 204.8)
+      # 4Gi = 4096Mi, 5% = 204Mi (truncated from 204.8), clamped up to 256Mi floor
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=204Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=204Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
 
   - it: auto-computes reservation from resources.memory (8Gi -> 409Mi)
@@ -372,10 +372,10 @@ tests:
         documentIndex: 4
 
   ##################################
-  # Clamp logic: 64Mi floor        #
+  # Clamp logic: 256Mi floor        #
   ##################################
 
-  - it: clamps auto-computed reservation to 64Mi floor (1Gi memory)
+  - it: clamps auto-computed reservation to 256Mi floor (1Gi memory)
     release:
       name: test-k8s
       namespace: tenant-test
@@ -397,17 +397,17 @@ tests:
           resources:
             memory: "1Gi"
     asserts:
-      # 1Gi = 1024Mi, 5% = 51Mi, but floor is 64Mi
+      # 1Gi = 1024Mi, 5% = 51Mi, but floor is 256Mi
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
 
-  - it: clamps auto-computed reservation to 64Mi floor (512Mi memory)
+  - it: clamps auto-computed reservation to 256Mi floor (512Mi memory, triggers validation error)
     release:
       name: test-k8s
       namespace: tenant-test
@@ -429,15 +429,9 @@ tests:
           resources:
             memory: "512Mi"
     asserts:
-      # 512Mi, 5% = 25Mi, but floor is 64Mi
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=64Mi,cpu=100m"
-        documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
-        documentIndex: 4
+      # 512Mi, 5% = 25Mi, but floor is 256Mi -> 256Mi+256Mi = 512Mi >= 512Mi -> fails validation
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: total reserved memory (systemReservedMemory=256Mi + kubeReservedMemory=256Mi) must be less than effective node memory (512Mi)"
 
   ##################################
   # Clamp logic: 1024Mi ceiling    #
@@ -885,11 +879,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -1112,10 +1106,10 @@ tests:
         documentIndex: 4
 
   ####################################################
-  # instanceType with nil lookup falls back to 64Mi   #
+  # instanceType with nil lookup falls back to 256Mi   #
   ####################################################
 
-  - it: falls back to 64Mi floor when instanceType is set but lookup returns nil
+  - it: falls back to 256Mi floor when instanceType is set but lookup returns nil
     release:
       name: test-k8s
       namespace: tenant-test
@@ -1138,9 +1132,9 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=64Mi,cpu=100m"
+          value: "memory=256Mi,cpu=100m"
         documentIndex: 4

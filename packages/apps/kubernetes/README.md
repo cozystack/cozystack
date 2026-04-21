@@ -269,10 +269,10 @@ When `systemReservedMemory` or `kubeReservedMemory` are left empty, they are **a
 1. Determine the **effective memory** of the node:
    - If `resources.memory` is explicitly set, use that value.
    - Otherwise, look up the `instanceType` and use its `memory.guest` value.
-   - If neither is available, the reservation falls back to the minimum (64Mi).
+   - If neither is available, the reservation falls back to the minimum (256Mi).
 2. Calculate **5%** of the effective memory (in MiB, rounded down).
-3. **Clamp** the result to the range **[64Mi, 1Gi]**:
-   - Nodes with 1.28 GiB or less get the minimum 64Mi reservation.
+3. **Clamp** the result to the range **[256Mi, 1Gi]**:
+   - Nodes with 5.12 GiB or less get the minimum 256Mi reservation.
    - Nodes with 20 GiB or more get the maximum 1Gi reservation.
 
 Both `systemReservedMemory` and `kubeReservedMemory` receive the same auto-computed value by default.
