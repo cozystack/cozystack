@@ -60,10 +60,8 @@ EOF
   sleep 5
   kubectl -n tenant-test wait hr etcd --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
   # With backup disabled, neither the schedule nor the secret should be created.
-  run kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd
-  [ "$status" -ne 0 ]
-  run kubectl -n tenant-test get secret etcd-s3-creds
-  [ "$status" -ne 0 ]
+  ! kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd 2>/dev/null
+  ! kubectl -n tenant-test get secret etcd-s3-creds 2>/dev/null
 }
 
 @test "Create Etcd with backup schedule" {
