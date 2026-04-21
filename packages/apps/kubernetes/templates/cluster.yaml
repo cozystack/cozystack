@@ -181,6 +181,35 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 {{- range $groupName, $group := .Values.nodeGroups }}
+{{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
+{{- $instanceType := dict }}
+{{- if $group.instanceType }}
+{{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
+{{-   if not $instanceType }}
+{{-     fail (printf "Specified instancetype not exists in cluster: %s" $group.instanceType) }}
+{{-   end }}
+{{- end }}
+{{/* Compute kubelet reservations: explicit resources.memory wins over instanceType.spec.memory.guest.
+     Auto-computed system/kube reserved = 5% of effective memory, clamped to [256Mi, 1Gi]. */}}
+{{- $effectiveMemory := "" }}
+{{- if and $group.resources $group.resources.memory }}
+{{-   $effectiveMemory = $group.resources.memory | toString }}
+{{- else if $instanceType }}
+{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
+{{- end }}
+{{- $autoReservedMi := 256 }}
+{{- if $effectiveMemory }}
+{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
+{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
+{{-   if gt $fivePercentMi $autoReservedMi }}{{- $autoReservedMi = $fivePercentMi }}{{- end }}
+{{-   if gt $autoReservedMi 1024 }}{{- $autoReservedMi = 1024 }}{{- end }}
+{{- end }}
+{{- $kubeletOverride := $group.kubelet | default dict }}
+{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default "100m" }}
+{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default "100m" }}
+{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "10%" }}
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate
@@ -250,7 +279,10 @@ spec:
       - systemctl start containerd.service
       joinConfiguration:
         nodeRegistration:
-          kubeletExtraArgs: {}
+          kubeletExtraArgs:
+            system-reserved: "memory={{ $systemReservedMemory }},cpu={{ $systemReservedCpu }}"
+            kube-reserved: "memory={{ $kubeReservedMemory }},cpu={{ $kubeReservedCpu }}"
+            eviction-hard: "memory.available<{{ $evictionHardMemory }}"
           # Ignore this for 1.31
           ignorePreflightErrors:
           - FileExisting-conntrack
@@ -277,14 +309,6 @@ spec:
   template:
     {{- $kubevirtmachinetemplate | nindent 4 }}
 ---
-{{- $instanceType := dict }}
-{{- if $group.instanceType }}
-{{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
-{{-   if not $instanceType }}
-{{-     fail (printf "Specified instancetype not exists in cluster: %s" $group.instanceType) }}
-{{-   end }}
-{{- end }}
-
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineDeployment
 metadata:

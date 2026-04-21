@@ -22,7 +22,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	StorageClass string `json:"storageClass"`
 	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"ephemeralStorage":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
+	// +kubebuilder:default:={"md0":{"ephemeralStorage":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
@@ -187,6 +187,22 @@ type KonnectivityServer struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
+type Kubelet struct {
+	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 10%).
+	// +kubebuilder:default:="10%"
+	EvictionHardMemory string `json:"evictionHardMemory"`
+	// CPU reserved for kubelet and container runtime.
+	// +kubebuilder:default:="100m"
+	KubeReservedCpu string `json:"kubeReservedCpu"`
+	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
+	// CPU reserved for host OS.
+	// +kubebuilder:default:="100m"
+	SystemReservedCpu string `json:"systemReservedCpu"`
+	// Memory reserved for host OS. Auto-computed from instanceType if empty.
+	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
+}
+
 type MonitoringAgentsAddon struct {
 	// Enable monitoring agents.
 	// +kubebuilder:default:=false
@@ -205,6 +221,8 @@ type NodeGroup struct {
 	// Virtual machine instance type.
 	// +kubebuilder:default:="u1.medium"
 	InstanceType string `json:"instanceType"`
+	// Kubelet resource reservations for this node group.
+	Kubelet Kubelet `json:"kubelet"`
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
