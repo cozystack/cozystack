@@ -6,7 +6,7 @@ package kubernetes
 
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -188,7 +188,7 @@ type KonnectivityServer struct {
 }
 
 type Kubelet struct {
-	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 10%).
+	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
 	// +kubebuilder:default:="7%"
 	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
 	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
@@ -225,7 +225,7 @@ type NodeGroup struct {
 	// +kubebuilder:default:="u1.medium"
 	InstanceType string `json:"instanceType"`
 	// Kubelet resource reservations for this node group.
-	Kubelet Kubelet `json:"kubelet"`
+	Kubelet Kubelet `json:"kubelet,omitempty"`
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
