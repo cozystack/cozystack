@@ -1105,6 +1105,101 @@ tests:
           value: "memory=512Mi,cpu=100m"
         documentIndex: 4
 
+  #############################################################
+  # Eviction thresholds interaction with explicit reservations
+  #############################################################
+
+  - it: renders aggressive absolute eviction with explicit reservations on small node
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "4Gi"
+          kubelet:
+            systemReservedMemory: "512Mi"
+            kubeReservedMemory: "512Mi"
+            evictionHardMemory: "3Gi"
+            evictionSoftMemory: "3.5Gi"
+    asserts:
+      # 4Gi node, 1Gi reserved, 3Gi hard eviction — only ~3Gi for workloads.
+      # Valid config: template allows aggressive eviction relative to reservations.
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=512Mi,cpu=100m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=512Mi,cpu=100m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
+          value: "memory.available<3Gi"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
+          value: "memory.available<3.5Gi"
+        documentIndex: 4
+
+  - it: renders reasonable absolute eviction with explicit reservations
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "8Gi"
+          kubelet:
+            systemReservedMemory: "512Mi"
+            kubeReservedMemory: "512Mi"
+            evictionHardMemory: "512Mi"
+            evictionSoftMemory: "1Gi"
+    asserts:
+      # 8Gi node, 1Gi reserved, 512Mi hard / 1Gi soft — typical production config.
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=512Mi,cpu=100m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=512Mi,cpu=100m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
+          value: "memory.available<512Mi"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
+          value: "memory.available<1Gi"
+        documentIndex: 4
+
   ####################################################
   # instanceType with nil lookup falls back to 256Mi   #
   ####################################################

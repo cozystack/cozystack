@@ -185,6 +185,9 @@ metadata:
 {{- $instanceType := dict }}
 {{- if $group.instanceType }}
 {{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
+{{-   if not $instanceType }}
+{{-     fail (printf "nodeGroup %s: specified instanceType %q not found in cluster" $groupName $group.instanceType) }}
+{{-   end }}
 {{- end }}
 {{/* Compute kubelet reservations: explicit resources.memory wins over instanceType.spec.memory.guest.
      Auto-computed system/kube reserved = 5% of effective memory, clamped to [256Mi, 1Gi]. */}}
@@ -332,6 +335,8 @@ spec:
             eviction-hard: "memory.available<{{ $evictionHardMemory }}"
             eviction-soft: "memory.available<{{ $evictionSoftMemory }}"
             eviction-soft-grace-period: "memory.available=1m30s"
+            # 256Mi ensures meaningful reclamation per eviction cycle while being
+            # proportional to the 256Mi-1Gi auto-computed reservation range.
             eviction-minimum-reclaim: "memory.available=256Mi"
             enforce-node-allocatable: "pods"
             cgroups-per-qos: "true"
