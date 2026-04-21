@@ -210,18 +210,20 @@ metadata:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default "100m" }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
-{{/* Validate reservation field formats */}}
-{{- if and $kubeletOverride.systemReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` ($kubeletOverride.systemReservedMemory | toString))) }}
-{{-   fail (printf "nodeGroup %s: invalid systemReservedMemory value %q — must be a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)" $groupName ($kubeletOverride.systemReservedMemory | toString)) }}
-{{- end }}
-{{- if and $kubeletOverride.kubeReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` ($kubeletOverride.kubeReservedMemory | toString))) }}
-{{-   fail (printf "nodeGroup %s: invalid kubeReservedMemory value %q — must be a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)" $groupName ($kubeletOverride.kubeReservedMemory | toString)) }}
-{{- end }}
-{{- if and $kubeletOverride.systemReservedCpu (not (regexMatch `^[0-9]+(\.[0-9]+)?m?$` ($kubeletOverride.systemReservedCpu | toString))) }}
-{{-   fail (printf "nodeGroup %s: invalid systemReservedCpu value %q — must be a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)" $groupName ($kubeletOverride.systemReservedCpu | toString)) }}
-{{- end }}
-{{- if and $kubeletOverride.kubeReservedCpu (not (regexMatch `^[0-9]+(\.[0-9]+)?m?$` ($kubeletOverride.kubeReservedCpu | toString))) }}
-{{-   fail (printf "nodeGroup %s: invalid kubeReservedCpu value %q — must be a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)" $groupName ($kubeletOverride.kubeReservedCpu | toString)) }}
+{{/* Validate reservation field formats.
+  These guards validate the USER-SUPPLIED value (from values.yaml via
+  $kubeletOverride), not the resolved/computed default.  The resolved
+  default is always valid by construction, so only user input needs validation. */}}
+{{- $validations := list
+      (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory "pattern" `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)")
+      (dict "key" "kubeReservedMemory"   "value" $kubeletOverride.kubeReservedMemory   "pattern" `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)")
+      (dict "key" "systemReservedCpu"    "value" $kubeletOverride.systemReservedCpu    "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
+      (dict "key" "kubeReservedCpu"      "value" $kubeletOverride.kubeReservedCpu      "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
+}}
+{{- range $validations }}
+{{-   if and .value (not (regexMatch .pattern (.value | toString))) }}
+{{-     fail (printf "nodeGroup %s: invalid %s value %q — must be %s" $groupName .key (.value | toString) .hint) }}
+{{-   end }}
 {{- end }}
 {{/* Validate absolute eviction threshold formats before converting */}}
 {{- if not (hasSuffix "%" $evictionHardMemory) }}
