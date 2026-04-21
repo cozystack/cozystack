@@ -194,7 +194,7 @@ metadata:
 {{- $effectiveMemory := "" }}
 {{- if and $group.resources $group.resources.memory }}
 {{-   $effectiveMemory = $group.resources.memory | toString }}
-{{- else if $instanceType }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
 {{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
 {{- end }}
 {{- $autoReservedMi := 64 }}
@@ -211,6 +211,13 @@ metadata:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default "100m" }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+{{- if and (hasSuffix "%" $evictionHardMemory) (hasSuffix "%" $evictionSoftMemory) }}
+{{-   $hardPct := trimSuffix "%" $evictionHardMemory | float64 }}
+{{-   $softPct := trimSuffix "%" $evictionSoftMemory | float64 }}
+{{-   if ge $hardPct $softPct }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
+{{-   end }}
+{{- end }}
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate
@@ -327,12 +334,12 @@ metadata:
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
     {{- if and $group.resources $group.resources.memory }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $group.resources.memory }}"
-    {{- else }}
+    {{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $instanceType.spec.memory.guest }}"
     {{- end }}
     {{- if and $group.resources $group.resources.cpu }}
     capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $group.resources.cpu }}"
-    {{- else }}
+    {{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
     capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $instanceType.spec.cpu.guest }}"
     {{- end }}
 spec:
