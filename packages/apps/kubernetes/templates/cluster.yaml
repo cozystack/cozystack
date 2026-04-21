@@ -215,10 +215,10 @@ metadata:
   $kubeletOverride), not the resolved/computed default.  The resolved
   default is always valid by construction, so only user input needs validation. */}}
 {{- $validations := list
-      (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory "pattern" `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)")
-      (dict "key" "kubeReservedMemory"   "value" $kubeletOverride.kubeReservedMemory   "pattern" `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)")
-      (dict "key" "systemReservedCpu"    "value" $kubeletOverride.systemReservedCpu    "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
-      (dict "key" "kubeReservedCpu"      "value" $kubeletOverride.kubeReservedCpu      "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
+      (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
+      (dict "key" "kubeReservedMemory"   "value" $kubeletOverride.kubeReservedMemory   "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
+      (dict "key" "systemReservedCpu"    "value" $kubeletOverride.systemReservedCpu    "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
+      (dict "key" "kubeReservedCpu"      "value" $kubeletOverride.kubeReservedCpu      "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
 }}
 {{- range $validations }}
 {{-   if and .value (not (regexMatch .pattern (.value | toString))) }}
@@ -227,13 +227,13 @@ metadata:
 {{- end }}
 {{/* Validate absolute eviction threshold formats before converting */}}
 {{- if not (hasSuffix "%" $evictionHardMemory) }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionHardMemory) }}
-{{-     fail (printf "nodeGroup %s: invalid evictionHardMemory value %q — must be a percentage (e.g. 7%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi)" $groupName $evictionHardMemory) }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionHardMemory) }}
+{{-     fail (printf "nodeGroup %s: invalid evictionHardMemory value %q — must be a percentage (e.g. 7%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi, 1e9)" $groupName $evictionHardMemory) }}
 {{-   end }}
 {{- end }}
 {{- if not (hasSuffix "%" $evictionSoftMemory) }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionSoftMemory) }}
-{{-     fail (printf "nodeGroup %s: invalid evictionSoftMemory value %q — must be a percentage (e.g. 10%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi)" $groupName $evictionSoftMemory) }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionSoftMemory) }}
+{{-     fail (printf "nodeGroup %s: invalid evictionSoftMemory value %q — must be a percentage (e.g. 10%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi, 1e9)" $groupName $evictionSoftMemory) }}
 {{-   end }}
 {{- end }}
 {{- if and (hasSuffix "%" $evictionHardMemory) (hasSuffix "%" $evictionSoftMemory) }}
