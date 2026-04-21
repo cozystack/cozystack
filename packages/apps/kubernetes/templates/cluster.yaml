@@ -287,7 +287,7 @@ spec:
             eviction-soft: "memory.available<{{ $evictionSoftMemory }}"
             eviction-soft-grace-period: "memory.available=1m30s"
             eviction-minimum-reclaim: "memory.available=256Mi"
-            enforce-node-allocatable: "pods,system-reserved,kube-reserved"
+            enforce-node-allocatable: "pods"
             cgroups-per-qos: "true"
             cgroup-driver: "systemd"
             kernel-memcg-notification: "true"
