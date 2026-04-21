@@ -211,9 +211,10 @@ metadata:
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
 {{/* Validate reservation field formats.
-  These guards validate the USER-SUPPLIED value (from values.yaml via
-  $kubeletOverride), not the resolved/computed default.  The resolved
-  default is always valid by construction, so only user input needs validation. */}}
+  These guards check the USER-SUPPLIED value (from values.yaml via
+  $kubeletOverride), not the resolved/computed default — the default is
+  always valid by construction.  The eviction threshold validation below
+  differs: it validates the RESOLVED values (user-supplied or default). */}}
 {{- $validations := list
       (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
       (dict "key" "kubeReservedMemory"   "value" $kubeletOverride.kubeReservedMemory   "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
@@ -237,8 +238,28 @@ metadata:
 {{-   end }}
 {{- end }}
 {{- if and (hasSuffix "%" $evictionHardMemory) (hasSuffix "%" $evictionSoftMemory) }}
-{{-   $hardPct := trimSuffix "%" $evictionHardMemory | float64 }}
-{{-   $softPct := trimSuffix "%" $evictionSoftMemory | float64 }}
+{{-   $hardPctStr := trimSuffix "%" $evictionHardMemory }}
+{{-   $softPctStr := trimSuffix "%" $evictionSoftMemory }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?$` $hardPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage value %q is not a valid number" $groupName $hardPctStr) }}
+{{-   end }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?$` $softPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage value %q is not a valid number" $groupName $softPctStr) }}
+{{-   end }}
+{{-   $hardPct := $hardPctStr | float64 }}
+{{-   $softPct := $softPctStr | float64 }}
+{{-   if le $hardPct 0.0 }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be between 1 and 100, got %s%%" $groupName $hardPctStr) }}
+{{-   end }}
+{{-   if gt $hardPct 100.0 }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be between 1 and 100, got %s%%" $groupName $hardPctStr) }}
+{{-   end }}
+{{-   if le $softPct 0.0 }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be between 1 and 100, got %s%%" $groupName $softPctStr) }}
+{{-   end }}
+{{-   if gt $softPct 100.0 }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be between 1 and 100, got %s%%" $groupName $softPctStr) }}
+{{-   end }}
 {{-   if ge $hardPct $softPct }}
 {{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{-   end }}
@@ -270,6 +291,13 @@ metadata:
 {{-   $effectiveMemBytes := include "cozy-lib.resources.toFloat" $effectiveMemory | float64 }}
 {{-   if ge $totalReservedBytes $effectiveMemBytes }}
 {{-     fail (printf "nodeGroup %s: total reserved memory (systemReservedMemory=%s + kubeReservedMemory=%s + evictionHardMemory=%s) must be less than effective node memory (%s)" $groupName $systemReservedMemory $kubeReservedMemory $evictionHardMemory $effectiveMemory) }}
+{{-   end }}
+{{- end }}
+{{/* Guard: explicit kubelet overrides require effective memory for validation */}}
+{{- if not $effectiveMemory }}
+{{-   $hasOverride := or $kubeletOverride.systemReservedMemory $kubeletOverride.kubeReservedMemory $kubeletOverride.evictionHardMemory $kubeletOverride.evictionSoftMemory }}
+{{-   if $hasOverride }}
+{{-     fail (printf "nodeGroup %s: cannot validate kubelet reservations without effective memory — set resources.memory or a valid instanceType" $groupName) }}
 {{-   end }}
 {{- end }}
 ---
@@ -354,7 +382,6 @@ spec:
             cgroups-per-qos: "true"
             cgroup-driver: "systemd"
             kernel-memcg-notification: "true"
-          # Ignore this for 1.31
           ignorePreflightErrors:
           - FileExisting-conntrack
         discovery:
@@ -393,12 +420,8 @@ metadata:
     {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
     {{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
     {{-   $allocatableBytes := subf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) $totalReservedBytes }}
-    {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | int }}
+    {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | ceil }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
-    {{- else if and $group.resources $group.resources.memory }}
-    capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $group.resources.memory }}"
-    {{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
-    capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $instanceType.spec.memory.guest }}"
     {{- end }}
     {{- if and $group.resources $group.resources.cpu }}
     capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $group.resources.cpu }}"

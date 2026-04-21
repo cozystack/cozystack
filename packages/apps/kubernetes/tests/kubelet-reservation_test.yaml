@@ -177,7 +177,8 @@ tests:
           ephemeralStorage: 20Gi
           roles:
             - worker
-          resources: {}
+          resources:
+            memory: "8Gi"
           kubelet:
             systemReservedMemory: "512Mi"
             kubeReservedMemory: "256Mi"
@@ -222,7 +223,8 @@ tests:
           ephemeralStorage: 20Gi
           roles:
             - worker
-          resources: {}
+          resources:
+            memory: "4Gi"
           kubelet:
             systemReservedMemory: "256Mi"
     asserts:
@@ -262,7 +264,8 @@ tests:
           ephemeralStorage: 20Gi
           roles:
             - worker
-          resources: {}
+          resources:
+            memory: "8Gi"
           kubelet:
             evictionHardMemory: "200Mi"
             evictionSoftMemory: "500Mi"
@@ -860,7 +863,8 @@ tests:
           ephemeralStorage: 40Gi
           roles:
             - worker
-          resources: {}
+          resources:
+            memory: "8Gi"
           kubelet:
             systemReservedMemory: "512Mi"
             kubeReservedMemory: "256Mi"
@@ -997,7 +1001,8 @@ tests:
           ephemeralStorage: 20Gi
           roles:
             - worker
-          resources: {}
+          resources:
+            memory: "8Gi"
           kubelet:
             evictionHardMemory: "500Mi"
             evictionSoftMemory: "1Gi"
@@ -1010,6 +1015,145 @@ tests:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
           value: "memory.available<1Gi"
         documentIndex: 4
+
+  ####################################################
+  # Eviction percentage range validation             #
+  ####################################################
+
+  - it: rejects non-numeric evictionHardMemory percentage
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "abc%"
+            evictionSoftMemory: "10%"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionHardMemory percentage value \"abc\" is not a valid number"
+
+  - it: rejects evictionHardMemory percentage over 100
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "150%"
+            evictionSoftMemory: "200%"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionHardMemory percentage must be between 1 and 100, got 150%"
+
+  - it: rejects evictionSoftMemory percentage over 100
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "5%"
+            evictionSoftMemory: "150%"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionSoftMemory percentage must be between 1 and 100, got 150%"
+
+  - it: rejects evictionHardMemory percentage of zero
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "0%"
+            evictionSoftMemory: "10%"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionHardMemory percentage must be between 1 and 100, got 0%"
+
+  - it: rejects negative evictionHardMemory percentage
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            evictionHardMemory: "-5%"
+            evictionSoftMemory: "10%"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: evictionHardMemory percentage value \"-5\" is not a valid number"
 
   ####################################################
   # Reserved memory exceeds node memory validation   #
@@ -1107,6 +1251,36 @@ tests:
           value: "memory=512Mi,cpu=100m"
         documentIndex: 4
 
+  ################################################################
+  # Overrides without effective memory must be rejected          #
+  ################################################################
+
+  - it: rejects kubelet overrides when no effective memory is available
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            systemReservedMemory: "1Gi"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: cannot validate kubelet reservations without effective memory — set resources.memory or a valid instanceType"
+
   #############################################################
   # Eviction thresholds interaction with explicit reservations
   #############################################################
@@ -1202,8 +1376,195 @@ tests:
         documentIndex: 4
 
   ####################################################
-  # instanceType validation: must exist in cluster     #
+  # Capacity annotation: default auto-computation    #
   ####################################################
+
+  - it: sets capacity.memory annotation with default auto-computed reservations (4Gi)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "4Gi"
+    asserts:
+      # 4Gi = 4096Mi; 5% = 204Mi -> clamped to 256Mi floor
+      # systemReserved=256Mi, kubeReserved=256Mi, evictionHard=7% of 4Gi
+      # allocatable = ceil(4096 - 256 - 256 - 286.72) = ceil(3297.28) = 3298Mi
+      - isKind:
+          of: MachineDeployment
+        documentIndex: 6
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/memory"]
+          value: "3298Mi"
+        documentIndex: 6
+
+  - it: sets capacity.memory annotation with explicit reservation overrides (8Gi)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "8Gi"
+          kubelet:
+            systemReservedMemory: "1Gi"
+            kubeReservedMemory: "512Mi"
+    asserts:
+      # 8Gi = 8192Mi; systemReserved=1Gi, kubeReserved=512Mi, evictionHard=7% of 8Gi
+      # allocatable = ceil(8192 - 1024 - 512 - 573.44) = ceil(6082.56) = 6083Mi
+      - isKind:
+          of: MachineDeployment
+        documentIndex: 6
+      - equal:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/memory"]
+          value: "6083Mi"
+        documentIndex: 6
+
+  - it: omits capacity.memory annotation when no memory info is available
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+    asserts:
+      - isKind:
+          of: MachineDeployment
+        documentIndex: 6
+      - isNull:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/memory"]
+        documentIndex: 6
+
+  - it: omits capacity.cpu annotation when no cpu info is available
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+    asserts:
+      - isKind:
+          of: MachineDeployment
+        documentIndex: 6
+      - isNull:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/cpu"]
+        documentIndex: 6
+
+  ####################################################
+  # Capacity annotation: ceil prevents zero truncation
+  ####################################################
+
+  - it: reports non-zero capacity annotation when reservations consume most memory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "2.5Gi"
+          kubelet:
+            systemReservedMemory: "1Gi"
+            kubeReservedMemory: "1Gi"
+    asserts:
+      # 2.5Gi = 2560Mi. Reserved: 1Gi + 1Gi + 7% of 2560Mi (179.2Mi) = 2359.2Mi.
+      # Remaining: ~200.8Mi. ceil ensures at least 1Mi is reported instead of 0 from int truncation.
+      - isKind:
+          of: MachineDeployment
+        documentIndex: 6
+      - notEqual:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/memory"]
+          value: "0Mi"
+        documentIndex: 6
+      - matchRegex:
+          path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/memory"]
+          pattern: "^\\d+Mi$"
+        documentIndex: 6
+
+  ####################################################
+  # instanceType validation                          #
+  ####################################################
+
+  # NOTE: The instanceType-based auto-computation path (where resources.memory is
+  # absent and instanceType points to a VirtualMachineClusterInstancetype CR whose
+  # .spec.memory.guest is used as $effectiveMemory) cannot be tested here.
+  #
+  # The template uses Helm's `lookup` function to fetch the instancetype CR
+  # (cluster.yaml line ~187). `lookup` requires a live Kubernetes API server and
+  # always returns empty in helm-unittest (v1.0.3 provides no lookup mocking).
+  # When lookup returns empty, the template calls `fail`, so the positive path
+  # (successful lookup -> reservation derived from spec.memory.guest) is
+  # unreachable in unit tests.
+  #
+  # All reservation auto-computation tests above use resources.memory directly,
+  # which exercises the same 5%-clamp logic that the instanceType path uses.
+  # The instanceType resolution itself is validated via e2e tests that deploy
+  # against a real cluster with instancetype CRs present.
 
   - it: fails when instanceType is specified but not found in cluster
     release:

@@ -272,7 +272,7 @@ When `systemReservedMemory` or `kubeReservedMemory` are left empty, they are **a
    - If neither is available, the reservation falls back to the minimum (256Mi).
 2. Calculate **5%** of the effective memory (in MiB, rounded down).
 3. **Clamp** the result to the range **[256Mi, 1Gi]**:
-   - Nodes with 5.12 GiB or less get the minimum 256Mi reservation.
+   - Nodes with 5 GiB or less get the minimum 256Mi reservation.
    - Nodes with 20 GiB or more get the maximum 1Gi reservation.
 
 Both `systemReservedMemory` and `kubeReservedMemory` receive the same auto-computed value by default.
@@ -293,6 +293,12 @@ Both `systemReservedMemory` and `kubeReservedMemory` receive the same auto-compu
 Eviction thresholds can be specified as percentages (e.g., `7%`) or absolute values (e.g., `200Mi`). Both thresholds must use the same unit type. The hard threshold must be strictly less than the soft threshold.
 
 The `evictionSoftGracePeriod` and `evictionMinimumReclaim` parameters are currently hardcoded in the chart template and cannot be overridden through values.
+
+#### Capacity Annotation
+
+When kubelet resource reservations are configured, the `capacity.cluster-autoscaler.kubernetes.io/memory` annotation on worker nodes reports **allocatable memory** (total node memory minus system-reserved, kube-reserved, and eviction-hard) instead of total node memory. This aligns the annotation with the value the cluster autoscaler uses in its scaling calculations.
+
+Upgrading from a version without this feature may cause the autoscaler to see reduced per-node capacity after the annotations are updated, which can trigger additional scale-up operations. No action is typically required — the new values reflect the actual memory available for workload scheduling.
 
 #### Example: Override kubelet reservations
 
