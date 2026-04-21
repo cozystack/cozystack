@@ -185,9 +185,6 @@ metadata:
 {{- $instanceType := dict }}
 {{- if $group.instanceType }}
 {{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
-{{-   if not $instanceType }}
-{{-     fail (printf "Specified instancetype not exists in cluster: %s" $group.instanceType) }}
-{{-   end }}
 {{- end }}
 {{/* Compute kubelet reservations: explicit resources.memory wins over instanceType.spec.memory.guest.
      Auto-computed system/kube reserved = 5% of effective memory, clamped to [64Mi, 1Gi]. */}}
@@ -212,10 +209,10 @@ metadata:
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
 {{/* Validate reservation field formats */}}
-{{- if and $kubeletOverride.systemReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei)?$` ($kubeletOverride.systemReservedMemory | toString))) }}
+{{- if and $kubeletOverride.systemReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` ($kubeletOverride.systemReservedMemory | toString))) }}
 {{-   fail (printf "nodeGroup %s: invalid systemReservedMemory value %q — must be a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)" $groupName ($kubeletOverride.systemReservedMemory | toString)) }}
 {{- end }}
-{{- if and $kubeletOverride.kubeReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei)?$` ($kubeletOverride.kubeReservedMemory | toString))) }}
+{{- if and $kubeletOverride.kubeReservedMemory (not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` ($kubeletOverride.kubeReservedMemory | toString))) }}
 {{-   fail (printf "nodeGroup %s: invalid kubeReservedMemory value %q — must be a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi)" $groupName ($kubeletOverride.kubeReservedMemory | toString)) }}
 {{- end }}
 {{- if and $kubeletOverride.systemReservedCpu (not (regexMatch `^[0-9]+(\.[0-9]+)?m?$` ($kubeletOverride.systemReservedCpu | toString))) }}
@@ -226,12 +223,12 @@ metadata:
 {{- end }}
 {{/* Validate absolute eviction threshold formats before converting */}}
 {{- if not (hasSuffix "%" $evictionHardMemory) }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei)?$` $evictionHardMemory) }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionHardMemory) }}
 {{-     fail (printf "nodeGroup %s: invalid evictionHardMemory value %q — must be a percentage (e.g. 7%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi)" $groupName $evictionHardMemory) }}
 {{-   end }}
 {{- end }}
 {{- if not (hasSuffix "%" $evictionSoftMemory) }}
-{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei)?$` $evictionSoftMemory) }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionSoftMemory) }}
 {{-     fail (printf "nodeGroup %s: invalid evictionSoftMemory value %q — must be a percentage (e.g. 10%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi)" $groupName $evictionSoftMemory) }}
 {{-   end }}
 {{- end }}
@@ -254,7 +251,7 @@ metadata:
 {{- if $effectiveMemory }}
 {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
 {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
-{{-   $totalReservedBytes := mulf $sysBytes 1.0 | addf $kubeBytes }}
+{{-   $totalReservedBytes := addf $sysBytes $kubeBytes }}
 {{-   $effectiveMemBytes := include "cozy-lib.resources.toFloat" $effectiveMemory | float64 }}
 {{-   if ge $totalReservedBytes $effectiveMemBytes }}
 {{-     fail (printf "nodeGroup %s: total reserved memory (systemReservedMemory=%s + kubeReservedMemory=%s) must be less than effective node memory (%s)" $groupName $systemReservedMemory $kubeReservedMemory $effectiveMemory) }}
