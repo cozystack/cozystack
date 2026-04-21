@@ -441,17 +441,58 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           ref: main
 
+      # Decide whether this release promotes the `next/` trunk to a new released
+      # version directory. Per the website repo's contract (see website#495):
+      #   - `make release-next` runs only for new minor/major final releases
+      #     (tag matches `vX.Y.Z` with no prerelease suffix AND `vX.Y/` does
+      #     not yet exist on disk).
+      #   - Prereleases and patch releases skip this step and let
+      #     `make update-all` handle routing on its own.
+      - name: Determine if this release promotes next/
+        id: promote
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "Prerelease tag '$TAG' — skipping release-next."
+            exit 0
+          fi
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          if [[ "$MAJOR" == "0" ]]; then
+            DOC_VERSION="v0"
+          else
+            DOC_VERSION="v${MAJOR}.${MINOR}"
+          fi
+          if [[ -d "content/en/docs/${DOC_VERSION}" ]]; then
+            echo "promote=false" >> "$GITHUB_OUTPUT"
+            echo "content/en/docs/${DOC_VERSION}/ already exists — patch release, skipping release-next."
+          else
+            echo "promote=true" >> "$GITHUB_OUTPUT"
+            echo "New minor/major release ${DOC_VERSION} — will promote next/ → ${DOC_VERSION}/."
+          fi
+
+      - name: Promote next/ to released version
+        if: steps.promote.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: make release-next RELEASE_TAG="$TAG"
+
       - name: Update docs from release branch
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: make update-all BRANCH=release-${{ steps.tag.outputs.version }} RELEASE_TAG=${{ steps.tag.outputs.tag }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: make update-all BRANCH="release-$VERSION" RELEASE_TAG="$TAG"
 
       - name: Commit and push
         id: commit
         run: |
           git config user.name  "cozystack-ci[bot]"
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
-          git add content
+          git add content hugo.yaml
           if git diff --cached --quiet; then
             echo "No changes to commit"
             echo "changed=false" >> $GITHUB_OUTPUT
