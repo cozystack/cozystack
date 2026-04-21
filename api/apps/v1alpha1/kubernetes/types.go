@@ -190,15 +190,15 @@ type KonnectivityServer struct {
 type Kubelet struct {
 	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 10%).
 	// +kubebuilder:default:="10%"
-	EvictionHardMemory string `json:"evictionHardMemory"`
+	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
 	// CPU reserved for kubelet and container runtime.
 	// +kubebuilder:default:="100m"
-	KubeReservedCpu string `json:"kubeReservedCpu"`
+	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
 	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
 	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
 	// CPU reserved for host OS.
 	// +kubebuilder:default:="100m"
-	SystemReservedCpu string `json:"systemReservedCpu"`
+	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
 	// Memory reserved for host OS. Auto-computed from instanceType if empty.
 	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
 }

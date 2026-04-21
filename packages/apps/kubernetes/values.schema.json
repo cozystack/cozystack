@@ -73,11 +73,6 @@
           "kubelet": {
             "description": "Kubelet resource reservations for this node group.",
             "type": "object",
-            "required": [
-              "evictionHardMemory",
-              "kubeReservedCpu",
-              "systemReservedCpu"
-            ],
             "properties": {
               "evictionHardMemory": {
                 "description": "Hard eviction threshold for memory (absolute like 200Mi or percentage like 10%).",
