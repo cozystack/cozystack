@@ -1,6 +1,7 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 
-apiVersion: cert-manager.io/v1 
+apiVersion: cert-manager.io/v1
 kind: ClusterIssuer  
 metadata:  
   name: letsencrypt-prod  
@@ -17,9 +18,9 @@ spec:
               name: cloudflare-api-token-secret  
               key: api-token  
       {{- else }}  
-        http01:  
-          ingress:  
-            class: nginx  
+        http01:
+          ingress:
+            ingressClassName: {{ $exposeIngress }}
       {{- end }}  
 
 ---  
@@ -41,9 +42,9 @@ spec:
               name: cloudflare-api-token-secret  
               key: api-token  
       {{- else }}  
-        http01:  
-          ingress:  
-            class: nginx  
+        http01:
+          ingress:
+            ingressClassName: {{ $exposeIngress }}
       {{- end }}  
 
 ---  
