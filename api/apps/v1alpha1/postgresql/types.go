@@ -92,6 +92,9 @@ type Bootstrap struct {
 	// Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 	// +kubebuilder:default:=""
 	RecoveryTime string `json:"recoveryTime,omitempty"`
+	// Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name.
+	// +kubebuilder:default:=""
+	ServerName string `json:"serverName,omitempty"`
 }
 
 type Database struct {
