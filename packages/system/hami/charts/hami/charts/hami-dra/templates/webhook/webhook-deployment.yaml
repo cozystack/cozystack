@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hami.dra.webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "hami.dra.webhook.fullname" . }}
+    {{- include "hami-dra-webhook.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "hami-dra-webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hami-dra-webhook.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "hami.dra.webhook.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "hami.dra.webhook.fullname" . }}
+      containers:
+        - name: webhook
+          image: {{ include "hami.dra.webhook.image" . }}
+          imagePullPolicy: {{ .Values.webhook.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/webhook
+            - --v=5
+            - --bind-address=0.0.0.0
+            - --secure-port=8443
+            - --cert-dir=/tls
+            - --tls-cert-file-name=tls.crt
+            - --tls-private-key-file-name=tls.key
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8000
+            - --device-config-file=/device-config.yaml
+          ports:
+            - containerPort: 8443
+              name: webhook
+              protocol: TCP
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+            - containerPort: 8000
+              name: health
+              protocol: TCP
+          volumeMounts:
+            - name: device-config
+              mountPath: /device-config.yaml
+              subPath: device-config.yaml
+            - name: tls-config
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: device-config
+          configMap:
+            name: {{ include "hami.dra.webhook.fullname" . }}-device-config
+        - name: tls-config
+          secret:
+            secretName: {{ if .Values.certs.certManager.enabled }}{{ .Release.Name }}-dra-webhook-tls{{ else }}{{ .Release.Name }}-tls{{ end }}

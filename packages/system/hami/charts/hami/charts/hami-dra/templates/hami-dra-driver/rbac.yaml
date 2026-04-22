@@ -1,0 +1,110 @@
+{{- if .Values.drivers.nvidia.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hami-dra-driver-service-account
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+items:
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: Role
+  metadata:
+    name: hami-dra-driver-role
+    namespace: {{ .Release.Namespace }}
+  rules:
+  - apiGroups:
+    - apps
+    resources:
+    - daemonsets
+    - deployments
+    verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+kind: List
+metadata:
+  resourceVersion: ""
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hami-dra-driver-role-binding
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hami-dra-driver-role
+subjects:
+- kind: ServiceAccount
+  name: hami-dra-driver-service-account
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hami-dra-driver-clusterrole
+rules:
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceclaims
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceclaimtemplates
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceslices
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceclaims/status
+  verbs:
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hami-dra-driver-clusterrole-binding-hami-dra-driver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hami-dra-driver-clusterrole
+subjects:
+- kind: ServiceAccount
+  name: hami-dra-driver-service-account
+  namespace: {{ .Release.Namespace }}
+{{- end }}

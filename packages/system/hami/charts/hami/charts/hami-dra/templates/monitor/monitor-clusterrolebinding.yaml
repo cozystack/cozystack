@@ -1,0 +1,15 @@
+{{- if .Values.monitor.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "hami.dra.monitor.fullname" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "hami.dra.monitor.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "hami.dra.monitor.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+

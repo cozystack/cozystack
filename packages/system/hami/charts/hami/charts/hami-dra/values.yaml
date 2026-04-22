@@ -1,0 +1,166 @@
+## @section Global configuration
+## @param global.imageRegistry Global Docker image registry
+## @param global.imagePullSecrets Global Docker image pull secrets
+global:
+  ## @param global.imageRegistry Global Docker image registry
+  imageRegistry: ""
+  ## E.g.
+  ## imagePullSecrets:
+  ##   - myRegistryKeySecretName
+  ## @param global.imagePullSecrets Global Docker image pull secrets
+  imagePullSecrets: []
+
+#Nvidia GPU Parameters
+resourceName: "nvidia.com/gpu"
+resourceMem: "nvidia.com/gpumem"
+resourceMemPercentage: "nvidia.com/gpumem-percentage"
+resourceCores: "nvidia.com/gpucores"
+resourcePriority: "nvidia.com/priority"
+
+#MLU Parameters
+mluResourceName: "cambricon.com/vmlu"
+mluResourceMem: "cambricon.com/mlu.smlu.vmemory"
+mluResourceCores: "cambricon.com/mlu.smlu.vcore"
+
+#Hygon DCU Parameters
+dcuResourceName: "hygon.com/dcunum"
+dcuResourceMem: "hygon.com/dcumem"
+dcuResourceCores: "hygon.com/dcucores"
+
+#Metax sGPU Parameters
+metaxResourceName: "metax-tech.com/sgpu"
+metaxResourceCore: "metax-tech.com/vcore"
+metaxResourceMem: "metax-tech.com/vmemory"
+metaxsGPUTopologyAware: "false"
+
+#Enflame VGCU Parameters
+enflameResourceNameVGCU: "enflame.com/vgcu"
+enflameResourceNameVGCUPercentage: "enflame.com/vgcu-percentage"
+
+#Kunlun XPU Parameters
+kunlunResourceName: "kunlunxin.com/xpu"
+kunlunResourceVCountName: "kunlunxin.com/vxpu"
+kunlunResourceVMemoryName: "kunlunxin.com/vxpu-memory"
+
+# Webhook deployment configuration
+webhook:
+  image:
+    registry: ghcr.io
+    repository: project-hami/hami-dra-webhook
+    tag: "v0.1.0"
+    ## Specify a imagePullPolicy
+    ## Defaults to 'Always' if image tag is 'latest', else set to 'IfNotPresent'
+    ## ref: https://kubernetes.io/docs/user-guide/images/#pre-pulling-images
+    ##
+    pullPolicy: Always
+    ## Optionally specify an array of imagePullSecrets.
+    ## Secrets must be manually created in the namespace.
+    ## Example:
+    ## pullSecrets:
+    ##   - myRegistryKeySecretName
+    ##
+    pullSecrets: []
+  ## @param resources controllerManager resource requests and limits
+  resources:
+  # If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  ## @param nodeSelector controllerManager node labels for pod assignment
+  args:
+    webhookName: ""  # Default: {{ .Release.Name }}-hami-dra-webhook
+    secretName: ""  # Default: {{ .Release.Name }}-hami-dra-webhook-tls
+  # Webhook configuration
+  config:
+    mutating:
+      enabled: true
+    validating:
+      enabled: true
+
+# Monitor deployment configuration
+monitor:
+  enabled: true
+  replicas: 1
+  image:
+    registry: ghcr.io
+    repository: project-hami/hami-dra-monitor
+    tag: "v0.1.0"
+    ## Specify a imagePullPolicy
+    ## Defaults to 'Always' if image tag is 'latest', else set to 'IfNotPresent'
+    ## ref: https://kubernetes.io/docs/user-guide/images/#pre-pulling-images
+    ##
+    pullPolicy: Always
+    ## Optionally specify an array of imagePullSecrets.
+    ## Secrets must be manually created in the namespace.
+    ## Example:
+    ## pullSecrets:
+    ##   - myRegistryKeySecretName
+    ##
+    pullSecrets: []
+  ## @param resources monitor resource requests and limits
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  ## Monitor configuration
+  logLevel: 2
+  metricsBindAddress: ":8080"
+  healthProbeBindAddress: ":8000"
+  kubeAPIQPS: 40.0
+  kubeAPIBurst: 60
+  collectInterval: "30s"
+  ## Monitor service configuration
+  service:
+    ## Service type: ClusterIP, NodePort, or LoadBalancer
+    ## Defaults to ClusterIP
+    type: ClusterIP
+    ## NodePort configuration (only used when type is NodePort)
+    nodePort:
+      ## Metrics port (NodePort). If not specified, Kubernetes will assign a random port
+      metrics: ""
+
+# Certificate configuration
+certs:
+  # Custom certificate (used when mode is "custom")
+  custom:
+    crt: ""
+    key: ""
+  # Cert-manager configuration (used when mode is "cert-manager")
+  certManager:
+    enabled: true
+    # Private key rotation policy: "Never" or "Always"
+    # In cert-manager >= v1.18.0, the default changed from "Never" to "Always"
+    # Setting to "Never" avoids frequent certificate rotation for webhooks
+    privateKeyRotationPolicy: "Never"
+    issuer:
+      clusterIssuerName: ""  # Required when type is "clusterIssuer"
+
+# DRA Drivers configuration
+drivers:
+  nvidia:
+    enabled: true
+    # If you are using gpu driver on host, you need to set this to false
+    containerDriver: true
+    image:
+      registry: ghcr.io
+      repository: projecthami/k8s-dra-driver
+      tag: "v0.0.1-dev"
+      ## Specify a imagePullPolicy
+      ## Defaults to 'Always' if image tag is 'latest', else set to 'IfNotPresent'
+      ## ref: https://kubernetes.io/docs/user-guide/images/#pre-pulling-images
+      ##
+      pullPolicy: IfNotPresent
+      ## Optionally specify an array of imagePullSecrets.
+      ## Secrets must be manually created in the namespace.
+      ## Example:
+      ## pullSecrets:
+      ##   - myRegistryKeySecretName
+      ##
+      pullSecrets: []

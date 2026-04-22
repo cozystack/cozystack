@@ -1,0 +1,29 @@
+{{- if .Values.webhook.config.validating.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ .Release.Name }}-validatingwebhookconfiguration
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ .Release.Name }}-dra-webhook-serving-cert
+webhooks:
+  - name: validate.hami.io
+    admissionReviewVersions: ["v1"]
+    clientConfig:
+      service:
+        name: {{ .Release.Name }}-dra-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+    rules:
+      - apiGroups:
+          - ""
+        apiVersions:
+          - v1
+        operations:
+          - DELETE
+        resources:
+          - pods
+        scope: '*'
+    sideEffects: None
+    timeoutSeconds: 10
+    failurePolicy: Ignore
+{{- end }}

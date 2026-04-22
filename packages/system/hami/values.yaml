@@ -1,0 +1,8 @@
+hami:
+  devicePlugin:
+    runtimeClassName: nvidia
+    nodeConfiguration:
+      config: |
+        {
+          "nodeconfig": []
+        }

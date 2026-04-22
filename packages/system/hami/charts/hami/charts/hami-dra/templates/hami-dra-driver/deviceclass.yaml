@@ -1,0 +1,11 @@
+{{- if .Values.drivers.nvidia.enabled }}
+apiVersion: resource.k8s.io/v1
+kind: DeviceClass
+metadata:
+  name: hami-core-gpu.project-hami.io
+spec:
+  selectors:
+  - cel:
+      expression: |-
+        device.driver == "hami-core-gpu.project-hami.io" && device.attributes["hami-core-gpu.project-hami.io"].type == "hami-gpu"
+{{- end }}

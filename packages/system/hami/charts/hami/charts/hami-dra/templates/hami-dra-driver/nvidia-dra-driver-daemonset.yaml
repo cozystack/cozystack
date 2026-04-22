@@ -1,0 +1,145 @@
+{{- if .Values.drivers.nvidia.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hami-dra-driver-kubelet-plugin
+  namespace: {{ .Release.Namespace }}
+spec:
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      hami-dra-driver-component: kubelet-plugin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: hami-dra-driver
+        app.kubernetes.io/name: hami-dra-driver
+        hami-dra-driver-component: kubelet-plugin
+    spec:
+      {{- include "hami.dra.driver.nvidia.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+      - name: init-container
+        image: {{ include "hami.dra.driver.nvidia.image" . }}
+        securityContext:
+          privileged: true
+        command: [bash, /usr/bin/kubelet-plugin-prestart.sh]
+        env:
+        - name: NVIDIA_DRIVER_ROOT
+          value: {{ if .Values.drivers.nvidia.containerDriver }}/run/nvidia/driver{{ else }}/{{ end }}
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: void
+        - name: KUBELET_REGISTRAR_DIRECTORY_PATH
+          value: /var/lib/kubelet/plugins_registry
+        - name: KUBELET_PLUGINS_DIRECTORY_PATH
+          value: /var/lib/kubelet/plugins
+        volumeMounts:
+        - name: driver-root-parent
+          mountPath: /driver-root-parent
+          readOnly: true
+      containers:
+      - args:
+        - |-
+          # Conditionally mask the params file to prevent this container from
+          # recreating any missing GPU device nodes. This is necessary, for
+          # example, when running under nvkind to limit the set GPUs governed
+          # by the plugin even though it has cgroup access to all of them.
+          if [ "${MASK_NVIDIA_DRIVER_PARAMS}" = "true" ]; then
+            cp /proc/driver/nvidia/params root/gpu-params
+            sed -i 's/^ModifyDeviceFiles: 1$/ModifyDeviceFiles: 0/' root/gpu-params
+            mount --bind root/gpu-params /proc/driver/nvidia/params
+          fi
+          hami-kubelet-plugin -v 6
+        command:
+        - bash
+        - -c
+        env:
+        - name: MASK_NVIDIA_DRIVER_PARAMS
+          value: ""
+        - name: NVIDIA_DRIVER_ROOT
+          value: {{ if .Values.drivers.nvidia.containerDriver }}/run/nvidia/driver{{ else }}/{{ end }}
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: void
+        - name: CDI_ROOT
+          value: /var/run/cdi
+        - name: NVIDIA_MIG_CONFIG_DEVICES
+          value: all
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: KUBELET_REGISTRAR_DIRECTORY_PATH
+          value: /var/lib/kubelet/plugins_registry
+        - name: KUBELET_PLUGINS_DIRECTORY_PATH
+          value: /var/lib/kubelet/plugins
+        - name: IMAGE_NAME
+          value: {{ include "hami.dra.driver.nvidia.image" . }}
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/bash", "-c", "/usr/bin/vgpu-init.sh /usr/local/vgpu/"]
+        image: {{ include "hami.dra.driver.nvidia.image" . }}
+        imagePullPolicy: {{ .Values.drivers.nvidia.image.pullPolicy | default "IfNotPresent" }}
+        name: gpus
+        securityContext:
+          privileged: true
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/kubelet/plugins_registry
+          name: plugins-registry
+        - mountPath: /var/lib/kubelet/plugins
+          mountPropagation: Bidirectional
+          name: plugins
+        - mountPath: /var/run/cdi
+          name: cdi
+        - mountPath: /driver-root
+          mountPropagation: HostToContainer
+          name: driver-root
+          readOnly: true
+        - mountPath: /usr/local/vgpu
+          name: host-vgpu
+        - mountPath: /tmp
+          name: host-tmp
+      dnsPolicy: ClusterFirst
+      serviceAccount: hami-dra-driver-service-account
+      serviceAccountName: hami-dra-driver-service-account
+      volumes:
+      - hostPath:
+          path: /var/lib/kubelet/plugins_registry
+          type: ""
+        name: plugins-registry
+      - hostPath:
+          path: /var/lib/kubelet/plugins
+          type: ""
+        name: plugins
+      - hostPath:
+          path: /var/run/cdi
+          type: ""
+        name: cdi
+      - hostPath:
+          path: {{if .Values.drivers.nvidia.containerDriver }}/run/nvidia{{ else }}/{{ end }}
+          type: DirectoryOrCreate
+        name: driver-root-parent
+      - hostPath:
+          path: {{if .Values.drivers.nvidia.containerDriver }}/run/nvidia/driver{{ else }}/{{ end }}
+          type: DirectoryOrCreate
+        name: driver-root
+      - hostPath:
+          path: /dev
+          type: ""
+        name: host-dev
+      - hostPath:
+          path: /usr/local/vgpu
+          type: DirectoryOrCreate
+        name: host-vgpu
+      - hostPath:
+          path: /tmp
+          type: ""
+        name: host-tmp
+{{- end }}

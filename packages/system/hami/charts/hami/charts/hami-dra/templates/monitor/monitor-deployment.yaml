@@ -1,0 +1,62 @@
+{{- if .Values.monitor.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hami.dra.monitor.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ include "hami.dra.monitor.fullname" . }}
+    {{- include "hami-dra-monitor.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.monitor.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "hami-dra-monitor.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "hami-dra-monitor.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- include "hami.dra.monitor.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "hami.dra.monitor.fullname" . }}
+      containers:
+        - name: monitor
+          image: {{ include "hami.dra.monitor.image" . }}
+          imagePullPolicy: {{ .Values.monitor.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /bin/monitor
+            - --v={{ .Values.monitor.logLevel | default 2 }}
+            - --metrics-bind-address={{ .Values.monitor.metricsBindAddress | default ":8080" }}
+            - --health-probe-bind-address={{ .Values.monitor.healthProbeBindAddress | default ":8000" }}
+            - --kube-api-qps={{ .Values.monitor.kubeAPIQPS | default 40.0 }}
+            - --kube-api-burst={{ .Values.monitor.kubeAPIBurst | default 60 }}
+            - --collect-interval={{ .Values.monitor.collectInterval | default "30s" }}
+          ports:
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+            - containerPort: 8000
+              name: health
+              protocol: TCP
+          {{- if .Values.monitor.resources }}
+          resources:
+            {{- toYaml .Values.monitor.resources | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+{{- end }}
+

@@ -1,0 +1,13 @@
+{{- if and .Values.devicePlugin.enabled (not .Values.devicePlugin.nodeConfiguration.externalConfigName) (not .Values.dra.enabled) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "hami-vgpu.device-plugin" . }}
+  namespace: {{ include "hami-vgpu.namespace" . }}
+  labels:
+    app.kubernetes.io/component: hami-device-plugin
+    {{- include "hami-vgpu.labels" . | nindent 4 }}
+data:
+  config.json: |
+{{- .Values.devicePlugin.nodeConfiguration.config | nindent 4 }}
+{{- end }}

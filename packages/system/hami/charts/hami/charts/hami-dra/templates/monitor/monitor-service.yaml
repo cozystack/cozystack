@@ -1,0 +1,26 @@
+{{- if .Values.monitor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hami.dra.monitor.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hami-dra-monitor.selectorLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.monitor.service.type | default "ClusterIP" }}
+  selector:
+    {{- include "hami-dra-monitor.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: metrics
+      protocol: TCP
+      {{- if and (eq (.Values.monitor.service.type | default "ClusterIP") "NodePort") .Values.monitor.service.nodePort.metrics }}
+      nodePort: {{ .Values.monitor.service.nodePort.metrics }}
+      {{- end }}
+    - port: 8000
+      targetPort: 8000
+      name: health
+      protocol: TCP
+{{- end }}
+

@@ -1,0 +1,29 @@
+{{- if .Values.certs.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-dra-webhook-serving-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "hami-dra-webhook.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+    - {{ .Release.Name }}-dra-webhook.{{ .Release.Namespace }}.svc
+    - {{ .Release.Name }}-dra-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: {{ .Release.Name }}-dra-webhook-selfsigned-issuer
+  secretName: {{ .Release.Name }}-dra-webhook-tls
+  privateKey:
+    rotationPolicy: {{ .Values.certs.certManager.privateKeyRotationPolicy | default "Never" }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-dra-webhook-selfsigned-issuer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: hami-dra-webhook
+spec:
+  selfSigned: {}
+{{- end }}
