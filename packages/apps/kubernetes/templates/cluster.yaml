@@ -24,6 +24,7 @@ spec:
       - metadata:
           name: disk-kubelet
           annotations:
+            {{/* Populator creates intermediate PVC + PV rebind that causes ClaimMisbound with LINSTOR CSI */}}
             cdi.kubevirt.io/storage.usePopulator: "false"
         spec:
           source:
@@ -86,6 +87,7 @@ spec:
               guest: {{ .group.resources.memory }}
             {{- end }}
             resources:
+              {{/* 2Gi is enough: persistent DataVolumes are not counted as pod ephemeral storage */}}
               {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) | nindent 14 }}
           evictionStrategy: External
           volumes:
