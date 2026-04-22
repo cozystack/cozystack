@@ -29,7 +29,7 @@ storageClass: replicated
 ## @field {int} minReplicas=0 - Minimum number of replicas.
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
 ## @field {string} instanceType="u1.medium" - Virtual machine instance type.
-## @field {quantity} ephemeralStorage="20Gi" - Ephemeral storage size.
+## @field {quantity} diskSize="20Gi" - Persistent disk size for kubelet and containerd data.
 ## @field {[]string} roles - List of node roles.
 ## @field {Resources} resources - CPU and memory resources for each worker node.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
@@ -40,7 +40,7 @@ nodeGroups:
     minReplicas: 0
     maxReplicas: 10
     instanceType: "u1.medium"
-    ephemeralStorage: 20Gi
+    diskSize: 20Gi
     roles:
     - ingress-nginx
     resources: {}
