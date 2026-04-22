@@ -12,7 +12,7 @@ Within a tenant cluster, users can take advantage of LoadBalancer services and e
 The control-plane operates within containers, while the worker nodes are deployed as virtual machines, all seamlessly managed by the application.
 
 Kubernetes version in tenant clusters is independent of Kubernetes in the management cluster.
-Users can select the latest patch versions from 1.30 to 1.35.
+Users can select the supported patch versions from 1.30 to 1.35.
 
 ## Why Use a Managed Kubernetes Cluster?
 
