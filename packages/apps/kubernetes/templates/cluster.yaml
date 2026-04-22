@@ -212,7 +212,8 @@ metadata:
 {{- end }}
 {{- $autoReservedMillicores := 50 }}
 {{- if $effectiveCpu }}
-{{-   $effectiveCpuMillis := mulf ($effectiveCpu | float64) 1000.0 | int }}
+{{-   $effectiveCpuFloat := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
+{{-   $effectiveCpuMillis := mulf $effectiveCpuFloat 1000.0 | int }}
 {{-   $fivePercentMillis := mulf ($effectiveCpuMillis | float64) 0.05 | int }}
 {{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
 {{- end }}
