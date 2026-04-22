@@ -232,8 +232,8 @@ metadata:
 {{- $validations := list
       (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
       (dict "key" "kubeReservedMemory"   "value" $kubeletOverride.kubeReservedMemory   "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
-      (dict "key" "systemReservedCpu"    "value" $kubeletOverride.systemReservedCpu    "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
-      (dict "key" "kubeReservedCpu"      "value" $kubeletOverride.kubeReservedCpu      "pattern" `^[0-9]+(\.[0-9]+)?m?$`                                                                   "hint" "a valid Kubernetes CPU quantity (e.g. 100m, 0.5, 1)")
+      (dict "key" "systemReservedCpu"    "value" $kubeletOverride.systemReservedCpu    "pattern" `^([0-9]+m|[0-9]+(\.[0-9]+)?)$`                                                              "hint" "a valid Kubernetes CPU quantity (integer millicores like 100m, or decimal cores like 0.5, 1)")
+      (dict "key" "kubeReservedCpu"      "value" $kubeletOverride.kubeReservedCpu      "pattern" `^([0-9]+m|[0-9]+(\.[0-9]+)?)$`                                                              "hint" "a valid Kubernetes CPU quantity (integer millicores like 100m, or decimal cores like 0.5, 1)")
 }}
 {{- range $validations }}
 {{-   if and .value (not (regexMatch .pattern (.value | toString))) }}
