@@ -301,7 +301,7 @@ metadata:
 {{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{-   end }}
 {{- else }}
-{{-   fail (printf "nodeGroup %s: evictionHardMemory and evictionSoftMemory must use the same unit type (both percentage or both absolute) — got evictionHardMemory=%s, evictionSoftMemory=%s" $groupName $evictionHardMemory $evictionSoftMemory) }}
+{{-   fail (printf "nodeGroup %s: evictionHardMemory (%s) and evictionSoftMemory (%s) must use the same unit type (both percentage or both absolute) — when overriding one to an absolute value, you must also override the other" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{- end }}
 {{/* Resolve eviction hard threshold to bytes for arithmetic.
      Percentage is relative to effective node memory; absolute values are used as-is. */}}

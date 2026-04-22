@@ -748,7 +748,7 @@ tests:
             evictionSoftMemory: "10%"
     asserts:
       - failedTemplate:
-          errorMessage: "nodeGroup md0: evictionHardMemory and evictionSoftMemory must use the same unit type (both percentage or both absolute) — got evictionHardMemory=1Gi, evictionSoftMemory=10%"
+          errorMessage: "nodeGroup md0: evictionHardMemory (1Gi) and evictionSoftMemory (10%) must use the same unit type (both percentage or both absolute) — when overriding one to an absolute value, you must also override the other"
 
   - it: rejects mixed eviction types reversed (hard percentage, soft absolute)
     release:
@@ -775,7 +775,7 @@ tests:
             evictionSoftMemory: "1Gi"
     asserts:
       - failedTemplate:
-          errorMessage: "nodeGroup md0: evictionHardMemory and evictionSoftMemory must use the same unit type (both percentage or both absolute) — got evictionHardMemory=10%, evictionSoftMemory=1Gi"
+          errorMessage: "nodeGroup md0: evictionHardMemory (10%) and evictionSoftMemory (1Gi) must use the same unit type (both percentage or both absolute) — when overriding one to an absolute value, you must also override the other"
 
   ################################################
   # Reservation field format validation          #
