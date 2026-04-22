@@ -347,7 +347,8 @@ metadata:
 {{-     $kubeCpuMillis = mulf ($kubeCpuStr | float64) 1000.0 }}
 {{-   end }}
 {{-   $totalCpuMillis := addf $sysCpuMillis $kubeCpuMillis }}
-{{-   $effectiveCpuMillis := mulf ($effectiveCpu | float64) 1000.0 }}
+{{-   $effectiveCpuFloatV := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
+{{-   $effectiveCpuMillis := mulf $effectiveCpuFloatV 1000.0 }}
 {{-   if ge $totalCpuMillis $effectiveCpuMillis }}
 {{-     fail (printf "nodeGroup %s: total reserved CPU (systemReservedCpu=%s + kubeReservedCpu=%s) must be less than effective node CPU (%s cores)" $groupName $systemReservedCpu $kubeReservedCpu $effectiveCpu) }}
 {{-   end }}
@@ -489,10 +490,26 @@ metadata:
     {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | ceil }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
     {{- end }}
-    {{- if and $group.resources $group.resources.cpu }}
-    capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $group.resources.cpu }}"
-    {{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
-    capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $instanceType.spec.cpu.guest }}"
+    {{- if $effectiveCpu }}
+    {{-   $sysCpuStr := $systemReservedCpu | toString }}
+    {{-   $kubeCpuStr := $kubeReservedCpu | toString }}
+    {{-   $sysCpuMillisA := 0.0 }}
+    {{-   $kubeCpuMillisA := 0.0 }}
+    {{-   if hasSuffix "m" $sysCpuStr }}
+    {{-     $sysCpuMillisA = trimSuffix "m" $sysCpuStr | float64 }}
+    {{-   else }}
+    {{-     $sysCpuMillisA = mulf ($sysCpuStr | float64) 1000.0 }}
+    {{-   end }}
+    {{-   if hasSuffix "m" $kubeCpuStr }}
+    {{-     $kubeCpuMillisA = trimSuffix "m" $kubeCpuStr | float64 }}
+    {{-   else }}
+    {{-     $kubeCpuMillisA = mulf ($kubeCpuStr | float64) 1000.0 }}
+    {{-   end }}
+    {{-   $effectiveCpuFloatA := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
+    {{-   $effectiveCpuMillisA := mulf $effectiveCpuFloatA 1000.0 }}
+    {{-   $allocatableCpuMillis := subf $effectiveCpuMillisA (addf $sysCpuMillisA $kubeCpuMillisA) }}
+    {{-   $allocatableCpuMillisInt := $allocatableCpuMillis | ceil | int }}
+    capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $allocatableCpuMillisInt }}m"
     {{- end }}
 spec:
   clusterName: {{ $.Release.Name }}
