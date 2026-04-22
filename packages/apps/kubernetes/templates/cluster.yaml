@@ -240,6 +240,29 @@ metadata:
 {{-     fail (printf "nodeGroup %s: invalid %s value %q — must be %s" $groupName .key (.value | toString) .hint) }}
 {{-   end }}
 {{- end }}
+{{/* Validate that user-supplied reservation values are positive (non-zero) */}}
+{{- range $_, $entry := list (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory) (dict "key" "kubeReservedMemory" "value" $kubeletOverride.kubeReservedMemory) }}
+{{-   if $entry.value }}
+{{-     $bytes := include "cozy-lib.resources.toFloat" ($entry.value | toString) | float64 }}
+{{-     if le $bytes 0.0 }}
+{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key ($entry.value | toString)) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- range $_, $entry := list (dict "key" "systemReservedCpu" "value" $kubeletOverride.systemReservedCpu) (dict "key" "kubeReservedCpu" "value" $kubeletOverride.kubeReservedCpu) }}
+{{-   if $entry.value }}
+{{-     $cpuStr := $entry.value | toString }}
+{{-     $cpuVal := 0.0 }}
+{{-     if hasSuffix "m" $cpuStr }}
+{{-       $cpuVal = trimSuffix "m" $cpuStr | float64 }}
+{{-     else }}
+{{-       $cpuVal = $cpuStr | float64 }}
+{{-     end }}
+{{-     if le $cpuVal 0.0 }}
+{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key $cpuStr) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
 {{/* Validate absolute eviction threshold formats before converting */}}
 {{- if not (hasSuffix "%" $evictionHardMemory) }}
 {{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionHardMemory) }}
