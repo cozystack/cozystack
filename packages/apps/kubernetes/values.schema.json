@@ -84,18 +84,16 @@
                 "default": "10%"
               },
               "kubeReservedCpu": {
-                "description": "CPU reserved for kubelet and container runtime.",
-                "type": "string",
-                "default": "100m"
+                "description": "CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
+                "type": "string"
               },
               "kubeReservedMemory": {
                 "description": "Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
                 "type": "string"
               },
               "systemReservedCpu": {
-                "description": "CPU reserved for host OS.",
-                "type": "string",
-                "default": "100m"
+                "description": "CPU reserved for host OS. Auto-computed from instanceType if empty.",
+                "type": "string"
               },
               "systemReservedMemory": {
                 "description": "Memory reserved for host OS. Auto-computed from instanceType if empty.",

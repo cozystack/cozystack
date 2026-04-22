@@ -28,8 +28,8 @@ storageClass: replicated
 ## @typedef {struct} Kubelet - Kubelet resource reservations for worker nodes.
 ## @field {string} [systemReservedMemory] - Memory reserved for host OS. Auto-computed from instanceType if empty.
 ## @field {string} [kubeReservedMemory] - Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-## @field {string} [systemReservedCpu]="100m" - CPU reserved for host OS.
-## @field {string} [kubeReservedCpu]="100m" - CPU reserved for kubelet and container runtime.
+## @field {string} [systemReservedCpu] - CPU reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedCpu] - CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
 ## @field {string} [evictionHardMemory]="7%" - Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
 ## @field {string} [evictionSoftMemory]="10%" - Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
 

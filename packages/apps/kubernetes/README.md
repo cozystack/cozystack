@@ -277,14 +277,16 @@ When `systemReservedMemory` or `kubeReservedMemory` are left empty, they are **a
 
 Both `systemReservedMemory` and `kubeReservedMemory` receive the same auto-computed value by default.
 
+CPU reservations (`systemReservedCpu`, `kubeReservedCpu`) follow the same pattern: **5%** of effective CPU, clamped to **[50m, 500m]**. Both are auto-computed when left empty.
+
 #### Kubelet Defaults
 
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `systemReservedMemory` | auto-computed | Memory reserved for host OS |
 | `kubeReservedMemory` | auto-computed | Memory reserved for kubelet and container runtime |
-| `systemReservedCpu` | `100m` | CPU reserved for host OS |
-| `kubeReservedCpu` | `100m` | CPU reserved for kubelet and container runtime |
+| `systemReservedCpu` | auto-computed | CPU reserved for host OS |
+| `kubeReservedCpu` | auto-computed | CPU reserved for kubelet and container runtime |
 | `evictionHardMemory` | `7%` | Hard eviction threshold for memory |
 | `evictionSoftMemory` | `10%` | Soft eviction threshold for memory |
 | `evictionSoftGracePeriod` | `1m30s` *(hardcoded)* | Duration a soft eviction threshold must be breached before triggering eviction |
@@ -296,7 +298,7 @@ The `evictionSoftGracePeriod` and `evictionMinimumReclaim` parameters are curren
 
 #### Capacity Annotation
 
-When kubelet resource reservations are configured, the `capacity.cluster-autoscaler.kubernetes.io/memory` annotation on worker nodes reports **allocatable memory** (total node memory minus system-reserved, kube-reserved, and eviction-hard) instead of total node memory. This aligns the annotation with the value the cluster autoscaler uses in its scaling calculations.
+When kubelet resource reservations are configured, both the `capacity.cluster-autoscaler.kubernetes.io/memory` and `capacity.cluster-autoscaler.kubernetes.io/cpu` annotations on worker nodes report **allocatable** values instead of total node resources. Memory allocatable subtracts system-reserved, kube-reserved, and eviction-hard. CPU allocatable subtracts system-reserved and kube-reserved. This aligns the annotations with the values the cluster autoscaler uses in its scaling calculations.
 
 Upgrading from a version without this feature may cause the autoscaler to see reduced per-node capacity after the annotations are updated, which can trigger additional scale-up operations. No action is typically required — the new values reflect the actual memory available for workload scheduling.
 
