@@ -38,11 +38,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -105,11 +105,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -147,11 +147,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
 
   ###############################
@@ -179,6 +179,7 @@ tests:
             - worker
           resources:
             memory: "8Gi"
+            cpu: 4
           kubelet:
             systemReservedMemory: "512Mi"
             kubeReservedMemory: "256Mi"
@@ -230,11 +231,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -335,11 +336,11 @@ tests:
       # 4Gi = 4096Mi, 5% = 204Mi (truncated from 204.8), clamped up to 256Mi floor
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
 
   - it: auto-computes reservation from resources.memory (8Gi -> 409Mi)
@@ -367,11 +368,11 @@ tests:
       # 8Gi = 8192Mi, 5% = 409Mi (truncated from 409.6)
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=409Mi,cpu=100m"
+          value: "memory=409Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=409Mi,cpu=100m"
+          value: "memory=409Mi,cpu=50m"
         documentIndex: 4
 
   ##################################
@@ -403,11 +404,11 @@ tests:
       # 1Gi = 1024Mi, 5% = 51Mi, but floor is 256Mi
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
 
   - it: clamps auto-computed reservation to 256Mi floor (512Mi memory, triggers validation error)
@@ -465,11 +466,11 @@ tests:
       # 32Gi = 32768Mi, 5% = 1638Mi, capped to 1024Mi
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=1024Mi,cpu=100m"
+          value: "memory=1024Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=1024Mi,cpu=100m"
+          value: "memory=1024Mi,cpu=50m"
         documentIndex: 4
 
   - it: clamps auto-computed reservation to 1024Mi ceiling (64Gi memory)
@@ -497,11 +498,11 @@ tests:
       # 64Gi = 65536Mi, 5% = 3276Mi, capped to 1024Mi
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=1024Mi,cpu=100m"
+          value: "memory=1024Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=1024Mi,cpu=100m"
+          value: "memory=1024Mi,cpu=50m"
         documentIndex: 4
 
   ##################################################
@@ -533,11 +534,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=1024Mi,cpu=100m"
+          value: "memory=1024Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=1024Mi,cpu=100m"
+          value: "memory=1024Mi,cpu=50m"
         documentIndex: 4
 
   ####################################################
@@ -572,11 +573,11 @@ tests:
       # Despite 8Gi yielding 409Mi auto, explicit overrides win
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=1Gi,cpu=100m"
+          value: "memory=1Gi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=768Mi,cpu=100m"
+          value: "memory=768Mi,cpu=50m"
         documentIndex: 4
 
   ######################################
@@ -865,6 +866,7 @@ tests:
             - worker
           resources:
             memory: "8Gi"
+            cpu: 4
           kubelet:
             systemReservedMemory: "512Mi"
             kubeReservedMemory: "256Mi"
@@ -883,11 +885,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=256Mi,cpu=100m"
+          value: "memory=256Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -1244,11 +1246,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=512Mi,cpu=100m"
+          value: "memory=512Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=512Mi,cpu=100m"
+          value: "memory=512Mi,cpu=50m"
         documentIndex: 4
 
   ################################################################
@@ -1315,11 +1317,11 @@ tests:
       # 8Gi node, 1Gi reserved, 3Gi hard eviction — total 4Gi < 8Gi, passes validation.
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=512Mi,cpu=100m"
+          value: "memory=512Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=512Mi,cpu=100m"
+          value: "memory=512Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -1360,11 +1362,11 @@ tests:
       # 8Gi node, 1Gi reserved, 512Mi hard / 1Gi soft — typical production config.
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
-          value: "memory=512Mi,cpu=100m"
+          value: "memory=512Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
-          value: "memory=512Mi,cpu=100m"
+          value: "memory=512Mi,cpu=50m"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
@@ -1589,3 +1591,212 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "nodeGroup md0: specified instanceType \"u1.medium\" not found in cluster"
+
+  ####################################################
+  # CPU auto-computation from resources.cpu          #
+  ####################################################
+
+  - it: auto-computes CPU reservation from resources.cpu (4 cores -> 200m each)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "8Gi"
+            cpu: 4
+    asserts:
+      # 4 cores = 4000m, 5% = 200m
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=409Mi,cpu=200m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=409Mi,cpu=200m"
+        documentIndex: 4
+
+  ##################################
+  # CPU clamp logic: 50m floor     #
+  ##################################
+
+  - it: clamps auto-computed CPU reservation to 50m floor (1 core)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "4Gi"
+            cpu: 1
+    asserts:
+      # 1 core = 1000m, 5% = 50m — exactly at floor
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=256Mi,cpu=50m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=256Mi,cpu=50m"
+        documentIndex: 4
+
+  ##################################
+  # CPU clamp logic: 500m ceiling  #
+  ##################################
+
+  - it: clamps auto-computed CPU reservation to 500m ceiling (20 cores)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "32Gi"
+            cpu: 20
+    asserts:
+      # 20 cores = 20000m, 5% = 1000m, capped to 500m
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=1024Mi,cpu=500m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=1024Mi,cpu=500m"
+        documentIndex: 4
+
+  ####################################################
+  # CPU total validation: exceeds effective CPU      #
+  ####################################################
+
+  - it: rejects reserved CPU exceeding effective node CPU
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: "8Gi"
+            cpu: 2
+          kubelet:
+            systemReservedCpu: "1200m"
+            kubeReservedCpu: "1200m"
+    asserts:
+      # 2 cores = 2000m, 1200+1200 = 2400 > 2000 -> fails
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: total reserved CPU (systemReservedCpu=1200m + kubeReservedCpu=1200m) must be less than effective node CPU (2 cores)"
+
+  ################################################################
+  # CPU override guard: CPU overrides without effective CPU      #
+  ################################################################
+
+  - it: rejects kubelet CPU overrides when no effective CPU is available
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+          kubelet:
+            systemReservedCpu: "200m"
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: cannot validate kubelet CPU reservations without effective CPU — set resources.cpu or a valid instanceType"
+
+  ########################################################
+  # Default CPU: no resources/instanceType -> 50m        #
+  ########################################################
+
+  - it: defaults to 50m CPU reservation when no resources or instanceType
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          ephemeralStorage: 20Gi
+          roles:
+            - worker
+          resources: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.system-reserved
+          value: "memory=256Mi,cpu=50m"
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kube-reserved
+          value: "memory=256Mi,cpu=50m"
+        documentIndex: 4

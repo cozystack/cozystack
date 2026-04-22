@@ -189,13 +189,20 @@ metadata:
 {{-     fail (printf "nodeGroup %s: specified instanceType %q not found in cluster" $groupName $group.instanceType) }}
 {{-   end }}
 {{- end }}
-{{/* Compute kubelet reservations: explicit resources.memory wins over instanceType.spec.memory.guest.
-     Auto-computed system/kube reserved = 5% of effective memory, clamped to [256Mi, 1Gi]. */}}
+{{/* Compute kubelet reservations: explicit resources.memory/cpu wins over instanceType spec.
+     Auto-computed system/kube reserved memory = 5% of effective memory, clamped to [256Mi, 1Gi].
+     Auto-computed system/kube reserved CPU = 5% of effective CPU, clamped to [50m, 500m]. */}}
 {{- $effectiveMemory := "" }}
 {{- if and $group.resources $group.resources.memory }}
 {{-   $effectiveMemory = $group.resources.memory | toString }}
 {{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
 {{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
+{{- end }}
+{{- $effectiveCpu := "" }}
+{{- if and $group.resources $group.resources.cpu }}
+{{-   $effectiveCpu = $group.resources.cpu | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
+{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
 {{- end }}
 {{- $autoReservedMi := 256 }}
 {{- if $effectiveMemory }}
@@ -203,11 +210,17 @@ metadata:
 {{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
 {{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
 {{- end }}
+{{- $autoReservedMillicores := 50 }}
+{{- if $effectiveCpu }}
+{{-   $effectiveCpuMillis := mulf ($effectiveCpu | float64) 1000.0 | int }}
+{{-   $fivePercentMillis := mulf ($effectiveCpuMillis | float64) 0.05 | int }}
+{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
+{{- end }}
 {{- $kubeletOverride := $group.kubelet | default dict }}
 {{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
 {{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
-{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default "100m" }}
-{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default "100m" }}
+{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
 {{/* Validate reservation field formats.
@@ -293,11 +306,40 @@ metadata:
 {{-     fail (printf "nodeGroup %s: total reserved memory (systemReservedMemory=%s + kubeReservedMemory=%s + evictionHardMemory=%s) must be less than effective node memory (%s)" $groupName $systemReservedMemory $kubeReservedMemory $evictionHardMemory $effectiveMemory) }}
 {{-   end }}
 {{- end }}
+{{/* Validate that total reserved CPU does not exceed effective node CPU */}}
+{{- if $effectiveCpu }}
+{{-   $sysCpuStr := $systemReservedCpu | toString }}
+{{-   $kubeCpuStr := $kubeReservedCpu | toString }}
+{{-   $sysCpuMillis := 0.0 }}
+{{-   $kubeCpuMillis := 0.0 }}
+{{-   if hasSuffix "m" $sysCpuStr }}
+{{-     $sysCpuMillis = trimSuffix "m" $sysCpuStr | float64 }}
+{{-   else }}
+{{-     $sysCpuMillis = mulf ($sysCpuStr | float64) 1000.0 }}
+{{-   end }}
+{{-   if hasSuffix "m" $kubeCpuStr }}
+{{-     $kubeCpuMillis = trimSuffix "m" $kubeCpuStr | float64 }}
+{{-   else }}
+{{-     $kubeCpuMillis = mulf ($kubeCpuStr | float64) 1000.0 }}
+{{-   end }}
+{{-   $totalCpuMillis := addf $sysCpuMillis $kubeCpuMillis }}
+{{-   $effectiveCpuMillis := mulf ($effectiveCpu | float64) 1000.0 }}
+{{-   if ge $totalCpuMillis $effectiveCpuMillis }}
+{{-     fail (printf "nodeGroup %s: total reserved CPU (systemReservedCpu=%s + kubeReservedCpu=%s) must be less than effective node CPU (%s cores)" $groupName $systemReservedCpu $kubeReservedCpu $effectiveCpu) }}
+{{-   end }}
+{{- end }}
 {{/* Guard: explicit kubelet overrides require effective memory for validation */}}
 {{- if not $effectiveMemory }}
 {{-   $hasOverride := or $kubeletOverride.systemReservedMemory $kubeletOverride.kubeReservedMemory $kubeletOverride.evictionHardMemory $kubeletOverride.evictionSoftMemory }}
 {{-   if $hasOverride }}
 {{-     fail (printf "nodeGroup %s: cannot validate kubelet reservations without effective memory — set resources.memory or a valid instanceType" $groupName) }}
+{{-   end }}
+{{- end }}
+{{/* Guard: explicit kubelet CPU overrides require effective CPU for validation */}}
+{{- if not $effectiveCpu }}
+{{-   $hasCpuOverride := or $kubeletOverride.systemReservedCpu $kubeletOverride.kubeReservedCpu }}
+{{-   if $hasCpuOverride }}
+{{-     fail (printf "nodeGroup %s: cannot validate kubelet CPU reservations without effective CPU — set resources.cpu or a valid instanceType" $groupName) }}
 {{-   end }}
 {{- end }}
 ---
