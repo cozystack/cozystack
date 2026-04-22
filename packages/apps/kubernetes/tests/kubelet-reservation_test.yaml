@@ -46,11 +46,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<7%"
+          value: "memory.available<7%,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<10%"
+          value: "memory.available<10%,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft-grace-period
@@ -113,11 +113,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<7%"
+          value: "memory.available<7%,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<10%"
+          value: "memory.available<10%,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
 
   #########################################
@@ -198,11 +198,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<5%"
+          value: "memory.available<5%,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<15%"
+          value: "memory.available<15%,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
 
   - it: allows partial kubelet overrides, uses defaults for unset fields
@@ -239,11 +239,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<7%"
+          value: "memory.available<7%,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<10%"
+          value: "memory.available<10%,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
 
   - it: allows valid absolute eviction thresholds (hard < soft)
@@ -273,11 +273,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<200Mi"
+          value: "memory.available<200Mi,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<500Mi"
+          value: "memory.available<500Mi,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
 
   - it: rejects absolute eviction thresholds where hard >= soft
@@ -893,11 +893,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<7%"
+          value: "memory.available<7%,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<10%"
+          value: "memory.available<10%,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
       # md1 at documentIndex 9: custom overrides
       # (each nodeGroup emits 5 documents: KubeadmConfigTemplate, KubevirtMachineTemplate,
@@ -919,11 +919,11 @@ tests:
         documentIndex: 9
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<5%"
+          value: "memory.available<5%,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 9
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<15%"
+          value: "memory.available<15%,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 9
 
   ################################################
@@ -1011,11 +1011,11 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<500Mi"
+          value: "memory.available<500Mi,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<1Gi"
+          value: "memory.available<1Gi,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
 
   ####################################################
@@ -1325,11 +1325,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<3Gi"
+          value: "memory.available<3Gi,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<3.5Gi"
+          value: "memory.available<3.5Gi,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
 
   - it: renders reasonable absolute eviction with explicit reservations
@@ -1370,11 +1370,11 @@ tests:
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-hard
-          value: "memory.available<512Mi"
+          value: "memory.available<512Mi,nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft
-          value: "memory.available<1Gi"
+          value: "memory.available<1Gi,nodefs.available<15%,imagefs.available<20%"
         documentIndex: 4
 
   ####################################################
