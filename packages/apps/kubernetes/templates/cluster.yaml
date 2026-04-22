@@ -23,6 +23,8 @@ spec:
       dataVolumeTemplates:
       - metadata:
           name: disk-kubelet
+          annotations:
+            cdi.kubevirt.io/storage.usePopulator: "false"
         spec:
           source:
             blank: {}
