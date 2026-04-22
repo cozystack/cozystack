@@ -149,6 +149,7 @@
         "fluxcd",
         "gatewayAPI",
         "gpuOperator",
+        "hami",
         "ingressNginx",
         "monitoringAgents",
         "velero",
@@ -257,6 +258,28 @@
           "properties": {
             "enabled": {
               "description": "Enable GPU Operator.",
+              "type": "boolean",
+              "default": false
+            },
+            "valuesOverride": {
+              "description": "Custom Helm values overrides.",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "hami": {
+          "description": "HAMi GPU virtualization middleware. Enables fractional GPU sharing (memory and compute isolation) for workloads. Requires GPU Operator. Note: workload containers must use glibc < 2.34 (not musl/Alpine) for full compute isolation.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Enable HAMi.",
               "type": "boolean",
               "default": false
             },
