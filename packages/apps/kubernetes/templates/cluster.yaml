@@ -423,7 +423,7 @@ spec:
             kube-reserved: "memory={{ $kubeReservedMemory }},cpu={{ $kubeReservedCpu }}"
             eviction-hard: "memory.available<{{ $evictionHardMemory }},nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
             eviction-soft: "memory.available<{{ $evictionSoftMemory }},nodefs.available<15%,imagefs.available<20%"
-            eviction-soft-grace-period: "memory.available=1m30s"
+            eviction-soft-grace-period: "memory.available=1m30s,nodefs.available=1m30s,imagefs.available=1m30s"
             # 256Mi ensures meaningful reclamation per eviction cycle while being
             # proportional to the 256Mi-1Gi auto-computed reservation range.
             eviction-minimum-reclaim: "memory.available=256Mi"
