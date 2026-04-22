@@ -57,6 +57,6 @@ Returns a number string: "100", "500", "1000", "4000".
 {{-   if hasSuffix "m" $str -}}
 {{-     trimSuffix "m" $str -}}
 {{-   else -}}
-{{-     mulf ($str | float64) 1000.0 | toString -}}
+{{-     mulf ($str | float64) 1000.0 | int | toString -}}
 {{-   end -}}
 {{- end -}}
