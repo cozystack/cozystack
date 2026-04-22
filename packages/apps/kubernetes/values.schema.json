@@ -33,6 +33,11 @@
           "resources"
         ],
         "properties": {
+          "affinity": {
+            "description": "Pod affinity applied to worker VMI virt-launcher pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread worker VMIs across different hypervisor hosts.",
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
           "ephemeralStorage": {
             "description": "Ephemeral storage size.",
             "default": "20Gi",
@@ -115,6 +120,14 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "topologySpreadConstraints": {
+            "description": "Pod topology spread constraints applied to worker VMI virt-launcher pods (standard Kubernetes corev1.TopologySpreadConstraint). When set, takes precedence over any cluster-wide globalAppTopologySpreadConstraints.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-kubernetes-preserve-unknown-fields": true
             }
           }
         }
