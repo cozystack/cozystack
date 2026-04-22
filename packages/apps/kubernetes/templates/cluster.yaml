@@ -32,7 +32,9 @@ spec:
             resources:
               requests:
                 storage: {{ .group.diskSize | default "20Gi" }}
-            storageClassName: {{ $.Values.storageClass }}
+            {{- with .group.storageClass }}
+            storageClassName: {{ . }}
+            {{- end }}
       template:
         metadata:
           annotations:

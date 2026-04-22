@@ -116,6 +116,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "storageClass": {
+            "description": "StorageClass for worker node persistent disks. Uses cluster default when empty.",
+            "type": "string"
           }
         }
       }

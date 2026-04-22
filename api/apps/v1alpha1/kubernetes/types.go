@@ -215,6 +215,8 @@ type NodeGroup struct {
 	Resources Resources `json:"resources"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
+	// StorageClass for worker node persistent disks. Uses cluster default when empty.
+	StorageClass string `json:"storageClass,omitempty"`
 }
 
 type Resources struct {
