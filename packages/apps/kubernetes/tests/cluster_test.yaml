@@ -1,0 +1,418 @@
+suite: cluster.yaml template tests
+
+templates:
+  - templates/cluster.yaml
+
+# The KubevirtMachineTemplate is document index 5 when rendering with one
+# nodeGroup (md0).  Documents before it: Cluster(0), KamajiControlPlane(1),
+# WorkloadMonitor-cp(2), KubevirtCluster(3), KubeadmConfigTemplate-md0(4).
+# The named template "kubevirtmachinetemplate" is inlined inside document 5
+# under spec.template.spec.
+#
+# Note: instanceType must be set to "" to bypass the lookup() call that
+# validates VirtualMachineClusterInstancetype existence against a live cluster.
+
+tests:
+  ###############################################
+  # dataVolumeTemplates — default disk size     #
+  ###############################################
+
+  - it: renders dataVolumeTemplate with default 20Gi storage
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          diskSize: 20Gi
+          gpus: []
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.name
+          value: disk-kubelet
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.blank
+          value: {}
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 20Gi
+        documentIndex: 5
+
+  ###############################################
+  # dataVolumeTemplates — custom disk size      #
+  ###############################################
+
+  - it: renders dataVolumeTemplate with custom 50Gi storage
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          diskSize: 50Gi
+          gpus: []
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 50Gi
+        documentIndex: 5
+
+  ###############################################
+  # storageClassName omitted when empty         #
+  ###############################################
+
+  - it: omits storageClassName when storageClass is empty
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          storageClass: ""
+          gpus: []
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+        documentIndex: 5
+
+  ###############################################
+  # storageClassName present when set           #
+  ###############################################
+
+  - it: sets storageClassName when storageClass is provided
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          storageClass: "my-storage"
+          gpus: []
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+          value: my-storage
+        documentIndex: 5
+
+  ###############################################
+  # ephemeral-storage is always 2Gi             #
+  ###############################################
+
+  - it: hardcodes ephemeral-storage to 2Gi with default diskSize
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          diskSize: 20Gi
+          gpus: []
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: 2Gi
+        documentIndex: 5
+
+  - it: hardcodes ephemeral-storage to 2Gi even with large diskSize
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          diskSize: 100Gi
+          gpus: []
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: 2Gi
+        documentIndex: 5
+
+  ###############################################
+  # disk-kubelet name consistency               #
+  ###############################################
+
+  - it: uses disk-kubelet name consistently across dataVolumeTemplates, volumes, and disks
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+    asserts:
+      # dataVolumeTemplates name
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.name
+          value: disk-kubelet
+        documentIndex: 5
+      # disks name
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.devices.disks[1].name
+          value: disk-kubelet
+        documentIndex: 5
+      # volumes name
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.volumes[1].name
+          value: disk-kubelet
+        documentIndex: 5
+      # volumes dataVolume reference
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.volumes[1].dataVolume.name
+          value: disk-kubelet
+        documentIndex: 5
+
+  ###############################################
+  # CDI populator annotation                    #
+  ###############################################
+
+  - it: includes CDI populator annotation on dataVolumeTemplate
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      version: "v1.32"
+      controlPlane:
+        replicas: 2
+        apiServer:
+          resources: {}
+          resourcesPreset: "large"
+        controllerManager:
+          resources: {}
+          resourcesPreset: "micro"
+        scheduler:
+          resources: {}
+          resourcesPreset: "micro"
+        konnectivity:
+          server:
+            resources: {}
+            resourcesPreset: "micro"
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations["cdi.kubevirt.io/storage.usePopulator"]
+          value: "false"
+        documentIndex: 5
