@@ -107,8 +107,8 @@ See the reference for components utilized in this service:
 | `nodeGroups[name].kubelet`                      | Kubelet resource reservations for this node group.                                             | `object`            | `{}`        |
 | `nodeGroups[name].kubelet.systemReservedMemory` | Memory reserved for host OS. Auto-computed from instanceType if empty.                         | `string`            | `""`        |
 | `nodeGroups[name].kubelet.kubeReservedMemory`   | Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.   | `string`            | `""`        |
-| `nodeGroups[name].kubelet.systemReservedCpu`    | CPU reserved for host OS.                                                                      | `string`            | `100m`      |
-| `nodeGroups[name].kubelet.kubeReservedCpu`      | CPU reserved for kubelet and container runtime.                                                | `string`            | `100m`      |
+| `nodeGroups[name].kubelet.systemReservedCpu`    | CPU reserved for host OS. Auto-computed from instanceType if empty.                            | `string`            | `""`        |
+| `nodeGroups[name].kubelet.kubeReservedCpu`      | CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.      | `string`            | `""`        |
 | `nodeGroups[name].kubelet.evictionHardMemory`   | Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).                | `string`            | `7%`        |
 | `nodeGroups[name].kubelet.evictionSoftMemory`   | Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).                 | `string`            | `10%`       |
 | `version`                                       | Kubernetes major.minor version to deploy                                                       | `string`            | `v1.35`     |
