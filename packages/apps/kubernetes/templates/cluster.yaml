@@ -286,16 +286,16 @@ metadata:
 {{-   $hardPct := $hardPctStr | float64 }}
 {{-   $softPct := $softPctStr | float64 }}
 {{-   if le $hardPct 0.0 }}
-{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be between 1 and 100, got %s%%" $groupName $hardPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $hardPctStr) }}
 {{-   end }}
 {{-   if gt $hardPct 100.0 }}
-{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be between 1 and 100, got %s%%" $groupName $hardPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $hardPctStr) }}
 {{-   end }}
 {{-   if le $softPct 0.0 }}
-{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be between 1 and 100, got %s%%" $groupName $softPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $softPctStr) }}
 {{-   end }}
 {{-   if gt $softPct 100.0 }}
-{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be between 1 and 100, got %s%%" $groupName $softPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $softPctStr) }}
 {{-   end }}
 {{-   if ge $hardPct $softPct }}
 {{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
