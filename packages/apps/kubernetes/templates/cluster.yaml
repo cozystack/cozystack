@@ -251,15 +251,9 @@ metadata:
 {{- end }}
 {{- range $_, $entry := list (dict "key" "systemReservedCpu" "value" $kubeletOverride.systemReservedCpu) (dict "key" "kubeReservedCpu" "value" $kubeletOverride.kubeReservedCpu) }}
 {{-   if $entry.value }}
-{{-     $cpuStr := $entry.value | toString }}
-{{-     $cpuVal := 0.0 }}
-{{-     if hasSuffix "m" $cpuStr }}
-{{-       $cpuVal = trimSuffix "m" $cpuStr | float64 }}
-{{-     else }}
-{{-       $cpuVal = $cpuStr | float64 }}
-{{-     end }}
-{{-     if le $cpuVal 0.0 }}
-{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key $cpuStr) }}
+{{-     $cpuMillis := include "kubernetes.cpuToMillicores" $entry.value | float64 }}
+{{-     if le $cpuMillis 0.0 }}
+{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key ($entry.value | toString)) }}
 {{-     end }}
 {{-   end }}
 {{- end }}
@@ -332,20 +326,8 @@ metadata:
 {{- end }}
 {{/* Validate that total reserved CPU does not exceed effective node CPU */}}
 {{- if $effectiveCpu }}
-{{-   $sysCpuStr := $systemReservedCpu | toString }}
-{{-   $kubeCpuStr := $kubeReservedCpu | toString }}
-{{-   $sysCpuMillis := 0.0 }}
-{{-   $kubeCpuMillis := 0.0 }}
-{{-   if hasSuffix "m" $sysCpuStr }}
-{{-     $sysCpuMillis = trimSuffix "m" $sysCpuStr | float64 }}
-{{-   else }}
-{{-     $sysCpuMillis = mulf ($sysCpuStr | float64) 1000.0 }}
-{{-   end }}
-{{-   if hasSuffix "m" $kubeCpuStr }}
-{{-     $kubeCpuMillis = trimSuffix "m" $kubeCpuStr | float64 }}
-{{-   else }}
-{{-     $kubeCpuMillis = mulf ($kubeCpuStr | float64) 1000.0 }}
-{{-   end }}
+{{-   $sysCpuMillis := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
+{{-   $kubeCpuMillis := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
 {{-   $totalCpuMillis := addf $sysCpuMillis $kubeCpuMillis }}
 {{-   $effectiveCpuFloatV := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
 {{-   $effectiveCpuMillis := mulf $effectiveCpuFloatV 1000.0 }}
@@ -491,20 +473,8 @@ metadata:
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
     {{- end }}
     {{- if $effectiveCpu }}
-    {{-   $sysCpuStr := $systemReservedCpu | toString }}
-    {{-   $kubeCpuStr := $kubeReservedCpu | toString }}
-    {{-   $sysCpuMillisA := 0.0 }}
-    {{-   $kubeCpuMillisA := 0.0 }}
-    {{-   if hasSuffix "m" $sysCpuStr }}
-    {{-     $sysCpuMillisA = trimSuffix "m" $sysCpuStr | float64 }}
-    {{-   else }}
-    {{-     $sysCpuMillisA = mulf ($sysCpuStr | float64) 1000.0 }}
-    {{-   end }}
-    {{-   if hasSuffix "m" $kubeCpuStr }}
-    {{-     $kubeCpuMillisA = trimSuffix "m" $kubeCpuStr | float64 }}
-    {{-   else }}
-    {{-     $kubeCpuMillisA = mulf ($kubeCpuStr | float64) 1000.0 }}
-    {{-   end }}
+    {{-   $sysCpuMillisA := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
+    {{-   $kubeCpuMillisA := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
     {{-   $effectiveCpuFloatA := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
     {{-   $effectiveCpuMillisA := mulf $effectiveCpuFloatA 1000.0 }}
     {{-   $allocatableCpuMillis := subf $effectiveCpuMillisA (addf $sysCpuMillisA $kubeCpuMillisA) }}
