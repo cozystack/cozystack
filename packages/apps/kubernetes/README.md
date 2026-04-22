@@ -298,7 +298,7 @@ The `evictionSoftGracePeriod` and `evictionMinimumReclaim` parameters are curren
 
 #### Capacity Annotation
 
-When kubelet resource reservations are configured, both the `capacity.cluster-autoscaler.kubernetes.io/memory` and `capacity.cluster-autoscaler.kubernetes.io/cpu` annotations on worker nodes report **allocatable** values instead of total node resources. Memory allocatable subtracts system-reserved, kube-reserved, and eviction-hard. CPU allocatable subtracts system-reserved and kube-reserved. This aligns the annotations with the values the cluster autoscaler uses in its scaling calculations.
+When kubelet resource reservations are configured, both the `capacity.cluster-autoscaler.kubernetes.io/memory` and `capacity.cluster-autoscaler.kubernetes.io/cpu` annotations on MachineDeployments report **allocatable** values instead of total node resources. Memory allocatable subtracts system-reserved, kube-reserved, and eviction-hard. CPU allocatable subtracts system-reserved and kube-reserved. This aligns the annotations with the values the cluster autoscaler uses in its scaling calculations.
 
 Upgrading from a version without this feature may cause the autoscaler to see reduced per-node capacity after the annotations are updated, which can trigger additional scale-up operations. No action is typically required — the new values reflect the actual memory available for workload scheduling.
 
