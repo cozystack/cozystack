@@ -1,0 +1,42 @@
+name: Codegen Drift Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'api/**'
+      - 'pkg/apis/**'
+      - 'hack/update-codegen.sh'
+      - 'hack/boilerplate.go.txt'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/codegen-drift.yml'
+
+concurrency:
+  group: codegen-drift-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codegen-drift:
+    name: Verify generated code is up to date
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run make generate
+        run: make generate
+
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::'make generate' produced changes. Run 'make generate' locally and commit the result."
+            git status --short
+            exit 1
+          fi
