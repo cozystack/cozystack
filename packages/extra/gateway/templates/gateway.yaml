@@ -15,8 +15,8 @@ metadata:
 spec:
   secretName: {{ trimPrefix "tenant-" .Release.Namespace }}-gateway-tls
   issuerRef:
-    name: {{ $issuerName }}
-    kind: ClusterIssuer
+    name: gateway
+    kind: Issuer
   dnsNames:
   - {{ $host | quote }}
   - {{ printf "*.%s" $host | quote }}

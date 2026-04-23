@@ -1,4 +1,3 @@
-{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $apexHost := (index .Values._cluster "root-host") | default "" }}
 {{- $publishingNamespace := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $attachedNamespaces := (index .Values._cluster "gateway-attached-namespaces") | default "" }}
@@ -8,7 +7,12 @@
     {{- fail (printf "publishing.gateway.attachedNamespaces must not contain tenant-* namespaces (got %q). Adding a tenant namespace here lets that tenant attach HTTPRoutes to the publishing tenant's Gateway and hijack hostnames. Child tenants that need their own Gateway must opt in via tenant.spec.gateway=true instead." $ns) }}
   {{- end }}
 {{- end }}
-{{- if and (eq $gatewayEnabled "true") $apexHost }}
+{{/* The ValidatingAdmissionPolicy installs unconditionally — it must guard
+Gateway creation even when gateway.enabled=false at the platform level,
+because a tenant could still create a Gateway manually once the CRDs exist.
+ConfigMap params pull apexHost/publishingNamespace from the cozystack-values
+Secret so the VAP always has a concrete suffix to validate against. */}}
+{{- if $apexHost }}
 ---
 apiVersion: v1
 kind: ConfigMap
