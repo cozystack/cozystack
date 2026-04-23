@@ -89,6 +89,7 @@ func main() {
 	var platformSourceURL string
 	var platformSourceName string
 	var platformSourceRef string
+	var platformSourceSecret string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -110,6 +111,7 @@ func main() {
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
+	flag.StringVar(&platformSourceSecret, "platform-source-secret", "", "Name of the Secret in cozy-system namespace containing registry credentials (kubernetes.io/dockerconfigjson type). If specified, sets spec.secretRef in the generated OCIRepository or GitRepository resource.")
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
@@ -211,12 +213,12 @@ func main() {
 
 	// Generate and install platform source resource if specified
 	if platformSourceURL != "" {
-		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef)
+		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef, "secret", platformSourceSecret)
 		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
-		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef); err != nil {
+		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef, platformSourceSecret); err != nil {
 			setupLog.Error(err, "failed to install platform source resource")
 			os.Exit(1)
 		} else {
@@ -325,7 +327,7 @@ func main() {
 
 // installPlatformSourceResource generates and installs a Flux source resource (OCIRepository or GitRepository)
 // based on the platform source URL
-func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec string) error {
+func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec, secretName string) error {
 	logger := log.FromContext(ctx)
 
 	// Parse the source URL to determine type
@@ -343,12 +345,12 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	var obj client.Object
 	switch sourceType {
 	case "oci":
-		obj, err = generateOCIRepository(resourceName, repoURL, refMap)
+		obj, err = generateOCIRepository(resourceName, repoURL, refMap, secretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate OCIRepository: %w", err)
 		}
 	case "git":
-		obj, err = generateGitRepository(resourceName, repoURL, refMap)
+		obj, err = generateGitRepository(resourceName, repoURL, refMap, secretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate GitRepository: %w", err)
 		}
@@ -508,7 +510,7 @@ func validateGitRef(refMap map[string]string) error {
 }
 
 // generateOCIRepository creates an OCIRepository resource
-func generateOCIRepository(name, repoURL string, refMap map[string]string) (*sourcev1.OCIRepository, error) {
+func generateOCIRepository(name, repoURL string, refMap map[string]string, secretName string) (*sourcev1.OCIRepository, error) {
 	if err := validateOCIRef(refMap); err != nil {
 		return nil, err
 	}
@@ -538,11 +540,18 @@ func generateOCIRepository(name, repoURL string, refMap map[string]string) (*sou
 		}
 	}
 
+	// Set secretRef if secret name is provided
+	if secretName != "" {
+		obj.Spec.SecretRef = &metav1.LocalObjectReference{
+			Name: secretName,
+		}
+	}
+
 	return obj, nil
 }
 
 // generateGitRepository creates a GitRepository resource
-func generateGitRepository(name, repoURL string, refMap map[string]string) (*sourcev1.GitRepository, error) {
+func generateGitRepository(name, repoURL string, refMap map[string]string, secretName string) (*sourcev1.GitRepository, error) {
 	if err := validateGitRef(refMap); err != nil {
 		return nil, err
 	}
@@ -570,6 +579,13 @@ func generateGitRepository(name, repoURL string, refMap map[string]string) (*sou
 			SemVer: refMap["semver"],
 			Name:   refMap["name"],
 			Commit: refMap["commit"],
+		}
+	}
+
+	// Set secretRef if secret name is provided
+	if secretName != "" {
+		obj.Spec.SecretRef = &metav1.LocalObjectReference{
+			Name: secretName,
 		}
 	}
 
