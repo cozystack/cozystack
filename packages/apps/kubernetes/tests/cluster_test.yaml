@@ -20,6 +20,19 @@ tests:
   # dataVolumeTemplates — default disk size     #
   ###############################################
 
+  - it: falls back to 20Gi when diskSize is not set
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: "20Gi"
+        documentIndex: 5
+
   - it: renders dataVolumeTemplate with default 20Gi storage
     release:
       name: test-k8s
