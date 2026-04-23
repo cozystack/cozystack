@@ -232,6 +232,100 @@ tests:
         documentIndex: 10
 
   ###############################################
+  # KubeadmConfigTemplate — persistent storage  #
+  ###############################################
+
+  # KubeadmConfigTemplate is document index 4 when rendering with one
+  # nodeGroup (md0).
+
+  - it: configures persistent filesystem as xfs with label persistent
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].label
+          value: persistent
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].overwrite
+          value: false
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].filesystem
+          value: xfs
+        documentIndex: 4
+
+  - it: configures persistent filesystem device and partition
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].device
+          value: /dev/vdb
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].partition
+          value: "none"
+        documentIndex: 4
+
+  - it: mounts persistent volume and bind-mounts kubelet and containerd
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.mounts[0]
+          value:
+            - LABEL=persistent
+            - /persistent
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.mounts[1]
+          value:
+            - /persistent/kubelet
+            - /var/lib/kubelet
+            - none
+            - bind,nofail
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.mounts[2]
+          value:
+            - /persistent/containerd
+            - /var/lib/containerd
+            - none
+            - bind,nofail
+        documentIndex: 4
+
+  - it: includes mountpoint guards in preKubeadmCommands
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: "mountpoint -q /var/lib/kubelet || mount -o bind /persistent/kubelet /var/lib/kubelet"
+        documentIndex: 4
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: "mountpoint -q /var/lib/containerd || mount -o bind /persistent/containerd /var/lib/containerd"
+        documentIndex: 4
+
+  - it: creates persistent directories in preKubeadmCommands
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: "mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd"
+        documentIndex: 4
+
+  ###############################################
   # disk-kubelet matchVolume blockSize          #
   ###############################################
 
