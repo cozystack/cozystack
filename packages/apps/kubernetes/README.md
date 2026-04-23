@@ -105,7 +105,7 @@ See the reference for components utilized in this service:
 | `nodeGroups[name].maxReplicas`      | Maximum number of replicas.                                                                    | `int`               | `10`        |
 | `nodeGroups[name].instanceType`     | Virtual machine instance type.                                                                 | `string`            | `u1.medium` |
 | `nodeGroups[name].diskSize`         | Persistent disk size for kubelet and containerd data.                                          | `quantity`          | `20Gi`      |
-| `nodeGroups[name].storageClass`     | StorageClass for worker node persistent disks. Uses cluster default when empty.                | `string`            | `""`        |
+| `nodeGroups[name].storageClass`     | StorageClass for worker node persistent disks. Uses cluster default when empty.                | `string`            | `{}`        |
 | `nodeGroups[name].roles`            | List of node roles.                                                                            | `[]string`          | `[]`        |
 | `nodeGroups[name].resources`        | CPU and memory resources for each worker node.                                                 | `object`            | `{}`        |
 | `nodeGroups[name].resources.cpu`    | CPU available.                                                                                 | `quantity`          | `""`        |
