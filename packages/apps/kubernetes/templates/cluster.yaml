@@ -243,6 +243,7 @@ spec:
           filesystem: xfs
           label: persistent
           partition: "none"
+          overwrite: false
       mounts:
       - ["LABEL=persistent", "/persistent"]
       - ["/persistent/kubelet", "/var/lib/kubelet", "none", "bind,nofail"]
