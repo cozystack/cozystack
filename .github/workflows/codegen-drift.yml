@@ -30,6 +30,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Pre-fetch k8s.io/code-generator module
+        # hack/update-codegen.sh sources kube_codegen.sh from the Go module cache.
+        # The module is not declared in go.mod, so fetch it explicitly at the
+        # version pinned in the script.
+        run: |
+          version=$(grep -oP 'code-generator@\Kv[0-9.]+' hack/update-codegen.sh)
+          tmpdir=$(mktemp -d)
+          cd "$tmpdir"
+          go mod init codegen-fetch
+          go get "k8s.io/code-generator@${version}"
+
       - name: Run make generate
         run: make generate
 
