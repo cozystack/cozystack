@@ -76,6 +76,62 @@ EOF
   echo "$output" | grep -q "must equal test.example.org"
 }
 
+@test "cozystack-gateway-attached-namespaces-policy rejects Packages with tenant-* entries" {
+  # The platform Package default name is cozystack.cozystack-platform, managed by
+  # cozystack-api. Creating a dummy Package with tenant-alice in gateway.attachedNamespaces
+  # must fail at admission time.
+  run kubectl apply -f - <<'EOF'
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: vap-reject-probe
+spec:
+  variant: isp-full
+  components:
+    platform:
+      values:
+        gateway:
+          attachedNamespaces:
+          - tenant-alice
+EOF
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  echo "$output" | grep -q "must not contain any tenant-\*"
+}
+
+@test "cozystack-tenant-host-policy blocks non-trusted callers from setting tenant.spec.host" {
+  # Impersonate a tenant-scoped ServiceAccount that is NOT in the trustedCaller
+  # group list. Attempt to create a Tenant with spec.host set → rejected.
+  run kubectl --as=system:serviceaccount:tenant-test:default \
+              --as-group=system:serviceaccounts \
+              --as-group=system:serviceaccounts:tenant-test \
+    apply -f - <<'EOF'
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: vap-host-probe
+  namespace: tenant-test
+spec:
+  host: foreign.example.org
+EOF
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  echo "$output" | grep -q "spec.host can only be set"
+}
+
+@test "cozystack-namespace-host-label-policy blocks non-trusted callers from changing the host label" {
+  # tenant-test namespace already has namespace.cozystack.io/host set by the
+  # cozystack tenant chart. An unprivileged SA must not be able to overwrite it.
+  run kubectl --as=system:serviceaccount:tenant-test:default \
+              --as-group=system:serviceaccounts \
+              --as-group=system:serviceaccounts:tenant-test \
+    label namespace tenant-test \
+      namespace.cozystack.io/host=foreign.example.org --overwrite
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  echo "$output" | grep -q "immutable"
+}
+
 @test "HTTPRoute with a matching parentRef reaches Accepted status" {
   # Put a Gateway and a route in the same namespace so allowedRoutes: Same accepts them.
   kubectl apply -f - <<'EOF'
