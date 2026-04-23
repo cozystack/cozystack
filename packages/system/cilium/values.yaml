@@ -15,8 +15,8 @@ cilium:
     mode: "kubernetes"
   image:
     repository: ghcr.io/cozystack/cozystack/cilium
-    tag: 1.19.1
-    digest: "sha256:ab3acf270821df4614a8456348a4e0d3098aed72a4b2016a0edfa30d91428c3d"
+    tag: latest
+    digest: "sha256:8f5ab52982fc848ee098ff89919e3528aa8f3a553b82106a25149dcd0b87ea7e"
   envoy:
     enabled: false
   rollOutCiliumPods: true
