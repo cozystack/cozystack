@@ -66,13 +66,17 @@ spec:
       apiVersions: ["v1alpha1"]
       operations: ["CREATE", "UPDATE"]
       resources: ["packages"]
+  matchConditions:
+  - name: has-gateway-attached-namespaces
+    expression: >-
+      has(object.spec) &&
+      has(object.spec.components) &&
+      "platform" in object.spec.components &&
+      has(object.spec.components.platform.values) &&
+      "gateway" in object.spec.components.platform.values &&
+      "attachedNamespaces" in object.spec.components.platform.values.gateway
   validations:
   - expression: >-
-      !has(object.spec.components) ||
-      !has(object.spec.components.platform) ||
-      !has(object.spec.components.platform.values) ||
-      !has(object.spec.components.platform.values.gateway) ||
-      !has(object.spec.components.platform.values.gateway.attachedNamespaces) ||
       object.spec.components.platform.values.gateway.attachedNamespaces.all(ns, !ns.startsWith("tenant-"))
     messageExpression: >-
       "spec.components.platform.values.gateway.attachedNamespaces must not contain any tenant-* namespace; use tenant.spec.gateway=true instead of adding a tenant namespace to the publishing Gateway's whitelist"
@@ -102,12 +106,14 @@ spec:
       apiVersions: ["v1alpha1"]
       operations: ["CREATE", "UPDATE"]
       resources: ["tenants"]
+  matchConditions:
+  - name: has-host-field
+    expression: >-
+      has(object.spec) && "host" in object.spec && object.spec.host != ""
   variables:
   - name: hostChanged
     expression: >-
-      !has(object.spec) || !has(object.spec.host) || object.spec.host == "" ||
-      (has(oldObject) && has(oldObject.spec) && has(oldObject.spec.host) && oldObject.spec.host == object.spec.host) ?
-      false : true
+      (has(oldObject) && has(oldObject.spec) && "host" in oldObject.spec && oldObject.spec.host == object.spec.host) ? false : true
   - name: trustedCaller
     expression: >-
       (has(request.userInfo.groups) && request.userInfo.groups.exists(g, g == "system:masters")) ||
@@ -144,15 +150,16 @@ spec:
       apiVersions: ["v1"]
       operations: ["UPDATE"]
       resources: ["namespaces"]
+  matchConditions:
+  - name: had-host-label
+    expression: >-
+      has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels
   variables:
   - name: oldHost
-    expression: >-
-      has(oldObject.metadata.labels) && has(oldObject.metadata.labels["namespace.cozystack.io/host"])
-        ? oldObject.metadata.labels["namespace.cozystack.io/host"]
-        : ""
+    expression: 'oldObject.metadata.labels["namespace.cozystack.io/host"]'
   - name: newHost
     expression: >-
-      has(object.metadata.labels) && has(object.metadata.labels["namespace.cozystack.io/host"])
+      has(object.metadata.labels) && "namespace.cozystack.io/host" in object.metadata.labels
         ? object.metadata.labels["namespace.cozystack.io/host"]
         : ""
   - name: trustedCaller
@@ -162,10 +169,7 @@ spec:
       request.userInfo.username.startsWith("system:serviceaccount:flux-system:") ||
       request.userInfo.username.startsWith("system:serviceaccount:kube-system:")
   validations:
-  - expression: >-
-      variables.oldHost == "" ||
-      variables.newHost == variables.oldHost ||
-      variables.trustedCaller
+  - expression: "variables.newHost == variables.oldHost || variables.trustedCaller"
     messageExpression: >-
       "namespace label namespace.cozystack.io/host is immutable once set (was " + variables.oldHost + ", requested " + variables.newHost + "); only cluster-admins and cozystack/Flux service accounts may change it. Request user: " + request.userInfo.username
     reason: Forbidden
