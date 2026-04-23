@@ -112,15 +112,9 @@ type DatabaseRoles struct {
 }
 
 type PostgreSQL struct {
-	// PostgreSQL server parameters.
-	// +kubebuilder:default:={}
-	Parameters PostgreSQLParameters `json:"parameters,omitempty"`
-}
-
-type PostgreSQLParameters struct {
-	// Maximum number of concurrent connections to the database server.
-	// +kubebuilder:default:=100
-	MaxConnections int `json:"max_connections,omitempty"`
+	// PostgreSQL server parameters. All values must be strings (enclose numbers in quotes). See PostgreSQL documentation for available parameters. WARNING: Some parameters are managed by CloudNativePG and should NOT be overridden (archive_mode, archive_command, restore_command, primary_conninfo, etc.). Incorrect values may break backup/replication or require pod restart.
+	// +kubebuilder:default:={"max_connections":"100"}
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 type Quorum struct {

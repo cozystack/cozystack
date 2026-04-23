@@ -60,9 +60,15 @@ spec:
   {{- end }}
   postgresql:
     parameters:
-      max_wal_senders: "30"
-      {{- with .Values.postgresql.parameters.max_connections }}
-      max_connections: "{{ . }}"
+      {{- $defaults := dict "max_wal_senders" "30" }}
+      {{- $params := merge .Values.postgresql.parameters $defaults }}
+      {{- /* Security: Block parameters that could allow shell command execution */ -}}
+      {{- $dangerousParams := list "archive_command" "restore_command" "ssl_passphrase_command" "log_destination" "event_source" }}
+      {{- range $key, $value := $params }}
+      {{- if has $key $dangerousParams }}
+      {{- fail (printf "SECURITY: Parameter '%s' is blocked for security reasons. This parameter could allow arbitrary shell command execution and is managed by CloudNativePG operator." $key) }}
+      {{- end }}
+      {{ $key }}: "{{ $value }}"
       {{- end }}
 
   minSyncReplicas: {{ .Values.quorum.minSyncReplicas }}
