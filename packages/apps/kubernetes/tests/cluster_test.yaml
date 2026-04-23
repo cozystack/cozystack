@@ -176,6 +176,62 @@ tests:
         documentIndex: 5
 
   ###############################################
+  # multiple node groups — independent storage  #
+  ###############################################
+
+  # With two nodeGroups (md0, md1) the range loop emits per-group documents
+  # alphabetically.  Documents before the loop: Cluster(0),
+  # KamajiControlPlane(1), WorkloadMonitor-cp(2), KubevirtCluster(3).
+  # Each group adds: KubeadmConfigTemplate, KubevirtMachineTemplate,
+  # MachineDeployment, MachineHealthCheck, WorkloadMonitor.
+  # md0 KubevirtMachineTemplate → index 5, md1 → index 10.
+
+  - it: renders independent dataVolumeTemplates per node group
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.minReplicas: 0
+      nodeGroups.md0.maxReplicas: 10
+      nodeGroups.md0.instanceType: ""
+      nodeGroups.md0.roles[0]: worker
+      nodeGroups.md0.resources.cpu: 2
+      nodeGroups.md0.resources.memory: 4Gi
+      nodeGroups.md0.diskSize: 20Gi
+      nodeGroups.md1.minReplicas: 0
+      nodeGroups.md1.maxReplicas: 5
+      nodeGroups.md1.instanceType: ""
+      nodeGroups.md1.roles[0]: worker
+      nodeGroups.md1.resources.cpu: 4
+      nodeGroups.md1.resources.memory: 8Gi
+      nodeGroups.md1.diskSize: 50Gi
+      nodeGroups.md1.storageClass: my-storage-class
+    asserts:
+      # --- md0: KubevirtMachineTemplate at document index 5 ---
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 20Gi
+        documentIndex: 5
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+        documentIndex: 5
+      # --- md1: KubevirtMachineTemplate at document index 10 ---
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 10
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 50Gi
+        documentIndex: 10
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+          value: my-storage-class
+        documentIndex: 10
+
+  ###############################################
   # disk-kubelet matchVolume blockSize          #
   ###############################################
 
