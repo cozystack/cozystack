@@ -102,7 +102,10 @@ seaweedfs:
       className: "tenant-root"
       host: "seaweedfs.demo.cozystack.io"
       annotations:
-        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        # Limit single PUT request to 5GB to enforce multipart uploads for large files.
+        # This prevents issues with large file uploads and reduces support load.
+        # For files >5GB, clients must use S3 multipart upload API.
+        nginx.ingress.kubernetes.io/proxy-body-size: "5g"
         nginx.ingress.kubernetes.io/proxy-buffering: "off"
         nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
         nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
