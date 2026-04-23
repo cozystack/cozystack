@@ -249,3 +249,17 @@ tests:
           path: spec.values.ingress-nginx.controller.service.externalIPs
           value:
             - 192.0.2.10
+
+  - it: loadBalancer mode accepts pre-CIDR input without double-suffixing
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10/32,2001:db8::1/128"
+        expose-mode: loadBalancer
+    asserts:
+      - template: templates/cilium-lb-pool.yaml
+        equal:
+          path: spec.blocks
+          value:
+            - cidr: 192.0.2.10/32
+            - cidr: 2001:db8::1/128

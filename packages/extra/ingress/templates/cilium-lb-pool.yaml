@@ -16,7 +16,7 @@ metadata:
 spec:
   blocks:
   {{- range $exposeIPsList }}
-  - cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+  - cidr: {{ . }}{{ if not (contains "/" .) }}/{{ if contains ":" . }}128{{ else }}32{{ end }}{{ end }}
   {{- end }}
   serviceSelector:
     matchLabels:
