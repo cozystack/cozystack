@@ -1,0 +1,11 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "gatewayClassName": {
+      "description": "GatewayClass to attach the tenant Gateway to. Must exist cluster-wide. Default matches the Cilium-managed class.",
+      "type": "string",
+      "default": "cilium"
+    }
+  }
+}

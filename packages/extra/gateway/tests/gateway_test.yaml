@@ -1,0 +1,143 @@
+suite: tenant gateway
+templates:
+  - templates/gateway.yaml
+  - templates/cilium-lb-pool.yaml
+
+release:
+  name: gateway
+  namespace: tenant-root
+
+tests:
+  - it: renders Certificate, Gateway, redirect HTTPRoute and CiliumLoadBalancerIPPool when IPs and host are set
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10,192.0.2.11"
+        host: example.org
+        issuer-name: letsencrypt-prod
+    asserts:
+      - template: templates/gateway.yaml
+        hasDocuments:
+          count: 3
+      - template: templates/gateway.yaml
+        documentIndex: 0
+        equal:
+          path: kind
+          value: Certificate
+      - template: templates/gateway.yaml
+        documentIndex: 0
+        equal:
+          path: spec.dnsNames
+          value:
+            - example.org
+            - "*.example.org"
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: kind
+          value: Gateway
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.gatewayClassName
+          value: cilium
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[0].name
+          value: http
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[1].hostname
+          value: "*.example.org"
+      - template: templates/gateway.yaml
+        documentIndex: 2
+        equal:
+          path: kind
+          value: HTTPRoute
+      - template: templates/gateway.yaml
+        documentIndex: 2
+        equal:
+          path: spec.rules[0].filters[0].requestRedirect.scheme
+          value: https
+      - template: templates/cilium-lb-pool.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/cilium-lb-pool.yaml
+        equal:
+          path: apiVersion
+          value: cilium.io/v2
+      - template: templates/cilium-lb-pool.yaml
+        equal:
+          path: spec.blocks
+          value:
+            - cidr: 192.0.2.10/32
+            - cidr: 192.0.2.11/32
+      - template: templates/cilium-lb-pool.yaml
+        equal:
+          path: spec.serviceSelector.matchLabels["gateway.networking.k8s.io/gateway-name"]
+          value: cozystack
+
+  - it: IPv6 external IPs use /128 CIDRs
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "2001:db8::1,192.0.2.10"
+        host: example.org
+    asserts:
+      - template: templates/cilium-lb-pool.yaml
+        equal:
+          path: spec.blocks
+          value:
+            - cidr: 2001:db8::1/128
+            - cidr: 192.0.2.10/32
+
+  - it: empty entries in expose-external-ips are filtered out
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10,,"
+        host: example.org
+    asserts:
+      - template: templates/cilium-lb-pool.yaml
+        equal:
+          path: spec.blocks
+          value:
+            - cidr: 192.0.2.10/32
+
+  - it: no LoadBalancer pool is rendered when externalIPs is empty but Gateway still renders
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: ""
+        host: example.org
+    asserts:
+      - template: templates/gateway.yaml
+        hasDocuments:
+          count: 3
+      - template: templates/cilium-lb-pool.yaml
+        hasDocuments:
+          count: 0
+
+  - it: release in a non-publishing namespace fails with an explicit error
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: example.org
+    release:
+      namespace: tenant-other
+    asserts:
+      - template: templates/gateway.yaml
+        failedTemplate:
+          errorMessage: 'packages/extra/gateway is only meaningful in the publishing namespace "tenant-root"; current release namespace is "tenant-other". Set tenant.spec.gateway=true on that tenant only.'
+
+  - it: empty host fails with explicit error
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: ""
+    asserts:
+      - template: templates/gateway.yaml
+        failedTemplate:
+          errorMessage: "publishing.host must be set in the platform chart for packages/extra/gateway to render a wildcard TLS listener."
