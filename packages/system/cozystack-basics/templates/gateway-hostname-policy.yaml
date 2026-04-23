@@ -1,0 +1,74 @@
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- $apexHost := (index .Values._cluster "root-host") | default "" }}
+{{- $publishingNamespace := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- if and (eq $gatewayEnabled "true") $apexHost }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-gateway-hostname-policy
+  namespace: cozy-system
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+data:
+  apexHost: {{ $apexHost | quote }}
+  publishingNamespace: {{ $publishingNamespace | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gateway-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gateway.networking.k8s.io"]
+      apiVersions: ["v1", "v1beta1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["gateways"]
+  paramKind:
+    apiVersion: v1
+    kind: ConfigMap
+  variables:
+  - name: apexHost
+    expression: "params.data.apexHost"
+  - name: publishingNamespace
+    expression: "params.data.publishingNamespace"
+  - name: tenantSuffix
+    expression: >-
+      object.metadata.namespace == variables.publishingNamespace
+        ? variables.apexHost
+        : (object.metadata.namespace.startsWith("tenant-")
+            ? object.metadata.namespace.substring(7) + "." + variables.apexHost
+            : "")
+  validations:
+  - expression: >-
+      variables.tenantSuffix != "" &&
+      (!has(object.spec.listeners) ||
+       object.spec.listeners.all(l,
+         !has(l.hostname) ||
+         l.hostname == variables.tenantSuffix ||
+         l.hostname.endsWith("." + variables.tenantSuffix)
+       ))
+    messageExpression: >-
+      "Gateway listener hostname must equal " + variables.tenantSuffix +
+      " or end with ." + variables.tenantSuffix +
+      " (namespace " + object.metadata.namespace + " may only publish its own tenant's domain)"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gateway-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gateway-hostname-policy
+  paramRef:
+    name: cozystack-gateway-hostname-policy
+    namespace: cozy-system
+    parameterNotFoundAction: Deny
+  validationActions: [Deny]
+{{- end }}
