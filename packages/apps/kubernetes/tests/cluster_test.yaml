@@ -3,6 +3,9 @@ suite: cluster.yaml template tests
 templates:
   - templates/cluster.yaml
 
+values:
+  - values/common.yaml
+
 # The KubevirtMachineTemplate is document index 5 when rendering with one
 # nodeGroup (md0).  Documents before it: Cluster(0), KamajiControlPlane(1),
 # WorkloadMonitor-cp(2), KubevirtCluster(3), KubeadmConfigTemplate-md0(4).
@@ -22,39 +25,7 @@ tests:
       name: test-k8s
       namespace: tenant-test
     set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          diskSize: 20Gi
-          gpus: []
+      nodeGroups.md0.diskSize: 20Gi
     asserts:
       - isKind:
           of: KubevirtMachineTemplate
@@ -81,39 +52,7 @@ tests:
       name: test-k8s
       namespace: tenant-test
     set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          diskSize: 50Gi
-          gpus: []
+      nodeGroups.md0.diskSize: 50Gi
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
@@ -129,39 +68,7 @@ tests:
       name: test-k8s
       namespace: tenant-test
     set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          storageClass: ""
-          gpus: []
+      nodeGroups.md0.storageClass: ""
     asserts:
       - notExists:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
@@ -176,39 +83,7 @@ tests:
       name: test-k8s
       namespace: tenant-test
     set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          storageClass: "my-storage"
-          gpus: []
+      nodeGroups.md0.storageClass: "my-storage"
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
@@ -224,39 +99,7 @@ tests:
       name: test-k8s
       namespace: tenant-test
     set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          diskSize: 20Gi
-          gpus: []
+      nodeGroups.md0.diskSize: 20Gi
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
@@ -268,39 +111,7 @@ tests:
       name: test-k8s
       namespace: tenant-test
     set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          diskSize: 100Gi
-          gpus: []
+      nodeGroups.md0.diskSize: 100Gi
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
@@ -315,39 +126,6 @@ tests:
     release:
       name: test-k8s
       namespace: tenant-test
-    set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          gpus: []
     asserts:
       # dataVolumeTemplates name
       - equal:
@@ -378,39 +156,6 @@ tests:
     release:
       name: test-k8s
       namespace: tenant-test
-    set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          gpus: []
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations["cdi.kubevirt.io/storage.usePopulator"]
@@ -425,39 +170,6 @@ tests:
     release:
       name: test-k8s
       namespace: tenant-test
-    set:
-      _cluster: {}
-      _namespace:
-        etcd: cozy-etcd
-        ingress: nginx
-        host: example.com
-      version: "v1.32"
-      controlPlane:
-        replicas: 2
-        apiServer:
-          resources: {}
-          resourcesPreset: "large"
-        controllerManager:
-          resources: {}
-          resourcesPreset: "micro"
-        scheduler:
-          resources: {}
-          resourcesPreset: "micro"
-        konnectivity:
-          server:
-            resources: {}
-            resourcesPreset: "micro"
-      nodeGroups:
-        md0:
-          minReplicas: 0
-          maxReplicas: 10
-          instanceType: ""
-          roles:
-            - worker
-          resources:
-            cpu: 2
-            memory: 4Gi
-          gpus: []
     asserts:
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.devices.disks[1].blockSize.matchVolume.enabled
