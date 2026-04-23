@@ -19,6 +19,8 @@ controlPlane:
     server:
       resources: {}
       resourcesPreset: "micro"
+# diskSize and storageClass are intentionally omitted from md0 to verify template
+# fallback defaults: diskSize defaults to "20Gi", storageClass falls back to cluster default.
 nodeGroups:
   md0:
     minReplicas: 0
