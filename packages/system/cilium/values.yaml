@@ -18,7 +18,9 @@ cilium:
     tag: 1.19.3
     digest: "sha256:700f06f4803a838a8e830be5ace4650e3ad82bdefabfb2f4d110368d307a5efb"
   envoy:
-    enabled: false
+    enabled: true
+  gatewayAPI:
+    enabled: true
   rollOutCiliumPods: true
   operator:
     rollOutPods: true
