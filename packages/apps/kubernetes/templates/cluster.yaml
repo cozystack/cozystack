@@ -212,9 +212,9 @@ metadata:
 {{- end }}
 {{- $autoReservedMillicores := 50 }}
 {{- if $effectiveCpu }}
-{{-   $effectiveCpuFloat := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
-{{-   $effectiveCpuMillis := mulf $effectiveCpuFloat 1000.0 | int }}
-{{-   $fivePercentMillis := mulf ($effectiveCpuMillis | float64) 0.05 | int }}
+{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $effectiveCpuFloat := divf (float64 $effectiveCpuMillicores) 1000.0 }}
+{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
 {{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
 {{- end }}
 {{- $kubeletOverride := $group.kubelet | default dict }}
@@ -301,7 +301,7 @@ metadata:
 {{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{-   end }}
 {{- else }}
-{{-   fail (printf "nodeGroup %s: evictionHardMemory (%s) and evictionSoftMemory (%s) must use the same unit type (both percentage or both absolute) — when overriding one to an absolute value, you must also override the other" $groupName $evictionHardMemory $evictionSoftMemory) }}
+{{-   fail (printf "nodeGroup %s: evictionHardMemory (%s) and evictionSoftMemory (%s) must use the same unit type (both percentage or both absolute)" $groupName $evictionHardMemory $evictionSoftMemory) }}
 {{- end }}
 {{/* Resolve eviction hard threshold to bytes for arithmetic.
      Percentage is relative to effective node memory; absolute values are used as-is. */}}
@@ -329,8 +329,8 @@ metadata:
 {{-   $sysCpuMillis := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
 {{-   $kubeCpuMillis := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
 {{-   $totalCpuMillis := addf $sysCpuMillis $kubeCpuMillis }}
-{{-   $effectiveCpuFloatV := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
-{{-   $effectiveCpuMillis := mulf $effectiveCpuFloatV 1000.0 }}
+{{-   $effectiveCpuMillicoresV := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $effectiveCpuMillis := float64 $effectiveCpuMillicoresV }}
 {{-   if ge $totalCpuMillis $effectiveCpuMillis }}
 {{-     fail (printf "nodeGroup %s: total reserved CPU (systemReservedCpu=%s + kubeReservedCpu=%s) must be less than effective node CPU (%s cores)" $groupName $systemReservedCpu $kubeReservedCpu $effectiveCpu) }}
 {{-   end }}
@@ -339,7 +339,7 @@ metadata:
 {{- if not $effectiveMemory }}
 {{-   $hasOverride := or $kubeletOverride.systemReservedMemory $kubeletOverride.kubeReservedMemory $kubeletOverride.evictionHardMemory $kubeletOverride.evictionSoftMemory }}
 {{-   if $hasOverride }}
-{{-     fail (printf "nodeGroup %s: cannot validate kubelet reservations without effective memory — set resources.memory or a valid instanceType" $groupName) }}
+{{-     fail (printf "nodeGroup %s: eviction thresholds (evictionHardMemory, evictionSoftMemory) require effective memory to validate — set resources.memory or instanceType" $groupName) }}
 {{-   end }}
 {{- end }}
 {{/* Guard: explicit kubelet CPU overrides require effective CPU for validation */}}
@@ -472,8 +472,8 @@ metadata:
     {{- if $effectiveCpu }}
     {{-   $sysCpuMillisA := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
     {{-   $kubeCpuMillisA := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
-    {{-   $effectiveCpuFloatA := include "cozy-lib.resources.toFloat" $effectiveCpu | float64 }}
-    {{-   $effectiveCpuMillisA := mulf $effectiveCpuFloatA 1000.0 }}
+    {{-   $effectiveCpuMillicoresA := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+    {{-   $effectiveCpuMillisA := float64 $effectiveCpuMillicoresA }}
     {{-   $allocatableCpuMillis := subf $effectiveCpuMillisA (addf $sysCpuMillisA $kubeCpuMillisA) }}
     {{-   $allocatableCpuMillisInt := $allocatableCpuMillis | ceil | int }}
     capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $allocatableCpuMillisInt }}m"
