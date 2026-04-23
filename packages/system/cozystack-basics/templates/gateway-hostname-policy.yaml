@@ -114,7 +114,7 @@ spec:
   variables:
   - name: hostChanged
     expression: >-
-      (has(oldObject) && has(oldObject.spec) && "host" in oldObject.spec && oldObject.spec.host == object.spec.host) ? false : true
+      (oldObject != null && has(oldObject.spec) && "host" in oldObject.spec && oldObject.spec.host == object.spec.host) ? false : true
   - name: trustedCaller
     expression: >-
       has(request.userInfo.groups) && request.userInfo.groups.exists(g,
