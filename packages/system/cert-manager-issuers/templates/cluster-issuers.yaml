@@ -1,57 +1,73 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+
+{{- define "cert-manager-issuers.httpSolver" -}}
+{{- $gatewayEnabled := index . "gatewayEnabled" -}}
+{{- $exposeIngress := index . "exposeIngress" -}}
+{{- if eq $gatewayEnabled "true" }}
+http01:
+  gatewayHTTPRoute:
+    parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: cozystack
+      namespace: {{ $exposeIngress }}
+      sectionName: http
+{{- else }}
+http01:
+  ingress:
+    ingressClassName: {{ $exposeIngress }}
+{{- end }}
+{{- end }}
 
 apiVersion: cert-manager.io/v1
-kind: ClusterIssuer  
-metadata:  
-  name: letsencrypt-prod  
-spec:  
-  acme:  
-    privateKeySecretRef:  
-      name: letsencrypt-prod  
-    server: https://acme-v02.api.letsencrypt.org/directory  
-    solvers:  
-    - {{- if eq $solver "dns01" }}  
-        dns01:  
-          cloudflare:  
-            apiTokenSecretRef:  
-              name: cloudflare-api-token-secret  
-              key: api-token  
-      {{- else }}  
-        http01:
-          ingress:
-            ingressClassName: {{ $exposeIngress }}
-      {{- end }}  
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+    - {{- if eq $solver "dns01" }}
+        dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+      {{- else }}
+        {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress) | nindent 8 }}
+      {{- end }}
 
----  
+---
 
-apiVersion: cert-manager.io/v1  
-kind: ClusterIssuer  
-metadata:  
-  name: letsencrypt-stage  
-spec:  
-  acme:  
-    privateKeySecretRef:  
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-stage
+spec:
+  acme:
+    privateKeySecretRef:
       name: letsencrypt-stage
-    server: https://acme-staging-v02.api.letsencrypt.org/directory  
-    solvers:  
-    - {{- if eq $solver "dns01" }}  
-        dns01:  
-          cloudflare:  
-            apiTokenSecretRef:  
-              name: cloudflare-api-token-secret  
-              key: api-token  
-      {{- else }}  
-        http01:
-          ingress:
-            ingressClassName: {{ $exposeIngress }}
-      {{- end }}  
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    solvers:
+    - {{- if eq $solver "dns01" }}
+        dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+      {{- else }}
+        {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress) | nindent 8 }}
+      {{- end }}
 
----  
+---
 
-apiVersion: cert-manager.io/v1  
-kind: ClusterIssuer  
-metadata:  
-  name: selfsigned-cluster-issuer  
-spec:  
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-cluster-issuer
+spec:
   selfSigned: {}
