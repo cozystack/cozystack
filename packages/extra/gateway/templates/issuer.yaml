@@ -1,0 +1,27 @@
+{{- $issuerName := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $acmeServer := "" }}
+{{- if eq $issuerName "letsencrypt-prod" }}
+  {{- $acmeServer = "https://acme-v02.api.letsencrypt.org/directory" }}
+{{- else if eq $issuerName "letsencrypt-stage" }}
+  {{- $acmeServer = "https://acme-staging-v02.api.letsencrypt.org/directory" }}
+{{- else }}
+  {{- fail (printf "packages/extra/gateway currently supports publishing.certificates.issuerName=letsencrypt-prod or letsencrypt-stage (got %q). For other issuers, extend templates/issuer.yaml to map the name to the corresponding ACME server URL." $issuerName) }}
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: gateway
+spec:
+  acme:
+    server: {{ $acmeServer }}
+    privateKeySecretRef:
+      name: gateway-acme-account
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+          - group: gateway.networking.k8s.io
+            kind: Gateway
+            name: cozystack
+            sectionName: http

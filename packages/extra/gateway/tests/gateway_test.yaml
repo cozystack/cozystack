@@ -2,6 +2,7 @@ suite: tenant gateway
 templates:
   - templates/gateway.yaml
   - templates/cilium-lb-pool.yaml
+  - templates/issuer.yaml
 
 release:
   name: gateway
@@ -186,6 +187,78 @@ tests:
             - cozy-cert-manager
             - cozy-dashboard
             - cozy-keycloak
+
+  - it: Certificate references the per-tenant Issuer (not a shared ClusterIssuer) so each tenant gets isolated ACME state
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: example.org
+        issuer-name: letsencrypt-prod
+    asserts:
+      - template: templates/gateway.yaml
+        documentIndex: 0
+        equal:
+          path: kind
+          value: Certificate
+      - template: templates/gateway.yaml
+        documentIndex: 0
+        equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - template: templates/gateway.yaml
+        documentIndex: 0
+        equal:
+          path: spec.issuerRef.name
+          value: gateway
+      - template: templates/issuer.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/issuer.yaml
+        equal:
+          path: kind
+          value: Issuer
+      - template: templates/issuer.yaml
+        equal:
+          path: metadata.name
+          value: gateway
+      - template: templates/issuer.yaml
+        equal:
+          path: spec.acme.server
+          value: https://acme-v02.api.letsencrypt.org/directory
+      - template: templates/issuer.yaml
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].name
+          value: cozystack
+      - template: templates/issuer.yaml
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
+          value: http
+      - template: templates/issuer.yaml
+        notExists:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].namespace
+
+  - it: Issuer picks the staging ACME server when publishing.certificates.issuerName=letsencrypt-stage
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: example.org
+        issuer-name: letsencrypt-stage
+    asserts:
+      - template: templates/issuer.yaml
+        equal:
+          path: spec.acme.server
+          value: https://acme-staging-v02.api.letsencrypt.org/directory
+
+  - it: unknown issuer-name fails chart render with an explicit error
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: example.org
+        issuer-name: my-custom-ca
+    asserts:
+      - template: templates/issuer.yaml
+        failedTemplate:
+          errorMessage: 'packages/extra/gateway currently supports publishing.certificates.issuerName=letsencrypt-prod or letsencrypt-stage (got "my-custom-ca"). For other issuers, extend templates/issuer.yaml to map the name to the corresponding ACME server URL.'
 
   - it: HTTPS and HTTPS-apex listeners share the same allowedRoutes whitelist
     set:
