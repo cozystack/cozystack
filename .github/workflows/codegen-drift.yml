@@ -6,8 +6,15 @@ on:
     paths:
       - 'api/**'
       - 'pkg/apis/**'
+      - 'pkg/generated/**'
+      - 'internal/crdinstall/manifests/**'
+      - 'packages/system/cozystack-controller/definitions/**'
+      - 'packages/system/application-definition-crd/definition/**'
+      - 'packages/system/backup-controller/definitions/**'
+      - 'packages/system/backupstrategy-controller/definitions/**'
       - 'hack/update-codegen.sh'
       - 'hack/boilerplate.go.txt'
+      - 'Makefile'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/codegen-drift.yml'
@@ -46,8 +53,9 @@ jobs:
 
       - name: Fail on drift
         run: |
-          if ! git diff --exit-code; then
+          if [ -n "$(git status --porcelain)" ]; then
             echo "::error::'make generate' produced changes. Run 'make generate' locally and commit the result."
             git status --short
+            git diff --color=always
             exit 1
           fi

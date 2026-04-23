@@ -10,7 +10,7 @@ repos:
           git diff --color=always | cat
         '
       language: system
-      files: ^(api/|pkg/apis/|hack/update-codegen\.sh$|hack/boilerplate\.go\.txt$)
+      files: ^(api/|pkg/apis/|pkg/generated/|internal/crdinstall/manifests/|packages/system/cozystack-controller/definitions/|packages/system/application-definition-crd/definition/|packages/system/backup-controller/definitions/|packages/system/backupstrategy-controller/definitions/|hack/update-codegen\.sh$|hack/boilerplate\.go\.txt$|Makefile$)
       pass_filenames: false
     - id: run-make-generate
       name: Run 'make generate' in all app directories
