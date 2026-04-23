@@ -216,8 +216,7 @@ type NodeGroup struct {
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
 	// StorageClass for worker node persistent disks. Uses cluster default when empty.
-	// +kubebuilder:default:=""
-	StorageClass string `json:"storageClass"`
+	StorageClass string `json:"storageClass,omitempty"`
 }
 
 type Resources struct {
