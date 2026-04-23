@@ -1,8 +1,9 @@
 {{- $host := index .Values._cluster "root-host" }}
 {{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 
-{{- if and (has "vm-exportproxy" $exposeServices) }}
+{{- if and (has "vm-exportproxy" $exposeServices) (ne $gatewayEnabled "true") }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

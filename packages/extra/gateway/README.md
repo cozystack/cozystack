@@ -6,9 +6,10 @@ Per-tenant Gateway API Gateway backed by Cilium. Installed automatically when `t
 
 ### Common parameters
 
-| Name               | Description                                                                                                      | Type     | Value    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------- | -------- | -------- |
-| `gatewayClassName` | GatewayClass to attach the tenant Gateway to. Must exist cluster-wide. Default matches the Cilium-managed class. | `string` | `cilium` |
+| Name                     | Description                                                                                                                                                                                                                                                                          | Type       | Value                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ---------------------------------------- |
+| `gatewayClassName`       | GatewayClass to attach the tenant Gateway to. Must exist cluster-wide. Default matches the Cilium-managed class.                                                                                                                                                                     | `string`   | `cilium`                                 |
+| `tlsPassthroughServices` | Names (from publishing.exposedServices) whose traffic is TLS-passthrough rather than TLS-terminate. For each such service a dedicated HTTPS listener with tls.mode=Passthrough is rendered on the Gateway, and the service is expected to attach a TLSRoute instead of an HTTPRoute. | `[]string` | `[api, vm-exportproxy, cdi-uploadproxy]` |
 
 
 ## Security model
