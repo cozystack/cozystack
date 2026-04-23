@@ -362,3 +362,74 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+
+  ###############################################
+  # KubeadmConfigTemplate — files block         #
+  ###############################################
+
+  # When the containerd patch Secret does not exist (lookup returns nil),
+  # only the update-k8s.sh entry must appear in the files list.
+
+  - it: includes update-k8s.sh in KubeadmConfigTemplate files
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.files[0].path
+          value: /usr/bin/update-k8s.sh
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.files[0].permissions
+          value: "0755"
+        documentIndex: 4
+      - matchRegex:
+          path: spec.template.spec.files[0].content
+          pattern: "KUBELET_VERSION"
+        documentIndex: 4
+      - matchRegex:
+          path: spec.template.spec.files[0].content
+          pattern: "curl -fsSL"
+        documentIndex: 4
+
+  - it: has exactly one file entry when no containerd patch Secret exists
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.files
+          value:
+            - path: /usr/bin/update-k8s.sh
+              owner: root:root
+              permissions: "0755"
+              content: |
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                # Expected to be passed in via preKubeadmCommands
+                : "${KUBELET_VERSION:?KUBELET_VERSION must be set, e.g. v1.31.0}"
+
+                ARCH="$(uname -m)"
+                case "${ARCH}" in
+                  x86_64) ARCH=amd64 ;;
+                  aarch64) ARCH=arm64 ;;
+                esac
+
+                # Use your internal mirror here for real-world use.
+                BASE_URL="https://dl.k8s.io/release/${KUBELET_VERSION}/bin/linux/${ARCH}"
+
+                echo "Installing kubelet and kubeadm  ${KUBELET_VERSION} for ${ARCH}..."
+                curl -fsSL "${BASE_URL}/kubelet" -o /root/kubelet
+                curl -fsSL "${BASE_URL}/kubeadm" -o /root/kubeadm
+                chmod 0755 /root/kubelet
+                chmod 0755 /root/kubeadm
+                if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
+                if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
+        documentIndex: 4
