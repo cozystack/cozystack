@@ -1,0 +1,20 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.gateway-api-crds
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn: []
+    components:
+    - name: gateway-api-crds
+      path: system/gateway-api-crds
+      install:
+        namespace: cozy-gateway-api
+        releaseName: gateway-api-crds
