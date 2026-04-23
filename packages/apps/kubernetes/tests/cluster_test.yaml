@@ -338,3 +338,17 @@ tests:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.devices.disks[1].blockSize.matchVolume.enabled
           value: true
         documentIndex: 5
+
+  ###############################################
+  # ephemeralStorage migration guard            #
+  ###############################################
+
+  - it: fails when ephemeralStorage is set instead of diskSize
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.ephemeralStorage: 50Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'

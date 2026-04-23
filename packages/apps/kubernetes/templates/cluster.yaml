@@ -27,6 +27,9 @@ spec:
             {{/* Populator creates intermediate PVC + PV rebind that causes ClaimMisbound with LINSTOR CSI */}}
             cdi.kubevirt.io/storage.usePopulator: "false"
         spec:
+          {{- if .group.ephemeralStorage }}
+          {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions." .groupName) }}
+          {{- end }}
           source:
             blank: {}
           storage:
