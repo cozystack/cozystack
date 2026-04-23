@@ -12,6 +12,7 @@ spec:
     kind: Gateway
     name: cozystack
     namespace: {{ $gateway }}
+    sectionName: https
   hostnames:
   - {{ $harborHost | quote }}
   rules:
