@@ -83,6 +83,15 @@ publishing:
   certificates:
     solver: http01 # "http01" or "dns01"
     issuerName: letsencrypt-prod
+    # Rate-limit note: every tenant with gateway=true issues one
+    # Certificate for its wildcard + apex hostnames. If many tenants share
+    # the same apex domain with issuerName=letsencrypt-prod, the cluster
+    # can hit the Let's Encrypt limits (50 certs / registered domain /
+    # week, 5 duplicate certs / week, 300 new orders / account / 3h).
+    # Use letsencrypt-stage for non-production clusters or gate the
+    # number of certificates per tenant via tenant.spec.resourceQuotas
+    # with count/certificates.cert-manager.io. See
+    # https://letsencrypt.org/docs/rate-limits/.
 # Authentication configuration
 authentication:
   oidc:
