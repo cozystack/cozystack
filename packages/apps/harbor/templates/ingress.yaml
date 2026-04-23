@@ -1,8 +1,10 @@
 {{- $ingress := .Values._namespace.ingress }}
+{{- $gateway := .Values._namespace.gateway | default "" }}
 {{- $host := .Values._namespace.host }}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- if not $gateway }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -35,3 +37,4 @@ spec:
                 name: {{ .Release.Name }}
                 port:
                   number: 80
+{{- end }}
