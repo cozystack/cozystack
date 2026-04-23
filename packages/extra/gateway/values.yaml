@@ -1,0 +1,6 @@
+##
+## @section Common parameters
+##
+
+## @param {string} gatewayClassName - GatewayClass to attach the tenant Gateway to. Must exist cluster-wide. Default matches the Cilium-managed class.
+gatewayClassName: cilium
