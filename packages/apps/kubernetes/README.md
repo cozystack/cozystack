@@ -302,6 +302,8 @@ When kubelet resource reservations are configured, both the `capacity.cluster-au
 
 Upgrading from a version without this feature may cause the autoscaler to see reduced per-node capacity after the annotations are updated, which can trigger additional scale-up operations. No action is typically required — the new values reflect the actual memory available for workload scheduling.
 
+> **Note:** When neither `resources.memory` nor `instanceType` is set, eviction thresholds (default 7% hard / 10% soft) are still enforced by the kubelet at runtime, but the capacity annotation is not rendered. Without this annotation, the cluster-autoscaler has no visibility into these reservations and may over-schedule the node until evictions fire.
+
 #### Example: Override kubelet reservations
 
 ```yaml
