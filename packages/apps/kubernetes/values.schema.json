@@ -20,7 +20,8 @@
           "resources": {},
           "roles": [
             "ingress-nginx"
-          ]
+          ],
+          "storageClass": ""
         }
       },
       "additionalProperties": {

@@ -42,6 +42,7 @@ nodeGroups:
     maxReplicas: 10
     instanceType: "u1.medium"
     diskSize: 20Gi
+    storageClass: ""
     roles:
     - ingress-nginx
     resources: {}

@@ -22,7 +22,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	StorageClass string `json:"storageClass"`
 	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
+	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
