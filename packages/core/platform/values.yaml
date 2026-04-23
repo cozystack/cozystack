@@ -117,12 +117,16 @@ gateway:
   # materialises the Gateway itself. This flag only controls platform-wide
   # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
   enabled: false
-  # Namespaces that are allowed to attach HTTPRoutes to a tenant Gateway.
-  # The publishing tenant namespace is always included implicitly. Additional
-  # entries must be the exact namespace name (matched on the built-in
-  # kubernetes.io/metadata.name label). Tenants not on this list cannot
-  # attach an HTTPRoute to somebody else's Gateway, which prevents hostname
-  # hijacking across tenants.
+  # Namespaces that are allowed to attach HTTPRoute or TLSRoute to a tenant
+  # Gateway. The publishing tenant namespace is always included implicitly.
+  # Additional entries must be the exact namespace name (matched on the
+  # built-in kubernetes.io/metadata.name label). Tenants not on this list
+  # cannot attach a route to somebody else's Gateway, which prevents
+  # hostname hijacking across tenants.
+  #
+  # The `default` namespace is included because the Kubernetes API's
+  # TLSRoute (shipped by the cozystack-api package) has to live next to
+  # the `kubernetes` Service it points at, which is always in `default`.
   attachedNamespaces:
     - cozy-cert-manager
     - cozy-dashboard
@@ -134,6 +138,7 @@ gateway:
     - cozy-kubevirt-cdi
     - cozy-monitoring
     - cozy-linstor-gui
+    - default
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
