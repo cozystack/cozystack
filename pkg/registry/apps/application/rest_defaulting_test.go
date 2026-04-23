@@ -57,6 +57,8 @@ var _ = Describe("defaultLikeKubernetes", func() {
 	})
 })
 
+// buildTestSchema returns a minimal schema that exercises defaultLikeKubernetes.
+// Defaults intentionally differ from values.schema.json — do not use this as a reference for production defaults.
 func buildTestSchema() *apischema.Structural {
 	instanceType := apischema.Structural{
 		Generic: apischema.Generic{
