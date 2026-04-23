@@ -363,6 +363,17 @@ tests:
       - failedTemplate:
           errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
 
+  - it: fails when both ephemeralStorage and diskSize are set
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.ephemeralStorage: 50Gi
+      nodeGroups.md0.diskSize: 50Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+
   ###############################################
   # KubeadmConfigTemplate — files block         #
   ###############################################
