@@ -29,6 +29,15 @@ cozystackOperator:
   # (operator default: 5). Number of release revisions Helm keeps per HR.
   # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
   helmReleaseMaxHistory: ""
+  # Name of the Secret in cozy-system namespace containing credentials for the
+  # platform source. When non-empty, sets spec.secretRef on the generated
+  # OCIRepository or GitRepository resource. Secret type depends on source kind:
+  #   OCI (oci://...): kubernetes.io/dockerconfigjson with registry credentials.
+  #   Git over HTTPS:  Opaque/generic secret with `username` + `password` keys.
+  #   Git over SSH:    Opaque/generic secret with `identity`, `identity.pub`,
+  #                    and `known_hosts` keys.
+  # See FluxCD source-controller docs for the exact key layout per scheme.
+  platformSourceSecret: ''
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)
