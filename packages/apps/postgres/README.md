@@ -81,11 +81,10 @@ See:
 
 ### Application-specific parameters
 
-| Name                                    | Description                                                      | Type     | Value |
-| --------------------------------------- | ---------------------------------------------------------------- | -------- | ----- |
-| `postgresql`                            | PostgreSQL server configuration.                                 | `object` | `{}`  |
-| `postgresql.parameters`                 | PostgreSQL server parameters.                                    | `object` | `{}`  |
-| `postgresql.parameters.max_connections` | Maximum number of concurrent connections to the database server. | `int`    | `100` |
+| Name                    | Description                                                                                                                                                                                                                                                                                                                                                                     | Type                | Value |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `postgresql`            | PostgreSQL server configuration.                                                                                                                                                                                                                                                                                                                                                | `object`            | `{}`  |
+| `postgresql.parameters` | PostgreSQL server parameters. All values must be strings (enclose numbers in quotes). See PostgreSQL documentation for available parameters. WARNING: Some parameters are managed by CloudNativePG and should NOT be overridden (archive_mode, archive_command, restore_command, primary_conninfo, etc.). Incorrect values may break backup/replication or require pod restart. | `map[string]string` | `{}`  |
 
 
 ### Quorum-based synchronous replication
