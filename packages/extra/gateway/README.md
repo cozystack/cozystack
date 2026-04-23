@@ -48,6 +48,6 @@ The default for a fresh tenant is unlimited; operators running shared-apex multi
 
 ## Known limitations
 
-- **Child-tenant ACME HTTP-01** currently relies on the publishing tenant's Gateway; a child tenant that turns on `gateway: true` but still has its issuer pointed at `letsencrypt-prod` (HTTP-01) must either share the parent Gateway or switch to `dns01`. A proper fix is a namespace-scoped `Issuer` per tenant — tracked as a follow-up.
 - **Upstream application gaps** — some chart-level features (harbor ACL integrations, bucket upstream limitations) remain on ingress-nginx workflows in upstream docs; cozystack tracks those separately as upstream PRs.
+- **Supported ACME issuers** — `publishing.certificates.issuerName` for Gateway-based tenants must be `letsencrypt-prod` or `letsencrypt-stage` (the chart maps those names to concrete ACME server URLs). To support another ACME provider, extend `templates/issuer.yaml` with an additional branch.
 
