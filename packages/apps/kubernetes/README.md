@@ -63,6 +63,9 @@ Deploying it involves the following components:
 
 -   **Worker Nodes**: Virtual Machines are provisioned to serve as worker nodes using KubeVirt.
     These nodes are configured to join the tenant Kubernetes cluster, enabling the deployment and management of workloads.
+    Worker node disks automatically detect and match the underlying volume's block size
+    (`blockSize.matchVolume`) to ensure compatibility with storage backends that use
+    non-512-byte sectors, such as LINSTOR DRBD with 4Kn drives.
 
 -   **Cluster API**: Cozystack is using the [Kubernetes Cluster API](https://cluster-api.sigs.k8s.io/) to provision the components of a cluster.
 
