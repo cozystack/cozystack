@@ -33,9 +33,21 @@ A cluster where many tenants share the same apex domain can exhaust these quickl
 - Limit the number of simultaneous tenant Gateways per cluster via the platform's package quota, or cap it via `tenant.spec.resourceQuotas` with `count/certificates.cert-manager.io` to limit how many `Certificate` objects a tenant may create.
 - For bare-metal or air-gapped deployments consider an internal ACME server or the self-signed `ClusterIssuer` (`selfsigned-cluster-issuer`) that ships alongside the Let's Encrypt issuers.
 
+Recommended tenant-level quota to contain a misbehaving tenant:
+
+```yaml
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+spec:
+  gateway: true
+  resourceQuotas:
+    count/certificates.cert-manager.io: "10"
+```
+
+The default for a fresh tenant is unlimited; operators running shared-apex multi-tenant clusters should set this explicitly (or stage it via the tenant-application default values) before opening `gateway: true` to non-trusted tenants.
+
 ## Known limitations
 
-- **TLS passthrough services** (`cozystack-api`, `vm-exportproxy`, `cdi-uploadproxy`) are not migrated to the Gateway. They keep rendering their existing Ingress regardless of `gateway.enabled`. A follow-up PR will add a Passthrough listener + `TLSRoute` per passthrough service.
-- **Tenant-scoped apps** (`harbor`, `bucket`) are not yet wired to a tenant's own Gateway — they still use ingress-nginx even when `gateway.enabled=true`. Follow-up work needs to plumb `gateway` through `_namespace` in `packages/apps/tenant/templates/namespace.yaml` so the apps know which Gateway to attach to.
 - **Child-tenant ACME HTTP-01** currently relies on the publishing tenant's Gateway; a child tenant that turns on `gateway: true` but still has its issuer pointed at `letsencrypt-prod` (HTTP-01) must either share the parent Gateway or switch to `dns01`. A proper fix is a namespace-scoped `Issuer` per tenant — tracked as a follow-up.
+- **Upstream application gaps** — some chart-level features (harbor ACL integrations, bucket upstream limitations) remain on ingress-nginx workflows in upstream docs; cozystack tracks those separately as upstream PRs.
 
