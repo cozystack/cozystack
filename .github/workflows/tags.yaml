@@ -255,6 +255,21 @@ jobs:
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
 
+      # Read-only token for the AI step. Minting a separate scoped token
+      # means the Generate changelog using AI step cannot push branches,
+      # open PRs, or mutate any repository even with --allow-all-tools,
+      # regardless of whether the agent follows the prompt's instructions.
+      - name: Generate read-only GitHub App token
+        id: app-token-read
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          permission-contents: read
+          permission-pull-requests: read
+          permission-metadata: read
+
       - name: Parse tag
         id: tag
         uses: actions/github-script@v7
@@ -306,7 +321,7 @@ jobs:
         timeout-minutes: 30
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token-read.outputs.token }}
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
           copilot \
