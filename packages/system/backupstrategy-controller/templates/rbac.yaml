@@ -27,7 +27,9 @@ rules:
   resources: ["pods"]
   verbs: ["get", "list", "watch"]
 # ConfigMaps: controller-runtime cache requires cluster-scoped list/watch;
-# create/update/delete is scoped to cozy-velero via the Role below.
+# create/update/delete is scoped to cozy-velero via a Role shipped by the
+# velero chart (packages/system/velero/templates/backupstrategy-controller-rbac.yaml)
+# so it is only created when velero is installed.
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list", "watch"]
@@ -78,14 +80,3 @@ rules:
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["get", "list", "watch", "create", "update", "patch"]
----
-# To create ResourceModifiers in ConfigMaps for Restore in Velero install namespace.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: backups.cozystack.io:strategy-controller:velero-configmaps
-  namespace: cozy-velero
-rules:
-- apiGroups: [""]
-  resources: ["configmaps"]
-  verbs: ["create", "get", "list", "delete", "deletecollection", "patch", "update"]
