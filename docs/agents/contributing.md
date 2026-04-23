@@ -43,10 +43,10 @@ git commit --signoff -m "type(scope): brief description"
 
 **Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`
 
-**Scopes:**
+**Scopes** (e.g., not exhaustive — use any scope that names the component you are touching):
 - System: `dashboard`, `platform`, `cilium`, `kube-ovn`, `linstor`, `fluxcd`, `cluster-api`
 - Apps: `postgres`, `mariadb`, `redis`, `kafka`, `clickhouse`, `virtual-machine`, `kubernetes`
-- Other: `api`, `hack`, `tests`, `ci`, `docs`, `maintenance`
+- Other: `api`, `hack`, `tests`, `ci`, `docs`, `agents`, `maintenance`
 
 Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
 
