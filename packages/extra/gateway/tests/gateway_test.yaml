@@ -110,7 +110,7 @@ tests:
           value:
             - cidr: 192.0.2.10/32
 
-  - it: no LoadBalancer pool is rendered when externalIPs is empty but Gateway still renders
+  - it: chart render fails when publishing.externalIPs is empty so the operator never ships a silently non-working Gateway
     set:
       _cluster:
         expose-ingress: tenant-root
@@ -118,12 +118,9 @@ tests:
       _namespace:
         host: example.org
     asserts:
-      - template: templates/gateway.yaml
-        hasDocuments:
-          count: 3
       - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 0
+        failedTemplate:
+          errorMessage: "publishing.externalIPs is empty — a tenant Gateway has no CiliumLoadBalancerIPPool to draw from. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform (or publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately) before enabling tenant.spec.gateway=true."
 
   - it: child tenant renders its own Gateway with the child's per-tenant apex
     set:
@@ -170,6 +167,7 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
       _namespace:
         host: ""
     asserts:
@@ -181,6 +179,7 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
       _namespace:
         host: example.org
     asserts:
@@ -210,6 +209,7 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
         gateway-attached-namespaces: "cozy-cert-manager,,cozy-dashboard, cozy-keycloak,"
       _namespace:
         host: example.org
@@ -228,6 +228,7 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
         issuer-name: letsencrypt-prod
       _namespace:
         host: example.org
@@ -278,6 +279,7 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
         issuer-name: letsencrypt-stage
       _namespace:
         host: example.org
@@ -291,6 +293,7 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
         issuer-name: my-custom-ca
       _namespace:
         host: example.org
@@ -303,6 +306,7 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
         gateway-attached-namespaces: "cozy-dashboard"
       _namespace:
         host: example.org

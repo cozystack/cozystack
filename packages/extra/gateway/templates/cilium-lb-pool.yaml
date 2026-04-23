@@ -6,7 +6,9 @@
     {{- $exposeIPsList = append $exposeIPsList $ip }}
   {{- end }}
 {{- end }}
-{{- if $exposeIPsList }}
+{{- if not $exposeIPsList }}
+{{- fail "publishing.externalIPs is empty — a tenant Gateway has no CiliumLoadBalancerIPPool to draw from. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform (or publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately) before enabling tenant.spec.gateway=true." }}
+{{- end }}
 apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:
@@ -14,10 +16,9 @@ metadata:
 spec:
   blocks:
   {{- range $exposeIPsList }}
-  - cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+  - cidr: {{ . }}{{ if not (contains "/" .) }}/{{ if contains ":" . }}128{{ else }}32{{ end }}{{ end }}
   {{- end }}
   serviceSelector:
     matchLabels:
       "io.kubernetes.service.namespace": {{ .Release.Namespace | quote }}
       "gateway.networking.k8s.io/gateway-name": cozystack
-{{- end }}
