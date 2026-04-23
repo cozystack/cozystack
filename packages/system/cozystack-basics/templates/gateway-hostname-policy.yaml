@@ -117,10 +117,12 @@ spec:
       (has(oldObject) && has(oldObject.spec) && "host" in oldObject.spec && oldObject.spec.host == object.spec.host) ? false : true
   - name: trustedCaller
     expression: >-
-      (has(request.userInfo.groups) && request.userInfo.groups.exists(g, g == "system:masters")) ||
-      request.userInfo.username.startsWith("system:serviceaccount:cozy-") ||
-      request.userInfo.username.startsWith("system:serviceaccount:flux-system:") ||
-      request.userInfo.username.startsWith("system:serviceaccount:kube-system:")
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:cozy-cert-manager" ||
+        g == "system:serviceaccounts:flux-system" ||
+        g == "system:serviceaccounts:kube-system")
   validations:
   - expression: "!variables.hostChanged || variables.trustedCaller"
     messageExpression: >-
@@ -165,10 +167,12 @@ spec:
         : ""
   - name: trustedCaller
     expression: >-
-      (has(request.userInfo.groups) && request.userInfo.groups.exists(g, g == "system:masters")) ||
-      request.userInfo.username.startsWith("system:serviceaccount:cozy-") ||
-      request.userInfo.username.startsWith("system:serviceaccount:flux-system:") ||
-      request.userInfo.username.startsWith("system:serviceaccount:kube-system:")
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:cozy-cert-manager" ||
+        g == "system:serviceaccounts:flux-system" ||
+        g == "system:serviceaccounts:kube-system")
   validations:
   - expression: "variables.newHost == variables.oldHost || variables.trustedCaller"
     messageExpression: >-
