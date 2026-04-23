@@ -27,7 +27,7 @@ git add packages/<apps-or-extra>/<name>/ packages/system/<name>-rd/
 
 The repo's pre-commit CI job runs `make generate` in every package and then `git diff --exit-code`. Any unstaged generator output fails the job with exit code 123 and blocks the PR. Also rerun `make generate` after a `git commit --amend` if the amended change touched any of the sources above.
 
-To locate packages a WIP branch is likely to need regenerated:
+To locate packages a WIP branch likely needs to be regenerated:
 
 ```bash
 git diff --name-only | xargs -n1 dirname | sort -u | grep ^packages/
