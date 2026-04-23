@@ -4,6 +4,8 @@ KUBERNETES_PKG_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+.PHONY: test generate update
+
 test:
 	helm unittest .
 
