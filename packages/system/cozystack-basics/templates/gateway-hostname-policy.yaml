@@ -20,22 +20,23 @@ spec:
       apiVersions: ["v1", "v1beta1"]
       operations: ["CREATE", "UPDATE"]
       resources: ["gateways"]
+  matchConditions:
+  - name: is-cozystack-managed-namespace
+    expression: >-
+      has(namespaceObject.metadata.labels) &&
+      "namespace.cozystack.io/host" in namespaceObject.metadata.labels &&
+      namespaceObject.metadata.labels["namespace.cozystack.io/host"] != ""
   variables:
   - name: tenantHost
-    expression: >-
-      (has(namespaceObject.metadata.labels) &&
-       has(namespaceObject.metadata.labels["namespace.cozystack.io/host"]))
-        ? namespaceObject.metadata.labels["namespace.cozystack.io/host"]
-        : ""
+    expression: 'namespaceObject.metadata.labels["namespace.cozystack.io/host"]'
   validations:
   - expression: >-
-      variables.tenantHost != "" &&
-      (!has(object.spec.listeners) ||
-       object.spec.listeners.all(l,
-         !has(l.hostname) ||
-         l.hostname == variables.tenantHost ||
-         l.hostname.endsWith("." + variables.tenantHost)
-       ))
+      !has(object.spec.listeners) ||
+      object.spec.listeners.all(l,
+        !has(l.hostname) ||
+        l.hostname == variables.tenantHost ||
+        l.hostname.endsWith("." + variables.tenantHost)
+      )
     messageExpression: >-
       "Gateway listener hostname must equal " + variables.tenantHost +
       " or end with ." + variables.tenantHost +
