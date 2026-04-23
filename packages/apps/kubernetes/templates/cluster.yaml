@@ -30,7 +30,14 @@ spec:
             {{- end }}
             cluster.x-k8s.io/deployment-name: {{ $.Release.Name }}-{{ .groupName }}
         spec:
-          {{- if .Values._cluster.scheduling }}
+          {{- with .group.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .group.topologySpreadConstraints }}
+          topologySpreadConstraints:
+            {{- toYaml .group.topologySpreadConstraints | nindent 10 }}
+          {{- else if .Values._cluster.scheduling }}
           {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
           {{- if $rawConstraints }}
           {{- $rawConstraints | fromYaml | toYaml | nindent 10 }}
