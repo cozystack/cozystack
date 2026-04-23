@@ -12,9 +12,9 @@ Follow these instructions when the user explicitly asks to generate a changelog.
 
 Unless the caller explicitly instructs otherwise:
 
-- **Do not** run `git commit`, `git push`, `git checkout` (to switch branches), `git branch`, `git tag`, `git reset`, `git merge`, `git rebase`, or any other command that writes to refs, HEAD, or remotes.
-- **Do not** create pull requests, push branches, or issue GitHub API write calls (POST / PATCH / DELETE).
-- In the cozystack working tree, the **only** file you create or modify is `docs/changelogs/v<version>.md`. Cloning auxiliary repositories under `_repos/` for cross-repo analysis (see Step 6) is fine — that directory is outside the cozystack tree.
+- **In the cozystack working tree**, do not run `git commit`, `git push`, `git checkout` (to switch branches), `git branch`, `git tag`, `git reset`, `git merge`, or `git rebase`. Do not write to local branches, tags, or HEAD. `git fetch` is expected and fine (see the read-only analysis list below).
+- **Do not** push to any remote, open pull requests, or issue GitHub API write calls (POST / PATCH / DELETE) for any repository.
+- In the cozystack working tree, the **only** file you create or modify is `docs/changelogs/v<version>.md`. Cloning auxiliary repositories under `_repos/` for cross-repo analysis (see Step 6) is fine; local git operations inside those disposable clones (`git checkout`, `git pull`, etc.) are allowed — just never push from them or open PRs against them.
 
 The caller — a GitHub Actions workflow in CI, or a developer running you interactively — owns branching, committing, pushing, and PR creation. They will perform those actions after you exit. Do not pre-empt them even if the working tree looks ready.
 
