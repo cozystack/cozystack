@@ -29,7 +29,19 @@
 {{- $ingress = $tenantName }}
 {{- end }}
 
-{{- $gateway := $parentNamespace.gateway | default "" }}
+{{/*
+  Gateway reference is NOT inherited from parent. Unlike ingress (where nginx
+  serves from the publishing namespace and any tenant can attach via the shared
+  apex), a Gateway's allowedRoutes.namespaces selector is restrictive: a child
+  tenant namespace is not on the parent Gateway's whitelist, so an HTTPRoute
+  from the child would be NotAllowedByListeners. The parent Gateway's cert also
+  only covers <apex> and *.<apex> (one level), and a child apex is
+  <name>.<parent-apex> — two levels deep — so even if admission let the route
+  through, TLS would break. Require explicit tenant.spec.gateway=true on each
+  tenant that wants Gateway-attached apps; otherwise apps fall back to the
+  inherited Ingress.
+*/}}
+{{- $gateway := "" }}
 {{- if .Values.gateway }}
 {{- $gateway = $tenantName }}
 {{- end }}
