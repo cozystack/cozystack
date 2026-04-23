@@ -79,6 +79,9 @@ spec:
                 disk:
                   bus: virtio
                   pciAddress: 0000:08:00.0
+                blockSize:
+                  matchVolume:
+                    enabled: true
               interfaces:
               - name: default
                 bridge: {}
