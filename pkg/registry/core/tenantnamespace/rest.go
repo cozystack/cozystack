@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
@@ -123,8 +124,18 @@ func (r *REST) Get(
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
+	// Check if user has access to this namespace
+	hasAccess, err := r.hasAccessToNamespace(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if !hasAccess {
+		// Return NotFound instead of Forbidden to prevent enumeration
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
 	ns := &corev1.Namespace{}
-	err := r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +197,17 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 			ns, ok := ev.Object.(*corev1.Namespace)
 			if !ok || !strings.HasPrefix(ns.Name, prefix) {
+				continue
+			}
+
+			// Check if user has access to this namespace
+			hasAccess, err := r.hasAccessToNamespace(ctx, ns.Name)
+			if err != nil {
+				klog.Errorf("Failed to check access for namespace %s in watch: %v", ns.Name, err)
+				continue
+			}
+			if !hasAccess {
+				// User doesn't have access, skip this event
 				continue
 			}
 
@@ -359,7 +381,11 @@ func (r *REST) filterAccessible(
 					break subjectLoop
 				}
 			case "ServiceAccount":
-				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", subj.Namespace, subj.Name) {
+				saNamespace := subj.Namespace
+				if saNamespace == "" {
+					saNamespace = rbs.Items[i].Namespace
+				}
+				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", saNamespace, subj.Name) {
 					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
 					break subjectLoop
 				}
@@ -371,6 +397,65 @@ func (r *REST) filterAccessible(
 		allowed = append(allowed, name)
 	}
 	return allowed, nil
+}
+
+// hasAccessToNamespace checks if the user has access to a single namespace.
+// This is optimized for Get/Watch operations where we check one namespace at a time.
+// It lists RoleBindings only in the target namespace instead of all cluster RoleBindings.
+func (r *REST) hasAccessToNamespace(
+	ctx context.Context,
+	namespace string,
+) (bool, error) {
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return false, fmt.Errorf("user missing in context")
+	}
+
+	// Check privileged groups
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
+	}
+	if _, ok := groups["system:masters"]; ok {
+		return true, nil
+	}
+	if _, ok := groups["cozystack-cluster-admin"]; ok {
+		return true, nil
+	}
+
+	// List RoleBindings only in the target namespace
+	rbs := &rbacv1.RoleBindingList{}
+	err := r.c.List(ctx, rbs, client.InNamespace(namespace))
+	if err != nil {
+		return false, fmt.Errorf("failed to list rolebindings in %s: %w", namespace, err)
+	}
+
+	// Check if user is in any RoleBinding subjects
+	for i := range rbs.Items {
+		for j := range rbs.Items[i].Subjects {
+			subj := rbs.Items[i].Subjects[j]
+			switch subj.Kind {
+			case "Group":
+				if _, ok := groups[subj.Name]; ok {
+					return true, nil
+				}
+			case "User":
+				if subj.Name == u.GetName() {
+					return true, nil
+				}
+			case "ServiceAccount":
+				saNamespace := subj.Namespace
+				if saNamespace == "" {
+					saNamespace = rbs.Items[i].Namespace
+				}
+				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", saNamespace, subj.Name) {
+					return true, nil
+				}
+			}
+		}
+	}
+
+	return false, nil
 }
 
 // -----------------------------------------------------------------------------
