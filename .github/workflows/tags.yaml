@@ -328,6 +328,10 @@ jobs:
             echo "::error::Changelog file $CHANGELOG_FILE was not produced by the Generate changelog using AI step"
             exit 1
           fi
+          if [ ! -s "$CHANGELOG_FILE" ]; then
+            echo "::error::Changelog file $CHANGELOG_FILE is empty"
+            exit 1
+          fi
 
           # Snapshot the file across the branch switch — the checkout below
           # resets tracked files to match origin/main.
