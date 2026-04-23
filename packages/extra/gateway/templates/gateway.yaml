@@ -76,6 +76,26 @@ spec:
         from: Selector
         selector:
           {{- toYaml $allowedNamespacesSelector | nindent 10 }}
+  {{- $exposedServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+  {{- range .Values.tlsPassthroughServices }}
+    {{- $svc := . }}
+    {{- if has $svc $exposedServices }}
+  - name: {{ printf "tls-%s" $svc | quote }}
+    protocol: TLS
+    port: 443
+    hostname: {{ printf "%s.%s" $svc $host | quote }}
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      kinds:
+      - group: gateway.networking.k8s.io
+        kind: TLSRoute
+      namespaces:
+        from: Selector
+        selector:
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
+    {{- end }}
+  {{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

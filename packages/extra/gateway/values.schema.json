@@ -6,6 +6,18 @@
       "description": "GatewayClass to attach the tenant Gateway to. Must exist cluster-wide. Default matches the Cilium-managed class.",
       "type": "string",
       "default": "cilium"
+    },
+    "tlsPassthroughServices": {
+      "description": "Names (from publishing.exposedServices) whose traffic is TLS-passthrough rather than TLS-terminate. For each such service a dedicated HTTPS listener with tls.mode=Passthrough is rendered on the Gateway, and the service is expected to attach a TLSRoute instead of an HTTPRoute.",
+      "type": "array",
+      "default": [
+        "api",
+        "vm-exportproxy",
+        "cdi-uploadproxy"
+      ],
+      "items": {
+        "type": "string"
+      }
     }
   }
 }
