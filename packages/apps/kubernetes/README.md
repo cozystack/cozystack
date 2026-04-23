@@ -83,6 +83,10 @@ See the reference for components utilized in this service:
 - [github.com/kubernetes-sigs/cluster-api-provider-kubevirt](https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt)
 - [github.com/kubevirt/csi-driver](https://github.com/kubevirt/csi-driver)
 
+## Breaking Changes
+
+- **`ephemeralStorage` renamed to `diskSize`**: The `nodeGroups[name].ephemeralStorage` field has been renamed to `nodeGroups[name].diskSize` to better reflect its purpose (persistent disk for kubelet and containerd data). There is no backward-compatibility fallback; users MUST update their configurations to use `diskSize` instead of `ephemeralStorage`. Existing VMs will be automatically rolling-updated via CAPI when the new values are applied.
+
 ## Parameters
 
 ### Common Parameters
