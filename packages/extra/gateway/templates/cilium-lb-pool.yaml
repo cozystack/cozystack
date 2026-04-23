@@ -1,4 +1,3 @@
-{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
 {{- $exposeIPsList := list }}
 {{- range splitList "," $exposeExternalIPs }}
@@ -7,7 +6,7 @@
     {{- $exposeIPsList = append $exposeIPsList $ip }}
   {{- end }}
 {{- end }}
-{{- if and (eq $exposeIngress .Release.Namespace) $exposeIPsList }}
+{{- if $exposeIPsList }}
 apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:

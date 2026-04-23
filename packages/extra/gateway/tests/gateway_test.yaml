@@ -14,8 +14,9 @@ tests:
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10,192.0.2.11"
-        host: example.org
         issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
     asserts:
       - template: templates/gateway.yaml
         hasDocuments:
@@ -85,6 +86,7 @@ tests:
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "2001:db8::1,192.0.2.10"
+      _namespace:
         host: example.org
     asserts:
       - template: templates/cilium-lb-pool.yaml
@@ -99,6 +101,7 @@ tests:
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10,,"
+      _namespace:
         host: example.org
     asserts:
       - template: templates/cilium-lb-pool.yaml
@@ -112,6 +115,7 @@ tests:
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: ""
+      _namespace:
         host: example.org
     asserts:
       - template: templates/gateway.yaml
@@ -121,32 +125,63 @@ tests:
         hasDocuments:
           count: 0
 
-  - it: release in a non-publishing namespace fails with an explicit error
+  - it: child tenant renders its own Gateway with the child's per-tenant apex
     set:
       _cluster:
         expose-ingress: tenant-root
-        host: example.org
+        expose-external-ips: "192.0.2.11"
+      _namespace:
+        host: alice.example.org
     release:
-      namespace: tenant-other
+      namespace: tenant-alice
     asserts:
       - template: templates/gateway.yaml
-        failedTemplate:
-          errorMessage: 'packages/extra/gateway is only meaningful in the publishing namespace "tenant-root"; current release namespace is "tenant-other". Set tenant.spec.gateway=true on that tenant only.'
+        hasDocuments:
+          count: 3
+      - template: templates/gateway.yaml
+        documentIndex: 0
+        equal:
+          path: spec.dnsNames
+          value:
+            - alice.example.org
+            - "*.alice.example.org"
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[1].hostname
+          value: "*.alice.example.org"
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[2].hostname
+          value: "alice.example.org"
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].values
+          value:
+            - tenant-alice
+      - template: templates/cilium-lb-pool.yaml
+        equal:
+          path: spec.serviceSelector.matchLabels["io.kubernetes.service.namespace"]
+          value: tenant-alice
 
-  - it: empty host fails with explicit error
+  - it: empty _namespace.host fails with explicit error
     set:
       _cluster:
         expose-ingress: tenant-root
+      _namespace:
         host: ""
     asserts:
       - template: templates/gateway.yaml
         failedTemplate:
-          errorMessage: "publishing.host must be set in the platform chart for packages/extra/gateway to render a wildcard TLS listener."
+          errorMessage: "_namespace.host is empty — the tenant has no apex domain. Either set tenant.spec.host on this tenant or inherit it from a parent that has host set."
 
   - it: allowedRoutes whitelist defaults to publishing namespace only when no extra namespaces are set
     set:
       _cluster:
         expose-ingress: tenant-root
+      _namespace:
         host: example.org
     asserts:
       - template: templates/gateway.yaml
@@ -175,8 +210,9 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
-        host: example.org
         gateway-attached-namespaces: "cozy-cert-manager,,cozy-dashboard, cozy-keycloak,"
+      _namespace:
+        host: example.org
     asserts:
       - template: templates/gateway.yaml
         documentIndex: 1
@@ -192,8 +228,9 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
-        host: example.org
         issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
     asserts:
       - template: templates/gateway.yaml
         documentIndex: 0
@@ -241,8 +278,9 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
-        host: example.org
         issuer-name: letsencrypt-stage
+      _namespace:
+        host: example.org
     asserts:
       - template: templates/issuer.yaml
         equal:
@@ -253,8 +291,9 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
-        host: example.org
         issuer-name: my-custom-ca
+      _namespace:
+        host: example.org
     asserts:
       - template: templates/issuer.yaml
         failedTemplate:
@@ -264,8 +303,9 @@ tests:
     set:
       _cluster:
         expose-ingress: tenant-root
-        host: example.org
         gateway-attached-namespaces: "cozy-dashboard"
+      _namespace:
+        host: example.org
     asserts:
       - template: templates/gateway.yaml
         documentIndex: 1
