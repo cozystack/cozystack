@@ -45,6 +45,57 @@ EOF
   kubectl -n tenant-test delete gateway/gateway-e2e-probe --ignore-not-found --timeout=1m
 }
 
+@test "exposed services render HTTPRoute/TLSRoute but not Ingress when gateway.enabled=true" {
+  # With gateway.enabled=true in the install bundle, dashboard and keycloak
+  # must render HTTPRoute; cozystack-api, vm-exportproxy and cdi-uploadproxy
+  # must render TLSRoute; and none of them should have a legacy Ingress.
+  kubectl -n cozy-dashboard wait httproute/dashboard --for=condition=Accepted --timeout=2m
+  kubectl -n cozy-keycloak wait httproute/keycloak --for=condition=Accepted --timeout=2m
+
+  kubectl -n default get tlsroute kubernetes-api
+  kubectl -n cozy-kubevirt get tlsroute vm-exportproxy
+  kubectl -n cozy-kubevirt-cdi get tlsroute cdi-uploadproxy
+
+  # The old Ingress objects for these services must be absent. If they're
+  # still around, the 'gateway.enabled gate' did not exclude them on render.
+  ! kubectl -n cozy-dashboard get ingress dashboard-web-ingress 2>/dev/null
+  ! kubectl -n cozy-keycloak get ingress keycloak-ingress 2>/dev/null
+  ! kubectl -n default get ingress kubernetes 2>/dev/null
+  ! kubectl -n cozy-kubevirt get ingress vm-exportproxy 2>/dev/null
+  ! kubectl -n cozy-kubevirt-cdi get ingress cdi-uploadproxy 2>/dev/null
+}
+
+@test "ValidatingAdmissionPolicy rejects Gateway with foreign hostname" {
+  # tenant-test namespace should only be allowed to publish its own
+  # domain suffix ('.test.example.org'); a listener hostname from the
+  # root tenant's apex must be denied by cozystack-gateway-hostname-policy.
+  run kubectl apply -f - <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: hostname-hijack-probe
+  namespace: tenant-test
+spec:
+  gatewayClassName: cilium
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "dashboard.example.org"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: noop
+    allowedRoutes:
+      namespaces:
+        from: Same
+EOF
+  # Expect kubectl to fail with an admission error
+  [ "$status" -ne 0 ]
+  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  echo "$output" | grep -q "must equal test.example.org"
+}
+
 @test "HTTPRoute with a matching parentRef reaches Accepted status" {
   # Put a Gateway and a route in the same namespace so allowedRoutes: Same accepts them.
   kubectl apply -f - <<'EOF'
