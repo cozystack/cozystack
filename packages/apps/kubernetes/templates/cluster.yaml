@@ -213,7 +213,6 @@ metadata:
 {{- $autoReservedMillicores := 50 }}
 {{- if $effectiveCpu }}
 {{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
-{{-   $effectiveCpuFloat := divf (float64 $effectiveCpuMillicores) 1000.0 }}
 {{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
 {{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
 {{- end }}
@@ -339,7 +338,7 @@ metadata:
 {{- if not $effectiveMemory }}
 {{-   $hasOverride := or $kubeletOverride.systemReservedMemory $kubeletOverride.kubeReservedMemory $kubeletOverride.evictionHardMemory $kubeletOverride.evictionSoftMemory }}
 {{-   if $hasOverride }}
-{{-     fail (printf "nodeGroup %s: eviction thresholds (evictionHardMemory, evictionSoftMemory) require effective memory to validate — set resources.memory or instanceType" $groupName) }}
+{{-     fail (printf "nodeGroup %s: kubelet memory reservations require effective memory to validate — set resources.memory or instanceType" $groupName) }}
 {{-   end }}
 {{- end }}
 {{/* Guard: explicit kubelet CPU overrides require effective CPU for validation */}}

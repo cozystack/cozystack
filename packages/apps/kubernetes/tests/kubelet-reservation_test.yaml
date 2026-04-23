@@ -1257,7 +1257,7 @@ tests:
             systemReservedMemory: "1Gi"
     asserts:
       - failedTemplate:
-          errorMessage: "nodeGroup md0: eviction thresholds (evictionHardMemory, evictionSoftMemory) require effective memory to validate — set resources.memory or instanceType"
+          errorMessage: "nodeGroup md0: kubelet memory reservations require effective memory to validate — set resources.memory or instanceType"
 
   #############################################################
   # Eviction thresholds interaction with explicit reservations
