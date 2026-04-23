@@ -2,8 +2,23 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "host": {
+      "description": "The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).",
+      "type": "string",
+      "default": ""
+    },
     "etcd": {
       "description": "Deploy own Etcd cluster.",
+      "type": "boolean",
+      "default": false
+    },
+    "monitoring": {
+      "description": "Deploy own Monitoring Stack.",
+      "type": "boolean",
+      "default": false
+    },
+    "ingress": {
+      "description": "Deploy own Ingress Controller.",
       "type": "boolean",
       "default": false
     },
@@ -12,20 +27,15 @@
       "type": "boolean",
       "default": false
     },
-    "host": {
-      "description": "The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).",
+    "seaweedfs": {
+      "description": "Deploy own SeaweedFS.",
+      "type": "boolean",
+      "default": false
+    },
+    "schedulingClass": {
+      "description": "The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.",
       "type": "string",
       "default": ""
-    },
-    "ingress": {
-      "description": "Deploy own Ingress Controller.",
-      "type": "boolean",
-      "default": false
-    },
-    "monitoring": {
-      "description": "Deploy own Monitoring Stack.",
-      "type": "boolean",
-      "default": false
     },
     "resourceQuotas": {
       "description": "Define resource quotas for the tenant.",
@@ -43,16 +53,6 @@
         ],
         "x-kubernetes-int-or-string": true
       }
-    },
-    "schedulingClass": {
-      "description": "The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.",
-      "type": "string",
-      "default": ""
-    },
-    "seaweedfs": {
-      "description": "Deploy own SeaweedFS.",
-      "type": "boolean",
-      "default": false
     }
   }
 }
