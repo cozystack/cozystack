@@ -141,3 +141,70 @@ tests:
       - template: templates/gateway.yaml
         failedTemplate:
           errorMessage: "publishing.host must be set in the platform chart for packages/extra/gateway to render a wildcard TLS listener."
+
+  - it: allowedRoutes whitelist defaults to publishing namespace only when no extra namespaces are set
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: example.org
+    asserts:
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[0].allowedRoutes.namespaces.from
+          value: Selector
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].key
+          value: kubernetes.io/metadata.name
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].operator
+          value: In
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].values
+          value:
+            - tenant-root
+
+  - it: allowedRoutes whitelist prepends publishing namespace to the gateway-attached-namespaces list and filters empty entries
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: example.org
+        gateway-attached-namespaces: "cozy-cert-manager,,cozy-dashboard, cozy-keycloak,"
+    asserts:
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].values
+          value:
+            - tenant-root
+            - cozy-cert-manager
+            - cozy-dashboard
+            - cozy-keycloak
+
+  - it: HTTPS and HTTPS-apex listeners share the same allowedRoutes whitelist
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        host: example.org
+        gateway-attached-namespaces: "cozy-dashboard"
+    asserts:
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[1].allowedRoutes.namespaces.selector.matchExpressions[0].values
+          value:
+            - tenant-root
+            - cozy-dashboard
+      - template: templates/gateway.yaml
+        documentIndex: 1
+        equal:
+          path: spec.listeners[2].allowedRoutes.namespaces.selector.matchExpressions[0].values
+          value:
+            - tenant-root
+            - cozy-dashboard

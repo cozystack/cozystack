@@ -30,6 +30,18 @@ metadata:
 spec:
   gatewayClassName: {{ .Values.gatewayClassName | quote }}
   listeners:
+  {{- $extraNs := list }}
+  {{- range splitList "," ((index .Values._cluster "gateway-attached-namespaces") | default "") }}
+    {{- $ns := . | trim }}
+    {{- if $ns }}
+      {{- $extraNs = append $extraNs $ns }}
+    {{- end }}
+  {{- end }}
+  {{- $allowedNamespaces := concat (list .Release.Namespace) $extraNs | uniq }}
+  {{- $allowedNamespacesSelector := dict "matchExpressions" (list (dict
+        "key" "kubernetes.io/metadata.name"
+        "operator" "In"
+        "values" $allowedNamespaces)) }}
   - name: http
     protocol: HTTP
     port: 80
@@ -37,8 +49,7 @@ spec:
       namespaces:
         from: Selector
         selector:
-          matchLabels:
-            cozystack.io/gateway: {{ .Release.Namespace }}
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
   - name: https
     protocol: HTTPS
     port: 443
@@ -51,8 +62,7 @@ spec:
       namespaces:
         from: Selector
         selector:
-          matchLabels:
-            cozystack.io/gateway: {{ .Release.Namespace }}
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
   - name: https-apex
     protocol: HTTPS
     port: 443
@@ -65,8 +75,7 @@ spec:
       namespaces:
         from: Selector
         selector:
-          matchLabels:
-            cozystack.io/gateway: {{ .Release.Namespace }}
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
