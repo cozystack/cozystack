@@ -38,7 +38,7 @@ var _ = Describe("defaultLikeKubernetes", func() {
 		Expect(ng).To(HaveKeyWithValue("instanceType", "u1.medium"))
 		Expect(ng["roles"]).To(ConsistOf("ingress-nginx"))
 
-		Expect(ng).NotTo(HaveKey("ephemeralStorage"))
+		Expect(ng).NotTo(HaveKey("diskSize"))
 		Expect(ng).NotTo(HaveKey("maxReplicas"))
 		Expect(ng).NotTo(HaveKey("resources"))
 	})
@@ -75,7 +75,7 @@ func buildTestSchema() *apischema.Structural {
 	minReplicas := apischema.Structural{
 		Generic: apischema.Generic{Type: "integer"},
 	}
-	ephemeralStorage := apischema.Structural{
+	diskSize := apischema.Structural{
 		Generic: apischema.Generic{Type: "string"},
 	}
 	maxReplicas := apischema.Structural{
@@ -89,12 +89,12 @@ func buildTestSchema() *apischema.Structural {
 	nodeGroupsValue := &apischema.Structural{
 		Generic: apischema.Generic{Type: "object"},
 		Properties: map[string]apischema.Structural{
-			"instanceType":     instanceType,
-			"roles":            roles,
-			"minReplicas":      minReplicas,
-			"ephemeralStorage": ephemeralStorage,
-			"maxReplicas":      maxReplicas,
-			"resources":        resources,
+			"instanceType": instanceType,
+			"roles":        roles,
+			"minReplicas":  minReplicas,
+			"diskSize":     diskSize,
+			"maxReplicas":  maxReplicas,
+			"resources":    resources,
 		},
 	}
 
@@ -103,10 +103,10 @@ func buildTestSchema() *apischema.Structural {
 			Type: "object",
 			Default: apischema.JSON{Object: map[string]any{
 				"md0": map[string]any{
-					"ephemeralStorage": "20Gi",
-					"maxReplicas":      10,
-					"minReplicas":      0,
-					"resources":        map[string]any{},
+					"diskSize":    "20Gi",
+					"maxReplicas": 10,
+					"minReplicas": 0,
+					"resources":   map[string]any{},
 				},
 			}},
 		},
