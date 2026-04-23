@@ -1,0 +1,25 @@
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $exposeMode := (index .Values._cluster "expose-mode") | default "externalIPs" }}
+{{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+{{- $exposeIPsList := list }}
+{{- range splitList "," $exposeExternalIPs }}
+  {{- $ip := . | trim }}
+  {{- if $ip }}
+    {{- $exposeIPsList = append $exposeIPsList $ip }}
+  {{- end }}
+{{- end }}
+{{- if and (eq $exposeMode "loadBalancer") (eq $exposeIngress .Release.Namespace) $exposeIPsList }}
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: {{ trimPrefix "tenant-" .Release.Namespace }}-ingress
+spec:
+  blocks:
+  {{- range $exposeIPsList }}
+  - cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+  {{- end }}
+  serviceSelector:
+    matchLabels:
+      "io.kubernetes.service.namespace": {{ .Release.Namespace | quote }}
+      "app.kubernetes.io/name": ingress-nginx
+{{- end }}
