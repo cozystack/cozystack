@@ -1,0 +1,140 @@
+suite: KafkaNodePool tests
+
+templates:
+  - templates/kafkanodepools.yaml
+
+tests:
+  ##################################
+  # Combined pool (new instance)   #
+  ##################################
+
+  - it: creates combined pool for new instance
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: KafkaNodePool
+      - equal:
+          path: metadata.name
+          value: test-kafka-combined
+
+  - it: sets combined pool with both roles
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.roles
+          value:
+            - controller
+            - broker
+
+  - it: sets replicas from kafka.replicas
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+
+  - it: sets cluster label
+    release:
+      name: my-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: my-kafka
+
+  - it: configures JBOD storage with kraftMetadata
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.storage.type
+          value: jbod
+      - equal:
+          path: spec.storage.volumes[0].type
+          value: persistent-claim
+      - equal:
+          path: spec.storage.volumes[0].kraftMetadata
+          value: shared
+      - equal:
+          path: spec.storage.volumes[0].deleteClaim
+          value: true
+
+  - it: sets storage size from kafka.size
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        size: 50Gi
+    asserts:
+      - equal:
+          path: spec.storage.volumes[0].size
+          value: 50Gi
+
+  - it: sets storageClass when provided
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        storageClass: fast-ssd
+    asserts:
+      - equal:
+          path: spec.storage.volumes[0].class
+          value: fast-ssd
+
+  - it: does not set storageClass when empty
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        storageClass: ""
+    asserts:
+      - notExists:
+          path: spec.storage.volumes[0].class
+
+  ##################################
+  # Single replica                 #
+  ##################################
+
+  - it: creates single-replica combined pool
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 1
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  ##################################
+  # Storage in combined pool       #
+  ##################################
+
+  - it: combined pool uses kafka.size (not controllerStorageSize)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        size: 50Gi
+        controllerStorageSize: 20Gi
+    asserts:
+      - equal:
+          path: spec.storage.volumes[0].size
+          value: 50Gi

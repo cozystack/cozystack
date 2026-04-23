@@ -1,0 +1,75 @@
+suite: KafkaTopic tests
+
+templates:
+  - templates/topics.yaml
+
+tests:
+  - it: renders no topics when topics list is empty
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates KafkaTopic for each topic
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: orders
+          partitions: 6
+          replicas: 3
+          config:
+            cleanup.policy: compact
+        - name: events
+          partitions: 12
+          replicas: 3
+          config:
+            retention.ms: "86400000"
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: KafkaTopic
+        documentIndex: 0
+      - isKind:
+          of: KafkaTopic
+        documentIndex: 1
+
+  - it: sets topic name and cluster label
+    release:
+      name: my-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: my-topic
+          partitions: 3
+          replicas: 1
+          config: {}
+    asserts:
+      - equal:
+          path: spec.topicName
+          value: my-topic
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: my-kafka
+
+  - it: sets partitions and replicas
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: t1
+          partitions: 12
+          replicas: 3
+          config: {}
+    asserts:
+      - equal:
+          path: spec.partitions
+          value: 12
+      - equal:
+          path: spec.replicas
+          value: 3

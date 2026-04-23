@@ -1,0 +1,63 @@
+suite: Dashboard resourcemap tests
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+tests:
+  - it: creates Role and RoleBinding
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: Role
+        documentIndex: 0
+      - isKind:
+          of: RoleBinding
+        documentIndex: 1
+
+  - it: allows access to kafka-bootstrap service
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-bootstrap
+        documentIndex: 0
+
+  - it: allows access to clients-ca secret
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-kafka-clients-ca
+        documentIndex: 0
+
+  - it: allows access to kafka workloadmonitor for new instance
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[2].resourceNames
+          content: test-kafka
+        documentIndex: 0
+
+  - it: does not reference zookeeper or controller monitors for new instance
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - notContains:
+          path: rules[2].resourceNames
+          content: test-kafka-zookeeper
+        documentIndex: 0
+      - notContains:
+          path: rules[2].resourceNames
+          content: test-kafka-controller
+        documentIndex: 0

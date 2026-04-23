@@ -1,0 +1,53 @@
+suite: Metrics ConfigMap tests
+
+templates:
+  - templates/metrics-configmap.yaml
+
+tests:
+  - it: creates ConfigMap with kafka metrics
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: test-kafka-metrics
+      - exists:
+          path: data["kafka-metrics-config.yml"]
+
+  - it: includes KRaft metrics in kafka config
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: data["kafka-metrics-config.yml"]
+          pattern: raft-metrics
+
+  - it: does not include zookeeper metrics for new instance
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - notExists:
+          path: data["zookeeper-metrics-config.yml"]
+
+  - it: includes KRaft channel metrics
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: data["kafka-metrics-config.yml"]
+          pattern: raft-channel-metrics
+
+  - it: includes broker metadata metrics
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: data["kafka-metrics-config.yml"]
+          pattern: broker-metadata-metrics
