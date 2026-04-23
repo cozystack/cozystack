@@ -1,5 +1,3 @@
-{{- $apexHost := (index .Values._cluster "root-host") | default "" }}
-{{- $publishingNamespace := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $attachedNamespaces := (index .Values._cluster "gateway-attached-namespaces") | default "" }}
 {{- range splitList "," $attachedNamespaces }}
   {{- $ns := . | trim }}
@@ -7,23 +5,6 @@
     {{- fail (printf "publishing.gateway.attachedNamespaces must not contain tenant-* namespaces (got %q). Adding a tenant namespace here lets that tenant attach HTTPRoutes to the publishing tenant's Gateway and hijack hostnames. Child tenants that need their own Gateway must opt in via tenant.spec.gateway=true instead." $ns) }}
   {{- end }}
 {{- end }}
-{{/* The ValidatingAdmissionPolicy installs unconditionally — it must guard
-Gateway creation even when gateway.enabled=false at the platform level,
-because a tenant could still create a Gateway manually once the CRDs exist.
-ConfigMap params pull apexHost/publishingNamespace from the cozystack-values
-Secret so the VAP always has a concrete suffix to validate against. */}}
-{{- if $apexHost }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cozystack-gateway-hostname-policy
-  namespace: cozy-system
-  labels:
-    internal.cozystack.io/managed-by-cozystack: ""
-data:
-  apexHost: {{ $apexHost | quote }}
-  publishingNamespace: {{ $publishingNamespace | quote }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -39,34 +20,26 @@ spec:
       apiVersions: ["v1", "v1beta1"]
       operations: ["CREATE", "UPDATE"]
       resources: ["gateways"]
-  paramKind:
-    apiVersion: v1
-    kind: ConfigMap
   variables:
-  - name: apexHost
-    expression: "params.data.apexHost"
-  - name: publishingNamespace
-    expression: "params.data.publishingNamespace"
-  - name: tenantSuffix
+  - name: tenantHost
     expression: >-
-      object.metadata.namespace == variables.publishingNamespace
-        ? variables.apexHost
-        : (object.metadata.namespace.startsWith("tenant-")
-            ? object.metadata.namespace.substring(7) + "." + variables.apexHost
-            : "")
+      (has(namespaceObject.metadata.labels) &&
+       has(namespaceObject.metadata.labels["namespace.cozystack.io/host"]))
+        ? namespaceObject.metadata.labels["namespace.cozystack.io/host"]
+        : ""
   validations:
   - expression: >-
-      variables.tenantSuffix != "" &&
+      variables.tenantHost != "" &&
       (!has(object.spec.listeners) ||
        object.spec.listeners.all(l,
          !has(l.hostname) ||
-         l.hostname == variables.tenantSuffix ||
-         l.hostname.endsWith("." + variables.tenantSuffix)
+         l.hostname == variables.tenantHost ||
+         l.hostname.endsWith("." + variables.tenantHost)
        ))
     messageExpression: >-
-      "Gateway listener hostname must equal " + variables.tenantSuffix +
-      " or end with ." + variables.tenantSuffix +
-      " (namespace " + object.metadata.namespace + " may only publish its own tenant's domain)"
+      "Gateway listener hostname must equal " + variables.tenantHost +
+      " or end with ." + variables.tenantHost +
+      " (namespace " + object.metadata.namespace + " carries label namespace.cozystack.io/host=" + variables.tenantHost + ")"
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -77,9 +50,40 @@ metadata:
     internal.cozystack.io/managed-by-cozystack: ""
 spec:
   policyName: cozystack-gateway-hostname-policy
-  paramRef:
-    name: cozystack-gateway-hostname-policy
-    namespace: cozy-system
-    parameterNotFoundAction: Deny
   validationActions: [Deny]
-{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gateway-attached-namespaces-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["cozystack.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["packages"]
+  validations:
+  - expression: >-
+      !has(object.spec.components) ||
+      !has(object.spec.components.platform) ||
+      !has(object.spec.components.platform.values) ||
+      !has(object.spec.components.platform.values.gateway) ||
+      !has(object.spec.components.platform.values.gateway.attachedNamespaces) ||
+      object.spec.components.platform.values.gateway.attachedNamespaces.all(ns, !ns.startsWith("tenant-"))
+    messageExpression: >-
+      "spec.components.platform.values.gateway.attachedNamespaces must not contain any tenant-* namespace; use tenant.spec.gateway=true instead of adding a tenant namespace to the publishing Gateway's whitelist"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gateway-attached-namespaces-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gateway-attached-namespaces-policy
+  validationActions: [Deny]
