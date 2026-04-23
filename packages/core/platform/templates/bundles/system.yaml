@@ -1,5 +1,8 @@
 {{- if .Values.bundles.system.enabled }}
 
+# Gateway API CRDs (consumed by Cilium Gateway API controller and cert-manager)
+{{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
+
 # Networking
 {{- if eq .Values.bundles.system.variant "isp-full" }}
 {{- $networkingComponents := dict -}}
