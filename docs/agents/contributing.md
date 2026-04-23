@@ -21,8 +21,8 @@ Several files in each package are produced by `make generate` from `values.yaml`
 **Before committing edits to any of those sources**, run `make generate` inside the package and stage the full diff:
 
 ```bash
-make -C packages/extra/<name> generate
-git add packages/extra/<name>/ packages/system/<name>-rd/
+make -C packages/<apps-or-extra>/<name> generate
+git add packages/<apps-or-extra>/<name>/ packages/system/<name>-rd/
 ```
 
 The repo's pre-commit CI job runs `make generate` in every package and then `git diff --exit-code`. Any unstaged generator output fails the job with exit code 123 and blocks the PR. Also rerun `make generate` after a `git commit --amend` if the amended change touched any of the sources above.
