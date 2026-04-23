@@ -352,3 +352,13 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+
+  - it: fails when ephemeralStorage is set to empty string
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.ephemeralStorage: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
