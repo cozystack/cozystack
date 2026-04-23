@@ -428,9 +428,6 @@ spec:
             # proportional to the 256Mi-1Gi auto-computed reservation range.
             eviction-minimum-reclaim: "memory.available=256Mi"
             enforce-node-allocatable: "pods"
-            cgroups-per-qos: "true"
-            cgroup-driver: "systemd"
-            kernel-memcg-notification: "true"
           ignorePreflightErrors:
           - FileExisting-conntrack
         discovery:

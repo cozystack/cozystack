@@ -64,18 +64,6 @@ tests:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.enforce-node-allocatable
           value: "pods"
         documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.cgroups-per-qos
-          value: "true"
-        documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.cgroup-driver
-          value: "systemd"
-        documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kernel-memcg-notification
-          value: "true"
-        documentIndex: 4
 
   ##########################################
   # Empty kubelet: {} falls back to defaults
@@ -697,18 +685,6 @@ tests:
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.enforce-node-allocatable
           value: "pods"
-        documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.cgroups-per-qos
-          value: "true"
-        documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.cgroup-driver
-          value: "systemd"
-        documentIndex: 4
-      - equal:
-          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.kernel-memcg-notification
-          value: "true"
         documentIndex: 4
       - equal:
           path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.eviction-soft-grace-period
