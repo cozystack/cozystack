@@ -46,6 +46,8 @@ spec:
         publishing:
           host: "example.org"
           apiServerEndpoint: "https://192.168.123.10:6443"
+        gateway:
+          enabled: true
         bundles:
           enabledPackages:
             - cozystack.external-dns-application
