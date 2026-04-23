@@ -1,11 +1,6 @@
-{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
-{{- $host := (index .Values._cluster "host") | default "" }}
-{{- $issuerName := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
-{{- if not (eq $exposeIngress .Release.Namespace) }}
-{{- fail (printf "packages/extra/gateway is only meaningful in the publishing namespace %q; current release namespace is %q. Set tenant.spec.gateway=true on that tenant only." $exposeIngress .Release.Namespace) }}
-{{- end }}
+{{- $host := (index .Values._namespace "host") | default "" }}
 {{- if not $host }}
-{{- fail "publishing.host must be set in the platform chart for packages/extra/gateway to render a wildcard TLS listener." }}
+{{- fail "_namespace.host is empty — the tenant has no apex domain. Either set tenant.spec.host on this tenant or inherit it from a parent that has host set." }}
 {{- end }}
 ---
 apiVersion: cert-manager.io/v1
