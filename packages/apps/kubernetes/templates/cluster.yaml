@@ -32,9 +32,9 @@ spec:
           storage:
             resources:
               requests:
-                storage: {{ .group.diskSize | default "20Gi" }}
+                storage: {{ .group.diskSize | default "20Gi" | quote }}
             {{- with .group.storageClass }}
-            storageClassName: {{ . }}
+            storageClassName: {{ . | quote }}
             {{- end }}
       template:
         metadata:
@@ -263,9 +263,9 @@ spec:
       - KUBELET_VERSION={{ include "kubernetes.versionMap" $}} /usr/bin/update-k8s.sh || true
       - sed -i 's|root:x:|root::|' /etc/passwd
       - systemctl stop containerd.service
-      - mkdir -p /persistent/kubelet /persistent/containerd
-      - mount -o bind /persistent/kubelet /var/lib/kubelet
-      - mount -o bind /persistent/containerd /var/lib/containerd
+      - mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd
+      - mountpoint -q /var/lib/kubelet || mount -o bind /persistent/kubelet /var/lib/kubelet
+      - mountpoint -q /var/lib/containerd || mount -o bind /persistent/containerd /var/lib/containerd
       - sudo sed -i '/\[plugins."io.containerd.grpc.v1.cri".registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
       - systemctl start containerd.service
       joinConfiguration:
