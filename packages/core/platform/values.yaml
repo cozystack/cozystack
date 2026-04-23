@@ -94,6 +94,20 @@ authentication:
     # userinfo, logout) through this URL while keeping browser redirects on the external URL.
     # Example: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
     keycloakInternalUrl: ""
+# Gateway API configuration
+gateway:
+  # Enable Gateway API support across the platform. When true:
+  #   - cert-manager ClusterIssuers use an http01.gatewayHTTPRoute solver
+  #     that attaches to the root tenant's Gateway, so Certificate issuance
+  #     works for tenants whose ingress is via Gateway API rather than
+  #     ingress-nginx.
+  #   - Exposed services (dashboard, keycloak, harbor, bucket, grafana,
+  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an
+  #     HTTPRoute attached to the tenant's Gateway.
+  # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
+  # materialises the Gateway itself. This flag only controls platform-wide
+  # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
+  enabled: false
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

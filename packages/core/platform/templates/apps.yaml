@@ -31,6 +31,7 @@ stringData:
       expose-ingress: {{ .Values.publishing.ingressName | quote }}
       expose-external-ips: {{ .Values.publishing.externalIPs | join "," | quote }}
       expose-mode: {{ .Values.publishing.exposure | default "externalIPs" | quote }}
+      gateway-enabled: {{ .Values.gateway.enabled | default false | quote }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}
       api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
       {{- with .Values.branding }}

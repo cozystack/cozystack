@@ -1,0 +1,103 @@
+suite: cluster-issuer solver selection
+templates:
+  - templates/cluster-issuers.yaml
+
+release:
+  name: cert-manager-issuers
+  namespace: cozy-cert-manager
+
+tests:
+  - it: default renders ingress-nginx HTTP-01 solver on both ACME issuers
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: letsencrypt-prod
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].http01.ingress.ingressClassName
+          value: tenant-root
+      - documentIndex: 0
+        notExists:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: letsencrypt-stage
+      - documentIndex: 1
+        equal:
+          path: spec.acme.solvers[0].http01.ingress.ingressClassName
+          value: tenant-root
+
+  - it: gateway-enabled=true renders gatewayHTTPRoute solver on both ACME issuers
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "true"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].group
+          value: gateway.networking.k8s.io
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].kind
+          value: Gateway
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].name
+          value: cozystack
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].namespace
+          value: tenant-root
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
+          value: http
+      - documentIndex: 0
+        notExists:
+          path: spec.acme.solvers[0].http01.ingress
+      - documentIndex: 1
+        equal:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].name
+          value: cozystack
+
+  - it: solver=dns01 is unaffected by gateway-enabled flag
+    set:
+      _cluster:
+        solver: dns01
+        expose-ingress: tenant-root
+        gateway-enabled: "true"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.cloudflare.apiTokenSecretRef.name
+          value: cloudflare-api-token-secret
+      - documentIndex: 0
+        notExists:
+          path: spec.acme.solvers[0].http01
+      - documentIndex: 1
+        equal:
+          path: spec.acme.solvers[0].dns01.cloudflare.apiTokenSecretRef.name
+          value: cloudflare-api-token-secret
+
+  - it: gateway-enabled defaults to ingress solver when unset
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: ""
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].http01.ingress.ingressClassName
+          value: tenant-root
+      - documentIndex: 0
+        notExists:
+          path: spec.acme.solvers[0].http01.gatewayHTTPRoute
