@@ -12,6 +12,7 @@ tests:
   - it: renders Certificate, Gateway, redirect HTTPRoute and CiliumLoadBalancerIPPool when IPs and host are set
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10,192.0.2.11"
         issuer-name: letsencrypt-prod
@@ -84,6 +85,7 @@ tests:
   - it: IPv6 external IPs use /128 CIDRs
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "2001:db8::1,192.0.2.10"
       _namespace:
@@ -99,6 +101,7 @@ tests:
   - it: empty entries in expose-external-ips are filtered out
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10,,"
       _namespace:
@@ -113,6 +116,7 @@ tests:
   - it: chart render fails when publishing.externalIPs is empty so the operator never ships a silently non-working Gateway
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: ""
       _namespace:
@@ -125,6 +129,7 @@ tests:
   - it: child tenant renders its own Gateway with the child's per-tenant apex
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.11"
       _namespace:
@@ -166,6 +171,7 @@ tests:
   - it: empty _namespace.host fails with explicit error
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
       _namespace:
@@ -178,6 +184,7 @@ tests:
   - it: allowedRoutes whitelist defaults to publishing namespace only when no extra namespaces are set
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
       _namespace:
@@ -208,6 +215,7 @@ tests:
   - it: allowedRoutes whitelist prepends publishing namespace to the gateway-attached-namespaces list and filters empty entries
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
         gateway-attached-namespaces: "cozy-cert-manager,,cozy-dashboard, cozy-keycloak,"
@@ -227,6 +235,7 @@ tests:
   - it: Certificate references the per-tenant Issuer (not a shared ClusterIssuer) so each tenant gets isolated ACME state
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
         issuer-name: letsencrypt-prod
@@ -265,19 +274,31 @@ tests:
           value: https://acme-v02.api.letsencrypt.org/directory
       - template: templates/issuer.yaml
         equal:
-          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].name
-          value: cozystack
+          path: spec.acme.solvers[0].dns01.cloudflare.apiTokenSecretRef.name
+          value: cloudflare-api-token-secret
       - template: templates/issuer.yaml
         equal:
-          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
-          value: http
+          path: spec.acme.solvers[0].dns01.cloudflare.apiTokenSecretRef.key
+          value: api-token
+
+  - it: chart render fails when publishing.certificates.solver=http01 because Let's Encrypt refuses HTTP-01 for wildcard certs
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
       - template: templates/issuer.yaml
-        notExists:
-          path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].namespace
+        failedTemplate:
+          errorMessage: "publishing.certificates.solver=http01 cannot issue the wildcard certificate the tenant Gateway needs (Let's Encrypt refuses HTTP-01 for wildcard identifiers). Set publishing.certificates.solver=dns01 (with a Cloudflare API token Secret in cozy-cert-manager) before enabling tenant.spec.gateway=true, or use the self-signed ClusterIssuer for air-gapped clusters."
 
   - it: Issuer picks the staging ACME server when publishing.certificates.issuerName=letsencrypt-stage
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
         issuer-name: letsencrypt-stage
@@ -292,6 +313,7 @@ tests:
   - it: unknown issuer-name fails chart render with an explicit error
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
         issuer-name: my-custom-ca
@@ -305,6 +327,7 @@ tests:
   - it: HTTPS and HTTPS-apex listeners share the same allowedRoutes whitelist
     set:
       _cluster:
+        solver: dns01
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
         gateway-attached-namespaces: "cozy-dashboard"
