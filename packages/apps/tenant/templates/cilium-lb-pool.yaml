@@ -12,7 +12,11 @@
       (eq $exposeMode "loadBalancer")
       (eq $exposeIngress .Release.Namespace)
       .Values.ingress }}
-{{- if and $isPublishingIngressLB $ipsList }}
+{{- $hasOwnGateway := .Values.gateway | default false }}
+{{- if and $hasOwnGateway (not $ipsList) }}
+{{- fail "publishing.externalIPs is empty — a tenant Gateway has no CiliumLoadBalancerIPPool to draw from. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform (or publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately) before enabling tenant.spec.gateway=true." }}
+{{- end }}
+{{- if and (or $isPublishingIngressLB $hasOwnGateway) $ipsList }}
 apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:

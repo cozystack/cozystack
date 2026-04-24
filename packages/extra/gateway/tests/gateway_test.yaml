@@ -1,7 +1,6 @@
 suite: tenant gateway
 templates:
   - templates/gateway.yaml
-  - templates/cilium-lb-pool.yaml
   - templates/issuer.yaml
 
 release:
@@ -9,7 +8,7 @@ release:
   namespace: tenant-root
 
 tests:
-  - it: renders Certificate, Gateway, redirect HTTPRoute and CiliumLoadBalancerIPPool when IPs and host are set
+  - it: renders Certificate, Gateway and redirect HTTPRoute when IPs and host are set
     set:
       _cluster:
         solver: dns01
@@ -64,67 +63,6 @@ tests:
         equal:
           path: spec.rules[0].filters[0].requestRedirect.scheme
           value: https
-      - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 1
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: apiVersion
-          value: cilium.io/v2
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 192.0.2.10/32
-            - cidr: 192.0.2.11/32
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.serviceSelector.matchLabels["gateway.networking.k8s.io/gateway-name"]
-          value: cozystack
-
-  - it: IPv6 external IPs use /128 CIDRs
-    set:
-      _cluster:
-        solver: dns01
-        expose-ingress: tenant-root
-        expose-external-ips: "2001:db8::1,192.0.2.10"
-      _namespace:
-        host: example.org
-    asserts:
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 2001:db8::1/128
-            - cidr: 192.0.2.10/32
-
-  - it: empty entries in expose-external-ips are filtered out
-    set:
-      _cluster:
-        solver: dns01
-        expose-ingress: tenant-root
-        expose-external-ips: "192.0.2.10,,"
-      _namespace:
-        host: example.org
-    asserts:
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 192.0.2.10/32
-
-  - it: chart render fails when publishing.externalIPs is empty so the operator never ships a silently non-working Gateway
-    set:
-      _cluster:
-        solver: dns01
-        expose-ingress: tenant-root
-        expose-external-ips: ""
-      _namespace:
-        host: example.org
-    asserts:
-      - template: templates/cilium-lb-pool.yaml
-        failedTemplate:
-          errorMessage: "publishing.externalIPs is empty — a tenant Gateway has no CiliumLoadBalancerIPPool to draw from. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform (or publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately) before enabling tenant.spec.gateway=true."
 
   - it: child tenant renders its own Gateway with the child's per-tenant apex
     set:
@@ -163,10 +101,6 @@ tests:
           path: spec.listeners[0].allowedRoutes.namespaces.selector.matchExpressions[0].values
           value:
             - tenant-alice
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.serviceSelector.matchLabels["io.kubernetes.service.namespace"]
-          value: tenant-alice
 
   - it: empty _namespace.host fails with explicit error
     set:
