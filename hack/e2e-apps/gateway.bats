@@ -81,9 +81,12 @@ EOF
   # tenant-test namespace should only be allowed to publish its own
   # domain suffix ('.test.example.org'); a listener hostname from the
   # root tenant's apex must be denied by cozystack-gateway-hostname-policy.
-  # hack/cozytest.sh is a pure-shell bats-compat runner — bats' `run` helper
-  # is NOT available, so we capture kubectl output and exit status manually.
-  output=$(kubectl apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
+  # hack/cozytest.sh is /bin/sh (dash) with set -e — a failing command
+  # substitution propagates its exit status through variable assignment and
+  # kills the test. We specifically EXPECT admission to reject the apply, so
+  # use `if !` — set -e is disabled inside the if-condition, the exit status
+  # is captured, and $output is filled either way for the follow-up greps.
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -104,18 +107,23 @@ spec:
       namespaces:
         from: Same
 EOF
-)
-  # Expect kubectl to fail with an admission error (no __SUCCEEDED__ marker).
-  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted cross-tenant hostname" >&2; return 1; fi
-  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
-  echo "$output" | grep -q "must equal test.example.org"
+); then
+    # Happy path: admission rejected the Gateway. Verify the rejection came
+    # from our VAP and names the expected tenant host.
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -q "must equal test.example.org"
+  else
+    echo "BUG: admission accepted cross-tenant hostname — Gateway 'hostname-hijack-probe' was created in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
 }
 
 @test "cozystack-gateway-attached-namespaces-policy rejects Packages with tenant-* entries" {
   # The platform Package default name is cozystack.cozystack-platform, managed by
   # cozystack-api. Creating a dummy Package with tenant-alice in gateway.attachedNamespaces
   # must fail at admission time.
-  output=$(kubectl apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
 apiVersion: cozystack.io/v1alpha1
 kind: Package
 metadata:
@@ -129,10 +137,15 @@ spec:
           attachedNamespaces:
           - tenant-alice
 EOF
-)
-  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted tenant-* in attachedNamespaces" >&2; return 1; fi
-  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
-  echo "$output" | grep -q "must not contain any tenant-"
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -q "must not contain any tenant-"
+  else
+    echo "BUG: admission accepted tenant-* in attachedNamespaces — Package 'vap-reject-probe' was created" >&2
+    echo "$output" >&2
+    kubectl delete package vap-reject-probe --ignore-not-found
+    return 1
+  fi
 }
 
 @test "cozystack-tenant-host-policy blocks non-trusted callers from setting tenant.spec.host" {
@@ -166,10 +179,10 @@ subjects:
   name: default
   namespace: tenant-test
 EOF
-  output=$(kubectl --as=system:serviceaccount:tenant-test:default \
-                   --as-group=system:serviceaccounts \
-                   --as-group=system:serviceaccounts:tenant-test \
-    apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
+  if ! output=$(kubectl --as=system:serviceaccount:tenant-test:default \
+                        --as-group=system:serviceaccounts \
+                        --as-group=system:serviceaccounts:tenant-test \
+    apply -f - 2>&1 <<'EOF'
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
 metadata:
@@ -178,12 +191,19 @@ metadata:
 spec:
   host: foreign.example.org
 EOF
-)
-  kubectl -n tenant-test delete rolebinding vap-probe-tenant-create --ignore-not-found
-  kubectl -n tenant-test delete role vap-probe-tenant-create --ignore-not-found
-  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted tenant.spec.host from untrusted SA" >&2; return 1; fi
-  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
-  echo "$output" | grep -q "spec.host can only be set"
+); then
+    kubectl -n tenant-test delete rolebinding vap-probe-tenant-create --ignore-not-found
+    kubectl -n tenant-test delete role vap-probe-tenant-create --ignore-not-found
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -q "spec.host can only be set"
+  else
+    kubectl -n tenant-test delete tenants.apps.cozystack.io vap-host-probe --ignore-not-found
+    kubectl -n tenant-test delete rolebinding vap-probe-tenant-create --ignore-not-found
+    kubectl -n tenant-test delete role vap-probe-tenant-create --ignore-not-found
+    echo "BUG: admission accepted tenant.spec.host from untrusted SA — Tenant 'vap-host-probe' was created" >&2
+    echo "$output" >&2
+    return 1
+  fi
 }
 
 @test "cozystack-namespace-host-label-policy blocks non-trusted callers from changing the host label" {
@@ -215,16 +235,24 @@ subjects:
   name: default
   namespace: tenant-test
 EOF
-  output=$(kubectl --as=system:serviceaccount:tenant-test:default \
-                   --as-group=system:serviceaccounts \
-                   --as-group=system:serviceaccounts:tenant-test \
+  if ! output=$(kubectl --as=system:serviceaccount:tenant-test:default \
+                        --as-group=system:serviceaccounts \
+                        --as-group=system:serviceaccounts:tenant-test \
     label namespace tenant-test \
-      namespace.cozystack.io/host=foreign.example.org --overwrite 2>&1 && echo "__SUCCEEDED__")
-  kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found
-  kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found
-  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted host label change from untrusted SA" >&2; return 1; fi
-  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
-  echo "$output" | grep -q "immutable"
+      namespace.cozystack.io/host=foreign.example.org --overwrite 2>&1); then
+    kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found
+    kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -q "immutable"
+  else
+    # Revert label if apiserver somehow accepted the overwrite.
+    kubectl label namespace tenant-test namespace.cozystack.io/host=test.example.org --overwrite
+    kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found
+    kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found
+    echo "BUG: admission accepted host label change from untrusted SA" >&2
+    echo "$output" >&2
+    return 1
+  fi
 }
 
 @test "cozystack-namespace-host-label-policy blocks non-trusted callers from setting the host label at CREATE" {
@@ -256,10 +284,10 @@ subjects:
   name: default
   namespace: tenant-test
 EOF
-  output=$(kubectl --as=system:serviceaccount:tenant-test:default \
-                   --as-group=system:serviceaccounts \
-                   --as-group=system:serviceaccounts:tenant-test \
-    apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
+  if ! output=$(kubectl --as=system:serviceaccount:tenant-test:default \
+                        --as-group=system:serviceaccounts \
+                        --as-group=system:serviceaccounts:tenant-test \
+    apply -f - 2>&1 <<'EOF'
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -267,13 +295,19 @@ metadata:
   labels:
     namespace.cozystack.io/host: foreign.example.org
 EOF
-)
-  kubectl delete namespace vap-host-label-probe --ignore-not-found --wait=false
-  kubectl delete clusterrolebinding vap-probe-namespace-create --ignore-not-found
-  kubectl delete clusterrole vap-probe-namespace-create --ignore-not-found
-  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted first-time host label write from untrusted SA at CREATE" >&2; return 1; fi
-  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
-  echo "$output" | grep -q "immutable"
+); then
+    kubectl delete clusterrolebinding vap-probe-namespace-create --ignore-not-found
+    kubectl delete clusterrole vap-probe-namespace-create --ignore-not-found
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -q "immutable"
+  else
+    kubectl delete namespace vap-host-label-probe --ignore-not-found --wait=false
+    kubectl delete clusterrolebinding vap-probe-namespace-create --ignore-not-found
+    kubectl delete clusterrole vap-probe-namespace-create --ignore-not-found
+    echo "BUG: admission accepted first-time host label write from untrusted SA at CREATE — Namespace 'vap-host-label-probe' was created" >&2
+    echo "$output" >&2
+    return 1
+  fi
 }
 
 @test "HTTPRoute with a matching parentRef reaches Accepted status" {
