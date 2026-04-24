@@ -49,7 +49,9 @@ EOF
   # tenant-test namespace should only be allowed to publish its own
   # domain suffix ('.test.example.org'); a listener hostname from the
   # root tenant's apex must be denied by cozystack-gateway-hostname-policy.
-  run kubectl apply -f - <<'EOF'
+  # hack/cozytest.sh is a pure-shell bats-compat runner — bats' `run` helper
+  # is NOT available, so we capture kubectl output and exit status manually.
+  output=$(kubectl apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -70,8 +72,9 @@ spec:
       namespaces:
         from: Same
 EOF
-  # Expect kubectl to fail with an admission error
-  [ "$status" -ne 0 ]
+)
+  # Expect kubectl to fail with an admission error (no __SUCCEEDED__ marker).
+  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted cross-tenant hostname" >&2; return 1; }
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "must equal test.example.org"
 }
@@ -80,7 +83,7 @@ EOF
   # The platform Package default name is cozystack.cozystack-platform, managed by
   # cozystack-api. Creating a dummy Package with tenant-alice in gateway.attachedNamespaces
   # must fail at admission time.
-  run kubectl apply -f - <<'EOF'
+  output=$(kubectl apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
 apiVersion: cozystack.io/v1alpha1
 kind: Package
 metadata:
@@ -94,18 +97,19 @@ spec:
           attachedNamespaces:
           - tenant-alice
 EOF
-  [ "$status" -ne 0 ]
+)
+  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted tenant-* in attachedNamespaces" >&2; return 1; }
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
-  echo "$output" | grep -q "must not contain any tenant-\*"
+  echo "$output" | grep -q "must not contain any tenant-"
 }
 
 @test "cozystack-tenant-host-policy blocks non-trusted callers from setting tenant.spec.host" {
   # Impersonate a tenant-scoped ServiceAccount that is NOT in the trustedCaller
   # group list. Attempt to create a Tenant with spec.host set → rejected.
-  run kubectl --as=system:serviceaccount:tenant-test:default \
-              --as-group=system:serviceaccounts \
-              --as-group=system:serviceaccounts:tenant-test \
-    apply -f - <<'EOF'
+  output=$(kubectl --as=system:serviceaccount:tenant-test:default \
+                   --as-group=system:serviceaccounts \
+                   --as-group=system:serviceaccounts:tenant-test \
+    apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
 metadata:
@@ -114,7 +118,8 @@ metadata:
 spec:
   host: foreign.example.org
 EOF
-  [ "$status" -ne 0 ]
+)
+  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted tenant.spec.host from untrusted SA" >&2; return 1; }
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "spec.host can only be set"
 }
@@ -122,12 +127,12 @@ EOF
 @test "cozystack-namespace-host-label-policy blocks non-trusted callers from changing the host label" {
   # tenant-test namespace already has namespace.cozystack.io/host set by the
   # cozystack tenant chart. An unprivileged SA must not be able to overwrite it.
-  run kubectl --as=system:serviceaccount:tenant-test:default \
-              --as-group=system:serviceaccounts \
-              --as-group=system:serviceaccounts:tenant-test \
+  output=$(kubectl --as=system:serviceaccount:tenant-test:default \
+                   --as-group=system:serviceaccounts \
+                   --as-group=system:serviceaccounts:tenant-test \
     label namespace tenant-test \
-      namespace.cozystack.io/host=foreign.example.org --overwrite
-  [ "$status" -ne 0 ]
+      namespace.cozystack.io/host=foreign.example.org --overwrite 2>&1 && echo "__SUCCEEDED__")
+  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted host label change from untrusted SA" >&2; return 1; }
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "immutable"
 }
