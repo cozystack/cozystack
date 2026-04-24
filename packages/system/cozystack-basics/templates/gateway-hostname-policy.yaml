@@ -21,16 +21,19 @@ spec:
       operations: ["CREATE", "UPDATE"]
       resources: ["gateways"]
   matchConditions:
-  - name: is-cozystack-managed-namespace
-    expression: >-
-      namespaceObject != null &&
-      "namespace.cozystack.io/host" in namespaceObject.metadata.labels &&
-      namespaceObject.metadata.labels["namespace.cozystack.io/host"] != ""
+  - name: tenant-namespace
+    expression: object.metadata.namespace.startsWith("tenant-")
   variables:
   - name: tenantHost
-    expression: 'namespaceObject.metadata.labels["namespace.cozystack.io/host"]'
+    expression: >-
+      (namespaceObject != null &&
+       has(namespaceObject.metadata.labels) &&
+       "namespace.cozystack.io/host" in namespaceObject.metadata.labels)
+         ? namespaceObject.metadata.labels["namespace.cozystack.io/host"]
+         : ""
   validations:
   - expression: >-
+      variables.tenantHost == "" ||
       !has(object.spec.listeners) ||
       object.spec.listeners.all(l,
         !has(l.hostname) ||
