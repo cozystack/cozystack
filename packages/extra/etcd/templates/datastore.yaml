@@ -3,6 +3,9 @@ apiVersion: kamaji.clastix.io/v1alpha1
 kind: DataStore
 metadata:
   name: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
 spec:
   driver: etcd
   endpoints:
