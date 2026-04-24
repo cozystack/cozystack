@@ -16,9 +16,9 @@ setup() {
 
 dump_diagnostics() {
   echo "# --- diagnostics ---" >&3
-  kubectl -n tenant-test get etcdcluster,etcdbackupschedule,cronjob -o wide 2>&1 >&3 || true
-  kubectl -n tenant-test describe etcdbackupschedule etcd 2>&1 >&3 || true
-  kubectl -n cozy-etcd-operator logs -l app.kubernetes.io/name=etcd-operator --tail=100 2>&1 >&3 || true
+  kubectl -n tenant-test get etcdcluster,etcdbackupschedule,cronjob -o wide >&3 2>&1 || true
+  kubectl -n tenant-test describe etcdbackupschedule etcd >&3 2>&1 || true
+  kubectl -n cozy-etcd-operator logs -l app.kubernetes.io/name=etcd-operator --tail=100 >&3 2>&1 || true
 }
 
 @test "Create Etcd" {
