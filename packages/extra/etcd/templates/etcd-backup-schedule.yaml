@@ -17,8 +17,8 @@ spec:
   clusterRef:
     name: etcd
   schedule: {{ .Values.backup.schedule | quote }}
-  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
-  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit | int }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit | int }}
   destination:
     s3:
       endpoint: {{ $endpointURL | quote }}
