@@ -25,6 +25,8 @@ webhookReady:
   # Pod-level retry budget for transient node/registry failures (image pull rate limit,
   # OOM, CNI hiccup). The shell loop inside the container only covers reachability retries.
   # Pod retries and activeDeadlineSeconds (wall-clock bound on the whole Job across all
-  # pod retries) are ANDed: a 5-minute ImagePullBackOff on attempt 0 leaves only ~60s for
-  # subsequent retries before the Job is cut.
+  # pod retries) are ANDed, so activeDeadlineSeconds is the shorter of the two gates with
+  # the defaults above: the 60*2+60 = 180s deadline cuts the Job before backoffLimit=2
+  # ever matters if pod-level failures eat more than ~60s of the budget. Raise
+  # maxAttempts/sleepSeconds alongside backoffLimit when tuning for slow image pulls.
   backoffLimit: 2
