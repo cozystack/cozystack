@@ -205,6 +205,26 @@ tests:
           path: spec.template.spec.securityContext.seccompProfile.type
           value: RuntimeDefault
 
+  - it: wait container declares resource requests and limits for predictable scheduling
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 32Mi
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 100m
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 64Mi
+
   - it: Job container drops all capabilities and runs read-only rootfs
     template: templates/webhook-ready-hook.yaml
     asserts:
