@@ -27,6 +27,9 @@ rules:
 - apiGroups: ["kamaji.clastix.io"]
   resources: ["datastores"]
   verbs: ["create", "get", "patch"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates", "certificaterequests"]
+  verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -64,6 +67,13 @@ spec:
       containers:
       - name: create-datastore
         image: {{ .Values.kubectlImage }}
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
         env:
         - name: CERT_WAIT_TIMEOUT
           value: {{ .Values.certWaitTimeout | quote }}
@@ -71,6 +81,9 @@ spec:
         - sh
         - -exc
         - |
+          # Enable pipefail to catch errors in pipes
+          set -o pipefail
+
           # Install required utilities (kubectl and openssl)
           apk add --no-cache kubectl openssl
 
