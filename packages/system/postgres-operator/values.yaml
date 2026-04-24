@@ -3,3 +3,28 @@ cloudnative-pg:
     create: true
   image:
     tag: "1.27.3"
+# Image used by the post-install webhook-readiness Job (see templates/webhook-ready-hook.yaml).
+# Any image with kubectl on PATH works; the Job calls the apiserver service proxy with the
+# hook ServiceAccount's token to confirm the mcluster.cnpg.io webhook is reachable end-to-end
+# before the HelmRelease reports Ready, closing the "connection refused" bootstrap race.
+#
+# The tag is digest-pinned so an upstream retag does not change what runs on every install
+# and upgrade across the fleet. Refresh by resolving the current manifest-list digest
+# (`docker manifest inspect docker.io/clastix/kubectl:v1.32`) and updating `digest` below.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
+webhookReady:
+  image:
+    repository: docker.io/clastix/kubectl
+    tag: v1.32
+    digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+  # Retry loop bounds for the readiness probe. Defaults total ~120s wall clock.
+  # Both are `default`-coerced in the template so an override that blanks them still
+  # produces a working Job.
+  maxAttempts: 60
+  sleepSeconds: 2
+  # Pod-level retry budget for transient node/registry failures (image pull rate limit,
+  # OOM, CNI hiccup). The shell loop inside the container only covers reachability retries.
+  # Pod retries and activeDeadlineSeconds (wall-clock bound on the whole Job across all
+  # pod retries) are ANDed: a 5-minute ImagePullBackOff on attempt 0 leaves only ~60s for
+  # subsequent retries before the Job is cut.
+  backoffLimit: 2

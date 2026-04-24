@@ -1,0 +1,139 @@
+{{- /*
+  Post-install gate: block the HelmRelease from reporting Ready until the
+  cnpg admission webhook actually serves through the cluster Service. Helm
+  --wait on the controller pod passes once its readinessProbe passes, but
+  EndpointSlice propagation and kube-proxy/cilium data-plane programming
+  can lag by a second or two — long enough for any HelmRelease that
+  depends on postgres-operator (e.g. cozy-keycloak, tenant Postgres apps)
+  to fire its own install and have kube-apiserver hit the mcluster.cnpg.io
+  mutating webhook with "dial tcp <svc-ip>:443: connect: connection refused".
+
+  The Job uses the apiserver service proxy, which exercises the same
+  endpoint-resolution and apiserver-initiated pod dial that the admission
+  webhook path uses. Once /readyz answers through the proxy the data-plane
+  race is resolved. It does not verify the webhook's TLS CA bundle, so
+  this gate is scoped to reachability regressions, not cert rotation.
+
+  The service name and port name are hardcoded literals. Upstream cnpg
+  pins the service name in charts/cloudnative-pg/values.yaml with a
+  comment "DO NOT CHANGE THE SERVICE NAME as it is currently used to
+  generate the certificate and can not be configured". The port name is
+  fixed in charts/cloudnative-pg/templates/service.yaml (ports[0].name:
+  webhook-server). If a future `make update` ever changes either literal
+  upstream, the sync-check helm-unittest test
+  (tests/webhook-ready-hook_test.yaml) renders the subchart Service and
+  fails if the literal drifts — forcing this template to be updated in
+  the same change.
+*/}}
+{{- $_ := required "webhookReady.image.repository must be set to the container image providing kubectl for the post-install readiness Job" .Values.webhookReady.image.repository -}}
+{{- $_ := required "webhookReady.image.tag must be set for the post-install readiness Job" .Values.webhookReady.image.tag -}}
+{{- /* $svcName and $portName are hardcoded literals; see header comment. */ -}}
+{{- $svcName := "cnpg-webhook-service" -}}
+{{- /* $portName is the service port NAME, not number — matches ports[0].name in the vendored subchart's Service. */ -}}
+{{- $portName := "webhook-server" -}}
+{{- $resourceName := printf "https:%s:%s" $svcName $portName -}}
+{{- $maxAttempts := .Values.webhookReady.maxAttempts | default 60 -}}
+{{- $sleepSeconds := .Values.webhookReady.sleepSeconds | default 2 -}}
+{{- /* Derive activeDeadlineSeconds from retries + 60s slack so a values override that raises maxAttempts doesn't get silently cut. */ -}}
+{{- $deadline := add (mul (int $maxAttempts) (int $sleepSeconds)) 60 -}}
+{{- $image := printf "%s:%s" .Values.webhookReady.image.repository .Values.webhookReady.image.tag -}}
+{{- if .Values.webhookReady.image.digest }}
+{{- $image = printf "%s@%s" $image .Values.webhookReady.image.digest -}}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-webhook-ready
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-webhook-ready
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: [{{ $resourceName | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-webhook-ready
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-webhook-ready
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-webhook-ready
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-webhook-ready
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.webhookReady.backoffLimit | default 2 }}
+  activeDeadlineSeconds: {{ $deadline }}
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Release.Name }}-webhook-ready
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wait
+          image: {{ $image }}
+          imagePullPolicy: {{ if .Values.webhookReady.image.digest }}IfNotPresent{{ else }}Always{{ end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              ns={{ .Release.Namespace }}
+              proxy="/api/v1/namespaces/${ns}/services/{{ $resourceName }}/proxy/readyz"
+              max_attempts={{ $maxAttempts }}
+              sleep_seconds={{ $sleepSeconds }}
+              i=0
+              last_err=""
+              until last_err=$(kubectl get --raw "$proxy" 2>&1 >/dev/null); do
+                i=$((i + 1))
+                if [ $i -gt $max_attempts ]; then
+                  echo "timeout: cnpg webhook did not respond through the apiserver proxy after ${max_attempts} attempts (${sleep_seconds}s each)"
+                  echo "last error: ${last_err}"
+                  exit 1
+                fi
+                if [ $((i % 10)) -eq 1 ]; then
+                  echo "attempt $i/${max_attempts}: ${last_err}"
+                fi
+                sleep "$sleep_seconds"
+              done
+              echo "cnpg webhook is ready"
