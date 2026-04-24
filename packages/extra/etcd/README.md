@@ -6,7 +6,7 @@ When `backup.enabled` is set to `true`, the chart renders an `EtcdBackupSchedule
 
 Enabling backup requires the following fields to be explicitly set (defaults are empty strings so that missing values fail fast at template render time): `backup.s3AccessKey`, `backup.s3SecretKey`, `backup.destinationPath` (must start with `s3://` and have no `//` segments), and `backup.endpointURL`. S3 credentials passed through plain values end up in the HelmRelease manifest — for production deployments prefer an external secret management tool (ESO, Sealed Secrets, etc.) over committing the keys to Git.
 
-**Restore** (`EtcdCluster.spec.bootstrap`) and the one-shot `EtcdBackup` CRD shipped upstream in v0.4.3 are not yet exposed through this chart. Restoring from a snapshot or taking an ad-hoc backup currently requires hand-applying the corresponding CRD.
+**Restore** (`EtcdCluster.spec.bootstrap`) and the one-shot `EtcdBackup` custom resource shipped upstream in v0.4.3 are not yet exposed through this chart. Restoring from a snapshot or taking an ad-hoc backup currently requires hand-applying the corresponding custom resource manifest.
 
 ## Parameters
 
