@@ -88,9 +88,8 @@ spec:
           set -o pipefail
 
           # Install required utilities
-          # openssl: for certificate validation
-          # coreutils: for GNU date (BusyBox date has limited RFC 2822 support)
-          apk add --no-cache openssl coreutils
+          # openssl: for certificate validation (checkend, pubkey extraction)
+          apk add --no-cache openssl
 
           # Get namespace from ServiceAccount
           NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
@@ -107,6 +106,29 @@ spec:
           echo "Waiting for cert-manager to populate TLS Secrets in namespace: $NAMESPACE"
           echo "Timeout: $TIMEOUT_SECONDS seconds"
 
+          # Function to check Certificate CR is not in failed state
+          check_certificate_ready() {
+            local cert_name=$1
+            local namespace=$2
+
+            # Check Certificate exists
+            if ! kubectl get certificate "$cert_name" --namespace "$namespace" --request-timeout=10s >/dev/null 2>&1; then
+              echo "ERROR: Certificate $cert_name not found"
+              return 1
+            fi
+
+            # Check Certificate is not in permanent failed state
+            local reason=$(kubectl get certificate "$cert_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null)
+
+            if [ "$reason" = "Failed" ]; then
+              echo "ERROR: Certificate $cert_name is in Failed state, will not recover"
+              kubectl describe certificate "$cert_name" --namespace "$namespace" --request-timeout=10s
+              return 1
+            fi
+
+            return 0
+          }
+
           # Function to validate Secret has both certificate and key
           validate_secret() {
             local secret_name=$1
@@ -122,18 +144,9 @@ spec:
 
             # Check certificate is valid (not expired)
             # -checkend 0 validates notAfter >= now
+            # Note: notBefore validation is omitted as Kamaji webhook validates
+            # TLS handshake at admission time, making client-side check redundant
             if ! echo "$cert_data" | openssl x509 -noout -checkend 0 2>/dev/null; then
-              return 1
-            fi
-
-            # Check certificate is already valid (notBefore <= now)
-            local not_before_str=$(echo "$cert_data" | openssl x509 -noout -startdate 2>/dev/null | cut -d= -f2-)
-            local current_time=$(date +%s)
-            # Parse notBefore date - works on Alpine/BusyBox date
-            local not_before_time=$(date -d "$not_before_str" +%s 2>/dev/null || echo 0)
-
-            if [ "$not_before_time" -gt 0 ] && [ "$not_before_time" -gt "$current_time" ]; then
-              echo "Certificate not yet valid (notBefore: $not_before_str)"
               return 1
             fi
 
@@ -166,9 +179,14 @@ spec:
             echo "CertificateRequest status:"
             kubectl get certificaterequest --namespace "$namespace" --request-timeout=10s -o wide 2>&1 || echo "No CertificateRequests found"
             echo ""
-            echo "Secret $secret_name status:"
-            kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o yaml 2>&1 || echo "Secret not found"
+            echo "Secret $secret_name metadata (no sensitive data):"
+            kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.metadata}' 2>&1 || echo "Secret not found"
           }
+
+          # Fail-fast check: ensure Certificate CRs exist and are not in failed state
+          echo "Verifying Certificate CRs are not in failed state..."
+          check_certificate_ready "etcd-ca" "$NAMESPACE" || exit 1
+          check_certificate_ready "etcd-client" "$NAMESPACE" || exit 1
 
           # Wait for etcd-ca-tls Secret to be populated by cert-manager
           echo "Checking etcd-ca-tls Secret..."
