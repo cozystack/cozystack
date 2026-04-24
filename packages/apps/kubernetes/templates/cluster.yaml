@@ -257,7 +257,7 @@ spec:
           filesystem: xfs
           label: persistent
           partition: "none"
-          {{/* overwrite must stay false: persistent PVC survives VM recreation during rolling updates, cloud-init skips reformatting and the existing LABEL=persistent mount still works */}}
+          {{/* overwrite must stay false: XFS on /dev/vdb is created on first boot; subsequent reboots of the same VM must reuse the existing filesystem via LABEL=persistent */}}
           overwrite: false
       mounts:
       - ["LABEL=persistent", "/persistent"]
