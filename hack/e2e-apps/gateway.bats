@@ -45,6 +45,20 @@ EOF
   kubectl -n tenant-test delete gateway/gateway-e2e-probe --ignore-not-found --timeout=1m
 }
 
+@test "cozystack-gateway-hostname-policy VAP and binding are installed" {
+  # Diagnose the hostname-policy enforcement path from the ground up.
+  # If these resources are missing, admission cannot reject anything.
+  kubectl get validatingadmissionpolicy cozystack-gateway-hostname-policy -o yaml
+  kubectl get validatingadmissionpolicybinding cozystack-gateway-hostname-policy -o yaml
+  # Binding MUST have validationActions: [Deny] — [Audit] / [] would let requests through silently.
+  actions=$(kubectl get validatingadmissionpolicybinding cozystack-gateway-hostname-policy -o jsonpath='{.spec.validationActions}')
+  echo "binding.validationActions=$actions"
+  case "$actions" in
+    *Deny*) ;;
+    *) echo "SETUP FAILURE: binding.validationActions lacks Deny (got '$actions')" >&2; return 1 ;;
+  esac
+}
+
 @test "tenant-test namespace carries namespace.cozystack.io/host label from tenant chart" {
   # Diagnostic: the whole hostname-policy VAP keys off this label. If it is
   # missing or empty, the VAP's matchCondition returns false, VAP skips, and
