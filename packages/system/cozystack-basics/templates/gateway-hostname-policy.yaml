@@ -130,7 +130,7 @@ spec:
         g == "system:masters" ||
         g == "system:serviceaccounts:cozy-system" ||
         g == "system:serviceaccounts:cozy-cert-manager" ||
-        g == "system:serviceaccounts:flux-system" ||
+        g == "system:serviceaccounts:cozy-fluxcd" ||
         g == "system:serviceaccounts:kube-system")
   validations:
   - expression: "!variables.hostChanged || variables.trustedCaller"
@@ -184,7 +184,7 @@ spec:
         g == "system:masters" ||
         g == "system:serviceaccounts:cozy-system" ||
         g == "system:serviceaccounts:cozy-cert-manager" ||
-        g == "system:serviceaccounts:flux-system" ||
+        g == "system:serviceaccounts:cozy-fluxcd" ||
         g == "system:serviceaccounts:kube-system")
   validations:
   - expression: "variables.newHost == variables.oldHost || variables.trustedCaller"
