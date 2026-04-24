@@ -1,6 +1,9 @@
 {{- if not (kindIs "float64" .Values.certWaitTimeout) }}
   {{- fail "certWaitTimeout must be a number" }}
 {{- end }}
+{{- if or (lt (.Values.certWaitTimeout | int) 10) (gt (.Values.certWaitTimeout | int) 3600) }}
+  {{- fail "certWaitTimeout must be between 10 and 3600 seconds" }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -92,7 +95,10 @@ spec:
 
           # Install required utilities
           # openssl: for certificate validation (checkend, pubkey extraction)
-          apk add --no-cache openssl
+          if ! apk add --no-cache openssl; then
+            echo "ERROR: Failed to install openssl. Check network connectivity and Alpine package repository availability."
+            exit 1
+          fi
 
           # Get namespace from ServiceAccount
           NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
