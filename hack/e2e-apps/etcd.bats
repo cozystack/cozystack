@@ -6,12 +6,12 @@
 # prior run so tests remain independent despite the singleton name.
 
 setup() {
-  kubectl -n tenant-test delete etcd.apps.cozystack.io --all --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test delete etcd.apps.cozystack.io --all --ignore-not-found --timeout=2m
   # HelmRelease teardown is async relative to the CR deletion above; wait for
   # downstream resources so the next test starts from a clean state.
-  kubectl -n tenant-test wait hr/etcd --for=delete --timeout=2m --ignore-not-found || true
-  kubectl -n tenant-test wait secret/etcd-s3-creds --for=delete --timeout=1m --ignore-not-found || true
-  kubectl -n tenant-test wait etcdbackupschedule.etcd.aenix.io/etcd --for=delete --timeout=1m --ignore-not-found || true
+  kubectl -n tenant-test wait hr/etcd --for=delete --timeout=2m --ignore-not-found
+  kubectl -n tenant-test wait secret/etcd-s3-creds --for=delete --timeout=1m --ignore-not-found
+  kubectl -n tenant-test wait etcdbackupschedule.etcd.aenix.io/etcd --for=delete --timeout=1m --ignore-not-found
 }
 
 dump_diagnostics() {
