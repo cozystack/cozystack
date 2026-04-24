@@ -22,7 +22,7 @@ Parameters:
   - dnsNames   (required) - list of DNS SANs
   - issuerRef  (required) - dict with "name" and "kind" (e.g. ClusterIssuer, Issuer)
   - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset
-  - renewBefore(optional) - renewal window, defaults to 720h (30 days)
+  - renewBefore (optional) - renewal window, defaults to 720h (30 days)
   - usages     (optional) - list of key usages, defaults to ["server auth"] (not cert-manager's default of "digital signature, key encipherment"; this is a deliberate choice for TLS server certificates)
 */}}
 {{- define "cozy-lib.tls.certificate" -}}
@@ -96,6 +96,12 @@ Parameters:
   - secretName (optional) - user-provided secret name; if set, returned as-is
 */}}
 {{- define "cozy-lib.tls.secretName" -}}
+{{- if not .Release -}}
+{{-   fail "ERROR: \"Release\" is required for cozy-lib.tls.secretName. Pass the Helm release object via the context dict." -}}
+{{- end -}}
+{{- if not .suffix -}}
+{{-   fail "ERROR: \"suffix\" is required for cozy-lib.tls.secretName. Provide a suffix for the generated secret name (e.g. \"tls\", \"server-tls\")." -}}
+{{- end -}}
 {{- if not (empty .secretName) -}}
 {{-   .secretName -}}
 {{- else -}}
