@@ -223,3 +223,91 @@ tests:
       - equal:
           path: spec.issuerRef.name
           value: my-namespace-issuer
+
+  # TLS disabled produces zero documents
+  - it: produces zero documents when tls is not set
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # TLS disabled when tls is explicitly null
+  - it: produces zero documents when tls is null
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls: null
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Empty dnsNames renders null in YAML
+  - it: renders null dnsNames when empty list provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: empty-dns-tls
+        dnsNames: []
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.dnsNames
+          value: null
+
+  # Missing issuerRef name renders null
+  - it: renders null issuerRef name when not provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: missing-issuer-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          kind: ClusterIssuer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.issuerRef.name
+          value: null
+
+  # Missing issuerRef kind renders null
+  - it: renders null issuerRef kind when not provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: missing-kind-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: my-issuer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.issuerRef.kind
+          value: null

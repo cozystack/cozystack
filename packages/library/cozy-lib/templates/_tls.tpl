@@ -59,6 +59,7 @@ spec:
 {{- end }}
 
 {{/*
+Convenience helper for chart consumers.
 Return a TLS secret name — either the user-provided value or a generated default.
 Useful in conditionals to decide whether to mount a TLS secret or render a Certificate CR.
 
