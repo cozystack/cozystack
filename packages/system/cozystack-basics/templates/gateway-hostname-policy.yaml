@@ -113,11 +113,17 @@ spec:
   matchConditions:
   - name: has-host-field
     expression: >-
-      has(object.spec) && "host" in object.spec && object.spec.host != ""
+      (has(object.spec) && "host" in object.spec && object.spec.host != "") ||
+      (oldObject != null && has(oldObject.spec) && "host" in oldObject.spec && oldObject.spec.host != "")
   variables:
-  - name: hostChanged
+  - name: oldHost
     expression: >-
-      (oldObject != null && has(oldObject.spec) && "host" in oldObject.spec && oldObject.spec.host == object.spec.host) ? false : true
+      (oldObject != null && has(oldObject.spec) && "host" in oldObject.spec) ? oldObject.spec.host : ""
+  - name: newHost
+    expression: >-
+      (has(object.spec) && "host" in object.spec) ? object.spec.host : ""
+  - name: hostChanged
+    expression: variables.oldHost != variables.newHost
   - name: trustedCaller
     expression: >-
       has(request.userInfo.groups) && request.userInfo.groups.exists(g,
