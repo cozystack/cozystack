@@ -227,6 +227,55 @@ EOF
   echo "$output" | grep -q "immutable"
 }
 
+@test "cozystack-namespace-host-label-policy blocks non-trusted callers from setting the host label at CREATE" {
+  # Defense-in-depth: a non-trusted caller must not be able to stamp
+  # namespace.cozystack.io/host=X on a brand-new namespace either — only
+  # cozystack/Flux SAs may write the label. Authorization runs before
+  # admission, so grant cluster-wide namespace create to the impersonated SA
+  # first, otherwise the test would fail with plain RBAC Forbidden.
+  kubectl apply -f - <<'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vap-probe-namespace-create
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["create","get","list","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vap-probe-namespace-create
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vap-probe-namespace-create
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: tenant-test
+EOF
+  output=$(kubectl --as=system:serviceaccount:tenant-test:default \
+                   --as-group=system:serviceaccounts \
+                   --as-group=system:serviceaccounts:tenant-test \
+    apply -f - 2>&1 <<'EOF' && echo "__SUCCEEDED__"
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vap-host-label-probe
+  labels:
+    namespace.cozystack.io/host: foreign.example.org
+EOF
+)
+  kubectl delete namespace vap-host-label-probe --ignore-not-found --wait=false
+  kubectl delete clusterrolebinding vap-probe-namespace-create --ignore-not-found
+  kubectl delete clusterrole vap-probe-namespace-create --ignore-not-found
+  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted first-time host label write from untrusted SA at CREATE" >&2; return 1; fi
+  echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  echo "$output" | grep -q "immutable"
+}
+
 @test "HTTPRoute with a matching parentRef reaches Accepted status" {
   # Put a Gateway and a route in the same namespace so allowedRoutes: Same accepts them.
   kubectl apply -f - <<'EOF'

@@ -160,15 +160,19 @@ spec:
     resourceRules:
     - apiGroups: [""]
       apiVersions: ["v1"]
-      operations: ["UPDATE"]
+      operations: ["CREATE", "UPDATE"]
       resources: ["namespaces"]
   matchConditions:
-  - name: had-host-label
+  - name: touches-host-label
     expression: >-
-      has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels
+      (has(object.metadata.labels) && "namespace.cozystack.io/host" in object.metadata.labels) ||
+      (oldObject != null && has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels)
   variables:
   - name: oldHost
-    expression: 'oldObject.metadata.labels["namespace.cozystack.io/host"]'
+    expression: >-
+      (oldObject != null && has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels)
+        ? oldObject.metadata.labels["namespace.cozystack.io/host"]
+        : ""
   - name: newHost
     expression: >-
       has(object.metadata.labels) && "namespace.cozystack.io/host" in object.metadata.labels
