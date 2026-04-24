@@ -45,6 +45,24 @@ EOF
   kubectl -n tenant-test delete gateway/gateway-e2e-probe --ignore-not-found --timeout=1m
 }
 
+@test "tenant-test namespace carries namespace.cozystack.io/host label from tenant chart" {
+  # Diagnostic: the whole hostname-policy VAP keys off this label. If it is
+  # missing or empty, the VAP's matchCondition returns false, VAP skips, and
+  # EVERY Gateway in the namespace is admitted regardless of listener hostname.
+  # Make that bug loud instead of letting it fall through as a silent pass.
+  host_label=$(kubectl get namespace tenant-test -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+  if [ -z "$host_label" ]; then
+    echo "SETUP FAILURE: tenant-test namespace lacks namespace.cozystack.io/host label" >&2
+    kubectl get namespace tenant-test -o yaml >&2
+    return 1
+  fi
+  if [ "$host_label" != "test.example.org" ]; then
+    echo "SETUP FAILURE: tenant-test host label is '$host_label', expected 'test.example.org'" >&2
+    kubectl get namespace tenant-test -o yaml >&2
+    return 1
+  fi
+}
+
 @test "ValidatingAdmissionPolicy rejects Gateway with foreign hostname" {
   # tenant-test namespace should only be allowed to publish its own
   # domain suffix ('.test.example.org'); a listener hostname from the
