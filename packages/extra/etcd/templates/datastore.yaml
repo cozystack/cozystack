@@ -1,38 +1,135 @@
 ---
-apiVersion: kamaji.clastix.io/v1alpha1
-kind: DataStore
+apiVersion: v1
+kind: ServiceAccount
 metadata:
-  name: {{ .Release.Namespace }}
+  name: etcd-datastore-hook
   annotations:
     helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: etcd-datastore-hook
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: ["kamaji.clastix.io"]
+  resources: ["datastores"]
+  verbs: ["create", "get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: etcd-datastore-hook
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: etcd-datastore-hook
+subjects:
+- kind: ServiceAccount
+  name: etcd-datastore-hook
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: etcd-datastore-hook-{{ .Release.Revision }}
+  annotations:
+    # Weight 10 ensures Job runs after all regular resources including Certificates
+    # Job waits for cert-manager to populate TLS Secrets before creating DataStore
+    helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
-  driver: etcd
-  endpoints:
-  - etcd.{{ $.Release.Namespace }}.svc:2379
-  tlsConfig:
-    certificateAuthority:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-    clientCertificate:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
+  backoffLimit: 10
+  template:
+    spec:
+      serviceAccountName: etcd-datastore-hook
+      restartPolicy: OnFailure
+      containers:
+      - name: create-datastore
+        image: rancher/kubectl:v1.29.0
+        command:
+        - sh
+        - -exc
+        - |
+          echo "Waiting for cert-manager to populate TLS Secrets..."
+
+          # Wait for etcd-ca-tls Secret to be populated by cert-manager
+          for i in $(seq 1 60); do
+            if kubectl get secret etcd-ca-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout 2>/dev/null; then
+              echo "etcd-ca-tls Secret populated"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "ERROR: etcd-ca-tls Secret not populated after 120 seconds"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Wait for etcd-client-tls Secret to be populated by cert-manager
+          for i in $(seq 1 60); do
+            if kubectl get secret etcd-client-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout 2>/dev/null; then
+              echo "etcd-client-tls Secret populated"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "ERROR: etcd-client-tls Secret not populated after 120 seconds"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "All TLS Secrets populated, creating DataStore..."
+
+          # Create DataStore manifest
+          cat <<EOF | kubectl apply -f -
+          apiVersion: kamaji.clastix.io/v1alpha1
+          kind: DataStore
+          metadata:
+            name: {{ .Release.Namespace }}
+          spec:
+            driver: etcd
+            endpoints:
+            - etcd.{{ .Release.Namespace }}.svc:2379
+            tlsConfig:
+              certificateAuthority:
+                certificate:
+                  secretReference:
+                    keyPath: tls.crt
+                    name: etcd-ca-tls
+                    namespace: {{ .Release.Namespace }}
+                privateKey:
+                  secretReference:
+                    keyPath: tls.key
+                    name: etcd-ca-tls
+                    namespace: {{ .Release.Namespace }}
+              clientCertificate:
+                certificate:
+                  secretReference:
+                    keyPath: tls.crt
+                    name: etcd-client-tls
+                    namespace: {{ .Release.Namespace }}
+                privateKey:
+                  secretReference:
+                    keyPath: tls.key
+                    name: etcd-client-tls
+                    namespace: {{ .Release.Namespace }}
+          EOF
+
+          echo "DataStore created successfully"
 ---
 apiVersion: v1
 kind: Secret
