@@ -1,11 +1,12 @@
-{{- if not .Values.lineageControllerWebhook.deployment.enabled }}
+{{- if .Values.lineageControllerWebhook.deployment.enabled }}
 apiVersion: apps/v1
-kind: DaemonSet
+kind: Deployment
 metadata:
   name: lineage-controller-webhook
   labels:
     app: lineage-controller-webhook
 spec:
+  replicas: {{ .Values.lineageControllerWebhook.deployment.replicas }}
   selector:
     matchLabels:
       app: lineage-controller-webhook
@@ -14,26 +15,19 @@ spec:
       labels:
         app: lineage-controller-webhook
     spec:
-      {{- with .Values.lineageControllerWebhook.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      tolerations:
-      - operator: Exists
       serviceAccountName: lineage-controller-webhook
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: lineage-controller-webhook
       containers:
       - name: lineage-controller-webhook
         image: "{{ .Values.lineageControllerWebhook.image }}"
-        {{- if .Values.lineageControllerWebhook.localK8sAPIEndpoint.enabled }}
-        env:
-        - name: KUBERNETES_SERVICE_HOST
-          valueFrom:
-            fieldRef:
-              apiVersion: v1
-              fieldPath: status.hostIP
-        - name: KUBERNETES_SERVICE_PORT
-          value: "6443"
-        {{- end }}
         args:
         {{- if .Values.lineageControllerWebhook.debug }}
         - --zap-log-level=debug

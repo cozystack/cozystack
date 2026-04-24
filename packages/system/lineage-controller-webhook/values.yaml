@@ -2,9 +2,14 @@ lineageControllerWebhook:
   image: ghcr.io/cozystack/cozystack/lineage-controller-webhook:v1.3.0@sha256:e8984709686a5eaf19b89da378d7b8c688ea5607e0783a88d9c9e4ccfca96fb0
   debug: false
   localK8sAPIEndpoint:
+    # incompatable with Deployment mode
     enabled: true
   # nodeSelector for the DaemonSet
   # Talos uses empty value: "node-role.kubernetes.io/control-plane": ""
   # Generic k8s (k3s, kubeadm) uses: "node-role.kubernetes.io/control-plane": "true"
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
+  # if enabled, replace DaemonSet by Deployment
+  deployment:
+    enabled: false
+    replicas: 1
