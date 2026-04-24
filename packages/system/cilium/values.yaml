@@ -19,6 +19,17 @@ cilium:
     digest: "sha256:700f06f4803a838a8e830be5ace4650e3ad82bdefabfb2f4d110368d307a5efb"
   envoy:
     enabled: true
+    # Upstream default is {} — no requests/limits. The embedded envoy DaemonSet
+    # idles at ~100 MB RAM/node and grows under L7 traffic; without requests
+    # the DaemonSet schedules onto any node with no reserved headroom, and
+    # without a memory limit a runaway listener could OOM the node.
+    # The baseline matches the commented-out example in the upstream Helm values.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
   gatewayAPI:
     enabled: true
   rollOutCiliumPods: true
