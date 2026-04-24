@@ -20,9 +20,8 @@ spec:
   interval: 5m
   timeout: 30m
   install:
-    atomic: true
     remediation:
-      retries: -1
+      retries: 3
   upgrade:
     force: true
     remediation:
