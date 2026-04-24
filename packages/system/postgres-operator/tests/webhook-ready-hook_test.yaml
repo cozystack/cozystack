@@ -9,7 +9,7 @@ release:
   namespace: cozy-postgres-operator
 
 tests:
-  - it: renders four hook objects (SA + ClusterRole + ClusterRoleBinding + Job)
+  - it: renders four hook objects (SA + Role + RoleBinding + Job)
     template: templates/webhook-ready-hook.yaml
     asserts:
       - hasDocuments:
@@ -49,7 +49,7 @@ tests:
       - documentIndex: 1
         equal:
           path: kind
-          value: ClusterRole
+          value: Role
       - documentIndex: 1
         equal:
           path: metadata.annotations["helm.sh/hook-weight"]
@@ -57,7 +57,7 @@ tests:
       - documentIndex: 2
         equal:
           path: kind
-          value: ClusterRoleBinding
+          value: RoleBinding
       - documentIndex: 2
         equal:
           path: metadata.annotations["helm.sh/hook-weight"]
