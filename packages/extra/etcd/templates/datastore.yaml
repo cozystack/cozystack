@@ -1,3 +1,6 @@
+{{- if not (kindIs "float64" .Values.certWaitTimeout) }}
+  {{- fail "certWaitTimeout must be a number" }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -68,6 +71,9 @@ spec:
         - sh
         - -exc
         - |
+          # Install required utilities (kubectl and openssl)
+          apk add --no-cache kubectl openssl
+
           # Get namespace from ServiceAccount
           NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
           TIMEOUT_SECONDS=${CERT_WAIT_TIMEOUT:-300}
@@ -96,16 +102,14 @@ spec:
             fi
 
             # Check certificate is already valid (notBefore <= now)
-            # Use openssl to get dates and compare, avoiding GNU date dependency
-            local dates=$(echo "$cert_data" | openssl x509 -noout -dates 2>/dev/null)
-            local not_before=$(echo "$dates" | grep notBefore | cut -d= -f2-)
+            local not_before_str=$(echo "$cert_data" | openssl x509 -noout -startdate 2>/dev/null | cut -d= -f2-)
+            local current_time=$(date +%s)
+            # Parse notBefore date - works on Alpine/BusyBox date
+            local not_before_time=$(date -d "$not_before_str" +%s 2>/dev/null || echo 0)
 
-            # Verify notBefore is in the past (certificate is valid now)
-            # Create temporary cert with notBefore and check if it's valid
-            if ! echo "$cert_data" | openssl x509 -noout -checkend -1 2>/dev/null; then
-              # If checkend -1 fails, cert might not be valid yet
-              # This is a heuristic - in practice cert-manager sets notBefore in past
-              echo "Warning: Certificate validity period check inconclusive"
+            if [ "$not_before_time" -gt 0 ] && [ "$not_before_time" -gt "$current_time" ]; then
+              echo "Certificate not yet valid (notBefore: $not_before_str)"
+              return 1
             fi
 
             # Check private key exists and is valid (supports RSA, ECDSA, Ed25519, etc.)

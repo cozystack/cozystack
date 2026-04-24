@@ -25,6 +25,6 @@ resources:
 certWaitTimeout: 300
 
 ## @param {string} [kubectlImage] - Container image used for DataStore creation hook Job.
-## MUST contain: sh/bash, kubectl, openssl, base64, date utilities.
-## Tested images: alpine/k8s:1.29.0 (alpine + kubectl + openssl)
-kubectlImage: alpine/k8s:1.29.0
+## Uses alpine:3.19 as base and installs kubectl + openssl via apk at runtime.
+## This ensures all required utilities (sh, kubectl, openssl, base64, date) are available.
+kubectlImage: alpine:3.19
