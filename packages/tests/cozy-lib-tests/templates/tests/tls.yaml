@@ -1,6 +1,6 @@
 {{- if .Values.tls }}
 {{- $certArgs := dict "Release" .Release "name" .Values.tls.name "secretName" (default .Values.tls.name .Values.tls.secretName) "dnsNames" .Values.tls.dnsNames "issuerRef" .Values.tls.issuerRef "usages" (.Values.tls.usages | default list) -}}
-{{- if .Values.tls.duration }}{{- $_ := set $certArgs "duration" .Values.tls.duration }}{{- end -}}
-{{- if .Values.tls.renewBefore }}{{- $_ := set $certArgs "renewBefore" .Values.tls.renewBefore }}{{- end -}}
+{{- if and .Values.tls.duration (ne .Values.tls.duration "") }}{{- $_ := set $certArgs "duration" .Values.tls.duration }}{{- end -}}
+{{- if and .Values.tls.renewBefore (ne .Values.tls.renewBefore "") }}{{- $_ := set $certArgs "renewBefore" .Values.tls.renewBefore }}{{- end -}}
 {{- include "cozy-lib.tls.certificate" $certArgs -}}
 {{- end }}
