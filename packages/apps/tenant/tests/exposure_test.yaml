@@ -139,3 +139,78 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: gateway=true in any tenant renders pool with namespace-only selector
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: root-exposure
+      - equal:
+          path: spec.blocks
+          value:
+            - cidr: 192.0.2.10/32
+      - equal:
+          path: spec.serviceSelector.matchLabels["io.kubernetes.service.namespace"]
+          value: tenant-root
+
+  - it: gateway=true in a non-publishing tenant renders its own pool (not tied to publishing tenant)
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    release:
+      name: tenant-u1
+      namespace: tenant-u1
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: u1-exposure
+      - equal:
+          path: spec.serviceSelector.matchLabels["io.kubernetes.service.namespace"]
+          value: tenant-u1
+
+  - it: gateway=true + ingress=true + loadBalancer mode renders a single shared pool (no overlapping CIDR conflict)
+    set:
+      gateway: true
+      ingress: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        expose-mode: loadBalancer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: root-exposure
+
+  - it: gateway=true with ingress=false still renders pool (gateway alone is enough)
+    set:
+      gateway: true
+      ingress: false
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: gateway=true with empty externalIPs fails chart render with explicit message
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "publishing.externalIPs is empty — a tenant Gateway has no CiliumLoadBalancerIPPool to draw from. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform (or publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately) before enabling tenant.spec.gateway=true."
