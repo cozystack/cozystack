@@ -1,8 +1,8 @@
 {{- if not (kindIs "float64" .Values.certWaitTimeout) }}
   {{- fail "certWaitTimeout must be a number" }}
 {{- end }}
-{{- if or (lt (.Values.certWaitTimeout | int) 10) (gt (.Values.certWaitTimeout | int) 3600) }}
-  {{- fail "certWaitTimeout must be between 10 and 3600 seconds" }}
+{{- if or (le (.Values.certWaitTimeout | int) 0) (lt (.Values.certWaitTimeout | int) 10) (gt (.Values.certWaitTimeout | int) 3600) }}
+  {{- fail "certWaitTimeout must be between 10 and 3600 seconds (positive integer)" }}
 {{- end }}
 ---
 apiVersion: v1
@@ -97,6 +97,12 @@ spec:
           # openssl: for certificate validation (checkend, pubkey extraction)
           if ! apk add --no-cache openssl; then
             echo "ERROR: Failed to install openssl. Check network connectivity and Alpine package repository availability."
+            exit 1
+          fi
+
+          # Verify openssl binary is available
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo "ERROR: openssl binary not available after installation"
             exit 1
           fi
 
