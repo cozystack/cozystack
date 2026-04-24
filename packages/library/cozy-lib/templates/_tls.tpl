@@ -29,6 +29,9 @@ Parameters:
 {{- if not .name -}}
 {{-   fail "ERROR: \"name\" is required for cozy-lib.tls.certificate. It sets the Certificate CR metadata.name." -}}
 {{- end -}}
+{{- if not .secretName -}}
+{{-   fail "ERROR: \"secretName\" is required for cozy-lib.tls.certificate. Specify the TLS secret name to create." -}}
+{{- end -}}
 {{- if not .dnsNames -}}
 {{-   fail "ERROR: \"dnsNames\" is required for cozy-lib.tls.certificate. Provide at least one DNS name as a list." -}}
 {{- end -}}
