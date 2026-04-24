@@ -106,7 +106,7 @@ spec:
 EOF
 )
   # Expect kubectl to fail with an admission error (no __SUCCEEDED__ marker).
-  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted cross-tenant hostname" >&2; return 1; }
+  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted cross-tenant hostname" >&2; return 1; fi
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "must equal test.example.org"
 }
@@ -130,7 +130,7 @@ spec:
           - tenant-alice
 EOF
 )
-  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted tenant-* in attachedNamespaces" >&2; return 1; }
+  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted tenant-* in attachedNamespaces" >&2; return 1; fi
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "must not contain any tenant-"
 }
@@ -181,7 +181,7 @@ EOF
 )
   kubectl -n tenant-test delete rolebinding vap-probe-tenant-create --ignore-not-found
   kubectl -n tenant-test delete role vap-probe-tenant-create --ignore-not-found
-  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted tenant.spec.host from untrusted SA" >&2; return 1; }
+  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted tenant.spec.host from untrusted SA" >&2; return 1; fi
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "spec.host can only be set"
 }
@@ -222,7 +222,7 @@ EOF
       namespace.cozystack.io/host=foreign.example.org --overwrite 2>&1 && echo "__SUCCEEDED__")
   kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found
   kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found
-  echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted host label change from untrusted SA" >&2; return 1; }
+  if echo "$output" | grep -q "__SUCCEEDED__"; then echo "BUG: admission accepted host label change from untrusted SA" >&2; return 1; fi
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "immutable"
 }
