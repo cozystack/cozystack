@@ -98,22 +98,22 @@ See the reference for components utilized in this service:
 
 ### Application-specific Parameters
 
-| Name                                | Description                                                                                    | Type                | Value       |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------- | ----------- |
-| `nodeGroups`                        | Worker nodes configuration map.                                                                | `map[string]object` | `{...}`     |
-| `nodeGroups[name].minReplicas`      | Minimum number of replicas.                                                                    | `int`               | `0`         |
-| `nodeGroups[name].maxReplicas`      | Maximum number of replicas.                                                                    | `int`               | `10`        |
-| `nodeGroups[name].instanceType`     | Virtual machine instance type.                                                                 | `string`            | `u1.medium` |
-| `nodeGroups[name].diskSize`         | Persistent disk size for kubelet and containerd data.                                          | `quantity`          | `20Gi`      |
-| `nodeGroups[name].storageClass`     | StorageClass for worker node persistent disks. Uses cluster default when empty.                | `string`            | `""`        |
-| `nodeGroups[name].roles`            | List of node roles.                                                                            | `[]string`          | `[]`        |
-| `nodeGroups[name].resources`        | CPU and memory resources for each worker node.                                                 | `object`            | `{}`        |
-| `nodeGroups[name].resources.cpu`    | CPU available.                                                                                 | `quantity`          | `""`        |
-| `nodeGroups[name].resources.memory` | Memory (RAM) available.                                                                        | `quantity`          | `""`        |
-| `nodeGroups[name].gpus`             | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                            | `[]object`          | `[]`        |
-| `nodeGroups[name].gpus[i].name`     | Name of GPU, such as "nvidia.com/AD102GL_L40S".                                                | `string`            | `""`        |
-| `version`                           | Kubernetes major.minor version to deploy                                                       | `string`            | `v1.35`     |
-| `host`                              | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty. | `string`            | `""`        |
+| Name                                | Description                                                                                                                                                                        | Type                | Value       |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----------- |
+| `nodeGroups`                        | Worker nodes configuration map.                                                                                                                                                    | `map[string]object` | `{...}`     |
+| `nodeGroups[name].minReplicas`      | Minimum number of replicas.                                                                                                                                                        | `int`               | `0`         |
+| `nodeGroups[name].maxReplicas`      | Maximum number of replicas.                                                                                                                                                        | `int`               | `10`        |
+| `nodeGroups[name].instanceType`     | Virtual machine instance type.                                                                                                                                                     | `string`            | `u1.medium` |
+| `nodeGroups[name].diskSize`         | Persistent disk size for kubelet and containerd data.                                                                                                                              | `quantity`          | `20Gi`      |
+| `nodeGroups[name].storageClass`     | StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). | `string`            | `""`        |
+| `nodeGroups[name].roles`            | List of node roles.                                                                                                                                                                | `[]string`          | `[]`        |
+| `nodeGroups[name].resources`        | CPU and memory resources for each worker node.                                                                                                                                     | `object`            | `{}`        |
+| `nodeGroups[name].resources.cpu`    | CPU available.                                                                                                                                                                     | `quantity`          | `""`        |
+| `nodeGroups[name].resources.memory` | Memory (RAM) available.                                                                                                                                                            | `quantity`          | `""`        |
+| `nodeGroups[name].gpus`             | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                                                                                                                | `[]object`          | `[]`        |
+| `nodeGroups[name].gpus[i].name`     | Name of GPU, such as "nvidia.com/AD102GL_L40S".                                                                                                                                    | `string`            | `""`        |
+| `version`                           | Kubernetes major.minor version to deploy                                                                                                                                           | `string`            | `v1.35`     |
+| `host`                              | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.                                                                                     | `string`            | `""`        |
 
 
 ### Cluster Addons

@@ -119,7 +119,7 @@
             }
           },
           "storageClass": {
-            "description": "StorageClass for worker node persistent disks. Uses cluster default when empty.",
+            "description": "StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).",
             "type": "string"
           }
         }

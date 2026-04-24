@@ -215,7 +215,7 @@ type NodeGroup struct {
 	Resources Resources `json:"resources"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
-	// StorageClass for worker node persistent disks. Uses cluster default when empty.
+	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
 	StorageClass string `json:"storageClass,omitempty"`
 }
 
