@@ -23,6 +23,8 @@ spec:
   matchConditions:
   - name: is-cozystack-managed-namespace
     expression: >-
+      namespaceObject != null &&
+      has(namespaceObject.metadata) &&
       has(namespaceObject.metadata.labels) &&
       "namespace.cozystack.io/host" in namespaceObject.metadata.labels &&
       namespaceObject.metadata.labels["namespace.cozystack.io/host"] != ""
