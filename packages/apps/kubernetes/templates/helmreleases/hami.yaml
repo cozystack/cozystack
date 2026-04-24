@@ -32,10 +32,8 @@ spec:
     force: true
     remediation:
       retries: -1
-  {{- with .Values.addons.hami.valuesOverride }}
   values:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- if .Values.addons.hami.valuesOverride }}{{ toYaml .Values.addons.hami.valuesOverride | nindent 4 }}{{ end }}
 
   dependsOn:
   {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}

@@ -55,9 +55,6 @@ kunlunResourceVMemoryName: "kunlunxin.com/vxpu-memory"
 
 schedulerName: "hami-scheduler"
 
-podSecurityPolicy:
-  enabled: false
-
 scheduler:
   # @param nodeName defines the node name and the nvidia-vgpu-scheduler-scheduler will schedule to the node.
   # if we install the nvidia-vgpu-scheduler-scheduler as default scheduler, we need to remove the k8s default

@@ -1,4 +1,9 @@
 hami:
+  scheduler:
+    kubeScheduler:
+      image:
+        registry: registry.k8s.io
+        repository: kube-scheduler
   devicePlugin:
     runtimeClassName: nvidia
     updateStrategy:

@@ -18,11 +18,4 @@ rules:
     verbs:
       - get
       - update
-{{- if .Values.podSecurityPolicy.enabled }}
-  - apiGroups: ['extensions']
-    resources: ['podsecuritypolicies']
-    verbs:     ['use']
-    resourceNames:
-    - {{ include "hami-vgpu.fullname" . }}-admission
-{{- end }}
 {{- end }}
