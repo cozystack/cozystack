@@ -1,0 +1,12 @@
+{{- if .Values.tls }}
+{{- include "cozy-lib.tls.certificate" (dict
+  "Release" .Release
+  "name" .Values.tls.name
+  "secretName" (default .Values.tls.name .Values.tls.secretName)
+  "dnsNames" .Values.tls.dnsNames
+  "issuerRef" .Values.tls.issuerRef
+  "duration" (.Values.tls.duration | default "")
+  "renewBefore" (.Values.tls.renewBefore | default "")
+  "usages" (.Values.tls.usages | default list)
+) }}
+{{- end }}

@@ -1,0 +1,225 @@
+suite: TLS certificate helper
+
+templates:
+  - templates/tests/tls.yaml
+
+tests:
+  # Certificate CR renders with all required fields
+  - it: renders a Certificate CR with all required fields
+    values:
+      - tls_values.yaml
+    release:
+      name: test-release
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Certificate
+      - isAPIVersion:
+          of: cert-manager.io/v1
+      - equal:
+          path: metadata.name
+          value: my-redis-tls
+      - equal:
+          path: spec.secretName
+          value: my-redis-tls-secret
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 2048
+
+  # dnsNames are correctly set
+  - it: sets dnsNames correctly
+    values:
+      - tls_values.yaml
+    release:
+      name: test-release
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - redis-svc
+            - redis-svc.tenant-test.svc
+
+  # issuerRef is correctly set
+  - it: sets issuerRef correctly
+    values:
+      - tls_values.yaml
+    release:
+      name: test-release
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.issuerRef.name
+          value: selfsigned-cluster-issuer
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+
+  # Labels include release info
+  - it: includes standard labels
+    values:
+      - tls_values.yaml
+    release:
+      name: test-release
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: test-release
+      - equal:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+          value: Helm
+
+  # Default duration and renewBefore are used when not provided
+  - it: uses default duration and renewBefore
+    values:
+      - tls_values.yaml
+    release:
+      name: test-release
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 8760h
+      - equal:
+          path: spec.renewBefore
+          value: 720h
+
+  # Custom duration and renewBefore work when provided
+  - it: uses custom duration and renewBefore when provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: custom-tls
+        secretName: custom-tls-secret
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: my-issuer
+          kind: Issuer
+        duration: 43800h
+        renewBefore: 360h
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 43800h
+      - equal:
+          path: spec.renewBefore
+          value: 360h
+
+  # Default usages is server auth
+  - it: uses server auth as default usage
+    values:
+      - tls_values.yaml
+    release:
+      name: test-release
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.usages
+          value:
+            - server auth
+
+  # Custom usages work when provided
+  - it: uses custom usages when provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: client-tls
+        secretName: client-tls-secret
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: my-issuer
+          kind: ClusterIssuer
+        usages:
+          - server auth
+          - client auth
+    asserts:
+      - equal:
+          path: spec.usages
+          value:
+            - server auth
+            - client auth
+
+  # secretName defaults to name when not provided
+  - it: uses name as secretName when secretName not provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: my-tls-cert
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-tls-cert
+      - equal:
+          path: spec.secretName
+          value: my-tls-cert
+
+  # Issuer kind defaults to ClusterIssuer
+  - it: defaults issuerRef kind to ClusterIssuer
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: test-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+
+  # Namespace-scoped Issuer also works
+  - it: supports namespace-scoped Issuer
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: test-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: my-namespace-issuer
+          kind: Issuer
+    asserts:
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.name
+          value: my-namespace-issuer
