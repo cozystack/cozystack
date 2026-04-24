@@ -21,6 +21,14 @@ dump_diagnostics() {
   kubectl -n cozy-etcd-operator logs -l app.kubernetes.io/name=etcd-operator --tail=100 >&3 2>&1 || true
 }
 
+# Wait until the etcd HelmRelease is reconciled by Flux and its
+# condition=ready is set. kubectl wait fails immediately on a missing
+# resource, so poll for existence first.
+wait_etcd_hr_ready() {
+  timeout 60 sh -ec 'until kubectl -n tenant-test get hr/etcd >/dev/null 2>&1; do sleep 2; done'
+  kubectl -n tenant-test wait hr/etcd --timeout=60s --for=condition=ready
+}
+
 @test "Create Etcd" {
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -36,8 +44,7 @@ spec:
     cpu: 100m
     memory: 128Mi
 EOF
-  sleep 5
-  kubectl -n tenant-test wait hr etcd --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
+  wait_etcd_hr_ready || { dump_diagnostics; false; }
   kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
 }
 
@@ -57,8 +64,7 @@ spec:
     memory: 128Mi
   backup: {}
 EOF
-  sleep 5
-  kubectl -n tenant-test wait hr etcd --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
+  wait_etcd_hr_ready || { dump_diagnostics; false; }
   # With backup disabled, neither the schedule nor the secret should be created.
   ! kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd 2>/dev/null
   ! kubectl -n tenant-test get secret etcd-s3-creds 2>/dev/null
@@ -94,8 +100,7 @@ spec:
     successfulJobsHistoryLimit: 1
     failedJobsHistoryLimit: 1
 EOF
-  sleep 5
-  kubectl -n tenant-test wait hr etcd --timeout=60s --for=condition=ready || { dump_diagnostics; false; }
+  wait_etcd_hr_ready || { dump_diagnostics; false; }
   kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
   kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd || { dump_diagnostics; false; }
   # Verify the region field propagated to the EtcdBackupSchedule.
