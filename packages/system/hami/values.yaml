@@ -1,6 +1,10 @@
 hami:
   devicePlugin:
     runtimeClassName: nvidia
+    updateStrategy:
+      type: OnDelete
+    # See upstream charts/hami/values.yaml for nodeConfiguration format.
+    # Each entry: {"name": "node-name", "operatingmode": "hami-core", "devicesplitcount": N, ...}
     nodeConfiguration:
       config: |
         {

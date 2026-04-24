@@ -26,8 +26,9 @@ tests:
           enabled: false
           valuesOverride: {}
     asserts:
-      - notExists:
+      - equal:
           path: spec.values
+          value: null
 
   - it: should allow user overrides to merge with hami defaults
     set:
@@ -65,6 +66,28 @@ tests:
       - equal:
           path: spec.values.gpu-operator.devicePlugin.enabled
           value: true
+
+  - it: should let user explicitly override devicePlugin.enabled to true with hami enabled
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride:
+            gpu-operator:
+              devicePlugin:
+                enabled: true
+              driver:
+                enabled: false
+        hami:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: true
+      - equal:
+          path: spec.values.gpu-operator.driver.enabled
+          value: false
 
   - it: should not render when gpuOperator is disabled
     set:

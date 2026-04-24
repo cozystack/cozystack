@@ -1,5 +1,4 @@
-{{- if and .Values.scheduler.admissionWebhook.enabled (not .Values.dra.enabled) -}}
-{{- if and (.Values.scheduler.patch.enabled) (not .Values.scheduler.certManager.enabled) }}
+{{- if and .Values.scheduler.admissionWebhook.enabled (.Values.scheduler.patch.enabled) (not .Values.scheduler.certManager.enabled) -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -18,5 +17,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "hami-vgpu.fullname" . }}-admission
     namespace: {{ include "hami-vgpu.namespace" . }}
-{{- end }}
 {{- end }}

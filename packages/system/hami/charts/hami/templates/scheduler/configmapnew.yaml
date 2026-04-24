@@ -1,4 +1,4 @@
-{{- if and .Values.scheduler.kubeScheduler.enabled (not .Values.dra.enabled) -}}
+{{- if .Values.scheduler.kubeScheduler.enabled -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
