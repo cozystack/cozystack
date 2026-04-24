@@ -1,14 +1,13 @@
 suite: ingress exposure modes
 templates:
   - templates/nginx-ingress.yaml
-  - templates/cilium-lb-pool.yaml
 
 release:
   name: ingress
   namespace: tenant-root
 
 tests:
-  - it: default exposure (externalIPs) renders ClusterIP Service with spec.externalIPs and no CiliumLoadBalancerIPPool
+  - it: default exposure (externalIPs) renders ClusterIP Service with spec.externalIPs
     set:
       _cluster:
         expose-ingress: tenant-root
@@ -31,9 +30,6 @@ tests:
       - template: templates/nginx-ingress.yaml
         notExists:
           path: spec.values.ingress-nginx.controller.service.labels
-      - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 0
 
   - it: legacy config without expose-mode falls back to externalIPs behavior
     set:
@@ -45,9 +41,6 @@ tests:
         equal:
           path: spec.values.ingress-nginx.controller.service.type
           value: ClusterIP
-      - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 0
 
   - it: externalIPs mode in a namespace other than publishing.ingressName renders LoadBalancer fallback without externalIPs
     set:
@@ -68,11 +61,8 @@ tests:
       - template: templates/nginx-ingress.yaml
         notExists:
           path: spec.values.ingress-nginx.controller.service.externalIPs
-      - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 0
 
-  - it: loadBalancer mode renders LoadBalancer Service with lb-pool label and a v2 CiliumLoadBalancerIPPool
+  - it: loadBalancer mode renders LoadBalancer Service without externalIPs on the Service
     set:
       _cluster:
         expose-ingress: tenant-root
@@ -93,62 +83,6 @@ tests:
       - template: templates/nginx-ingress.yaml
         notExists:
           path: spec.values.ingress-nginx.controller.service.externalIPs
-      - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 1
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: apiVersion
-          value: cilium.io/v2
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: kind
-          value: CiliumLoadBalancerIPPool
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: metadata.name
-          value: root-ingress
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 192.0.2.10/32
-            - cidr: 192.0.2.11/32
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.serviceSelector.matchLabels["io.kubernetes.service.namespace"]
-          value: tenant-root
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.serviceSelector.matchLabels["app.kubernetes.io/name"]
-          value: ingress-nginx
-
-  - it: loadBalancer mode with IPv6 address emits /128 CIDR
-    set:
-      _cluster:
-        expose-ingress: tenant-root
-        expose-external-ips: "2001:db8::1"
-        expose-mode: loadBalancer
-    asserts:
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 2001:db8::1/128
-
-  - it: loadBalancer mode with mixed IPv4 and IPv6 emits correct CIDR per family
-    set:
-      _cluster:
-        expose-ingress: tenant-root
-        expose-external-ips: "192.0.2.10,2001:db8::1"
-        expose-mode: loadBalancer
-    asserts:
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 192.0.2.10/32
-            - cidr: 2001:db8::1/128
 
   - it: loadBalancer mode without externalIPs fails chart render with explicit message
     set:
@@ -206,26 +140,6 @@ tests:
       - template: templates/nginx-ingress.yaml
         notExists:
           path: spec.values.ingress-nginx.controller.service.externalIPs
-      - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 0
-
-  - it: loadBalancer mode filters out empty entries from externalIPs (trailing comma, leading comma)
-    set:
-      _cluster:
-        expose-ingress: tenant-root
-        expose-external-ips: "192.0.2.10,,192.0.2.11,"
-        expose-mode: loadBalancer
-    asserts:
-      - template: templates/cilium-lb-pool.yaml
-        hasDocuments:
-          count: 1
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 192.0.2.10/32
-            - cidr: 192.0.2.11/32
 
   - it: loadBalancer mode with only-empty externalIPs fails chart render (comma-only input)
     set:
@@ -249,17 +163,3 @@ tests:
           path: spec.values.ingress-nginx.controller.service.externalIPs
           value:
             - 192.0.2.10
-
-  - it: loadBalancer mode accepts pre-CIDR input without double-suffixing
-    set:
-      _cluster:
-        expose-ingress: tenant-root
-        expose-external-ips: "192.0.2.10/32,2001:db8::1/128"
-        expose-mode: loadBalancer
-    asserts:
-      - template: templates/cilium-lb-pool.yaml
-        equal:
-          path: spec.blocks
-          value:
-            - cidr: 192.0.2.10/32
-            - cidr: 2001:db8::1/128
