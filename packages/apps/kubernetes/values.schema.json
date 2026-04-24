@@ -270,7 +270,7 @@
           }
         },
         "hami": {
-          "description": "HAMi GPU virtualization middleware. Enables fractional GPU sharing (memory and compute isolation) for workloads. Requires GPU Operator. Note: workload containers must use glibc < 2.34 (not musl/Alpine) for full compute isolation.",
+          "description": "HAMi GPU virtualization middleware.",
           "type": "object",
           "default": {},
           "required": [
@@ -279,7 +279,7 @@
           ],
           "properties": {
             "enabled": {
-              "description": "Enable HAMi.",
+              "description": "Enable HAMi (requires GPU Operator).",
               "type": "boolean",
               "default": false
             },

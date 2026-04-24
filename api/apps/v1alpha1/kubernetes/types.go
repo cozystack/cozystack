@@ -66,6 +66,9 @@ type Addons struct {
 	// NVIDIA GPU Operator.
 	// +kubebuilder:default:={}
 	GpuOperator GPUOperatorAddon `json:"gpuOperator"`
+	// HAMi GPU virtualization middleware.
+	// +kubebuilder:default:={}
+	Hami HAMiAddon `json:"hami"`
 	// Ingress-NGINX controller.
 	// +kubebuilder:default:={}
 	IngressNginx IngressNginxAddon `json:"ingressNginx"`
@@ -155,6 +158,15 @@ type GatewayAPIAddon struct {
 	// Enable Gateway API.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+}
+
+type HAMiAddon struct {
+	// Enable HAMi (requires GPU Operator).
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Custom Helm values overrides.
+	// +kubebuilder:default:={}
+	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
 type IngressNginxAddon struct {
