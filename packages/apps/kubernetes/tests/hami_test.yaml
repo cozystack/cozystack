@@ -118,6 +118,21 @@ tests:
             name: test-gpu-operator
             namespace: test-ns
 
+  - it: should not render spec.values when valuesOverride is empty
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.values
+
   - it: should pass through valuesOverride
     set:
       addons:

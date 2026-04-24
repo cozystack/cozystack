@@ -25,5 +25,4 @@ rules:
       - list
       - patch
 {{- end -}}
-    
-    
+
