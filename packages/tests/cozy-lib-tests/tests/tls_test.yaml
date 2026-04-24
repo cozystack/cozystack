@@ -181,8 +181,8 @@ tests:
           path: spec.secretName
           value: my-tls-cert
 
-  # Issuer kind defaults to ClusterIssuer
-  - it: defaults issuerRef kind to ClusterIssuer
+  # Issuer kind is passed through to Certificate CR
+  - it: passes issuerRef kind to Certificate CR
     release:
       name: test-release
       namespace: tenant-test
