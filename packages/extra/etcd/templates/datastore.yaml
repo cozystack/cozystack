@@ -19,6 +19,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
+  resourceNames: ["etcd-ca-tls", "etcd-client-tls"]
   verbs: ["get"]
 - apiGroups: ["kamaji.clastix.io"]
   resources: ["datastores"]
@@ -59,10 +60,10 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: create-datastore
-        image: rancher/kubectl:v1.29.0
+        image: {{ .Values.kubectlImage }}
         env:
         - name: CERT_WAIT_TIMEOUT
-          value: "300"
+          value: {{ .Values.certWaitTimeout | quote }}
         command:
         - sh
         - -exc
@@ -80,13 +81,26 @@ spec:
             local secret_name=$1
             local namespace=$2
 
-            # Check certificate exists and is valid (not expired)
-            if ! kubectl get secret "$secret_name" --namespace "$namespace" -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -checkend 0 2>/dev/null; then
+            # Check certificate exists and is valid (not expired, not in future)
+            # -checkend 0 validates notAfter >= now
+            if ! kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -checkend 0 2>/dev/null; then
               return 1
             fi
 
-            # Check private key exists and is valid
-            if ! kubectl get secret "$secret_name" --namespace "$namespace" -o jsonpath='{.data.tls\.key}' | base64 -d | openssl rsa -noout -check 2>/dev/null; then
+            # Check notBefore (certificate must be valid already, not in future)
+            local cert_data=$(kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.data.tls\.crt}' | base64 -d)
+            local current_time=$(date +%s)
+            local not_before=$(echo "$cert_data" | openssl x509 -noout -startdate 2>/dev/null | cut -d= -f2)
+            local not_before_epoch=$(date --date="$not_before" +%s 2>/dev/null || echo 0)
+
+            if [ "$not_before_epoch" -gt 0 ] && [ "$current_time" -lt "$not_before_epoch" ]; then
+              echo "Certificate notBefore is in future: $not_before"
+              return 1
+            fi
+
+            # Check private key exists and is valid (supports RSA, ECDSA, Ed25519, etc.)
+            # Using 'openssl pkey' instead of 'openssl rsa' for universal key type support
+            if ! kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.data.tls\.key}' | base64 -d | openssl pkey -noout -check 2>/dev/null; then
               return 1
             fi
 
@@ -100,16 +114,13 @@ spec:
 
             echo "=== Diagnostic Information ==="
             echo "Certificate status:"
-            kubectl describe certificate --namespace "$namespace" 2>&1 || echo "No Certificates found"
+            kubectl describe certificate --namespace "$namespace" --request-timeout=10s 2>&1 || echo "No Certificates found"
             echo ""
             echo "CertificateRequest status:"
-            kubectl get certificaterequest --namespace "$namespace" -o wide 2>&1 || echo "No CertificateRequests found"
+            kubectl get certificaterequest --namespace "$namespace" --request-timeout=10s -o wide 2>&1 || echo "No CertificateRequests found"
             echo ""
             echo "Secret $secret_name status:"
-            kubectl get secret "$secret_name" --namespace "$namespace" -o yaml 2>&1 || echo "Secret not found"
-            echo ""
-            echo "cert-manager controller logs (last 50 lines):"
-            kubectl logs --namespace cert-manager --selector app=cert-manager --tail=50 2>&1 || echo "Cannot access cert-manager logs"
+            kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o yaml 2>&1 || echo "Secret not found"
           }
 
           # Wait for etcd-ca-tls Secret to be populated by cert-manager
@@ -144,16 +155,11 @@ spec:
 
           echo "All TLS Secrets populated and validated"
 
-          # Check if DataStore already exists (upgrade case)
-          if kubectl get datastore "{{ .Release.Namespace }}" --namespace "$NAMESPACE" >/dev/null 2>&1; then
-            echo "DataStore already exists, skipping creation (upgrade detected)"
-            exit 0
-          fi
+          echo "Creating or updating DataStore..."
 
-          echo "Creating DataStore..."
-
-          # Create DataStore manifest
-          cat <<EOF | kubectl create --namespace "$NAMESPACE" -f -
+          # Use kubectl apply for idempotent creation/update
+          # This eliminates race condition between check and create
+          cat <<EOF | kubectl apply --namespace "$NAMESPACE" --request-timeout=30s -f -
           apiVersion: kamaji.clastix.io/v1alpha1
           kind: DataStore
           metadata:
@@ -187,7 +193,7 @@ spec:
                     namespace: {{ .Release.Namespace }}
           EOF
 
-          echo "DataStore created successfully"
+          echo "DataStore created or updated successfully"
 ---
 apiVersion: v1
 kind: Secret
