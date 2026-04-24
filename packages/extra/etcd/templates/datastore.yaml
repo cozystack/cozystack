@@ -60,42 +60,100 @@ spec:
       containers:
       - name: create-datastore
         image: rancher/kubectl:v1.29.0
+        env:
+        - name: CERT_WAIT_TIMEOUT
+          value: "300"
         command:
         - sh
         - -exc
         - |
-          echo "Waiting for cert-manager to populate TLS Secrets..."
+          # Get namespace from ServiceAccount
+          NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+          TIMEOUT_SECONDS=${CERT_WAIT_TIMEOUT:-300}
+          ITERATIONS=$((TIMEOUT_SECONDS / 2))
+
+          echo "Waiting for cert-manager to populate TLS Secrets in namespace: $NAMESPACE"
+          echo "Timeout: $TIMEOUT_SECONDS seconds"
+
+          # Function to validate Secret has both certificate and key
+          validate_secret() {
+            local secret_name=$1
+            local namespace=$2
+
+            # Check certificate exists and is valid (not expired)
+            if ! kubectl get secret "$secret_name" --namespace "$namespace" -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -checkend 0 2>/dev/null; then
+              return 1
+            fi
+
+            # Check private key exists and is valid
+            if ! kubectl get secret "$secret_name" --namespace "$namespace" -o jsonpath='{.data.tls\.key}' | base64 -d | openssl rsa -noout -check 2>/dev/null; then
+              return 1
+            fi
+
+            return 0
+          }
+
+          # Function to print diagnostics on failure
+          print_diagnostics() {
+            local secret_name=$1
+            local namespace=$2
+
+            echo "=== Diagnostic Information ==="
+            echo "Certificate status:"
+            kubectl describe certificate --namespace "$namespace" 2>&1 || echo "No Certificates found"
+            echo ""
+            echo "CertificateRequest status:"
+            kubectl get certificaterequest --namespace "$namespace" -o wide 2>&1 || echo "No CertificateRequests found"
+            echo ""
+            echo "Secret $secret_name status:"
+            kubectl get secret "$secret_name" --namespace "$namespace" -o yaml 2>&1 || echo "Secret not found"
+            echo ""
+            echo "cert-manager controller logs (last 50 lines):"
+            kubectl logs --namespace cert-manager --selector app=cert-manager --tail=50 2>&1 || echo "Cannot access cert-manager logs"
+          }
 
           # Wait for etcd-ca-tls Secret to be populated by cert-manager
-          for i in $(seq 1 60); do
-            if kubectl get secret etcd-ca-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout 2>/dev/null; then
-              echo "etcd-ca-tls Secret populated"
+          echo "Checking etcd-ca-tls Secret..."
+          for i in $(seq 1 $ITERATIONS); do
+            if validate_secret "etcd-ca-tls" "$NAMESPACE"; then
+              echo "etcd-ca-tls Secret populated and valid after $((i * 2)) seconds"
               break
             fi
-            if [ $i -eq 60 ]; then
-              echo "ERROR: etcd-ca-tls Secret not populated after 120 seconds"
+            if [ $i -eq $ITERATIONS ]; then
+              echo "ERROR: etcd-ca-tls Secret not populated after $TIMEOUT_SECONDS seconds"
+              print_diagnostics "etcd-ca-tls" "$NAMESPACE"
               exit 1
             fi
             sleep 2
           done
 
           # Wait for etcd-client-tls Secret to be populated by cert-manager
-          for i in $(seq 1 60); do
-            if kubectl get secret etcd-client-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout 2>/dev/null; then
-              echo "etcd-client-tls Secret populated"
+          echo "Checking etcd-client-tls Secret..."
+          for i in $(seq 1 $ITERATIONS); do
+            if validate_secret "etcd-client-tls" "$NAMESPACE"; then
+              echo "etcd-client-tls Secret populated and valid after $((i * 2)) seconds"
               break
             fi
-            if [ $i -eq 60 ]; then
-              echo "ERROR: etcd-client-tls Secret not populated after 120 seconds"
+            if [ $i -eq $ITERATIONS ]; then
+              echo "ERROR: etcd-client-tls Secret not populated after $TIMEOUT_SECONDS seconds"
+              print_diagnostics "etcd-client-tls" "$NAMESPACE"
               exit 1
             fi
             sleep 2
           done
 
-          echo "All TLS Secrets populated, creating DataStore..."
+          echo "All TLS Secrets populated and validated"
+
+          # Check if DataStore already exists (upgrade case)
+          if kubectl get datastore "{{ .Release.Namespace }}" --namespace "$NAMESPACE" >/dev/null 2>&1; then
+            echo "DataStore already exists, skipping creation (upgrade detected)"
+            exit 0
+          fi
+
+          echo "Creating DataStore..."
 
           # Create DataStore manifest
-          cat <<EOF | kubectl apply -f -
+          cat <<EOF | kubectl create --namespace "$NAMESPACE" -f -
           apiVersion: kamaji.clastix.io/v1alpha1
           kind: DataStore
           metadata:
