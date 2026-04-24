@@ -61,6 +61,9 @@ metadata:
 spec:
   backoffLimit: 10
   template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
     spec:
       serviceAccountName: etcd-datastore-hook
       restartPolicy: OnFailure
@@ -84,12 +87,21 @@ spec:
           # Enable pipefail to catch errors in pipes
           set -o pipefail
 
-          # Install required utilities (kubectl and openssl)
-          apk add --no-cache kubectl openssl
+          # Install required utilities
+          # openssl: for certificate validation
+          # coreutils: for GNU date (BusyBox date has limited RFC 2822 support)
+          apk add --no-cache openssl coreutils
 
           # Get namespace from ServiceAccount
           NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+          # Validate CERT_WAIT_TIMEOUT is a positive integer
           TIMEOUT_SECONDS=${CERT_WAIT_TIMEOUT:-300}
+          if ! echo "$TIMEOUT_SECONDS" | grep -Eq '^[0-9]+$' || [ "$TIMEOUT_SECONDS" -le 0 ]; then
+            echo "ERROR: CERT_WAIT_TIMEOUT must be a positive integer, got: $TIMEOUT_SECONDS"
+            exit 1
+          fi
+
           ITERATIONS=$((TIMEOUT_SECONDS / 2))
 
           echo "Waiting for cert-manager to populate TLS Secrets in namespace: $NAMESPACE"

@@ -25,6 +25,6 @@ resources:
 certWaitTimeout: 300
 
 ## @param {string} [kubectlImage] - Container image used for DataStore creation hook Job.
-## Uses alpine:3.19 as base and installs kubectl + openssl via apk at runtime.
-## This ensures all required utilities (sh, kubectl, openssl, base64, date) are available.
-kubectlImage: alpine:3.19
+## Uses alpine/k8s (alpine + kubectl pre-installed) and installs openssl + coreutils at runtime.
+## coreutils provides GNU date for proper RFC 2822 date parsing (BusyBox date has limited format support).
+kubectlImage: docker.io/alpine/k8s:1.33.4
