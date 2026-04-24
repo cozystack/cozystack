@@ -86,11 +86,12 @@ spec:
     memory: 128Mi
   backup:
     enabled: true
-    schedule: "*/1 * * * *"
-    # This test verifies that the chart renders EtcdBackupSchedule/Secret and
-    # that the etcd-operator materializes a CronJob from the schedule — it does
-    # NOT verify that backups reach S3. The endpoint below intentionally
-    # resolves nowhere to keep the test self-contained.
+    # Schedule is chosen far in the future so no Jobs fire during the
+    # ~6-minute test window; this test only checks that the chart renders
+    # EtcdBackupSchedule/Secret and that the etcd-operator materializes a
+    # CronJob — it does NOT verify that backups reach S3. The endpoint
+    # below intentionally resolves nowhere to keep the test self-contained.
+    schedule: "0 0 1 1 *"
     destinationPath: "s3://test-bucket/etcd-backups/"
     endpointURL: "http://no-such-endpoint.invalid:9000"
     region: "us-east-1"
