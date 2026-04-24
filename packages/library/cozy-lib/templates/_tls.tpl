@@ -18,14 +18,17 @@ Usage:
 Parameters:
   - Release    (required) - Helm release object, used for labels
   - name       (required) - Certificate CR metadata.name
-  - secretName (required) - TLS secret name to create (can be same as name)
+  - secretName (required) - TLS secret name to create (can be same as name). Required when calling directly. When using through tls.yaml, defaults to name.
   - dnsNames   (required) - list of DNS SANs
   - issuerRef  (required) - dict with "name" and "kind" (e.g. ClusterIssuer, Issuer)
   - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset
   - renewBefore(optional) - renewal window, defaults to 720h (30 days)
-  - usages     (optional) - list of key usages, defaults to ["server auth"]
+  - usages     (optional) - list of key usages, defaults to ["server auth"] (not cert-manager's default of "digital signature, key encipherment"; this is a deliberate choice for TLS server certificates)
 */}}
 {{- define "cozy-lib.tls.certificate" -}}
+{{- if not .Release -}}
+{{-   fail "ERROR: \"Release\" is required for cozy-lib.tls.certificate. Pass the Helm release object via the context dict." -}}
+{{- end -}}
 {{- if not .name -}}
 {{-   fail "ERROR: \"name\" is required for cozy-lib.tls.certificate. It sets the Certificate CR metadata.name." -}}
 {{- end -}}
@@ -43,6 +46,9 @@ Parameters:
 {{- end -}}
 {{- if not .issuerRef.kind -}}
 {{-   fail "ERROR: \"issuerRef.kind\" is required for cozy-lib.tls.certificate. Specify \"ClusterIssuer\" or \"Issuer\"." -}}
+{{- end -}}
+{{- if not (or (eq .issuerRef.kind "Issuer") (eq .issuerRef.kind "ClusterIssuer")) -}}
+{{-   fail "ERROR: issuerRef.kind must be \"Issuer\" or \"ClusterIssuer\"" -}}
 {{- end -}}
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -90,7 +96,7 @@ Parameters:
   - secretName (optional) - user-provided secret name; if set, returned as-is
 */}}
 {{- define "cozy-lib.tls.secretName" -}}
-{{- if .secretName -}}
+{{- if not (empty .secretName) -}}
 {{-   .secretName -}}
 {{- else -}}
 {{-   printf "%s-%s" .Release.Name .suffix -}}

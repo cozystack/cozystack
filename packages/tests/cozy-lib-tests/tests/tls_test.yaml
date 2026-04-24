@@ -303,6 +303,25 @@ tests:
       - failedTemplate:
           errorMessage: 'ERROR: "issuerRef.kind" is required for cozy-lib.tls.certificate. Specify "ClusterIssuer" or "Issuer".'
 
+  # Invalid issuerRef kind triggers a validation error
+  - it: errors when issuerRef kind is not Issuer or ClusterIssuer
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: invalid-kind-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: my-issuer
+          kind: InvalidKind
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ERROR: issuerRef.kind must be "Issuer" or "ClusterIssuer"'
+
   # Empty string duration should fall back to default 8760h
   - it: uses default duration when duration is an empty string
     release:
