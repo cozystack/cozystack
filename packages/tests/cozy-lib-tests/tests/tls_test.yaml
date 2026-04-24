@@ -249,8 +249,8 @@ tests:
       - hasDocuments:
           count: 0
 
-  # Empty dnsNames renders null in YAML
-  - it: renders null dnsNames when empty list provided
+  # Empty dnsNames triggers a validation error
+  - it: errors when dnsNames is empty
     release:
       name: test-release
       namespace: tenant-test
@@ -264,14 +264,11 @@ tests:
           name: selfsigned-cluster-issuer
           kind: ClusterIssuer
     asserts:
-      - hasDocuments:
-          count: 1
-      - equal:
-          path: spec.dnsNames
-          value: null
+      - failedTemplate:
+          errorMessage: 'ERROR: "dnsNames" is required for cozy-lib.tls.certificate. Provide at least one DNS name as a list.'
 
-  # Missing issuerRef name renders null
-  - it: renders null issuerRef name when not provided
+  # Missing issuerRef name triggers a validation error
+  - it: errors when issuerRef name is not provided
     release:
       name: test-release
       namespace: tenant-test
@@ -285,14 +282,11 @@ tests:
         issuerRef:
           kind: ClusterIssuer
     asserts:
-      - hasDocuments:
-          count: 1
-      - equal:
-          path: spec.issuerRef.name
-          value: null
+      - failedTemplate:
+          errorMessage: 'ERROR: "issuerRef.name" is required for cozy-lib.tls.certificate. Specify the ClusterIssuer or Issuer name.'
 
-  # Missing issuerRef kind renders null
-  - it: renders null issuerRef kind when not provided
+  # Missing issuerRef kind triggers a validation error
+  - it: errors when issuerRef kind is not provided
     release:
       name: test-release
       namespace: tenant-test
@@ -306,8 +300,32 @@ tests:
         issuerRef:
           name: my-issuer
     asserts:
+      - failedTemplate:
+          errorMessage: 'ERROR: "issuerRef.kind" is required for cozy-lib.tls.certificate. Specify "ClusterIssuer" or "Issuer".'
+
+  # Empty string duration should fall back to default 8760h
+  - it: uses default duration when duration is an empty string
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: empty-duration-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+        duration: ""
+        renewBefore: ""
+    asserts:
       - hasDocuments:
           count: 1
       - equal:
-          path: spec.issuerRef.kind
-          value: null
+          path: spec.duration
+          value: 8760h
+      - equal:
+          path: spec.renewBefore
+          value: 720h

@@ -21,11 +21,26 @@ Parameters:
   - secretName (required) - TLS secret name to create (can be same as name)
   - dnsNames   (required) - list of DNS SANs
   - issuerRef  (required) - dict with "name" and "kind" (e.g. ClusterIssuer, Issuer)
-  - duration   (optional) - certificate duration, defaults to 8760h (1 year)
+  - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset
   - renewBefore(optional) - renewal window, defaults to 720h (30 days)
   - usages     (optional) - list of key usages, defaults to ["server auth"]
 */}}
 {{- define "cozy-lib.tls.certificate" -}}
+{{- if not .name -}}
+{{-   fail "ERROR: \"name\" is required for cozy-lib.tls.certificate. It sets the Certificate CR metadata.name." -}}
+{{- end -}}
+{{- if not .dnsNames -}}
+{{-   fail "ERROR: \"dnsNames\" is required for cozy-lib.tls.certificate. Provide at least one DNS name as a list." -}}
+{{- end -}}
+{{- if not .issuerRef -}}
+{{-   fail "ERROR: \"issuerRef\" is required for cozy-lib.tls.certificate. Provide a dict with \"name\" and \"kind\"." -}}
+{{- end -}}
+{{- if not .issuerRef.name -}}
+{{-   fail "ERROR: \"issuerRef.name\" is required for cozy-lib.tls.certificate. Specify the ClusterIssuer or Issuer name." -}}
+{{- end -}}
+{{- if not .issuerRef.kind -}}
+{{-   fail "ERROR: \"issuerRef.kind\" is required for cozy-lib.tls.certificate. Specify \"ClusterIssuer\" or \"Issuer\"." -}}
+{{- end -}}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -35,8 +50,8 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
   secretName: {{ .secretName }}
-  duration: {{ .duration | default "8760h" }}
-  renewBefore: {{ .renewBefore | default "720h" }}
+  duration: {{ ternary "8760h" .duration (empty .duration) }}
+  renewBefore: {{ ternary "720h" .renewBefore (empty .renewBefore) }}
   privateKey:
     algorithm: RSA
     size: 2048
