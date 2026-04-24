@@ -137,7 +137,35 @@ EOF
 
 @test "cozystack-tenant-host-policy blocks non-trusted callers from setting tenant.spec.host" {
   # Impersonate a tenant-scoped ServiceAccount that is NOT in the trustedCaller
-  # group list. Attempt to create a Tenant with spec.host set → rejected.
+  # group list. First grant RBAC to create Tenants — authorization runs BEFORE
+  # admission, so without this grant the apiserver returns a plain RBAC
+  # Forbidden and the test would fail grep-ing for 'ValidatingAdmissionPolicy'
+  # even though the VAP itself is fine.
+  kubectl apply -f - <<'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: vap-probe-tenant-create
+  namespace: tenant-test
+rules:
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["tenants"]
+  verbs: ["create","get","list","watch","update","patch","delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vap-probe-tenant-create
+  namespace: tenant-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vap-probe-tenant-create
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: tenant-test
+EOF
   output=$(kubectl --as=system:serviceaccount:tenant-test:default \
                    --as-group=system:serviceaccounts \
                    --as-group=system:serviceaccounts:tenant-test \
@@ -151,6 +179,8 @@ spec:
   host: foreign.example.org
 EOF
 )
+  kubectl -n tenant-test delete rolebinding vap-probe-tenant-create --ignore-not-found
+  kubectl -n tenant-test delete role vap-probe-tenant-create --ignore-not-found
   echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted tenant.spec.host from untrusted SA" >&2; return 1; }
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "spec.host can only be set"
@@ -158,12 +188,40 @@ EOF
 
 @test "cozystack-namespace-host-label-policy blocks non-trusted callers from changing the host label" {
   # tenant-test namespace already has namespace.cozystack.io/host set by the
-  # cozystack tenant chart. An unprivileged SA must not be able to overwrite it.
+  # cozystack tenant chart. Grant patch on namespaces cluster-wide to the
+  # impersonated SA — namespaces is a cluster-scoped resource so this needs a
+  # ClusterRole. Authorization runs before admission, so without this grant
+  # the test would fail with plain RBAC Forbidden rather than a VAP rejection.
+  kubectl apply -f - <<'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vap-probe-namespace-patch
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get","list","watch","update","patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vap-probe-namespace-patch
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vap-probe-namespace-patch
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: tenant-test
+EOF
   output=$(kubectl --as=system:serviceaccount:tenant-test:default \
                    --as-group=system:serviceaccounts \
                    --as-group=system:serviceaccounts:tenant-test \
     label namespace tenant-test \
       namespace.cozystack.io/host=foreign.example.org --overwrite 2>&1 && echo "__SUCCEEDED__")
+  kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found
+  kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found
   echo "$output" | grep -q "__SUCCEEDED__" && { echo "BUG: admission accepted host label change from untrusted SA" >&2; return 1; }
   echo "$output" | grep -qi "ValidatingAdmissionPolicy"
   echo "$output" | grep -q "immutable"
