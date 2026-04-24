@@ -465,7 +465,7 @@ metadata:
     {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
     {{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
     {{-   $allocatableBytes := subf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) $totalReservedBytes }}
-    {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | ceil }}
+    {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | floor }}
     capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
     {{- end }}
     {{- if $effectiveCpu }}

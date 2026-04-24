@@ -1381,13 +1381,13 @@ tests:
     asserts:
       # 4Gi = 4096Mi; 5% = 204Mi -> clamped to 256Mi floor
       # systemReserved=256Mi, kubeReserved=256Mi, evictionHard=7% of 4Gi
-      # allocatable = ceil(4096 - 256 - 256 - 286.72) = ceil(3297.28) = 3298Mi
+      # allocatable = floor(4096 - 256 - 256 - 286.72) = floor(3297.28) = 3297Mi
       - isKind:
           of: MachineDeployment
         documentIndex: 6
       - equal:
           path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/memory"]
-          value: "3298Mi"
+          value: "3297Mi"
         documentIndex: 6
 
   - it: sets capacity.memory annotation with explicit reservation overrides (8Gi)
@@ -1416,13 +1416,13 @@ tests:
             kubeReservedMemory: "512Mi"
     asserts:
       # 8Gi = 8192Mi; systemReserved=1Gi, kubeReserved=512Mi, evictionHard=7% of 8Gi
-      # allocatable = ceil(8192 - 1024 - 512 - 573.44) = ceil(6082.56) = 6083Mi
+      # allocatable = floor(8192 - 1024 - 512 - 573.44) = floor(6082.56) = 6082Mi
       - isKind:
           of: MachineDeployment
         documentIndex: 6
       - equal:
           path: metadata.annotations["capacity.cluster-autoscaler.kubernetes.io/memory"]
-          value: "6083Mi"
+          value: "6082Mi"
         documentIndex: 6
 
   - it: omits capacity.memory annotation when no memory info is available
@@ -1482,7 +1482,7 @@ tests:
         documentIndex: 6
 
   ####################################################
-  # Capacity annotation: ceil prevents zero truncation
+  # Capacity annotation: floor gives safe under-approximation
   ####################################################
 
   - it: reports non-zero capacity annotation when reservations consume most memory
@@ -1511,7 +1511,7 @@ tests:
             kubeReservedMemory: "1Gi"
     asserts:
       # 2.5Gi = 2560Mi. Reserved: 1Gi + 1Gi + 7% of 2560Mi (179.2Mi) = 2359.2Mi.
-      # Remaining: ~200.8Mi. ceil ensures at least 1Mi is reported instead of 0 from int truncation.
+      # Remaining: ~200.8Mi. floor gives a safe under-approximation for cluster-autoscaler.
       - isKind:
           of: MachineDeployment
         documentIndex: 6
