@@ -1,4 +1,5 @@
 {{- $issuerName := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $acmeServer := "" }}
 {{- if eq $issuerName "letsencrypt-prod" }}
   {{- $acmeServer = "https://acme-v02.api.letsencrypt.org/directory" }}
@@ -6,6 +7,22 @@
   {{- $acmeServer = "https://acme-staging-v02.api.letsencrypt.org/directory" }}
 {{- else }}
   {{- fail (printf "packages/extra/gateway currently supports publishing.certificates.issuerName=letsencrypt-prod or letsencrypt-stage (got %q). For other issuers, extend templates/issuer.yaml to map the name to the corresponding ACME server URL." $issuerName) }}
+{{- end }}
+{{- /*
+  Let's Encrypt refuses to issue wildcard certificates via HTTP-01 (see
+  cert-manager/cert-manager-crds/.../crd-cert-manager.io_clusterissuers.yaml
+  at the http01 field description, and LE policy
+  https://letsencrypt.org/docs/challenge-types/#http-01-challenge). The
+  tenant Gateway's Certificate requests apex + *.apex, so HTTP-01 would
+  loop the Order forever and the HTTPS listeners would never get a cert.
+  Require dns01 (or selfsigned) for Gateway API tenants — fail fast so
+  the operator sees the mismatch at install time instead of during a
+  stuck cert-manager challenge.
+*/}}
+{{- if eq $solver "http01" }}
+  {{- fail "publishing.certificates.solver=http01 cannot issue the wildcard certificate the tenant Gateway needs (Let's Encrypt refuses HTTP-01 for wildcard identifiers). Set publishing.certificates.solver=dns01 (with a Cloudflare API token Secret in cozy-cert-manager) before enabling tenant.spec.gateway=true, or use the self-signed ClusterIssuer for air-gapped clusters." }}
+{{- else if ne $solver "dns01" }}
+  {{- fail (printf "packages/extra/gateway currently supports publishing.certificates.solver=dns01 only (got %q). Extend templates/issuer.yaml to add additional solver types." $solver) }}
 {{- end }}
 ---
 apiVersion: cert-manager.io/v1
@@ -18,10 +35,8 @@ spec:
     privateKeySecretRef:
       name: gateway-acme-account
     solvers:
-    - http01:
-        gatewayHTTPRoute:
-          parentRefs:
-          - group: gateway.networking.k8s.io
-            kind: Gateway
-            name: cozystack
-            sectionName: http
+    - dns01:
+        cloudflare:
+          apiTokenSecretRef:
+            name: cloudflare-api-token-secret
+            key: api-token
