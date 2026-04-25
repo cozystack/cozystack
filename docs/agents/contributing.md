@@ -86,6 +86,19 @@ Fill in the template at [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_
 
 Create the PR with `gh pr create --title "type(scope): brief description" --body-file <file>`.
 
+## Retrying a CI run after a flake
+
+Do NOT use `gh run rerun --failed` (or the "Re-run failed jobs" button) on a PR branch. Push an empty commit instead:
+
+```bash
+git commit --allow-empty --message "chore: retry CI after <flake-name>"
+git push origin <branch>
+```
+
+The `.github/workflows/pull-requests.yaml` workflow is configured with `concurrency.cancel-in-progress: true`, which cancels older runs when a new push arrives on the same PR. A rerun restarts jobs under the *same* `run_id` as a new attempt, which does not re-register into the concurrency group — so if a real fix-commit lands while the rerun is in flight, both runs race to completion and operators pay twice. The empty-commit path participates in the concurrency group cleanly, so the next real push cancels it as expected.
+
+If you already fired `gh run rerun` and need to push a follow-up, cancel the old run manually before pushing: `gh run cancel <run-id> --repo cozystack/cozystack`.
+
 ## Fetching Unresolved Review Comments
 
 Cozystack uses GitHub review threads with resolution status. Only unresolved threads are actionable — resolved threads are already handled.

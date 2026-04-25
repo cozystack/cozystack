@@ -23,6 +23,10 @@ working with the **Cozystack** project.
   - Read: [`overview.md`](./docs/agents/overview.md)
   - Action: Read relevant sections to understand project structure and conventions
 
+- **Retrying CI after a flake** (e.g., "rerun CI", "retry the failed run", "the build flaked, kick it again")
+  - Read: [`contributing.md`](./docs/agents/contributing.md), section "Retrying a CI run after a flake"
+  - Action: Push an empty commit with `git commit --allow-empty`. Do NOT use `gh run rerun` — it bypasses the concurrency group and leaves duplicate runs in flight
+
 - **General questions about contributing**
   - Read: [`contributing.md`](./docs/agents/contributing.md)
   - Action: Read the file to understand git workflow, commit format, PR process
