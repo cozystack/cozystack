@@ -60,6 +60,16 @@
           "x-kubernetes-int-or-string": true
         }
       }
+    },
+    "certWaitTimeout": {
+      "description": "Timeout in seconds to wait for cert-manager to populate TLS Secrets.",
+      "type": "integer",
+      "default": 300
+    },
+    "kubectlImage": {
+      "description": "Container image used for DataStore creation hook Job.",
+      "type": "string",
+      "default": "docker.io/alpine/k8s:1.33.4"
     }
   }
 }
