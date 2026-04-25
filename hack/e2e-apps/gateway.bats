@@ -186,7 +186,7 @@ EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Tenant
 metadata:
-  name: vap-host-probe
+  name: vaphostprobe
   namespace: tenant-test
 spec:
   host: foreign.example.org
@@ -197,10 +197,10 @@ EOF
     echo "$output" | grep -qi "ValidatingAdmissionPolicy"
     echo "$output" | grep -q "spec.host can only be set"
   else
-    kubectl -n tenant-test delete tenants.apps.cozystack.io vap-host-probe --ignore-not-found
+    kubectl -n tenant-test delete tenants.apps.cozystack.io vaphostprobe --ignore-not-found
     kubectl -n tenant-test delete rolebinding vap-probe-tenant-create --ignore-not-found
     kubectl -n tenant-test delete role vap-probe-tenant-create --ignore-not-found
-    echo "BUG: admission accepted tenant.spec.host from untrusted SA — Tenant 'vap-host-probe' was created" >&2
+    echo "BUG: admission accepted tenant.spec.host from untrusted SA — Tenant 'vaphostprobe' was created" >&2
     echo "$output" >&2
     return 1
   fi
