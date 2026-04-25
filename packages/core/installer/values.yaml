@@ -4,6 +4,10 @@ cozystackOperator:
   image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.3.0@sha256:62574f12486bb40c901cf5ed484cca264405ce5810196d86555cbb27cce1ba48
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
   platformSourceRef: 'digest=sha256:a0b9ef938446b3132d3d22ad2262beb1027c48c9037b6c2346fdc2f19acd3036'
+  # Name of the Secret in cozy-system namespace containing registry credentials
+  # (kubernetes.io/dockerconfigjson type) for private OCI registry or Git repository access.
+  # If specified, sets spec.secretRef in the generated OCIRepository or GitRepository resource.
+  platformSourceSecret: ''
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)
