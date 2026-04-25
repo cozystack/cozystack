@@ -246,7 +246,7 @@ spec:
           # Use kubectl apply for idempotent creation/update
           # This eliminates race condition between check and create
           # Timeout 90s to accommodate Kamaji ValidatingWebhook etcd connectivity check
-          cat <<EOF | kubectl apply --namespace "\$NAMESPACE" --request-timeout=90s -f -
+          cat <<EOF | kubectl apply --namespace "$$NAMESPACE" --request-timeout=90s -f -
 apiVersion: kamaji.clastix.io/v1alpha1
 kind: DataStore
 metadata:
