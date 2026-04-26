@@ -13,6 +13,7 @@
     --install \
     --namespace cozy-system \
     --create-namespace \
+    --set cozystackOperator.helmReleaseInterval=30s \
     --wait \
     --timeout 2m
 
