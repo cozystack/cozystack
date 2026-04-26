@@ -20,5 +20,4 @@ FROM scratch
 COPY --from=builder /lineage-controller-webhook /lineage-controller-webhook
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
-USER 65532:65532
 ENTRYPOINT ["/lineage-controller-webhook"]
