@@ -19,4 +19,5 @@ FROM scratch
 
 COPY --from=builder /cozystack-api /cozystack-api
 
+USER 65532:65532
 ENTRYPOINT ["/cozystack-api"]

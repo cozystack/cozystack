@@ -20,4 +20,5 @@ FROM scratch
 COPY --from=builder /backup-controller /backup-controller
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
+USER 65532:65532
 ENTRYPOINT ["/backup-controller"]

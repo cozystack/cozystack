@@ -12,4 +12,5 @@ FROM scratch
 
 COPY --from=builder /token-proxy /token-proxy
 
+USER 65532:65532
 ENTRYPOINT ["/token-proxy"]

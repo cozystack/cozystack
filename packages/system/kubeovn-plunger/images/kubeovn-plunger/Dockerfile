@@ -19,4 +19,5 @@ FROM scratch
 COPY --from=builder /kubeovn-plunger /kubeovn-plunger
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
+USER 65532:65532
 ENTRYPOINT ["/kubeovn-plunger"]
