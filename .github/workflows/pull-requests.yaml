@@ -223,31 +223,13 @@ jobs:
       - name: Prepare environment
         run: |
           cd /tmp/$SANDBOX_NAME
-          attempt=0
-          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
-            attempt=$((attempt + 1))
-            if [ $attempt -ge 3 ]; then
-              echo "❌ Attempt $attempt failed, exiting..."
-              exit 1
-            fi
-            echo "❌ Attempt $attempt failed, retrying..."
-          done
-          echo "✅ The task completed successfully after $attempt attempts"
+          make SANDBOX_NAME=$SANDBOX_NAME prepare-env
 
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
         run: |
           cd /tmp/$SANDBOX_NAME
-          attempt=0
-          until make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; do
-            attempt=$((attempt + 1))
-            if [ $attempt -ge 3 ]; then
-              echo "❌ Attempt $attempt failed, exiting..."
-              exit 1
-            fi
-            echo "❌ Attempt $attempt failed, retrying..."
-          done
-          echo "✅ The task completed successfully after $attempt attempts"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
 
       - name: Run OpenAPI tests
         run: |
