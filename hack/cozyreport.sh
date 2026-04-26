@@ -250,6 +250,9 @@ fi
 
 # -- finalization
 
+echo "Generating summary..."
+hack/cozyreport-summary.sh > $REPORT_DIR/summary.txt 2>&1 || true
+
 echo "Creating archive..."
 tar -czf $REPORT_NAME.tgz -C $REPORT_PDIR .
 echo "Report created: $REPORT_NAME.tgz"
