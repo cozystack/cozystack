@@ -1,0 +1,199 @@
+name: PR Auto-Label
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply labels from PR title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Conventional Commits types accepted by Cozystack (per docs/agents/contributing.md):
+            //   feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+            // Mapping below maps a subset to kind/* — types not listed do not produce a kind/*.
+            const typeToKind = {
+              feat:     'kind/feature',
+              fix:      'kind/bug',
+              docs:     'kind/documentation',
+              chore:    'kind/cleanup',
+              refactor: 'kind/cleanup',
+              // style, perf, test, build, ci, revert — no kind mapping
+            };
+
+            // scope -> area/* mapping. Keys are the scopes observed in cozystack issues
+            // and PRs. Add new entries when a scope recurs (3+ times).
+            const scopeToArea = {
+              // area/api
+              'api':                 'area/api',
+              'cozystack-api':       'area/api',
+
+              // area/ai
+              'agents':              'area/ai',
+              'ai':                  'area/ai',
+
+              // area/build
+              'build':               'area/build',
+
+              // area/ci
+              'ci':                  'area/ci',
+
+              // area/dashboard
+              'dashboard':           'area/dashboard',
+
+              // area/database
+              'postgres':            'area/database',
+              'postgres-operator':   'area/database',
+              'mariadb':             'area/database',
+              'mariadb-operator':    'area/database',
+              'redis':               'area/database',
+              'etcd':                'area/database',
+              'kafka':               'area/database',
+              'clickhouse':          'area/database',
+
+              // area/extra
+              'extra':               'area/extra',
+
+              // area/kubernetes
+              'kubernetes':          'area/kubernetes',
+              'apps/kubernetes':     'area/kubernetes',
+
+              // area/monitoring
+              'monitoring':          'area/monitoring',
+              'vlogs':               'area/monitoring',
+              'vmstack':             'area/monitoring',
+              'grafana':             'area/monitoring',
+              'workloadmonitor':     'area/monitoring',
+
+              // area/networking
+              'ingress':             'area/networking',
+              'ingress-nginx':       'area/networking',
+              'gateway':             'area/networking',
+              'vpn':                 'area/networking',
+              'metallb':             'area/networking',
+              'cilium':              'area/networking',
+              'kube-ovn':            'area/networking',
+              'tcp-balancer':        'area/networking',
+              'securitygroups':      'area/networking',
+              'cozy-proxy':          'area/networking',
+
+              // area/platform
+              'platform':            'area/platform',
+              'bundle':              'area/platform',
+              'flux':                'area/platform',
+              'fluxcd':              'area/platform',
+              'cluster-api':         'area/platform',
+              'talos':               'area/platform',
+              'installer':           'area/platform',
+              'cozyctl':             'area/platform',
+              'cozystack-engine':    'area/platform',
+              'cozy-lib':            'area/platform',
+
+              // area/release
+              'backport':            'area/release',
+              'release':             'area/release',
+
+              // area/storage
+              'seaweedfs':           'area/storage',
+              'seaweedfs-cosi-driver': 'area/storage',
+              'bucket':              'area/storage',
+              'linstor':             'area/storage',
+              'velero':              'area/storage',
+              'harbor':              'area/storage',
+              'backups':             'area/storage',
+
+              // area/testing
+              'tests':               'area/testing',
+              'e2e':                 'area/testing',
+
+              // area/virtualization
+              'kubevirt':            'area/virtualization',
+              'cdi':                 'area/virtualization',
+              'vmi':                 'area/virtualization',
+              'vm-import':           'area/virtualization',
+              'virtual-machine':     'area/virtualization',
+              'hami':                'area/virtualization',
+              'gpu-operator':        'area/virtualization',
+            };
+
+            const pr = context.payload.pull_request;
+            const title = pr.title || '';
+            const body  = pr.body  || '';
+            const existing = new Set(pr.labels.map(l => l.name));
+            const toAdd = new Set();
+
+            // 1. Strip "[Backport release-1.x]" prefix if present.
+            const backportMatch = title.match(/^\[Backport ([^\]]+)\]\s+(.+)$/);
+            const cleanTitle = backportMatch ? backportMatch[2] : title;
+            if (backportMatch) {
+              toAdd.add('area/release');
+              toAdd.add('backport');
+            }
+
+            // 2. Try Conventional Commits form: type(scope)?(!)?: description
+            const conv = cleanTitle.match(/^([a-z]+)(?:\(([^)]+)\))?(!)?:\s*.+$/);
+            // 3. Fall back to bracket form: [scope] description
+            const bracket = !conv && cleanTitle.match(/^\[([^\]]+)\]\s+.+$/);
+
+            let type = null, scopeStr = null, breaking = false;
+            if (conv) {
+              type = conv[1];
+              scopeStr = conv[2] || null;
+              breaking = !!conv[3];
+            } else if (bracket) {
+              scopeStr = bracket[1];
+            }
+
+            // 4. Detect BREAKING CHANGE: footer in body.
+            if (/^BREAKING CHANGE:/m.test(body)) {
+              breaking = true;
+            }
+
+            // 5. Apply kind/* from type.
+            if (type && typeToKind[type]) {
+              toAdd.add(typeToKind[type]);
+            }
+
+            // 6. Apply area/* from scope. Composite scopes split on comma.
+            const scopes = (scopeStr || '')
+              .split(/,\s*/)
+              .map(s => s.trim())
+              .filter(Boolean);
+            for (const s of scopes) {
+              if (scopeToArea[s]) {
+                toAdd.add(scopeToArea[s]);
+              }
+            }
+
+            // 7. kind/breaking-change.
+            if (breaking) {
+              toAdd.add('kind/breaking-change');
+            }
+
+            // 8. Fallback: no area/* applied -> area/uncategorized.
+            const hasArea = [...toAdd].some(l => l.startsWith('area/'));
+            if (!hasArea) {
+              toAdd.add('area/uncategorized');
+            }
+
+            // 9. Additive only — never remove existing labels.
+            const newLabels = [...toAdd].filter(l => !existing.has(l));
+            if (newLabels.length === 0) {
+              core.info('No new labels to apply');
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: newLabels,
+            });
+            core.info(`Applied labels: ${newLabels.join(', ')}`);
