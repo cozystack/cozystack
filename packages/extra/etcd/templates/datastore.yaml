@@ -1,35 +1,286 @@
+{{- if not (kindIs "float64" .Values.certWaitTimeout) }}
+  {{- fail "certWaitTimeout must be a number" }}
+{{- end }}
+{{- if or (le (.Values.certWaitTimeout | int) 0) (lt (.Values.certWaitTimeout | int) 10) (gt (.Values.certWaitTimeout | int) 3600) }}
+  {{- fail "certWaitTimeout must be between 10 and 3600 seconds (positive integer)" }}
+{{- end }}
 ---
-apiVersion: kamaji.clastix.io/v1alpha1
-kind: DataStore
+apiVersion: v1
+kind: ServiceAccount
 metadata:
-  name: {{ .Release.Namespace }}
+  name: etcd-datastore-hook
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: etcd-datastore-hook
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["etcd-ca-tls", "etcd-client-tls"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["list"]
+- apiGroups: ["kamaji.clastix.io"]
+  resources: ["datastores"]
+  verbs: ["create", "get", "patch"]
+- apiGroups: ["cert-manager.io"]
+  resources: ["certificates", "certificaterequests"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: etcd-datastore-hook
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: etcd-datastore-hook
+subjects:
+- kind: ServiceAccount
+  name: etcd-datastore-hook
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: etcd-datastore-hook-{{ .Release.Revision }}
+  annotations:
+    # Weight 10 ensures Job runs after all regular resources including Certificates
+    # Job waits for cert-manager to populate TLS Secrets before creating DataStore
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
-  driver: etcd
-  endpoints:
-  - etcd.{{ $.Release.Namespace }}.svc:2379
-  tlsConfig:
-    certificateAuthority:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-    clientCertificate:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: etcd-datastore-hook
+      restartPolicy: OnFailure
+      containers:
+      - name: create-datastore
+        image: {{ .Values.kubectlImage }}
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        env:
+        - name: CERT_WAIT_TIMEOUT
+          value: {{ .Values.certWaitTimeout | quote }}
+        command:
+        - sh
+        - -exc
+        - |
+          # Enable pipefail to catch errors in pipes
+          set -o pipefail
+
+          # Install required utilities
+          # openssl: for certificate validation (checkend, pubkey extraction)
+          if ! apk add --no-cache openssl; then
+            echo "ERROR: Failed to install openssl. Check network connectivity and Alpine package repository availability."
+            exit 1
+          fi
+
+          # Verify openssl binary is available
+          if ! command -v openssl >/dev/null 2>&1; then
+            echo "ERROR: openssl binary not available after installation"
+            exit 1
+          fi
+
+          # Get namespace from ServiceAccount
+          NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+
+          # Validate CERT_WAIT_TIMEOUT is a positive integer
+          TIMEOUT_SECONDS=${CERT_WAIT_TIMEOUT:-300}
+          if ! echo "$TIMEOUT_SECONDS" | grep -Eq '^[0-9]+$' || [ "$TIMEOUT_SECONDS" -le 0 ]; then
+            echo "ERROR: CERT_WAIT_TIMEOUT must be a positive integer, got: $TIMEOUT_SECONDS"
+            exit 1
+          fi
+
+          ITERATIONS=$((TIMEOUT_SECONDS / 2))
+
+          echo "Waiting for cert-manager to populate TLS Secrets in namespace: $NAMESPACE"
+          echo "Timeout: $TIMEOUT_SECONDS seconds"
+
+          # Function to check Certificate CR is not in failed state
+          check_certificate_ready() {
+            local cert_name=$1
+            local namespace=$2
+
+            # Check Certificate exists
+            if ! kubectl get certificate "$cert_name" --namespace "$namespace" --request-timeout=10s >/dev/null 2>&1; then
+              echo "ERROR: Certificate $cert_name not found"
+              return 1
+            fi
+
+            # Check Certificate is not in permanent failed state
+            local reason=$(kubectl get certificate "$cert_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null)
+
+            if [ "$reason" = "Failed" ]; then
+              echo "ERROR: Certificate $cert_name is in Failed state, will not recover"
+              kubectl describe certificate "$cert_name" --namespace "$namespace" --request-timeout=10s
+              return 1
+            fi
+
+            return 0
+          }
+
+          # Function to validate Secret has both certificate and key
+          validate_secret() {
+            local secret_name=$1
+            local namespace=$2
+
+            # Fetch certificate and key data atomically (single kubectl call to avoid TOCTOU)
+            local secret_data=$(kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.data}' 2>/dev/null)
+            local cert_data=$(echo "$secret_data" | grep -o '"tls.crt":"[^"]*"' | cut -d'"' -f4 | base64 -d 2>/dev/null)
+            local key_data=$(echo "$secret_data" | grep -o '"tls.key":"[^"]*"' | cut -d'"' -f4 | base64 -d 2>/dev/null)
+
+            if [ -z "$cert_data" ] || [ -z "$key_data" ]; then
+              return 1
+            fi
+
+            # Check certificate is valid (not expired)
+            # -checkend 0 validates notAfter >= now
+            # Note: notBefore validation is omitted as Kamaji webhook validates
+            # TLS handshake at admission time, making client-side check redundant
+            if ! echo "$cert_data" | openssl x509 -noout -checkend 0 2>/dev/null; then
+              echo "ERROR: Certificate in $secret_name is expired or will expire soon"
+              return 1
+            fi
+
+            # Check private key exists and is valid (supports RSA, ECDSA, Ed25519, etc.)
+            if ! echo "$key_data" | openssl pkey -noout -check 2>/dev/null; then
+              return 1
+            fi
+
+            # Verify certificate and key match (compare public keys)
+            local cert_pubkey=$(echo "$cert_data" | openssl x509 -noout -pubkey 2>/dev/null)
+            local key_pubkey=$(echo "$key_data" | openssl pkey -pubout 2>/dev/null)
+
+            if [ "$cert_pubkey" != "$key_pubkey" ]; then
+              echo "Certificate and private key mismatch"
+              return 1
+            fi
+
+            return 0
+          }
+
+          # Function to print diagnostics on failure
+          print_diagnostics() {
+            local secret_name=$1
+            local namespace=$2
+
+            echo "=== Diagnostic Information ==="
+            echo "Certificate status:"
+            kubectl describe certificate --namespace "$namespace" --request-timeout=10s 2>&1 || echo "No Certificates found"
+            echo ""
+            echo "CertificateRequest status:"
+            kubectl get certificaterequest --namespace "$namespace" --request-timeout=10s -o wide 2>&1 || echo "No CertificateRequests found"
+            echo ""
+            echo "Secret $secret_name metadata (no sensitive data):"
+            kubectl get secret "$secret_name" --namespace "$namespace" --request-timeout=10s -o jsonpath='{.metadata}' 2>&1 || echo "Secret not found"
+          }
+
+          # Fail-fast check: ensure Certificate CRs exist and are not in failed state
+          echo "Verifying Certificate CRs are not in failed state..."
+          if ! check_certificate_ready "etcd-ca" "$NAMESPACE"; then
+            exit 1
+          fi
+          if ! check_certificate_ready "etcd-client" "$NAMESPACE"; then
+            exit 1
+          fi
+
+          # Wait for etcd-ca-tls Secret to be populated by cert-manager
+          echo "Checking etcd-ca-tls Secret..."
+          for i in $(seq 1 $ITERATIONS); do
+            if validate_secret "etcd-ca-tls" "$NAMESPACE"; then
+              echo "etcd-ca-tls Secret populated and valid after $((i * 2)) seconds"
+              break
+            fi
+            if [ $i -eq $ITERATIONS ]; then
+              echo "ERROR: etcd-ca-tls Secret not populated after $TIMEOUT_SECONDS seconds"
+              print_diagnostics "etcd-ca-tls" "$NAMESPACE"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Wait for etcd-client-tls Secret to be populated by cert-manager
+          echo "Checking etcd-client-tls Secret..."
+          for i in $(seq 1 $ITERATIONS); do
+            if validate_secret "etcd-client-tls" "$NAMESPACE"; then
+              echo "etcd-client-tls Secret populated and valid after $((i * 2)) seconds"
+              break
+            fi
+            if [ $i -eq $ITERATIONS ]; then
+              echo "ERROR: etcd-client-tls Secret not populated after $TIMEOUT_SECONDS seconds"
+              print_diagnostics "etcd-client-tls" "$NAMESPACE"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo "All TLS Secrets populated and validated"
+
+          echo "Creating or updating DataStore..."
+
+          # Use kubectl apply for idempotent creation/update
+          # This eliminates race condition between check and create
+          # Timeout 90s to accommodate Kamaji ValidatingWebhook etcd connectivity check
+          sed 's/^          //' <<'EOF' | kubectl apply --namespace "$$NAMESPACE" --request-timeout=90s --filename -
+          apiVersion: kamaji.clastix.io/v1alpha1
+          kind: DataStore
+          metadata:
+            name: {{ .Release.Namespace }}
+          spec:
+            driver: etcd
+            endpoints:
+            - etcd.{{ .Release.Namespace }}.svc:2379
+            tlsConfig:
+              certificateAuthority:
+                certificate:
+                  secretReference:
+                    keyPath: tls.crt
+                    name: etcd-ca-tls
+                    namespace: {{ .Release.Namespace }}
+                privateKey:
+                  secretReference:
+                    keyPath: tls.key
+                    name: etcd-ca-tls
+                    namespace: {{ .Release.Namespace }}
+              clientCertificate:
+                certificate:
+                  secretReference:
+                    keyPath: tls.crt
+                    name: etcd-client-tls
+                    namespace: {{ .Release.Namespace }}
+                privateKey:
+                  secretReference:
+                    keyPath: tls.key
+                    name: etcd-client-tls
+                    namespace: {{ .Release.Namespace }}
+          EOF
+
+          echo "DataStore created or updated successfully"
 ---
 apiVersion: v1
 kind: Secret

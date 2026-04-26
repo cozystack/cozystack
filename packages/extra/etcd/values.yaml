@@ -19,3 +19,12 @@ replicas: 3
 resources:
   cpu: 1000m
   memory: 512Mi
+
+## @param {int} [certWaitTimeout] - Timeout in seconds to wait for cert-manager to populate TLS Secrets.
+## Increase this value for environments with slow cert-manager (high load, external CA, resource limits).
+certWaitTimeout: 300
+
+## @param {string} [kubectlImage] - Container image used for DataStore creation hook Job.
+## Uses alpine/k8s (alpine + kubectl pre-installed) and installs openssl at runtime.
+## openssl provides certificate validation utilities (checkend, pubkey extraction).
+kubectlImage: docker.io/alpine/k8s:1.33.4
