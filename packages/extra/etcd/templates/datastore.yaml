@@ -246,39 +246,39 @@ spec:
           # Use kubectl apply for idempotent creation/update
           # This eliminates race condition between check and create
           # Timeout 90s to accommodate Kamaji ValidatingWebhook etcd connectivity check
-          cat <<EOF | kubectl apply --namespace "$$NAMESPACE" --request-timeout=90s -f -
-apiVersion: kamaji.clastix.io/v1alpha1
-kind: DataStore
-metadata:
-  name: {{ .Release.Namespace }}
-spec:
-  driver: etcd
-  endpoints:
-  - etcd.{{ .Release.Namespace }}.svc:2379
-  tlsConfig:
-    certificateAuthority:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-ca-tls
-          namespace: {{ .Release.Namespace }}
-    clientCertificate:
-      certificate:
-        secretReference:
-          keyPath: tls.crt
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
-      privateKey:
-        secretReference:
-          keyPath: tls.key
-          name: etcd-client-tls
-          namespace: {{ .Release.Namespace }}
-EOF
+          sed 's/^          //' <<'EOF' | kubectl apply --namespace "$$NAMESPACE" --request-timeout=90s --filename -
+          apiVersion: kamaji.clastix.io/v1alpha1
+          kind: DataStore
+          metadata:
+            name: {{ .Release.Namespace }}
+          spec:
+            driver: etcd
+            endpoints:
+            - etcd.{{ .Release.Namespace }}.svc:2379
+            tlsConfig:
+              certificateAuthority:
+                certificate:
+                  secretReference:
+                    keyPath: tls.crt
+                    name: etcd-ca-tls
+                    namespace: {{ .Release.Namespace }}
+                privateKey:
+                  secretReference:
+                    keyPath: tls.key
+                    name: etcd-ca-tls
+                    namespace: {{ .Release.Namespace }}
+              clientCertificate:
+                certificate:
+                  secretReference:
+                    keyPath: tls.crt
+                    name: etcd-client-tls
+                    namespace: {{ .Release.Namespace }}
+                privateKey:
+                  secretReference:
+                    keyPath: tls.key
+                    name: etcd-client-tls
+                    namespace: {{ .Release.Namespace }}
+          EOF
 
           echo "DataStore created or updated successfully"
 ---
