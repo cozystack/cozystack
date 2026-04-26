@@ -181,6 +181,16 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
+	// Run the genericapiserver-supplied admission chain (mutating + validating
+	// webhooks and ValidatingAdmissionPolicies) before persisting anything.
+	// Custom REST handlers must invoke this hook explicitly — unlike
+	// genericregistry.Store, which wires it automatically.
+	if createValidation != nil {
+		if err := createValidation(ctx, obj); err != nil {
+			return nil, err
+		}
+	}
+
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
 	if err != nil {
@@ -588,6 +598,22 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	// Run the genericapiserver-supplied admission chain (validating webhooks
+	// and ValidatingAdmissionPolicies) on the resolved Application before
+	// removing the underlying HelmRelease. Custom REST handlers must invoke
+	// this hook explicitly — unlike genericregistry.Store, which wires it
+	// automatically.
+	if deleteValidation != nil {
+		converted, convErr := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
+		if convErr != nil {
+			klog.Errorf("Failed to convert HelmRelease %s to Application for delete admission: %v", helmReleaseName, convErr)
+			return nil, false, convErr
+		}
+		if err := deleteValidation(ctx, &converted); err != nil {
+			return nil, false, err
+		}
 	}
 
 	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
