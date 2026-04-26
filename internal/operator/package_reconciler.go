@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -58,7 +59,8 @@ func parseCRDPolicy(install *cozyv1alpha1.ComponentInstall) helmv2.CRDsPolicy {
 // PackageReconciler reconciles Package resources
 type PackageReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme              *runtime.Scheme
+	HelmReleaseInterval time.Duration
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=packages,verbs=get;list;watch;create;update;patch;delete
@@ -214,7 +216,7 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Labels:    labels,
 			},
 			Spec: helmv2.HelmReleaseSpec{
-				Interval: metav1.Duration{Duration: 5 * 60 * 1000000000}, // 5m
+				Interval: metav1.Duration{Duration: r.HelmReleaseInterval},
 				ChartRef: &helmv2.CrossNamespaceSourceReference{
 					Kind:      "ExternalArtifact",
 					Name:      artifactName,
