@@ -68,6 +68,9 @@ spec:
         {{- if .Values.cozystackOperator.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
+        {{- if .Values.cozystackOperator.helmReleaseInterval }}
+        - --helmrelease-interval={{ .Values.cozystackOperator.helmReleaseInterval }}
+        {{- end }}
         - --platform-source-name=cozystack-platform
         - --platform-source-url={{ .Values.cozystackOperator.platformSourceUrl }}
         {{- if .Values.cozystackOperator.platformSourceRef }}

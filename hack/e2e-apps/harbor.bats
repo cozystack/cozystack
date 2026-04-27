@@ -38,7 +38,9 @@ spec:
     size: 1Gi
     replicas: 1
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr $release >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr $release --timeout=60s --for=condition=ready
 
   # Wait for COSI to provision bucket

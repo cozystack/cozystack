@@ -227,27 +227,18 @@ jobs:
           until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
             attempt=$((attempt + 1))
             if [ $attempt -ge 3 ]; then
-              echo "❌ Attempt $attempt failed, exiting..."
+              echo "Attempt $attempt failed, exiting..."
               exit 1
             fi
-            echo "❌ Attempt $attempt failed, retrying..."
+            echo "Attempt $attempt failed, retrying..."
           done
-          echo "✅ The task completed successfully after $attempt attempts"
+          echo "Prepare environment completed after $attempt attempts"
 
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
         run: |
           cd /tmp/$SANDBOX_NAME
-          attempt=0
-          until make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; do
-            attempt=$((attempt + 1))
-            if [ $attempt -ge 3 ]; then
-              echo "❌ Attempt $attempt failed, exiting..."
-              exit 1
-            fi
-            echo "❌ Attempt $attempt failed, retrying..."
-          done
-          echo "✅ The task completed successfully after $attempt attempts"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
 
       - name: Run OpenAPI tests
         run: |
@@ -262,23 +253,18 @@ jobs:
           failed_tests=""
           for app in $(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1); do
             echo "::group::Testing $app"
-            attempt=0
-            success=false
-            until [ $attempt -ge 3 ]; do
-              if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
-                success=true
-                break
-              fi
-              attempt=$((attempt + 1))
-              echo "❌ Attempt $attempt failed, retrying..."
-            done
-            if [ "$success" = true ]; then
+            if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
+              echo "::endgroup::"
               echo "✅ Test $app completed successfully"
             else
-              echo "❌ Test $app failed after $attempt attempts"
+              echo "::endgroup::"
+              echo "❌ Test $app failed (no retry — see diagnostics below)"
               failed_tests="$failed_tests $app"
+              echo "::group::Diagnostics for $app"
+              kubectl get hr -A -o wide 2>&1 | tail -50 || true
+              kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30 || true
+              echo "::endgroup::"
             fi
-            echo "::endgroup::"
           done
           if [ -n "$failed_tests" ]; then
             echo "❌ Failed tests:$failed_tests"

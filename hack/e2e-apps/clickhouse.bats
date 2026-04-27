@@ -35,7 +35,9 @@ spec:
   resources: {}
   resourcesPreset: "nano"
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr clickhouse-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr clickhouse-$name --timeout=20s --for=condition=ready
   timeout 180 sh -ec "until kubectl -n tenant-test get svc chendpoint-clickhouse-$name -o jsonpath='{.spec.ports[*].port}' | grep -q '8123 9000'; do sleep 10; done"
   kubectl -n tenant-test wait statefulset.apps/chi-clickhouse-$name-clickhouse-0-0 --timeout=120s --for=jsonpath='{.status.replicas}'=1

@@ -83,6 +83,7 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
+	var helmReleaseInterval string
 	var cozyValuesSecretName string
 	var cozyValuesSecretNamespace string
 	var cozyValuesNamespaceSelector string
@@ -107,6 +108,10 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.StringVar(&helmReleaseInterval, "helmrelease-interval", "5m",
+		"Reconcile interval applied to HelmReleases created by the Package reconciler. "+
+			"Lower values speed up dependency-blocked retries (e.g. during E2E install) at the cost of "+
+			"controller load. Production default 5m matches existing behaviour.")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
@@ -121,6 +126,12 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	hrIntervalDuration, err := time.ParseDuration(helmReleaseInterval)
+	if err != nil {
+		setupLog.Error(err, "invalid --helmrelease-interval value", "value", helmReleaseInterval)
+		os.Exit(1)
+	}
 
 	config := ctrl.GetConfigOrDie()
 
@@ -258,8 +269,9 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		HelmReleaseInterval: hrIntervalDuration,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
