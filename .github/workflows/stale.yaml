@@ -31,7 +31,7 @@ jobs:
           # decided to keep visible.
           exempt-issue-labels: >-
             lifecycle/frozen,epic,
-            priority/critical-urgent,priority/important-soon,
+            priority/critical-urgent,priority/important-soon,priority/important-longterm,
             security/critical,security/high,security/confirmed,
             security/triage-needed,security/in-progress,
             triage/accepted,kind/regression
