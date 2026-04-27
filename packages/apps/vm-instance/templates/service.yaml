@@ -9,7 +9,7 @@ metadata:
 {{- if .Values.external }}
     service.kubernetes.io/service-proxy-name: "cozy-proxy"
   annotations:
-    networking.cozystack.io/wholeIP: "true"
+    networking.cozystack.io/wholeIP: {{ ternary "true" "false" (eq .Values.externalMethod "WholeIP") | quote }}
 {{- end }}
 spec:
   type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
