@@ -38,8 +38,13 @@ echo "Waiting for cozystack-controller"
 kubectl rollout status deploy/cozystack-controller -n cozy-system --timeout=5m || exit 1
 
 cozyhr -n cozy-system -C ./packages/system/lineage-controller-webhook/ apply lineage-controller-webhook --take-ownership
-echo "Waiting for lineage-webhook"
-kubectl rollout status ds/lineage-controller-webhook -n cozy-system --timeout=5m || exit 1
+if kubectl get ds lineage-controller-webhook -n cozy-system >/dev/null 2>&1; then
+  echo "Waiting for lineage-webhook daemonset"
+  kubectl rollout status ds/lineage-controller-webhook -n cozy-system --timeout=5m || exit 1
+else
+  echo "Waiting for lineage-webhook deployment"
+  kubectl rollout status deploy/lineage-controller-webhook -n cozy-system --timeout=5m || exit 1
+fi
 
 sleep 5
 echo "Running lineage-webhook test"
