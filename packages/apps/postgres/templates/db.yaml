@@ -58,7 +58,7 @@ spec:
   postgresql:
     parameters:
       {{- $defaults := dict "max_wal_senders" "30" }}
-      {{- $params := merge (dict) $defaults .Values.postgresql.parameters }}
+      {{- $params := merge (dict) .Values.postgresql.parameters $defaults }}
       {{- /* Security: Block parameters that could allow shell command execution */ -}}
       {{- $dangerousParams := list "archive_command" "restore_command" "ssl_passphrase_command" "log_destination" "event_source" }}
       {{- range $key, $value := $params }}
