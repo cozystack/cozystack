@@ -126,7 +126,7 @@ jobs:
             const pr = context.payload.pull_request;
             const title = pr.title || '';
             const body  = pr.body  || '';
-            const existing = new Set(pr.labels.map(l => l.name));
+            const existing = new Set((pr.labels || []).map(l => l.name));
             const toAdd = new Set();
 
             // 1. Strip "[Backport release-1.x]" prefix if present.
