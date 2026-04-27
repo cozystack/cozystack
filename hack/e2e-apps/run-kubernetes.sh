@@ -56,7 +56,7 @@ spec:
   host: ""
   nodeGroups:
     md0:
-      ephemeralStorage: 20Gi
+      diskSize: 20Gi
       gpus: []
       instanceType: u1.medium
       maxReplicas: 10

@@ -20,6 +20,25 @@ spec:
         name: {{ . }}
       {{- end }}
       runStrategy: Always
+      dataVolumeTemplates:
+      - metadata:
+          name: disk-kubelet
+          annotations:
+            {{/* Populator creates intermediate PVC + PV rebind that causes ClaimMisbound with LINSTOR CSI */}}
+            cdi.kubevirt.io/storage.usePopulator: "false"
+        spec:
+          {{- if hasKey .group "ephemeralStorage" }}
+          {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions." .groupName) }}
+          {{- end }}
+          source:
+            blank: {}
+          storage:
+            resources:
+              requests:
+                storage: {{ .group.diskSize | default "20Gi" | quote }}
+            {{- with .group.storageClass }}
+            storageClassName: {{ . | quote }}
+            {{- end }}
       template:
         metadata:
           annotations:
@@ -59,10 +78,13 @@ spec:
                 disk:
                   bus: virtio
                   pciAddress: 0000:07:00.0
-              - name: ephemeral
+              - name: disk-kubelet
                 disk:
                   bus: virtio
                   pciAddress: 0000:08:00.0
+                blockSize:
+                  matchVolume:
+                    enabled: true
               interfaces:
               - name: default
                 bridge: {}
@@ -71,15 +93,16 @@ spec:
               guest: {{ .group.resources.memory }}
             {{- end }}
             resources:
-              {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" .group.ephemeralStorage) $) | nindent 14 }}
+              {{/* 2Gi is enough: persistent DataVolumes are not counted as pod ephemeral storage */}}
+              {{- include "cozy-lib.resources.sanitize" (list (dict "ephemeral-storage" "2Gi") $) | nindent 14 }}
           evictionStrategy: External
           volumes:
           - name: system
             containerDisk:
               image: "{{ $.Files.Get (printf "images/ubuntu-container-disk-%s.tag" $.Values.version) | trim }}"
-          - name: ephemeral
-            emptyDisk:
-              capacity: {{ .group.ephemeralStorage | default "20Gi" }}
+          - name: disk-kubelet
+            dataVolume:
+              name: disk-kubelet
           networks:
           - name: default
             pod: {}
@@ -217,35 +240,36 @@ spec:
           chmod 0755 /root/kubeadm
           if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
           if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
+      {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
+      {{- if $sec }}
+        {{- range $key, $_ := $sec.data }}
+      - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
+        contentFrom:
+          secret:
+            name: {{ $.Release.Name }}-patch-containerd
+            key: {{ $key }}
+        permissions: "0400"
+        {{- end }}
+      {{- end }}
       diskSetup:
         filesystems:
         - device: /dev/vdb
           filesystem: xfs
-          label: ephemeral
+          label: persistent
           partition: "none"
+          {{/* overwrite must stay false: XFS on /dev/vdb is created on first boot; subsequent reboots of the same VM must reuse the existing filesystem via LABEL=persistent */}}
+          overwrite: false
       mounts:
-      - ["LABEL=ephemeral", "/ephemeral"]
-      - ["/ephemeral/kubelet", "/var/lib/kubelet", "none", "bind,nofail"]
-      - ["/ephemeral/containerd", "/var/lib/containerd", "none", "bind,nofail"]
-      {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
-      {{- if $sec }}
-      files:
-        {{- range $key, $_ := $sec.data }}
-        - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
-          contentFrom:
-            secret:
-              name: {{ $.Release.Name }}-patch-containerd
-              key: {{ $key }}
-          permissions: "0400"
-        {{- end }}
-      {{- end }}
+      - ["LABEL=persistent", "/persistent"]
+      - ["/persistent/kubelet", "/var/lib/kubelet", "none", "bind,nofail"]
+      - ["/persistent/containerd", "/var/lib/containerd", "none", "bind,nofail"]
       preKubeadmCommands:
       - KUBELET_VERSION={{ include "kubernetes.versionMap" $}} /usr/bin/update-k8s.sh || true
       - sed -i 's|root:x:|root::|' /etc/passwd
       - systemctl stop containerd.service
-      - mkdir -p /ephemeral/kubelet /ephemeral/containerd
-      - mount -o bind /ephemeral/kubelet /var/lib/kubelet
-      - mount -o bind /ephemeral/containerd /var/lib/containerd
+      - mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd
+      - mountpoint -q /var/lib/kubelet || mount -o bind /persistent/kubelet /var/lib/kubelet
+      - mountpoint -q /var/lib/containerd || mount -o bind /persistent/containerd /var/lib/containerd
       - sudo sed -i '/\[plugins."io.containerd.grpc.v1.cri".registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
       - systemctl start containerd.service
       joinConfiguration:
