@@ -1,0 +1,151 @@
+suite: HAMi HelmRelease tests
+templates:
+  - templates/helmreleases/hami.yaml
+tests:
+  - it: should not render when hami is disabled
+    set:
+      addons:
+        hami:
+          enabled: false
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render HelmRelease when hami is enabled
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+
+  - it: should fail when gpuOperator is not enabled
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: "addons.hami requires addons.gpuOperator to be enabled"
+
+  - it: should have correct metadata labels
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: metadata.labels["cozystack.io/repository"]
+          value: system
+      - equal:
+          path: metadata.labels["sharding.fluxcd.io/key"]
+          value: tenants
+
+  - it: should use ExternalArtifact chartRef
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.chartRef.kind
+          value: ExternalArtifact
+      - equal:
+          path: spec.chartRef.namespace
+          value: cozy-system
+
+  - it: should target cozy-hami namespace
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.targetNamespace
+          value: cozy-hami
+      - equal:
+          path: spec.storageNamespace
+          value: cozy-hami
+
+  - it: should depend on gpu-operator and cilium
+    release:
+      name: test
+      namespace: test-ns
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: test-cilium
+            namespace: test-ns
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: test-gpu-operator
+            namespace: test-ns
+
+  - it: should not render spec.values when valuesOverride is empty
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride: {}
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: spec.values
+
+  - it: should pass through valuesOverride
+    set:
+      addons:
+        hami:
+          enabled: true
+          valuesOverride:
+            hami:
+              devicePlugin:
+                deviceSplitCount: 5
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.hami.devicePlugin.deviceSplitCount
+          value: 5
