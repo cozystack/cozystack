@@ -158,8 +158,12 @@ jobs:
             }
 
             // 5. Apply kind/* from type.
-            if (type && typeToKind[type]) {
-              toAdd.add(typeToKind[type]);
+            if (type) {
+              if (typeToKind[type]) {
+                toAdd.add(typeToKind[type]);
+              } else {
+                core.warning(`type "${type}" has no kind/* mapping — typo or new type? See .github/workflows/pr-labeler.yaml typeToKind`);
+              }
             }
 
             // 6. Apply area/* from scope. Composite scopes split on comma.
@@ -170,6 +174,8 @@ jobs:
             for (const s of scopes) {
               if (scopeToArea[s]) {
                 toAdd.add(scopeToArea[s]);
+              } else {
+                core.warning(`scope "${s}" has no area/* mapping — consider extending scopeToArea in .github/workflows/pr-labeler.yaml if it recurs`);
               }
             }
 
