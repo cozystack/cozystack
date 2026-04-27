@@ -16,7 +16,7 @@ spec:
   storageClass: ""
   postgresql:
     parameters:
-      max_connections: 100
+      max_connections: "100"
   quorum:
     minSyncReplicas: 0
     maxSyncReplicas: 0

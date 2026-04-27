@@ -97,15 +97,13 @@
       "default": {},
       "properties": {
         "parameters": {
-          "description": "PostgreSQL server parameters.",
+          "description": "PostgreSQL server parameters. All values must be strings (enclose numbers in quotes). See PostgreSQL documentation for available parameters. WARNING: Some parameters are managed by CloudNativePG and should NOT be overridden (archive_mode, archive_command, restore_command, primary_conninfo, etc.). Incorrect values may break backup/replication or require pod restart.",
           "type": "object",
-          "default": {},
-          "properties": {
-            "max_connections": {
-              "description": "Maximum number of concurrent connections to the database server.",
-              "type": "integer",
-              "default": 100
-            }
+          "default": {
+            "max_connections": "100"
+          },
+          "additionalProperties": {
+            "type": "string"
           }
         }
       }
