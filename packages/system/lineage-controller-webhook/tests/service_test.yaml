@@ -1,0 +1,30 @@
+suite: lineage-controller-webhook service
+templates:
+  - templates/service.yaml
+
+release:
+  name: lineage-controller-webhook
+  namespace: cozy-system
+
+tests:
+  - it: renders a ClusterIP service on 443 -> 9443 with PreferClose traffic distribution
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.trafficDistribution
+          value: PreferClose
+      - notExists:
+          path: spec.internalTrafficPolicy
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 9443
+      - equal:
+          path: spec.selector.app
+          value: lineage-controller-webhook

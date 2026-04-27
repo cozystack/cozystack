@@ -1,0 +1,99 @@
+suite: lineage-controller-webhook workload + PDB
+templates:
+  - templates/workload.yaml
+  - templates/pdb.yaml
+
+release:
+  name: lineage-controller-webhook
+  namespace: cozy-system
+
+tests:
+  # ---- Default Deployment shape ----------------------------------------------
+
+  - it: defaults render a 2-replica Deployment with soft control-plane nodeAffinity, soft podAntiAffinity, and Exists tolerations
+    template: templates/workload.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - operator: Exists
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution
+          value:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
+      - notExists:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey
+          value: kubernetes.io/hostname
+
+  - it: defaults inject no localK8sAPIEndpoint env vars (knob is opt-in)
+    template: templates/workload.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  # ---- PDB --------------------------------------------------------------------
+
+  - it: PDB renders unconditionally with maxUnavailable=1 at the default replica count
+    template: templates/pdb.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - notExists:
+          path: spec.minAvailable
+
+  - it: PDB still renders at replicas=1 (no-op, but consistent shape)
+    set:
+      lineageControllerWebhook.replicas: 1
+    template: templates/pdb.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+
+  # ---- Replica override -------------------------------------------------------
+
+  - it: replicas value drives spec.replicas
+    set:
+      lineageControllerWebhook.replicas: 5
+    template: templates/workload.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+
+  # ---- Deprecated localK8sAPIEndpoint knob -----------------------------------
+
+  - it: localK8sAPIEndpoint.enabled=true injects KUBERNETES_SERVICE_HOST and PORT env vars
+    set:
+      lineageControllerWebhook.localK8sAPIEndpoint.enabled: true
+    template: templates/workload.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_HOST
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: status.hostIP
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_PORT
+            value: "6443"
