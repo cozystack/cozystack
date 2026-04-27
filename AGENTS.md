@@ -30,7 +30,7 @@ working with the **Cozystack** project.
 - **Issue and PR labeling, triage** (e.g., "label this issue", "what label should I use", "triage this", "categorize")
   - Read: [`.github/labels.yml`](./.github/labels.yml)
   - Action: Use labels defined there. Conventions follow the Kubernetes scheme — `kind/*` (type), `area/*` (subsystem), `priority/*` (urgency), `triage/*` (review state), `lifecycle/*` (auto-close), `do-not-merge/*` (PR blockers), `security/*` (severity)
-  - For `area/*`: accuracy outweighs reuse. If no existing `area/*` truly fits the change, propose a new one via PR (extend `labels.yml` and the scope mapping in `pr-labeler.yaml`) — do not shoehorn the change into a wrong area. `area/uncategorized` is the auto-labeler fallback; treat it as a signal to pick a fit, create a new area, or correct the PR title
+  - For `area/*`: accuracy outweighs reuse. If no existing `area/*` truly fits the change, propose a new one via PR (extend `.github/labels.yml` and the scope mapping in `.github/workflows/pr-labeler.yaml`) — do not shoehorn the change into a wrong area. `area/uncategorized` is the auto-labeler fallback; treat it as a signal to pick a fit, create a new area, or correct the PR title
   - PR titles: a Conventional Commits header (`type(scope): description`, types from [`contributing.md`](./docs/agents/contributing.md)) auto-applies `kind/*` and `area/*` via `.github/workflows/pr-labeler.yaml`. Append `!` (or add a `BREAKING CHANGE:` footer) to apply `kind/breaking-change`
 
 **Important rules:**
