@@ -70,7 +70,7 @@ git commit --signoff -m "docs(contributing): add installation guide"
 | docs      | kind/documentation |
 | chore     | kind/cleanup       |
 | refactor  | kind/cleanup       |
-| style, perf, test, build, ci, revert | (no kind label)|
+| style, perf, test, build, ci, revert | (no kind label) |
 
 **Scope → `area/*`** (full mapping in `.github/workflows/pr-labeler.yaml`):
 
