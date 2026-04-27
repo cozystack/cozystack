@@ -7,7 +7,7 @@ hami:
   devicePlugin:
     runtimeClassName: nvidia
     updateStrategy:
-      type: OnDelete
+      type: RollingUpdate
     # See https://github.com/Project-HAMi/HAMi/blob/v2.8.1/deployments/charts/hami/values.yaml
     # Each entry: {"name": "node-name", "operatingmode": "hami-core", "devicesplitcount": N, ...}
     nodeConfiguration:
