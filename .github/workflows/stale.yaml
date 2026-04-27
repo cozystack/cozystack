@@ -1,0 +1,56 @@
+name: Stale issues
+
+on:
+  schedule:
+    - cron: '37 4 * * *'  # daily at 04:37 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: stale
+  cancel-in-progress: false
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          stale-issue-label: lifecycle/stale
+          stale-pr-label: lifecycle/stale
+          close-issue-label: lifecycle/rotten
+          close-pr-label: lifecycle/rotten
+          # Exempt lists differ on purpose: issues sit longer than PRs by nature.
+          # An accepted issue (`triage/accepted`) is a known long-tail task, not stale;
+          # a held PR (`do-not-merge/hold`) is paused intentionally and shouldn't auto-close.
+          # Priority/security/regression labels protect issues that someone explicitly
+          # decided to keep visible.
+          exempt-issue-labels: >-
+            lifecycle/frozen,epic,
+            priority/critical-urgent,priority/important-soon,priority/important-longterm,
+            security/critical,security/high,security/confirmed,
+            security/triage-needed,security/in-progress,
+            triage/accepted,kind/regression
+          exempt-pr-labels: >-
+            lifecycle/frozen,do-not-merge/hold,
+            backport,backport-previous
+          days-before-stale: 60
+          days-before-close: 14
+          operations-per-run: 100
+          remove-stale-when-updated: true
+          stale-issue-message: |
+            This issue has had no activity for 60 days and was marked `lifecycle/stale`.
+            It will be closed in 14 days unless commented or labelled `lifecycle/frozen`.
+          stale-pr-message: |
+            This PR has had no activity for 60 days and was marked `lifecycle/stale`.
+            It will be closed in 14 days unless commented or labelled `lifecycle/frozen`.
+          close-issue-message: |
+            Closed because no activity followed the `lifecycle/stale` warning.
+            Reopen if the issue is still relevant.
+          close-pr-message: |
+            Closed because no activity followed the `lifecycle/stale` warning.
+            Reopen if the change is still wanted.
