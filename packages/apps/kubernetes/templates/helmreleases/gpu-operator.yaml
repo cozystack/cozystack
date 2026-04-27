@@ -40,8 +40,10 @@ spec:
   {{- $defaults := fromYaml (include "cozystack.defaultGpuOperatorValues" .) }}
   {{- $overrides := deepCopy (default (dict) .Values.addons.gpuOperator.valuesOverride) }}
   {{- $merged := mergeOverwrite (default (dict) $defaults) $overrides }}
+  {{- if $merged }}
   values:
-    {{- if $merged }}{{ toYaml $merged | nindent 4 }}{{ end }}
+    {{- toYaml $merged | nindent 4 }}
+  {{- end }}
 
   dependsOn:
   {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}

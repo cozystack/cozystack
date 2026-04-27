@@ -26,9 +26,8 @@ tests:
           enabled: false
           valuesOverride: {}
     asserts:
-      - equal:
+      - notExists:
           path: spec.values
-          value: null
 
   - it: should apply hami defaults when valuesOverride key is omitted
     set:
