@@ -32,9 +32,9 @@ spec:
     force: true
     remediation:
       retries: -1
-  {{- if .Values.addons.hami.valuesOverride }}
+  {{- with .Values.addons.hami.valuesOverride }}
   values:
-    {{- toYaml .Values.addons.hami.valuesOverride | nindent 4 }}
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
   dependsOn:
