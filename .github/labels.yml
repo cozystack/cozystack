@@ -239,11 +239,11 @@
 # ──────────────────────────────────────────────
 
 - name: epic
-  color: 'A335EE'
+  color: 'a335ee'
   description: A large development increment that brings definite value to Cozystack users
 
 - name: community
-  color: '97458A'
+  color: '97458a'
   description: Community contributions are welcome in this issue
 
 - name: help wanted
@@ -263,7 +263,7 @@
   description: Requires resolving an issue in an upstream project
 
 - name: backport
-  color: 'FBCA04'
+  color: 'fbca04'
   description: Should change be backported on previous release
 
 - name: backport-previous
@@ -283,7 +283,7 @@
   description: Debugging in progress
 
 - name: sponsored
-  color: '00FF00'
+  color: '00ff00'
   description: Sponsored work
 
 - name: lgtm
@@ -291,7 +291,7 @@
   description: This PR has been approved by a maintainer
 
 - name: ok-to-test
-  color: '00FF00'
+  color: '00ff00'
   description: Indicates a non-member PR is safe to run CI on
 
 # ──────────────────────────────────────────────
