@@ -1,15 +1,28 @@
 lineageControllerWebhook:
   image: ghcr.io/cozystack/cozystack/lineage-controller-webhook:v1.3.0@sha256:e8984709686a5eaf19b89da378d7b8c688ea5607e0783a88d9c9e4ccfca96fb0
   debug: false
+  # Inject KUBERNETES_SERVICE_HOST=status.hostIP and KUBERNETES_SERVICE_PORT=6443
+  # so the webhook talks to the kube-apiserver on its own node. Only valid when
+  # the pod is scheduled on a node that hosts an apiserver (typically a
+  # control-plane node) — orthogonal to deployment.enabled.
   localK8sAPIEndpoint:
-    # incompatable with Deployment mode
     enabled: true
-  # nodeSelector for the DaemonSet
-  # Talos uses empty value: "node-role.kubernetes.io/control-plane": ""
-  # Generic k8s (k3s, kubeadm) uses: "node-role.kubernetes.io/control-plane": "true"
-  nodeSelector:
-    node-role.kubernetes.io/control-plane: ""
+  # List form is clearable (set to [] to schedule anywhere). A map nodeSelector
+  # default looks clearable too — `helm install --set nodeSelector=null` works
+  # against the chart directly — but values overrides flow through Cozystack
+  # as Package -> HelmRelease -> helm-controller, and the merge step in that
+  # pipeline reads `key: null` as a strip signal: the empty-map override
+  # never reaches the template. The list-shaped nodeAffinity dodges that
+  # entire path. Exists matches both Talos ("") and k3s/kubeadm ("true").
+  nodeAffinity:
+  - matchExpressions:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+  # Permissive by default so the pod can land on tainted control-plane nodes.
+  # Override (or set to []) to constrain scheduling.
+  tolerations:
+  - operator: Exists
   # if enabled, replace DaemonSet by Deployment
   deployment:
     enabled: false
-    replicas: 1
+    replicas: 2

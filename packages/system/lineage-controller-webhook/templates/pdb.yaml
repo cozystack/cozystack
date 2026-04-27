@@ -1,10 +1,10 @@
-{{- if .Values.lineageControllerWebhook.deployment.enabled }}
+{{- if and .Values.lineageControllerWebhook.deployment.enabled (gt (int .Values.lineageControllerWebhook.deployment.replicas) 1) }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: lineage-controller-webhook
 spec:
-  minAvailable: {{ if gt (int .Values.lineageControllerWebhook.deployment.replicas) 1 }}1{{ else }}0{{ end }}
+  minAvailable: 1
   selector:
     matchLabels:
       app: lineage-controller-webhook

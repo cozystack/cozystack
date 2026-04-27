@@ -1,0 +1,152 @@
+suite: lineage-controller-webhook workload + PDB
+templates:
+  - templates/workload.yaml
+  - templates/pdb.yaml
+
+release:
+  name: lineage-controller-webhook
+  namespace: cozy-system
+
+tests:
+  # ---- DaemonSet (default) ----------------------------------------------------
+
+  - it: defaults render a DaemonSet with control-plane nodeAffinity, Exists tolerations, and the local-API env vars
+    template: templates/workload.yaml
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - notExists:
+          path: spec.replicas
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms
+          value:
+            - matchExpressions:
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+      - notExists:
+          path: spec.template.spec.affinity.podAntiAffinity
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - operator: Exists
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_HOST
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: status.hostIP
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_PORT
+            value: "6443"
+
+  - it: DaemonSet renders no PDB
+    template: templates/pdb.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ---- Deployment -------------------------------------------------------------
+
+  - it: deployment.enabled=true renders a Deployment with replicas, podAntiAffinity, and a 2-replica PDB
+    set:
+      lineageControllerWebhook.deployment.enabled: true
+    template: templates/workload.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key
+          value: node-role.kubernetes.io/control-plane
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey
+          value: kubernetes.io/hostname
+
+  - it: Deployment with replicas>1 renders a PDB with minAvailable=1
+    set:
+      lineageControllerWebhook.deployment.enabled: true
+      lineageControllerWebhook.deployment.replicas: 3
+    template: templates/pdb.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
+
+  - it: Deployment with replicas=1 skips the PDB (single-replica PDB has no useful value)
+    set:
+      lineageControllerWebhook.deployment.enabled: true
+      lineageControllerWebhook.deployment.replicas: 1
+    template: templates/pdb.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ---- Cleared scheduling constraints -----------------------------------------
+
+  - it: nodeAffinity=[] with localK8sAPIEndpoint disabled renders a DaemonSet with no nodeAffinity and no env block
+    set:
+      lineageControllerWebhook.nodeAffinity: []
+      lineageControllerWebhook.localK8sAPIEndpoint.enabled: false
+    template: templates/workload.yaml
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - notExists:
+          path: spec.template.spec.affinity
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  - it: managed-K8s topology renders a 2-replica Deployment with podAntiAffinity but no nodeAffinity and no env block
+    set:
+      lineageControllerWebhook.deployment.enabled: true
+      lineageControllerWebhook.deployment.replicas: 2
+      lineageControllerWebhook.nodeAffinity: []
+      lineageControllerWebhook.localK8sAPIEndpoint.enabled: false
+    template: templates/workload.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+      - notExists:
+          path: spec.template.spec.affinity.nodeAffinity
+      - exists:
+          path: spec.template.spec.affinity.podAntiAffinity
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  - it: tolerations=[] renders a pod spec with no tolerations key
+    set:
+      lineageControllerWebhook.tolerations: []
+    template: templates/workload.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.tolerations
+
+  # ---- Validation guard --------------------------------------------------------
+
+  - it: localK8sAPIEndpoint.enabled=true + nodeAffinity=[] fails to render in DaemonSet mode
+    set:
+      lineageControllerWebhook.nodeAffinity: []
+    template: templates/workload.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "localK8sAPIEndpoint\\.enabled=true with nodeAffinity"
+
+  - it: localK8sAPIEndpoint.enabled=true + nodeAffinity=[] fails to render in Deployment mode
+    set:
+      lineageControllerWebhook.deployment.enabled: true
+      lineageControllerWebhook.nodeAffinity: []
+    template: templates/workload.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "localK8sAPIEndpoint\\.enabled=true with nodeAffinity"

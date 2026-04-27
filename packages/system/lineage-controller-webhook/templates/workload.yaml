@@ -1,0 +1,80 @@
+{{- $useDeployment := .Values.lineageControllerWebhook.deployment.enabled -}}
+{{- $nodeAffinity := .Values.lineageControllerWebhook.nodeAffinity -}}
+{{- $tolerations := .Values.lineageControllerWebhook.tolerations -}}
+{{- $localEndpoint := .Values.lineageControllerWebhook.localK8sAPIEndpoint.enabled -}}
+{{- if and $localEndpoint (not $nodeAffinity) -}}
+{{- fail "lineageControllerWebhook: localK8sAPIEndpoint.enabled=true with nodeAffinity=[] is invalid — the local endpoint requires the pod to be on a node that hosts a kube-apiserver. Either set localK8sAPIEndpoint.enabled=false, or pin nodeAffinity to apiserver nodes." -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: {{ if $useDeployment }}Deployment{{ else }}DaemonSet{{ end }}
+metadata:
+  name: lineage-controller-webhook
+  labels:
+    app: lineage-controller-webhook
+spec:
+  {{- if $useDeployment }}
+  replicas: {{ .Values.lineageControllerWebhook.deployment.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: lineage-controller-webhook
+  template:
+    metadata:
+      labels:
+        app: lineage-controller-webhook
+    spec:
+      serviceAccountName: lineage-controller-webhook
+      {{- with $tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if or $nodeAffinity $useDeployment }}
+      affinity:
+        {{- if $nodeAffinity }}
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              {{- toYaml $nodeAffinity | nindent 12 }}
+        {{- end }}
+        {{- if $useDeployment }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: lineage-controller-webhook
+        {{- end }}
+      {{- end }}
+      containers:
+      - name: lineage-controller-webhook
+        image: "{{ .Values.lineageControllerWebhook.image }}"
+        {{- if .Values.lineageControllerWebhook.localK8sAPIEndpoint.enabled }}
+        env:
+        - name: KUBERNETES_SERVICE_HOST
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        - name: KUBERNETES_SERVICE_PORT
+          value: "6443"
+        {{- end }}
+        args:
+        {{- if .Values.lineageControllerWebhook.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        ports:
+        - name: webhook
+          containerPort: 9443
+        volumeMounts:
+          - name: webhook-certs
+            mountPath: /tmp/k8s-webhook-server/serving-certs
+            readOnly: true
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: lineage-controller-webhook-cert
+            defaultMode: 0400

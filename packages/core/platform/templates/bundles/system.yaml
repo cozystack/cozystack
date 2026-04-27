@@ -105,9 +105,6 @@
 {{- /* cozystack-api DaemonSet */ -}}
 {{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
-{{- /* lineage-controller-webhook DaemonSet */ -}}
-{{- $lineageValues := dict "lineageControllerWebhook" (dict "nodeSelector" $genericNodeSelector) -}}
-{{- $_ := set $cozystackEngineComponents "lineage-controller-webhook" (dict "values" $lineageValues) -}}
 {{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
