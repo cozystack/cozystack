@@ -61,6 +61,11 @@ EOF
 
   # Wait until HelmReleases appear & reconcile them
   timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
+  # TODO(e2e-replace-fixed-timeouts): genuine sleep. The threshold of 10 is a
+  # heuristic for "enough HRs visible to start waiting"; the snapshot below
+  # uses whatever HRs have appeared by then. There is no objective k8s API
+  # signal for "all platform HRs have been emitted" without hard-coding the
+  # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
   sleep 5
   kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
 

@@ -18,6 +18,9 @@ echo "[post-install-prep] waiting for linstor-controller to be Available"
 kubectl wait deployment/linstor-controller -n cozy-linstor --timeout=5m --for=condition=available
 
 echo "[post-install-prep] waiting for 3 LINSTOR nodes Online"
+# TODO(e2e-replace-fixed-timeouts): genuine poll. LINSTOR node membership is
+# reported by the linstor binary inside the controller pod, not via a
+# Kubernetes API condition, so kubectl wait cannot subscribe to it.
 timeout 60 sh -ec 'until [ $(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list | grep -c Online) -eq 3 ]; do sleep 1; done'
 
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
