@@ -1,0 +1,371 @@
+# Cozystack repository labels
+#
+# Label conventions follow the Kubernetes scheme:
+# https://github.com/kubernetes/test-infra/blob/master/label_sync/labels.md
+#
+# Synced into the repository by .github/workflows/labels.yaml
+# (EndBug/label-sync@v2). Edit this file via pull request — UI changes
+# will be overwritten on the next sync.
+#
+# Constraints (enforced by the validate job in labels.yaml):
+#   - description ≤ 100 characters (GitHub REST API limit)
+#   - color is a 6-character hex string (no leading #)
+#   - label names are unique
+#   - aliases do not collide with top-level names
+#
+# Categories:
+#   kind/         issue or PR type
+#   priority/     urgency
+#   triage/       review state
+#   lifecycle/    issue or PR lifecycle
+#   area/         subsystem; extensible — add when 3+ open issues exist
+#   do-not-merge/ PR merge blockers
+#   security/     security-finding severity and status (Cozystack-specific)
+#   size:         PR size (auto-applied)
+#
+# `aliases:` lets EndBug/label-sync rename existing labels without losing
+# references on already-tagged issues and PRs.
+#
+# GitHub-default labels not migrated here (`wontfix`, `invalid`) currently
+# carry zero issues/PRs in this repo and will be removed in a follow-up
+# cleanup PR rather than aliased to a different namespace.
+
+# ──────────────────────────────────────────────
+# kind/ — issue or PR type
+# ──────────────────────────────────────────────
+
+- name: kind/bug
+  color: 'd73a4a'
+  description: Categorizes issue or PR as related to a bug
+  aliases: ['bug']
+
+- name: kind/feature
+  color: 'a2eeef'
+  description: Categorizes issue or PR as related to a new feature
+  aliases: ['enhancement']
+
+- name: kind/documentation
+  color: '0075ca'
+  description: Categorizes issue or PR as related to documentation
+  aliases: ['documentation']
+
+- name: kind/support
+  color: 'd876e3'
+  description: Categorizes issue as a support question
+  aliases: ['question']
+
+- name: kind/cleanup
+  color: 'c7def8'
+  description: Categorizes issue or PR as related to cleanup of code, process, or technical debt
+
+- name: kind/regression
+  color: 'e11d21'
+  description: Categorizes issue or PR as related to a regression from a prior release
+
+- name: kind/flake
+  color: 'f7c6c7'
+  description: Categorizes issue or PR as related to a flaky test
+
+- name: kind/failing-test
+  color: 'e11d21'
+  description: Categorizes issue or PR as related to a consistently or frequently failing test
+
+- name: kind/api-change
+  color: 'c7def8'
+  description: Categorizes issue or PR as related to adding, removing, or otherwise changing an API
+
+- name: kind/breaking-change
+  color: 'e11d21'
+  description: Indicates the change introduces a breaking API or behaviour change
+
+# ──────────────────────────────────────────────
+# priority/ — urgency
+# ──────────────────────────────────────────────
+
+- name: priority/critical-urgent
+  color: 'e11d21'
+  description: Highest priority. Must be actively worked on as someone's top priority right now
+
+- name: priority/important-soon
+  color: 'eb6420'
+  description: Must be staffed and worked on either currently, or very soon, ideally in time for the next release
+
+- name: priority/important-longterm
+  color: 'fbca04'
+  description: Important over the long term, but may not be staffed and/or may need multiple releases to complete
+
+- name: priority/backlog
+  color: 'fef2c0'
+  description: General backlog priority. Lower than priority/important-longterm
+
+# ──────────────────────────────────────────────
+# triage/ — review state
+# ──────────────────────────────────────────────
+
+- name: triage/needs-triage
+  color: 'ededed'
+  description: Indicates an issue needs triage by a maintainer
+
+- name: triage/accepted
+  color: '0e8a16'
+  description: Indicates an issue is ready to be actively worked on
+
+- name: triage/needs-information
+  color: 'fbca04'
+  description: Indicates an issue needs more information in order to work on it
+
+- name: triage/not-reproducible
+  color: 'fbca04'
+  description: Indicates an issue can not be reproduced as described
+
+- name: triage/duplicate
+  color: 'cfd3d7'
+  description: Indicates an issue is a duplicate of another issue
+  aliases: ['duplicate']
+
+- name: triage/unresolved
+  color: 'cfd3d7'
+  description: Indicates an issue that can not or will not be resolved
+
+# ──────────────────────────────────────────────
+# lifecycle/ — issue or PR lifecycle
+# ──────────────────────────────────────────────
+
+- name: lifecycle/active
+  color: '1d76db'
+  description: Indicates that an issue or PR is actively being worked on by a contributor
+
+- name: lifecycle/frozen
+  color: 'db5dd6'
+  description: Indicates that an issue or PR should not be auto-closed due to staleness
+  aliases: ['frozen']
+
+- name: lifecycle/stale
+  color: 'dadada'
+  description: Denotes an issue or PR has remained open with no activity and has become stale
+  aliases: ['stale']
+
+- name: lifecycle/rotten
+  color: '795548'
+  description: Denotes an issue or PR that has aged beyond stale and will be auto-closed
+
+# ──────────────────────────────────────────────
+# area/ — subsystem (extensible)
+# Add a new area/* when there are 3+ open issues on the topic.
+# ──────────────────────────────────────────────
+
+- name: area/api
+  color: 'bfd4f2'
+  description: Issues or PRs related to the cozystack-api aggregated API server
+
+- name: area/ai
+  color: 'bfd4f2'
+  description: Issues or PRs related to AI agent guides, AGENTS.md, docs/agents/
+
+- name: area/build
+  color: 'bfd4f2'
+  description: Issues or PRs related to image build infrastructure, multi-arch support
+
+- name: area/ci
+  color: 'bfd4f2'
+  description: Issues or PRs related to CI workflows, GitHub Actions, automation
+
+- name: area/dashboard
+  color: 'bfd4f2'
+  description: Issues or PRs related to the dashboard / UI
+
+- name: area/extra
+  color: 'bfd4f2'
+  description: Issues or PRs related to tenant-specific modules (packages/extra/)
+
+- name: area/database
+  color: 'bfd4f2'
+  description: Issues or PRs related to managed databases (postgres, mariadb, redis, etcd, kafka, clickhouse)
+
+- name: area/kubernetes
+  color: 'bfd4f2'
+  description: Issues or PRs related to the tenant Kubernetes app
+
+- name: area/monitoring
+  color: 'bfd4f2'
+  description: Issues or PRs related to the monitoring stack (vlogs, vmstack, grafana, workloadmonitor)
+
+- name: area/networking
+  color: 'bfd4f2'
+  description: Issues or PRs related to networking (ingress, gateway, vpn, metallb, cilium, kube-ovn)
+
+- name: area/platform
+  color: 'bfd4f2'
+  description: Issues or PRs related to platform infrastructure (bundle, flux, talos, installer)
+
+- name: area/release
+  color: 'bfd4f2'
+  description: Issues or PRs related to release tooling (changelog, backport, release pipeline)
+
+- name: area/storage
+  color: 'bfd4f2'
+  description: Issues or PRs related to storage (linstor, seaweedfs, bucket, velero, harbor)
+
+- name: area/testing
+  color: 'bfd4f2'
+  description: Issues or PRs related to testing (e2e, bats, unit tests)
+
+- name: area/virtualization
+  color: 'bfd4f2'
+  description: Issues or PRs related to virtualization (kubevirt, cdi, vmi, vm-import)
+
+- name: area/uncategorized
+  color: 'fbca04'
+  description: PR auto-labeler could not map title scope to a known area/*; please review
+
+# ──────────────────────────────────────────────
+# do-not-merge/ — PR merge blockers (Prow convention)
+# ──────────────────────────────────────────────
+
+- name: do-not-merge/work-in-progress
+  color: 'e11d21'
+  description: Indicates that a PR should not merge because it is a work in progress
+  # Both legacy spellings collapse here. EndBug processes aliases sequentially;
+  # the second rename hits a name collision and logs a warning — the legacy
+  # label survives and gets cleaned up in the follow-up dedup PR.
+  aliases: ['do-not-merge', 'do not merge']
+
+- name: do-not-merge/hold
+  color: 'e11d21'
+  description: Indicates that a PR should not merge because someone has issued /hold
+
+# ──────────────────────────────────────────────
+# Cozystack-specific (preserved)
+# ──────────────────────────────────────────────
+
+- name: epic
+  color: 'a335ee'
+  description: A large development increment that brings definite value to Cozystack users
+
+- name: community
+  color: '97458a'
+  description: Community contributions are welcome in this issue
+
+- name: help wanted
+  color: '008672'
+  description: Extra attention is needed
+
+- name: good first issue
+  color: '7057ff'
+  description: Good for newcomers
+
+- name: quality-of-life
+  color: 'aaaaaa'
+  description: QoL improvements
+
+- name: upstream-issue
+  color: 'aaaaaa'
+  description: Requires resolving an issue in an upstream project
+
+- name: backport
+  color: 'fbca04'
+  description: Should change be backported on previous release
+
+- name: backport-previous
+  color: 'fbd876'
+  description: Backport target — previous release line
+
+- name: release
+  color: 'aaaaaa'
+  description: Releasing a new Cozystack version
+
+- name: automated
+  color: 'ededed'
+  description: Created by automation
+
+- name: debug
+  color: '704479'
+  description: Debugging in progress
+
+- name: sponsored
+  color: '00ff00'
+  description: Sponsored work
+
+- name: lgtm
+  color: '238636'
+  description: This PR has been approved by a maintainer
+
+- name: ok-to-test
+  color: '00ff00'
+  description: Indicates a non-member PR is safe to run CI on
+
+# ──────────────────────────────────────────────
+# size: — PR size (auto-applied by sizing bot)
+# ──────────────────────────────────────────────
+
+- name: 'size:XS'
+  color: '00ff00'
+  description: This PR changes 0-9 lines, ignoring generated files
+
+- name: 'size:S'
+  color: '77b800'
+  description: This PR changes 10-29 lines, ignoring generated files
+
+- name: 'size:M'
+  color: 'ebb800'
+  description: This PR changes 30-99 lines, ignoring generated files
+
+- name: 'size:L'
+  color: 'eb9500'
+  description: This PR changes 100-499 lines, ignoring generated files
+
+- name: 'size:XL'
+  color: 'ff823f'
+  description: This PR changes 500-999 lines, ignoring generated files
+
+- name: 'size:XXL'
+  color: 'ffb8b8'
+  description: This PR changes 1000+ lines, ignoring generated files
+
+# ──────────────────────────────────────────────
+# security/ — security-finding severity and status
+# ──────────────────────────────────────────────
+
+- name: security
+  color: 'aaaaaa'
+  description: Security-related issues and features
+
+- name: security/critical
+  color: 'd73a4a'
+  description: Critical security vulnerability
+
+- name: security/high
+  color: 'e99695'
+  description: High severity security finding
+
+- name: security/medium
+  color: 'f9c513'
+  description: Medium severity security finding
+
+- name: security/low
+  color: '0e8a16'
+  description: Low severity security finding
+
+- name: security/triage-needed
+  color: 'fbca04'
+  description: Needs security triage
+
+- name: security/confirmed
+  color: '1d76db'
+  description: Confirmed vulnerability
+
+- name: security/false-positive
+  color: 'c5def5'
+  description: Triaged as false positive
+
+- name: security/accepted-risk
+  color: 'bfd4f2'
+  description: Risk accepted with justification
+
+- name: security/in-progress
+  color: '0075ca'
+  description: Fix in progress
+
+- name: security/fixed
+  color: '0e8a16'
+  description: Fix released

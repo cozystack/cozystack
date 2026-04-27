@@ -58,6 +58,49 @@ git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
 git commit --signoff -m "docs(contributing): add installation guide"
 ```
 
+## PR Title Auto-Labeling
+
+`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `edited`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+
+**Type → `kind/*`:**
+
+| type      | label              |
+| --------- | ------------------ |
+| feat      | kind/feature       |
+| fix       | kind/bug           |
+| docs      | kind/documentation |
+| chore     | kind/cleanup       |
+| refactor  | kind/cleanup       |
+| style, perf, test, build, ci, revert | (no kind label) |
+
+**Scope → `area/*`** (full mapping in `.github/workflows/pr-labeler.yaml`):
+
+| scope (examples) | label |
+| --- | --- |
+| agents, ai | area/ai |
+| api, cozystack-api | area/api |
+| build | area/build |
+| ci | area/ci |
+| dashboard | area/dashboard |
+| postgres, mariadb, redis, etcd, kafka, clickhouse, postgres-operator, mariadb-operator | area/database |
+| extra | area/extra |
+| kubernetes | area/kubernetes |
+| monitoring, vlogs, vmstack, grafana, workloadmonitor | area/monitoring |
+| ingress, gateway, vpn, metallb, cilium, kube-ovn, cozy-proxy, ... | area/networking |
+| platform, bundle, flux, fluxcd, cluster-api, talos, installer, cozyctl, cozystack-engine, cozy-lib | area/platform |
+| backport, release | area/release |
+| seaweedfs, bucket, linstor, velero, harbor, backups | area/storage |
+| tests, e2e | area/testing |
+| kubevirt, cdi, vmi, vm-import, virtual-machine, hami, gpu-operator | area/virtualization |
+
+**Special handling:**
+
+- `[Backport release-1.x]` prefix is stripped before parsing; `area/release` and `backport` labels are added.
+- Composite scope (`feat(platform, system, apps): ...`) — each comma-separated part is mapped independently.
+- `!` after type or `BREAKING CHANGE:` footer in the body → `kind/breaking-change`.
+- Unmapped scope or non-conventional title → `area/uncategorized` (signals the PR needs manual area selection).
+- Bracket-style fallback (`[scope] description`) maps `scope` → `area/*` but cannot infer `kind/*`.
+
 ### AI Agent Attribution
 
 When an AI agent authors or materially assists with a commit, add an `Assisted-By:` trailer naming the model:
