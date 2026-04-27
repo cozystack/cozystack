@@ -70,3 +70,4 @@ image-cluster-autoscaler:
 	echo "$(REGISTRY)/cluster-autoscaler:$(call settag,$(KUBERNETES_PKG_TAG))@$$(yq e '."containerimage.digest"' images/cluster-autoscaler.json -o json -r)" \
 		> images/cluster-autoscaler.tag
 	rm -f images/cluster-autoscaler.json
+

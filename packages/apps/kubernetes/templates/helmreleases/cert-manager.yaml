@@ -8,7 +8,7 @@ cert-manager:
 {{- end }}
 {{- end }}
 
-{{- if .Values.addons.certManager.enabled }}
+{{- if and .Values.addons.certManager.enabled .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

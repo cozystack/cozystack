@@ -1,0 +1,84 @@
+name: Labels
+
+on:
+  pull_request:
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels.yaml
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels.yaml
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'  # Mondays at 04:17 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: labels-sync
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate labels.yml schema
+        run: |
+          python3 - <<'PY'
+          import re, sys, yaml
+
+          path = '.github/labels.yml'
+          data = yaml.safe_load(open(path))
+          errors = []
+
+          # 1. description ≤ 100 chars (GitHub REST API limit)
+          for label in data:
+              desc = label.get('description', '') or ''
+              if len(desc) > 100:
+                  errors.append(f"{label['name']}: description {len(desc)} chars (max 100)")
+
+          # 2. color is 6-char hex without leading #
+          for label in data:
+              color = label.get('color', '') or ''
+              if not re.match(r'^[0-9A-Fa-f]{6}$', color):
+                  errors.append(f"{label['name']}: bad color {color!r} (must be 6-char hex without #)")
+
+          # 3. unique top-level names
+          names = [label['name'] for label in data]
+          dups = sorted({n for n in names if names.count(n) > 1})
+          for n in dups:
+              errors.append(f"duplicate name: {n}")
+
+          # 4. aliases do not collide with any top-level name
+          name_set = set(names)
+          for label in data:
+              for alias in (label.get('aliases') or []):
+                  if alias in name_set:
+                      errors.append(f"alias {alias!r} (under {label['name']!r}) collides with a top-level name")
+
+          if errors:
+              for err in errors:
+                  print(f"::error::{err}")
+              sys.exit(1)
+
+          print(f"labels.yml schema OK ({len(data)} labels)")
+          PY
+
+  sync:
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EndBug/label-sync@v2
+        with:
+          config-file: .github/labels.yml
+          delete-other-labels: false

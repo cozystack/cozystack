@@ -1,3 +1,5 @@
+. hack/e2e-apps/remediation-guard.sh
+
 run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"
@@ -319,6 +321,35 @@ EOF
       kubectl wait hr kubernetes-${test_name}-${component} -n tenant-test --timeout=1m --for=condition=ready
     done
     kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
+
+  # Guard: parent HelmRelease must not have entered an install/upgrade remediation cycle.
+  # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
+  # admin-kubeconfig was still being provisioned, which would trigger uninstall remediation
+  # and churn the Cluster CR.
+  # Flux helm-controller v2 retains per-revision release Snapshots in
+  # .status.history; each Snapshot's .status reflects the Helm release
+  # state (deployed/superseded/failed/uninstalled). A remediation cycle
+  # leaves a "failed" or "uninstalled" entry behind that survives a later
+  # successful reinstall, unlike the installFailures/upgradeFailures
+  # counters (which ClearFailures zeroes on every successful reconcile).
+  # The shape is pinned by hack/remediation-guard.bats; the upstream
+  # types are github.com/fluxcd/helm-controller/api v2 Snapshot.
+  history_statuses=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" \
+    -ojsonpath='{range .status.history[*]}{.status}{"\n"}{end}')
+  # Always emit the raw value so a silent future-Flux field rename shows
+  # up as "empty history on a Ready HR" in CI logs rather than vanishing.
+  echo "Parent HelmRelease history statuses:"
+  printf '%s\n' "${history_statuses:-<empty>}"
+  if [ -z "${history_statuses}" ]; then
+    echo "Unexpected empty .status.history on a Ready HelmRelease - Flux API shape may have changed." >&2
+    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
+  if helmrelease_has_remediation_cycle "${history_statuses}"; then
+    echo "Parent HelmRelease entered remediation cycle." >&2
+    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
 
   # Clean up
   pkill -f "port-forward.*${port}:" 2>/dev/null || true

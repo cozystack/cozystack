@@ -199,3 +199,10 @@ controlPlane:
     server:
       resources: {}
       resourcesPreset: "micro"
+
+## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
+## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+
+## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
+images:
+  waitForKubeconfig: ""
