@@ -15,6 +15,7 @@
           "ephemeralStorage": "20Gi",
           "gpus": [],
           "instanceType": "u1.medium",
+          "kubelet": {},
           "maxReplicas": 10,
           "minReplicas": 0,
           "resources": {},
@@ -67,6 +68,38 @@
             "description": "Virtual machine instance type.",
             "type": "string",
             "default": "u1.medium"
+          },
+          "kubelet": {
+            "description": "Kubelet resource reservations for this node group.",
+            "type": "object",
+            "properties": {
+              "evictionHardMemory": {
+                "description": "Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).",
+                "type": "string",
+                "default": "7%"
+              },
+              "evictionSoftMemory": {
+                "description": "Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).",
+                "type": "string",
+                "default": "10%"
+              },
+              "kubeReservedCpu": {
+                "description": "CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
+                "type": "string"
+              },
+              "kubeReservedMemory": {
+                "description": "Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
+                "type": "string"
+              },
+              "systemReservedCpu": {
+                "description": "CPU reserved for host OS. Auto-computed from instanceType if empty.",
+                "type": "string"
+              },
+              "systemReservedMemory": {
+                "description": "Memory reserved for host OS. Auto-computed from instanceType if empty.",
+                "type": "string"
+              }
+            }
           },
           "maxReplicas": {
             "description": "Maximum number of replicas.",
