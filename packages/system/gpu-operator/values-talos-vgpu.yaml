@@ -1,0 +1,16 @@
+gpu-operator:
+  sandboxWorkloads:
+    enabled: true
+  driver:
+    enabled: false
+  devicePlugin:
+    enabled: false
+  vgpuManager:
+    enabled: true
+    repository: ""
+    image: vgpu-manager
+    version: ""
+  vgpuDeviceManager:
+    enabled: true
+    config:
+      default: default
