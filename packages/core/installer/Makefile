@@ -50,3 +50,26 @@ chart:
 	PKG=$$(helm package . --version $(COZYSTACK_VERSION) | awk '{print $$NF}'); \
 	trap 'rm -f "$$PKG"' EXIT; \
 	if [ "$(PUSH)" = "1" ]; then helm push "$$PKG" oci://$(REGISTRY); fi
+
+# === Dev overlay targets ===
+# See hack/dev-overlay.sh for full documentation and implementation.
+
+DEV_BASE_TAG       ?= origin/main
+DEV_OVERLAY_TAG    ?= dev-overlay
+OPERATOR_DEPLOY    ?= cozystack-operator
+OPERATOR_CONTAINER ?= $(OPERATOR_DEPLOY)
+PLATFORM_OCIREPO   ?= cozystack-platform
+
+DEV_OVERLAY_ENV = \
+	REGISTRY="$(REGISTRY)" \
+	DEV_BASE_TAG="$(DEV_BASE_TAG)" \
+	DEV_OVERLAY_TAG="$(DEV_OVERLAY_TAG)" \
+	OPERATOR_DEPLOY="$(OPERATOR_DEPLOY)" \
+	OPERATOR_CONTAINER="$(OPERATOR_CONTAINER)" \
+	PLATFORM_OCIREPO="$(PLATFORM_OCIREPO)"
+
+dev-overlay-diff: ## Show what files would be added/removed by dev-overlay (dry run, no changes)
+	@$(DEV_OVERLAY_ENV) ../../../hack/dev-overlay.sh diff
+
+dev-overlay: ## Overlay current branch's changes onto deployed artifact, update operator ref
+	@$(DEV_OVERLAY_ENV) ../../../hack/dev-overlay.sh apply
