@@ -8043,6 +8043,8 @@ spec:
               fieldPath: metadata.annotations['olm.targetNamespaces']
         - name: KUBEVIRT_VERSION
           value: v1.6.3
+        - name: LAUNCHER_IMAGE
+          value: ghcr.io/cozystack/virt-launcher:v1.8.2-qemu-9.1.0-19
         image: quay.io/kubevirt/virt-operator:v1.6.3
         imagePullPolicy: IfNotPresent
         livenessProbe:
