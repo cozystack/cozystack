@@ -5,6 +5,12 @@
 # overlaps with the wait instead of compounding it.
 set -eu
 
+echo "[post-install-prep] waiting for linstor HelmRelease object to exist"
+timeout 60 sh -ec 'until kubectl get hr/linstor -n cozy-linstor >/dev/null 2>&1; do sleep 2; done'
+
+echo "[post-install-prep] waiting for linstor HelmRelease to be Ready"
+kubectl wait helmrelease/linstor -n cozy-linstor --for=condition=Ready --timeout=15m
+
 echo "[post-install-prep] waiting for linstor-controller deployment to exist"
 timeout 300 sh -ec 'until kubectl get deploy/linstor-controller -n cozy-linstor >/dev/null 2>&1; do sleep 2; done'
 
