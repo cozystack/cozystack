@@ -65,18 +65,20 @@ release.cozystack.io/helm-install-timeout annotation) so the
 CrashLoopBackOff surfaces before flux remediation fires and uninstalls
 the Cluster CR.
 
-The pinned busybox image in images/busybox.tag points directly at
+The default image lives in images/busybox.tag and points directly at
 docker.io by digest (not mirrored to ghcr.io like the other .tag files
-here): the payload is a one-shot sh loop, the digest pin makes the
-pull immutable, and the cost of maintaining a private mirror of a tiny
-upstream image that does not move often is not worth it.
+here): the payload is a one-shot sh loop and the digest pin makes the
+pull immutable. Operators in air-gapped or rate-limited environments
+can override it via .Values.images.waitForKubeconfig (any registry
+reference kubelet can pull). When the value is empty the chart falls
+back to the bundled digest pin, preserving the prior default.
 
 Call site owns the surrounding volumes block; the kubeconfig volume
 must exist on the pod and mount at /etc/kubernetes/kubeconfig.
 */}}
 {{- define "kubernetes.waitForAdminKubeconfig" -}}
 - name: wait-for-kubeconfig
-  image: "{{ .Files.Get "images/busybox.tag" | trim }}"
+  image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"
   command:
   - sh
   - -c

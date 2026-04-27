@@ -630,6 +630,18 @@
           }
         }
       }
+    },
+    "images": {
+      "description": "Optional image overrides for air-gapped or rate-limited registries.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "waitForKubeconfig": {
+          "description": "Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.",
+          "type": "string",
+          "default": ""
+        }
+      }
     }
   }
 }
