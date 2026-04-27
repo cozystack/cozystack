@@ -151,8 +151,9 @@ jobs:
               scopeStr = bracket[1];
             }
 
-            // 4. Detect BREAKING CHANGE: footer in body.
-            if (/^BREAKING CHANGE:/m.test(body)) {
+            // 4. Detect BREAKING CHANGE: or BREAKING-CHANGE: footer in body.
+            // Conventional Commits 1.0 spec item 16 treats them as synonymous.
+            if (/^BREAKING[ -]CHANGE:/m.test(body)) {
               breaking = true;
             }
 
