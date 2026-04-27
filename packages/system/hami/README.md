@@ -72,6 +72,8 @@ resources:
 
 ## Parameters
 
+Default values shown below are inherited from the upstream HAMi chart and may change with upstream updates.
+
 | Name | Description | Default |
 | --- | --- | --- |
 | `hami.devicePlugin.runtimeClassName` | RuntimeClass for device plugin pods | `nvidia` |
