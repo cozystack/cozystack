@@ -106,8 +106,6 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/name: kubernetes
     app.kubernetes.io/instance: {{ .Release.Name }}
-  annotations:
-    cozystack.io/status-beacon: "true"
 data:
   status: "awaiting-etcd"
   message: |
