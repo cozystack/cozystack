@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// Kubernetes control-plane configuration.
 	// +kubebuilder:default:={}
 	ControlPlane ControlPlane `json:"controlPlane"`
+	// Optional image overrides for air-gapped or rate-limited registries.
+	// +kubebuilder:default:={}
+	Images Images `json:"images"`
 }
 
 type APIServer struct {
@@ -155,6 +158,12 @@ type GatewayAPIAddon struct {
 	// Enable Gateway API.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+}
+
+type Images struct {
+	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+	// +kubebuilder:default:=""
+	WaitForKubeconfig string `json:"waitForKubeconfig,omitempty"`
 }
 
 type IngressNginxAddon struct {

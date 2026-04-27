@@ -1,4 +1,4 @@
-{{- if .Values.addons.monitoringAgents.enabled }}
+{{- if and .Values.addons.monitoringAgents.enabled .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

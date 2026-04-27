@@ -82,10 +82,18 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests bats-unit-tests
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
+
+# Scoped go test over the cozystack-api surface that this repo owns. Kept
+# narrow intentionally - running `go test ./...` pulls in generated code
+# round-trip suites whose behavior depends on tool versions outside this
+# repo's control (kubebuilder, openapi-gen, etc.) and is better exercised
+# from their generator workflows.
+go-unit-tests:
+	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
 
 # Discover every hack/*.bats file that is NOT an e2e test and run it
 # through cozytest.sh. Drop a new *.bats file in hack/ and it is picked

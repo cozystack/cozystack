@@ -464,6 +464,9 @@ data:
 {{- if has (kindOf .Values.bpf.policyMapPressureMetricsThreshold) (list "int64" "float64") }}
   bpf-policy-map-pressure-metrics-threshold: {{ .Values.bpf.policyMapPressureMetricsThreshold | quote }}
 {{- end }}
+{{- if .Values.endpointPolicyUpdateTimeoutDuration }}
+  endpoint-policy-update-timeout: {{ .Values.endpointPolicyUpdateTimeoutDuration | quote }}
+{{- end }}
 {{- if hasKey .Values.bpf "policyStatsMapMax" }}
   # bpf-policy-stats-map-max specifies the maximum number of entries in global
   # policy stats map
@@ -706,7 +709,6 @@ data:
   enable-ipv4-big-tcp: {{ .Values.enableIPv4BIGTCP | quote }}
   enable-ipv6-big-tcp: {{ .Values.enableIPv6BIGTCP | quote }}
   enable-ipv6-masquerade: {{ .Values.enableIPv6Masquerade | quote }}
-  enable-tunnel-big-tcp: {{ .Values.enableTunnelBIGTCP | quote }}
 
 {{- if hasKey .Values.bpf "enableTCX" }}
   enable-tcx: {{ .Values.bpf.enableTCX | quote }}
@@ -906,9 +908,9 @@ data:
 {{- end }}
 {{- if hasKey .Values.loadBalancer "serviceTopology" }}
   enable-service-topology: {{ .Values.loadBalancer.serviceTopology | quote }}
-# {{- end }}
-
 {{- end }}
+{{- end }}
+
 {{- if hasKey .Values.maglev "tableSize" }}
   bpf-lb-maglev-table-size: {{ .Values.maglev.tableSize | quote}}
 {{- end }}
@@ -1380,11 +1382,7 @@ data:
 
 {{- if .Values.operator.unmanagedPodWatcher.restart }}
   {{- $interval := .Values.operator.unmanagedPodWatcher.intervalSeconds }}
-  {{- if kindIs "float64" $interval }}
   unmanaged-pod-watcher-interval: {{ printf "%ds" (int $interval) | quote }}
-  {{- else }}
-  unmanaged-pod-watcher-interval: {{ $interval | quote }}
-  {{- end }}
 {{- else }}
   unmanaged-pod-watcher-interval: "0"
 {{- end }}
@@ -1515,6 +1513,14 @@ data:
 
 {{- if has (kindOf .Values.connectivityProbeFrequencyRatio) (list "int64" "float64") }}
   connectivity-probe-frequency-ratio: {{ .Values.connectivityProbeFrequencyRatio | quote }}
+{{- end }}
+
+{{- if hasKey .Values "configDriftDetection" }}
+  enable-dynamic-config: {{ .Values.configDriftDetection.enabled | quote }}
+  enable-drift-checker: {{ .Values.configDriftDetection.driftChecker | quote }}
+  {{- if .Values.configDriftDetection.ignoredKeys }}
+  ignore-flags-drift-checker: {{ join "," .Values.configDriftDetection.ignoredKeys | quote }}
+  {{- end }}
 {{- end }}
 
 # Extra config allows adding arbitrary properties to the cilium config.

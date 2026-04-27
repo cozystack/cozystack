@@ -83,6 +83,14 @@ packages/<category>/<package-name>/
 - Reference PR numbers when available
 - Keep commits atomic and focused
 
+### PackageSource CRD upgrade policy
+
+Each component in a `PackageSource` may set `install.upgradeCRDs` to control how CRDs from the chart's `crds/` directory are handled on `HelmRelease` upgrades. Allowed values: `Skip` (default — helm-controller does not touch CRDs on upgrade), `Create` (create new CRDs only), `CreateReplace` (create new and overwrite existing).
+
+Set `upgradeCRDs: CreateReplace` for operators whose upstream regularly adds new CRDs between versions (etcd-operator, cnpg, kubevirt, kamaji). Without it, new CRDs from a chart bump do not land on existing clusters — only fresh installs get them.
+
+Do **not** set `CreateReplace` blindly: it overwrites every CRD in `crds/` and can cause silent data loss if upstream drops a field from a CRD that has live objects. Only enable it for operators whose schema evolution is additive-only. When in doubt, leave it unset and apply new CRDs manually.
+
 ### Documentation
 
 Documentation is organized as follows:

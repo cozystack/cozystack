@@ -45,6 +45,16 @@ const (
 	SecretCozystackValues = "cozystack-values"
 )
 
+// parseCRDPolicy maps ComponentInstall.UpgradeCRDs to a helmv2.CRDsPolicy.
+// Empty / nil preserves the helm-controller default (Skip on upgrade);
+// the CRD enum marker restricts the string to Skip/Create/CreateReplace.
+func parseCRDPolicy(install *cozyv1alpha1.ComponentInstall) helmv2.CRDsPolicy {
+	if install == nil || install.UpgradeCRDs == "" {
+		return ""
+	}
+	return helmv2.CRDsPolicy(install.UpgradeCRDs)
+}
+
 // PackageReconciler reconciles Package resources
 type PackageReconciler struct {
 	client.Client
@@ -221,6 +231,7 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					Remediation: &helmv2.UpgradeRemediation{
 						Retries: -1,
 					},
+					CRDs: parseCRDPolicy(component.Install),
 				},
 			},
 		}

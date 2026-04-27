@@ -223,7 +223,7 @@ jobs:
                 repo:  context.repo.repo,
                 head,
                 base,
-                title: `Release v${version}`,
+                title: `chore(release): cut v${version}`,
                 body:  `This PR prepares the release \`v${version}\`.`,
                 draft: false
               });
@@ -411,7 +411,7 @@ jobs:
                 repo:  context.repo.repo,
                 head:  changelogBranch,
                 base:  baseBranch,
-                title: `docs: add changelog for v${version}`,
+                title: `docs(release): add changelog for v${version}`,
                 body:  `This PR adds the changelog for release \`v${version}\`.\n\n✅ Changelog has been automatically generated in \`docs/changelogs/v${version}.md\`.`,
                 draft: false
               });
@@ -421,7 +421,7 @@ jobs:
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
                 issue_number: pr.data.number,
-                labels: ['documentation', 'automated']
+                labels: ['kind/documentation', 'automated']
               });
               
               console.log(`Created PR #${pr.data.number} for changelog`);
