@@ -85,7 +85,7 @@ git commit --signoff -m "docs(contributing): add installation guide"
 | extra | area/extra |
 | kubernetes | area/kubernetes |
 | monitoring, vlogs, vmstack, grafana, workloadmonitor | area/monitoring |
-| ingress, gateway, vpn, metallb, cilium, kube-ovn, cozy-proxy, … | area/networking |
+| ingress, gateway, vpn, metallb, cilium, kube-ovn, cozy-proxy, ... | area/networking |
 | platform, bundle, flux, fluxcd, cluster-api, talos, installer, cozyctl, cozystack-engine, cozy-lib | area/platform |
 | backport, release | area/release |
 | seaweedfs, bucket, linstor, velero, harbor, backups | area/storage |
@@ -95,7 +95,7 @@ git commit --signoff -m "docs(contributing): add installation guide"
 **Special handling:**
 
 - `[Backport release-1.x]` prefix is stripped before parsing; `area/release` and `backport` labels are added.
-- Composite scope (`feat(platform, system, apps): …`) — each comma-separated part is mapped independently.
+- Composite scope (`feat(platform, system, apps): ...`) — each comma-separated part is mapped independently.
 - `!` after type or `BREAKING CHANGE:` footer in the body → `kind/breaking-change`.
 - Unmapped scope or non-conventional title → `area/uncategorized` (signals the PR needs manual area selection).
 - Bracket-style fallback (`[scope] description`) maps `scope` → `area/*` but cannot infer `kind/*`.
