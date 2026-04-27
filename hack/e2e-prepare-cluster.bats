@@ -235,8 +235,11 @@ EOF
 }
 
 @test "Bootstrap Talos cluster" {
-  # Bootstrap etcd on the first node
-  timeout 10 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 1; done'
+  # Bootstrap etcd on the first node.
+  # Retry for up to 60s: talosctl bootstrap refuses with "time is not in
+  # sync yet" until NTP converges on a freshly booted node, which on fast
+  # ephemeral runners can take several attempts of ~5s each.
+  timeout 60 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 2; done'
 
   # Wait until etcd is healthy
   if ! timeout 180 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
