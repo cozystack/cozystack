@@ -42,46 +42,23 @@ spec:
         #     excluding infra pods would under-report raw capacity and
         #     break capacity-planning math.
         #
-        #   * cluster:gpu_util:avg DOES filter infra namespaces because it
-        #     is a tenant-oriented KPI. Admins want to see the mean
-        #     utilization of tenant workloads, not have it diluted by
-        #     GPU Operator DaemonSet pods whose containers hold a GPU
-        #     handle but do no useful compute.
-        #
-        # Do not "normalize" by adding the filter to the hardware rules —
-        # downstream consumers (capacity planning, billing) rely on the
-        # raw totals.
+        # No namespace filter — DCGM exporter metrics carry the exporter's
+        # own namespace, not the workload namespace. Filtering by namespace
+        # here would silently drop all series.
         - record: cluster:gpu_util:avg
-          expr: avg(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
+          expr: avg(DCGM_FI_DEV_GPU_UTIL)
         - record: cluster:gpu_power_watts:sum
           expr: sum(DCGM_FI_DEV_POWER_USAGE)
 
-    - name: gpu.recording.namespace.1m
+    - name: gpu.recording.node.1m
       interval: 1m
       params: {}
       rules:
-        # Kube-requested GPU count per namespace — billable view, includes
-        # Pending pods. Use this for GPU-hour reporting via
-        # sum_over_time(...[1h:1m])/60.
-        #
-        # Filters cozy-*/kube-* so the namespace set here matches every
-        # other namespace:* rule below. This keeps the $namespace variable
-        # in the tenant dashboard consistent with panels that read filtered
-        # rules — otherwise picking a system ns from the dropdown leaves
-        # half the panels empty while others show values.
-        #
-        # Trade-off: per-namespace GPU accounting for system workloads is
-        # no longer available here. If it's ever needed (e.g. operator
-        # pods pinning tenant GPUs), add a separate rule like
-        # system:gpu_count:allocated rather than widening this one — the
-        # "billable tenant view" invariant is relied on by tenants.json
-        # and keeping it narrow protects consumers from the asymmetry
-        # that triggered this filter in the first place.
-        #
-        # Note: sum(namespace:gpu_count:allocated) no longer equals
-        # cluster:gpu_count:allocated — the cluster-level rule intentionally
-        # keeps system pods to stay aligned with cluster:gpu_count:total
-        # when computing :free.
+        # Kube-requested GPU count per namespace — billable/allocation view.
+        # This is the only namespace-level rule that works correctly because
+        # kube_pod_container_resource_requests carries the real workload
+        # namespace, unlike DCGM exporter metrics which carry the exporter's
+        # own namespace (cozy-gpu-operator).
         - record: namespace:gpu_count:allocated
           expr: |
             sum by (namespace) (
@@ -90,14 +67,18 @@ spec:
                 kube_pod_status_phase{phase=~"Pending|Running"} == 1
               )
             )
-        - record: namespace:gpu_util:avg
-          expr: avg by (namespace) (DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"})
-        - record: namespace:tensor_active:avg
-          expr: avg by (namespace) (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"})
-        - record: namespace:fb_used_bytes:sum
-          expr: sum by (namespace) (DCGM_FI_DEV_FB_USED{namespace!="", namespace!~"cozy-.*|kube-.*"}) * 1048576
-        - record: namespace:power_watts:sum
-          expr: sum by (namespace) (DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"})
+        # Hardware metrics aggregated per node (Hostname). DCGM exporter
+        # metrics carry a capital-H "Hostname" label identifying the node
+        # but no usable workload namespace — so hardware telemetry is
+        # aggregated at node/GPU granularity, not namespace.
+        - record: node:gpu_util:avg
+          expr: avg by (Hostname) (DCGM_FI_DEV_GPU_UTIL)
+        - record: node:tensor_active:avg
+          expr: avg by (Hostname) (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE)
+        - record: node:fb_used_bytes:sum
+          expr: sum by (Hostname) (DCGM_FI_DEV_FB_USED) * 1048576
+        - record: node:power_watts:sum
+          expr: sum by (Hostname) (DCGM_FI_DEV_POWER_USAGE)
 
     # Known gap: there is no lower-bound sanity alert for under-reporting.
     # If DCGM ever switches POWER/THERMAL_VIOLATION counter units the other
@@ -113,27 +94,26 @@ spec:
       interval: 1m
       params: {}
       rules:
-        # Tensor hardware saturation — the honest "am I using the GPU" metric
-        # for AI/LLM workloads. Unlike NVML, idle tensor cores are visible.
-        # Stored as a 0..1 ratio to stay consistent with namespace:tensor_active:avg
-        # and DCGM's native units. Consumers multiply by 100 at display time.
-        - record: pod:tensor_saturation:avg5m
+        # Tensor hardware saturation per GPU — the honest "am I using the GPU"
+        # metric for AI/LLM workloads. Aggregated at GPU level (Hostname +
+        # gpu + UUID) because DCGM metrics don't carry workload namespace.
+        # Stored as a 0..1 ratio; consumers multiply by 100 at display time.
+        - record: gpu:tensor_saturation:avg5m
           expr: |
-            avg by (Hostname, gpu, UUID, namespace, pod) (
-              avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
+            avg by (Hostname, gpu, UUID) (
+              avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE[5m])
             )
 
-        # Power efficiency — utilization per watt, reveals unoptimized clients.
-        # Explicit on(...) pins the bigop matching set to the labels we
-        # group by — protects against empty results if dcgm-exporter
-        # relabeling ever diverges between the two metrics.
-        - record: pod:util_per_watt:avg5m
+        # Power efficiency per GPU — utilization per watt, reveals
+        # unoptimized workloads. Explicit on(...) pins the matching set
+        # to GPU-identifying labels.
+        - record: gpu:util_per_watt:avg5m
           expr: |
-            avg by (Hostname, gpu, UUID, namespace, pod) (
-              avg_over_time(DCGM_FI_DEV_GPU_UTIL{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m])
-              / on (Hostname, gpu, UUID, namespace, pod)
+            avg by (Hostname, gpu, UUID) (
+              avg_over_time(DCGM_FI_DEV_GPU_UTIL[5m])
+              / on (Hostname, gpu, UUID)
               clamp_min(
-                avg_over_time(DCGM_FI_DEV_POWER_USAGE{namespace!="", namespace!~"cozy-.*|kube-.*"}[5m]),
+                avg_over_time(DCGM_FI_DEV_POWER_USAGE[5m]),
                 1
               )
             )

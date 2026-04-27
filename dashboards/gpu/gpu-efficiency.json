@@ -35,12 +35,12 @@
       "id": 2,
       "targets": [
         {
-          "expr": "avg(pod:tensor_saturation:avg5m{namespace=~\"$namespace\"}) * 100",
+          "expr": "avg(gpu:tensor_saturation:avg5m) * 100",
           "refId": "A"
         }
       ],
       "title": "Avg Tensor Saturation",
-      "description": "Mean tensor core saturation across selected namespaces. \u003c10% means GPUs are used inefficiently (tenants could move to CPU or optimize their code).",
+      "description": "Mean tensor core saturation across all GPUs. \u003c10% means GPUs are used inefficiently (workloads could move to CPU or optimize their code). Cluster-wide — DCGM metrics cannot be attributed to workload namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -103,12 +103,12 @@
       "id": 3,
       "targets": [
         {
-          "expr": "avg(pod:util_per_watt:avg5m{namespace=~\"$namespace\"})",
+          "expr": "avg(gpu:util_per_watt:avg5m)",
           "refId": "A"
         }
       ],
       "title": "Avg Utilization per Watt",
-      "description": "NVML utilization % per watt across selected namespaces. Higher value = more efficient workload.",
+      "description": "NVML utilization % per watt across all GPUs. Higher value = more efficient workload. Cluster-wide — DCGM metrics cannot be attributed to workload namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -242,13 +242,13 @@
       "id": 11,
       "targets": [
         {
-          "expr": "DCGM_FI_DEV_GPU_UTIL{namespace=~\"$namespace\", namespace!=\"\"}",
-          "legendFormat": "{{namespace}}/{{pod}}",
+          "expr": "DCGM_FI_DEV_GPU_UTIL",
+          "legendFormat": "{{Hostname}}/{{gpu}}",
           "refId": "A"
         }
       ],
       "title": "NVML GPU Utilization",
-      "description": "Classic utilization metric. Shows activity of any engine (SM, copy, encoder).",
+      "description": "Classic utilization metric. Shows activity of any engine (SM, copy, encoder). Cluster-wide — DCGM namespace is the exporter's own namespace, not the workload namespace.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -296,13 +296,13 @@
       "id": 12,
       "targets": [
         {
-          "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{namespace=~\"$namespace\", namespace!=\"\"} * 100",
-          "legendFormat": "{{namespace}}/{{pod}}",
+          "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE * 100",
+          "legendFormat": "{{Hostname}}/{{gpu}}",
           "refId": "A"
         }
       ],
       "title": "Tensor Pipe Active",
-      "description": "Real tensor core load (HMMA). For AI/LLM inference it should be ≥20%, otherwise the workload is unoptimized.",
+      "description": "Real tensor core load (HMMA). For AI/LLM inference it should be ≥20%, otherwise the workload is unoptimized. Cluster-wide — DCGM namespace is the exporter's own namespace, not the workload namespace.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -348,7 +348,7 @@
     {
       "type": "row",
       "collapsed": false,
-      "title": "Per-pod ranking",
+      "title": "Per-GPU ranking",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -363,15 +363,15 @@
       "id": 21,
       "targets": [
         {
-          "expr": "topk(20, pod:tensor_saturation:avg5m{namespace=~\"$namespace\"} * 100)",
+          "expr": "topk(20, gpu:tensor_saturation:avg5m * 100)",
           "instant": true,
           "range": false,
           "format": "table",
           "refId": "A"
         }
       ],
-      "title": "Tensor Saturation per pod (5m avg)",
-      "description": "Who is exercising tensor cores and who is not. Sorted descending.",
+      "title": "Tensor Saturation per GPU (5m avg)",
+      "description": "Which GPUs are exercising tensor cores and which are not. Sorted descending. Grouped by Hostname/gpu/UUID — DCGM metrics cannot be attributed to workload namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -390,20 +390,19 @@
           "options": {
             "excludeByName": {
               "DCGM_FI_DRIVER_VERSION": true,
-              "Hostname": true,
               "Time": true,
-              "UUID": true,
               "__name__": true,
               "cluster": true,
               "container": true,
               "device": true,
               "endpoint": true,
-              "gpu": true,
               "gpu_driver_version": true,
               "instance": true,
               "job": true,
               "modelName": true,
+              "namespace": true,
               "pci_bus_id": true,
+              "pod": true,
               "prometheus": true,
               "service": true,
               "tenant": true,
@@ -412,14 +411,16 @@
               "unit": true
             },
             "indexByName": {
-              "Value": 2,
-              "namespace": 0,
-              "pod": 1
+              "Hostname": 0,
+              "UUID": 2,
+              "Value": 3,
+              "gpu": 1
             },
             "renameByName": {
+              "Hostname": "Node",
+              "UUID": "UUID",
               "Value": "Saturation",
-              "namespace": "Namespace",
-              "pod": "Pod"
+              "gpu": "GPU"
             }
           }
         }
@@ -501,15 +502,15 @@
       "id": 22,
       "targets": [
         {
-          "expr": "topk(20, pod:util_per_watt:avg5m{namespace=~\"$namespace\"})",
+          "expr": "topk(20, gpu:util_per_watt:avg5m)",
           "instant": true,
           "range": false,
           "format": "table",
           "refId": "A"
         }
       ],
-      "title": "Utilization / Watt per pod (5m avg)",
-      "description": "How efficiently each pod spends watts. Low value = poor optimization.",
+      "title": "Utilization / Watt per GPU (5m avg)",
+      "description": "How efficiently each GPU spends watts. Low value = poor optimization. Grouped by Hostname/gpu/UUID — DCGM metrics cannot be attributed to workload namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -528,20 +529,19 @@
           "options": {
             "excludeByName": {
               "DCGM_FI_DRIVER_VERSION": true,
-              "Hostname": true,
               "Time": true,
-              "UUID": true,
               "__name__": true,
               "cluster": true,
               "container": true,
               "device": true,
               "endpoint": true,
-              "gpu": true,
               "gpu_driver_version": true,
               "instance": true,
               "job": true,
               "modelName": true,
+              "namespace": true,
               "pci_bus_id": true,
+              "pod": true,
               "prometheus": true,
               "service": true,
               "tenant": true,
@@ -550,14 +550,16 @@
               "unit": true
             },
             "indexByName": {
-              "Value": 2,
-              "namespace": 0,
-              "pod": 1
+              "Hostname": 0,
+              "UUID": 2,
+              "Value": 3,
+              "gpu": 1
             },
             "renameByName": {
+              "Hostname": "Node",
+              "UUID": "UUID",
               "Value": "Util/Watt",
-              "namespace": "Namespace",
-              "pod": "Pod"
+              "gpu": "GPU"
             }
           }
         }

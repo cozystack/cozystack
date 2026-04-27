@@ -147,12 +147,12 @@
       "id": 4,
       "targets": [
         {
-          "expr": "avg(namespace:gpu_util:avg{namespace=~\"$namespace\"})",
+          "expr": "cluster:gpu_util:avg",
           "refId": "A"
         }
       ],
-      "title": "Avg tenant util",
-      "description": "Average NVML utilization across all tenant GPUs.",
+      "title": "Avg cluster GPU util",
+      "description": "Average NVML utilization across all GPUs in the cluster. Cluster-wide — DCGM hardware metrics cannot be attributed to workload namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -211,12 +211,12 @@
       "id": 5,
       "targets": [
         {
-          "expr": "sum(namespace:power_watts:sum{namespace=~\"$namespace\"})",
+          "expr": "cluster:gpu_power_watts:sum",
           "refId": "A"
         }
       ],
-      "title": "Total tenant power",
-      "description": "Live power draw summed across tenant workloads.",
+      "title": "Total GPU power",
+      "description": "Live power draw summed across all GPUs in the cluster. Cluster-wide — DCGM hardware metrics cannot be attributed to workload namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -266,12 +266,12 @@
       "id": 6,
       "targets": [
         {
-          "expr": "sum(sum_over_time(namespace:power_watts:sum{namespace=~\"$namespace\"}[24h:1m])) / 60 / 1000",
+          "expr": "sum(sum_over_time(node:power_watts:sum[24h:1m])) / 60 / 1000",
           "refId": "A"
         }
       ],
       "title": "Energy (last 24h)",
-      "description": "Integrated power draw over 24h. Feed into billing/chargeback as kWh.",
+      "description": "Integrated cluster-wide GPU power draw over 24h. Cluster-wide — DCGM hardware metrics cannot be attributed to workload namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -452,13 +452,13 @@
       "id": 12,
       "targets": [
         {
-          "expr": "namespace:fb_used_bytes:sum{namespace=~\"$namespace\"}",
-          "legendFormat": "{{namespace}}",
+          "expr": "node:fb_used_bytes:sum",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
-      "title": "VRAM used per namespace",
-      "description": "FB memory actively used by tenant workloads.",
+      "title": "VRAM used per node",
+      "description": "FB memory actively used per node. DCGM hardware metrics cannot be attributed to workload namespaces — shown per-node instead.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -513,7 +513,7 @@
     {
       "type": "row",
       "collapsed": false,
-      "title": "Utilization",
+      "title": "Utilization (per-node)",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -528,13 +528,13 @@
       "id": 21,
       "targets": [
         {
-          "expr": "namespace:gpu_util:avg{namespace=~\"$namespace\"}",
-          "legendFormat": "{{namespace}}",
+          "expr": "node:gpu_util:avg",
+          "legendFormat": "{{node}}",
           "refId": "A"
         }
       ],
-      "title": "NVML utilization per namespace",
-      "description": "Per-tenant NVML utilization. Stacked to show fleet-wide pressure over time.",
+      "title": "NVML utilization per node",
+      "description": "Per-node NVML utilization. Stacked to show fleet-wide pressure over time. DCGM hardware metrics cannot be attributed to workload namespaces — shown per-node instead.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -584,13 +584,13 @@
       "id": 22,
       "targets": [
         {
-          "expr": "namespace:tensor_active:avg{namespace=~\"$namespace\"} * 100",
-          "legendFormat": "{{namespace}}",
+          "expr": "node:tensor_active:avg * 100",
+          "legendFormat": "{{node}}",
           "refId": "A"
         }
       ],
-      "title": "Tensor saturation per namespace",
-      "description": "Real tensor core load per tenant. Useful to find AI tenants that claim GPUs but leave tensor cores idle.",
+      "title": "Tensor saturation per node",
+      "description": "Real tensor core load per node. Useful to spot nodes with idle tensor cores. DCGM hardware metrics cannot be attributed to workload namespaces — shown per-node instead.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -653,13 +653,13 @@
       "id": 31,
       "targets": [
         {
-          "expr": "namespace:power_watts:sum{namespace=~\"$namespace\"}",
-          "legendFormat": "{{namespace}}",
+          "expr": "node:power_watts:sum",
+          "legendFormat": "{{node}}",
           "refId": "A"
         }
       ],
-      "title": "Power draw per namespace",
-      "description": "Per-tenant power draw. Stacked to see cluster-wide energy burn over time.",
+      "title": "Power draw per node",
+      "description": "Per-node GPU power draw. Stacked to see cluster-wide energy burn over time. DCGM hardware metrics cannot be attributed to workload namespaces — shown per-node instead.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -783,38 +783,10 @@
           "range": false,
           "format": "table",
           "refId": "gpus"
-        },
-        {
-          "expr": "namespace:gpu_util:avg{namespace=~\"$namespace\"}",
-          "instant": true,
-          "range": false,
-          "format": "table",
-          "refId": "util"
-        },
-        {
-          "expr": "namespace:tensor_active:avg{namespace=~\"$namespace\"} * 100",
-          "instant": true,
-          "range": false,
-          "format": "table",
-          "refId": "tensor"
-        },
-        {
-          "expr": "namespace:power_watts:sum{namespace=~\"$namespace\"}",
-          "instant": true,
-          "range": false,
-          "format": "table",
-          "refId": "power"
-        },
-        {
-          "expr": "namespace:fb_used_bytes:sum{namespace=~\"$namespace\"}",
-          "instant": true,
-          "range": false,
-          "format": "table",
-          "refId": "vram"
         }
       ],
-      "title": "Top consumers",
-      "description": "Live ranking of tenants by power draw. Columns joined from namespace recording rules.",
+      "title": "Top consumers (allocation)",
+      "description": "Live ranking of tenants by GPU allocation. Hardware metrics (util, tensor, power, VRAM) cannot be attributed to workload namespaces — see Fleet and Performance dashboards for per-node/per-GPU hardware views.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -828,13 +800,6 @@
       },
       "repeatDirection": "h",
       "transformations": [
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "namespace",
-            "mode": "outer"
-          }
-        },
         {
           "id": "organize",
           "options": {
@@ -914,18 +879,10 @@
             },
             "indexByName": {
               "Value #gpus": 1,
-              "Value #power": 4,
-              "Value #tensor": 3,
-              "Value #util": 2,
-              "Value #vram": 5,
               "namespace": 0
             },
             "renameByName": {
               "Value #gpus": "GPUs",
-              "Value #power": "Power",
-              "Value #tensor": "Tensor %",
-              "Value #util": "Util %",
-              "Value #vram": "VRAM",
               "namespace": "Namespace"
             }
           }
@@ -937,7 +894,7 @@
         "showTypeIcons": false,
         "sortBy": [
           {
-            "displayName": "Power",
+            "displayName": "GPUs",
             "desc": true
           }
         ],
@@ -946,101 +903,6 @@
           "reducer": []
         },
         "cellHeight": "sm"
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Util %"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              },
-              {
-                "id": "min",
-                "value": 0
-              },
-              {
-                "id": "max",
-                "value": 100
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "mode": "gradient",
-                  "type": "gauge"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Tensor %"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "percent"
-              },
-              {
-                "id": "min",
-                "value": 0
-              },
-              {
-                "id": "max",
-                "value": 100
-              },
-              {
-                "id": "decimals",
-                "value": 1
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "mode": "gradient",
-                  "type": "gauge"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Power"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "watt"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "VRAM"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "bytes"
-              }
-            ]
-          }
-        ]
       }
     },
     {
@@ -1125,13 +987,13 @@
       "id": 52,
       "targets": [
         {
-          "expr": "sum_over_time(namespace:power_watts:sum{namespace=~\"$namespace\"}[24h:1m]) / 60 / 1000",
-          "legendFormat": "{{namespace}}",
+          "expr": "sum_over_time(node:power_watts:sum[24h:1m]) / 60 / 1000",
+          "legendFormat": "{{node}}",
           "refId": "A"
         }
       ],
-      "title": "Energy per namespace (last 24h)",
-      "description": "kWh consumed per tenant over the last 24h. Integrated from 1-minute power samples.",
+      "title": "Energy per node (last 24h)",
+      "description": "kWh consumed per node over the last 24h. Integrated from 1-minute power samples. DCGM hardware metrics cannot be attributed to workload namespaces — shown per-node instead.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
