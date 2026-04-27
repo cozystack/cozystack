@@ -60,9 +60,17 @@ spec:
     customConfig:
       - tcp-keepalive 0
       - loglevel notice
-      {{- if not .Values.size }}
+      {{- $persistenceMode := .Values.persistenceMode | default "rdb" }}
+      {{- if or (not .Values.size) (eq $persistenceMode "none") }}
       - appendonly no
       - save ""
+      {{- else if eq $persistenceMode "aof" }}
+      - save ""
+      - appendonly yes
+      - appendfsync everysec
+      {{- else if eq $persistenceMode "both" }}
+      - appendonly yes
+      - appendfsync everysec
       {{- end }}
   {{- if .Values.authEnabled }}
   auth:
