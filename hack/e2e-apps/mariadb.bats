@@ -35,7 +35,9 @@ spec:
   resources: {}
   resourcesPreset: "nano"
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr mariadb-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr mariadb-$name --timeout=30s --for=condition=ready
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"

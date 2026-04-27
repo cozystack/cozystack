@@ -26,7 +26,9 @@ spec:
   backup:
     enabled: false
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr mongodb-$name >/dev/null 2>&1; do sleep 2; done"
   # Wait for HelmRelease
   kubectl -n tenant-test wait hr mongodb-$name --timeout=60s --for=condition=ready
   # Wait for MongoDB service (port 27017)
