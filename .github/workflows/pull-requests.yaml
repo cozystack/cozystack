@@ -223,7 +223,16 @@ jobs:
       - name: Prepare environment
         run: |
           cd /tmp/$SANDBOX_NAME
-          make SANDBOX_NAME=$SANDBOX_NAME prepare-env
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+          echo "Prepare environment completed after $attempt attempts"
 
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
