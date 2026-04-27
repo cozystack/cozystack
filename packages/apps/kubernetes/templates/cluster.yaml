@@ -1,4 +1,15 @@
 {{- $etcd := .Values._namespace.etcd }}
+{{- /*
+  When $etcd is empty, the parent Tenant application has not populated
+  _namespace.etcd in cozystack-values yet - either the operator forgot to
+  set etcd: true on an ancestor Tenant, or the Tenant HelmRelease is still
+  reconciling. Either way, rendering a KamajiControlPlane with an empty
+  dataStoreName would be rejected by Kamaji's admission webhook and the
+  HelmRelease would fail to install, triggering remediation. Instead, emit
+  a single ConfigMap as a user-visible status beacon and skip the rest so
+  flux marks the HelmRelease Ready and retries its 5m reconcile loop until
+  the Tenant chart catches up.
+*/}}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $kubevirtmachinetemplateNames := list }}
@@ -84,6 +95,26 @@ spec:
           - name: default
             pod: {}
 {{- end }}
+{{- if not $etcd }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-awaiting-etcd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: kubernetes
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  status: "awaiting-etcd"
+  message: |
+    No DataStore is available for this tenant Kubernetes cluster. The parent
+    Tenant application has not populated _namespace.etcd. Set spec.etcd: true
+    on an ancestor Tenant (usually tenant-root) and wait for its HelmRelease
+    to reconcile - this HelmRelease will pick up the DataStore on its next
+    5m reconcile loop and provision the cluster.
+{{- else }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -403,4 +434,5 @@ metadata:
   namespace: {{ .metadata.Namespace }}
 spec:
   {{- .spec | toYaml | nindent 2 }}
+{{- end }}
 {{- end }}

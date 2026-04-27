@@ -14,6 +14,7 @@ cilium:
   {{- end }}
 {{- end }}
 
+{{- if .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -55,3 +56,4 @@ spec:
   - name: {{ .Release.Name }}-gateway-api-crds
     namespace: {{ .Release.Namespace }}
   {{- end }}
+{{- end }}

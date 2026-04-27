@@ -20,7 +20,7 @@ ingress-nginx:
     node-role.kubernetes.io/ingress-nginx: ""
 {{- end }}
 
-{{- if .Values.addons.ingressNginx.enabled }}
+{{- if and .Values.addons.ingressNginx.enabled .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
