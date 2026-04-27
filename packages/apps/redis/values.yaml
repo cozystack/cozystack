@@ -44,5 +44,8 @@ version: v8
 ## @section Application-specific parameters
 ##
 
+## @param {string} [maxmemory] - Override the auto-computed maxmemory (bytes). When omitted, maxmemory is set to 80% of the memory resource limit.
+maxmemory: ""
+
 ## @param {bool} authEnabled - Enable password generation.
 authEnabled: true

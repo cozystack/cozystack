@@ -64,6 +64,13 @@ spec:
       - appendonly no
       - save ""
       {{- end }}
+      {{- if .Values.maxmemory }}
+      - maxmemory {{ .Values.maxmemory }}
+      {{- else }}
+      {{- $resolved := include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | fromYaml }}
+      {{- $memLimitBytes := include "cozy-lib.resources.toFloat" $resolved.limits.memory | float64 | int64 }}
+      - maxmemory {{ div (mul $memLimitBytes 4) 5 }}
+      {{- end }}
   {{- if .Values.authEnabled }}
   auth:
     secretPath: {{ .Release.Name }}-auth
