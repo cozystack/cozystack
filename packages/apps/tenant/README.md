@@ -80,6 +80,7 @@ tenant-u1
 | `etcd`            | Deploy own Etcd cluster.                                                                                                   | `bool`                | `false` |
 | `monitoring`      | Deploy own Monitoring Stack.                                                                                               | `bool`                | `false` |
 | `ingress`         | Deploy own Ingress Controller.                                                                                             | `bool`                | `false` |
+| `gateway`         | Deploy own Gateway API Gateway (backed by Cilium Gateway API controller).                                                  | `bool`                | `false` |
 | `seaweedfs`       | Deploy own SeaweedFS.                                                                                                      | `bool`                | `false` |
 | `schedulingClass` | The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.                              | `string`              | `""`    |
 | `resourceQuotas`  | Define resource quotas for the tenant.                                                                                     | `map[string]quantity` | `{}`    |

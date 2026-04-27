@@ -3,6 +3,8 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- if ne $gatewayEnabled "true" }}
 
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -33,3 +35,4 @@ spec:
             name: keycloak-http
             port:
               name: http
+{{- end }}

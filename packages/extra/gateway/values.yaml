@@ -1,0 +1,12 @@
+##
+## @section Common parameters
+##
+
+## @param {string} gatewayClassName - GatewayClass to attach the tenant Gateway to. Must exist cluster-wide. Default matches the Cilium-managed class.
+gatewayClassName: cilium
+
+## @param {[]string} tlsPassthroughServices - Names (from publishing.exposedServices) whose traffic is TLS-passthrough rather than TLS-terminate. For each such service a dedicated HTTPS listener with tls.mode=Passthrough is rendered on the Gateway, and the service is expected to attach a TLSRoute instead of an HTTPRoute.
+tlsPassthroughServices:
+  - api
+  - vm-exportproxy
+  - cdi-uploadproxy

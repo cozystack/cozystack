@@ -1,0 +1,165 @@
+suite: ingress exposure modes
+templates:
+  - templates/nginx-ingress.yaml
+
+release:
+  name: ingress
+  namespace: tenant-root
+
+tests:
+  - it: default exposure (externalIPs) renders ClusterIP Service with spec.externalIPs
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10,192.0.2.11"
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: ClusterIP
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.externalTrafficPolicy
+          value: Cluster
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.externalIPs
+          value:
+            - 192.0.2.10
+            - 192.0.2.11
+      - template: templates/nginx-ingress.yaml
+        notExists:
+          path: spec.values.ingress-nginx.controller.service.labels
+
+  - it: legacy config without expose-mode falls back to externalIPs behavior
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: ClusterIP
+
+  - it: externalIPs mode in a namespace other than publishing.ingressName renders LoadBalancer fallback without externalIPs
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    release:
+      namespace: tenant-other
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: LoadBalancer
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.externalTrafficPolicy
+          value: Local
+      - template: templates/nginx-ingress.yaml
+        notExists:
+          path: spec.values.ingress-nginx.controller.service.externalIPs
+
+  - it: loadBalancer mode renders LoadBalancer Service without externalIPs on the Service
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10,192.0.2.11"
+        expose-mode: loadBalancer
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: LoadBalancer
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.externalTrafficPolicy
+          value: Local
+      - template: templates/nginx-ingress.yaml
+        notExists:
+          path: spec.values.ingress-nginx.controller.service.labels
+      - template: templates/nginx-ingress.yaml
+        notExists:
+          path: spec.values.ingress-nginx.controller.service.externalIPs
+
+  - it: loadBalancer mode without externalIPs fails chart render with explicit message
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: ""
+        expose-mode: loadBalancer
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        failedTemplate:
+          errorMessage: "publishing.exposure=loadBalancer requires publishing.externalIPs to contain at least one non-empty address: the CiliumLoadBalancerIPPool has nothing to advertise and the Service would stay in <pending>."
+
+  - it: unknown exposure mode is rejected with a clear error (case-sensitive enum)
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        expose-mode: LoadBalancer
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        failedTemplate:
+          errorMessage: "unknown publishing.exposure mode \"LoadBalancer\": must be \"externalIPs\" or \"loadBalancer\""
+
+  - it: another typo in exposure mode also fails
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        expose-mode: loadbalancer
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        failedTemplate:
+          errorMessage: "unknown publishing.exposure mode \"loadbalancer\": must be \"externalIPs\" or \"loadBalancer\""
+
+  - it: loadBalancer mode in a namespace other than publishing.ingressName falls back to LoadBalancer Service without pool
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        expose-mode: loadBalancer
+    release:
+      namespace: tenant-other
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: LoadBalancer
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.externalTrafficPolicy
+          value: Local
+      - template: templates/nginx-ingress.yaml
+        notExists:
+          path: spec.values.ingress-nginx.controller.service.labels
+      - template: templates/nginx-ingress.yaml
+        notExists:
+          path: spec.values.ingress-nginx.controller.service.externalIPs
+
+  - it: loadBalancer mode with only-empty externalIPs fails chart render (comma-only input)
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: ",,"
+        expose-mode: loadBalancer
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        failedTemplate:
+          errorMessage: "publishing.exposure=loadBalancer requires publishing.externalIPs to contain at least one non-empty address: the CiliumLoadBalancerIPPool has nothing to advertise and the Service would stay in <pending>."
+
+  - it: externalIPs mode also filters out empty entries (trailing comma)
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10,"
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: spec.values.ingress-nginx.controller.service.externalIPs
+          value:
+            - 192.0.2.10

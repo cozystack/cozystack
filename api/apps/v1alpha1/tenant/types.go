@@ -29,6 +29,9 @@ type ConfigSpec struct {
 	// Deploy own Ingress Controller.
 	// +kubebuilder:default:=false
 	Ingress bool `json:"ingress"`
+	// Deploy own Gateway API Gateway (backed by Cilium Gateway API controller).
+	// +kubebuilder:default:=false
+	Gateway bool `json:"gateway"`
 	// Deploy own SeaweedFS.
 	// +kubebuilder:default:=false
 	Seaweedfs bool `json:"seaweedfs"`

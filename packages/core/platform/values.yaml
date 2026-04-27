@@ -45,9 +45,53 @@ publishing:
     - cdi-uploadproxy
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
+  # Exposure mode for the ingress-nginx Service. When "externalIPs" (current
+  # default) is selected, the Service is created as ClusterIP with
+  # Service.spec.externalIPs set from publishing.externalIPs. When
+  # "loadBalancer" is selected, the Service is type: LoadBalancer and a
+  # CiliumLoadBalancerIPPool makes those same addresses allocatable via LB IPAM.
+  #
+  # Service.spec.externalIPs is deprecated upstream in Kubernetes v1.36
+  # (KEP-5707). The AllowServiceExternalIPs feature gate is expected to default
+  # to false around v1.40 and the implementation removed around v1.43 — switch
+  # to "loadBalancer" before upgrading past v1.40.
+  #
+  # Caveats for the "loadBalancer" mode:
+  #   - publishing.externalIPs must contain at least one non-empty address,
+  #     otherwise the chart render fails with an explicit error (a LoadBalancer
+  #     Service without a pool would sit in <pending> forever).
+  #   - The ingress-nginx Service is created with externalTrafficPolicy: Local
+  #     to preserve the client source IP. Traffic arriving on a node that does
+  #     not host an ingress-nginx pod is dropped, so the external IP must be
+  #     routed to a node that runs the ingress pod (floating IP / keepalived /
+  #     upstream router / podAntiAffinity).
+  #   - Cilium does NOT announce the IP on its own unless L2 announcements or
+  #     BGP are enabled in the Cilium values (disabled by default in Cozystack).
+  #     This mode assumes the operator already routes the externalIPs to a
+  #     cluster node; enabling announcements is out of scope for this setting.
+  #   - Switching this value on a running cluster causes the ingress-nginx
+  #     Service to be recreated (the HelmRelease has upgrade.force: true and
+  #     the Service kind changes between ClusterIP and LoadBalancer). Expect a
+  #     brief interruption of ingress traffic during the flip.
+  #
+  # Scope: this setting only controls the ingress-nginx Service. Other
+  # cozystack components that currently write Service.spec.externalIPs directly
+  # (e.g. the vpn app at packages/apps/vpn/templates/service.yaml) are NOT
+  # migrated by flipping this value and must be addressed separately before
+  # the AllowServiceExternalIPs feature gate flips to off in ~v1.40.
+  exposure: externalIPs # "externalIPs" or "loadBalancer"
   certificates:
     solver: http01 # "http01" or "dns01"
     issuerName: letsencrypt-prod
+    # Rate-limit note: every tenant with gateway=true issues one
+    # Certificate for its wildcard + apex hostnames. If many tenants share
+    # the same apex domain with issuerName=letsencrypt-prod, the cluster
+    # can hit the Let's Encrypt limits (50 certs / registered domain /
+    # week, 5 duplicate certs / week, 300 new orders / account / 3h).
+    # Use letsencrypt-stage for non-production clusters or gate the
+    # number of certificates per tenant via tenant.spec.resourceQuotas
+    # with count/certificates.cert-manager.io. See
+    # https://letsencrypt.org/docs/rate-limits/.
 # Authentication configuration
 authentication:
   oidc:
@@ -59,6 +103,42 @@ authentication:
     # userinfo, logout) through this URL while keeping browser redirects on the external URL.
     # Example: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
     keycloakInternalUrl: ""
+# Gateway API configuration
+gateway:
+  # Enable Gateway API support across the platform. When true:
+  #   - cert-manager ClusterIssuers use an http01.gatewayHTTPRoute solver
+  #     that attaches to the root tenant's Gateway, so Certificate issuance
+  #     works for tenants whose ingress is via Gateway API rather than
+  #     ingress-nginx.
+  #   - Exposed services (dashboard, keycloak, harbor, bucket, grafana,
+  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an
+  #     HTTPRoute attached to the tenant's Gateway.
+  # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
+  # materialises the Gateway itself. This flag only controls platform-wide
+  # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
+  enabled: false
+  # Namespaces that are allowed to attach HTTPRoute or TLSRoute to a tenant
+  # Gateway. The publishing tenant namespace is always included implicitly.
+  # Additional entries must be the exact namespace name (matched on the
+  # built-in kubernetes.io/metadata.name label). Tenants not on this list
+  # cannot attach a route to somebody else's Gateway, which prevents
+  # hostname hijacking across tenants.
+  #
+  # The `default` namespace is included because the Kubernetes API's
+  # TLSRoute (shipped by the cozystack-api package) has to live next to
+  # the `kubernetes` Service it points at, which is always in `default`.
+  attachedNamespaces:
+    - cozy-cert-manager
+    - cozy-dashboard
+    - cozy-keycloak
+    - cozy-system
+    - cozy-harbor
+    - cozy-bucket
+    - cozy-kubevirt
+    - cozy-kubevirt-cdi
+    - cozy-monitoring
+    - cozy-linstor-gui
+    - default
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

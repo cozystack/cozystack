@@ -1,0 +1,108 @@
+{{- $host := (index .Values._namespace "host") | default "" }}
+{{- if not $host }}
+{{- fail "_namespace.host is empty — the tenant has no apex domain. Either set tenant.spec.host on this tenant or inherit it from a parent that has host set." }}
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ trimPrefix "tenant-" .Release.Namespace }}-gateway-tls
+spec:
+  secretName: {{ trimPrefix "tenant-" .Release.Namespace }}-gateway-tls
+  issuerRef:
+    name: gateway
+    kind: Issuer
+  dnsNames:
+  - {{ $host | quote }}
+  - {{ printf "*.%s" $host | quote }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cozystack
+  labels:
+    cozystack.io/gateway: {{ .Release.Namespace }}
+spec:
+  gatewayClassName: {{ .Values.gatewayClassName | quote }}
+  listeners:
+  {{- $extraNs := list }}
+  {{- range splitList "," ((index .Values._cluster "gateway-attached-namespaces") | default "") }}
+    {{- $ns := . | trim }}
+    {{- if $ns }}
+      {{- $extraNs = append $extraNs $ns }}
+    {{- end }}
+  {{- end }}
+  {{- $allowedNamespaces := concat (list .Release.Namespace) $extraNs | uniq }}
+  {{- $allowedNamespacesSelector := dict "matchExpressions" (list (dict
+        "key" "kubernetes.io/metadata.name"
+        "operator" "In"
+        "values" $allowedNamespaces)) }}
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: {{ printf "*.%s" $host | quote }}
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: {{ trimPrefix "tenant-" .Release.Namespace }}-gateway-tls
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
+  - name: https-apex
+    protocol: HTTPS
+    port: 443
+    hostname: {{ $host | quote }}
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: {{ trimPrefix "tenant-" .Release.Namespace }}-gateway-tls
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
+  {{- $exposedServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+  {{- range .Values.tlsPassthroughServices }}
+    {{- $svc := . }}
+    {{- if has $svc $exposedServices }}
+  - name: {{ printf "tls-%s" $svc | quote }}
+    protocol: TLS
+    port: 443
+    hostname: {{ printf "%s.%s" $svc $host | quote }}
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      kinds:
+      - group: gateway.networking.k8s.io
+        kind: TLSRoute
+      namespaces:
+        from: Selector
+        selector:
+          {{- toYaml $allowedNamespacesSelector | nindent 10 }}
+    {{- end }}
+  {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-to-https-redirect
+spec:
+  parentRefs:
+  - name: cozystack
+    sectionName: http
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        statusCode: 301
