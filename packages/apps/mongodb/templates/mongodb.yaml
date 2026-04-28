@@ -99,7 +99,13 @@ spec:
       podDisruptionBudget:
         maxUnavailable: 1
       expose:
+        {{- if .Values.external }}
+        enabled: true
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+        {{- else }}
         enabled: false
+        {{- end }}
     {{- end }}
 
   {{- if .Values.users }}
