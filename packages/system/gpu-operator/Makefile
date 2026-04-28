@@ -8,4 +8,4 @@ update:
 	rm -rf charts
 	helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
 	helm repo update nvidia
-	helm pull nvidia/gpu-operator --untar --untardir charts --version v26.3.0
+	helm pull nvidia/gpu-operator --untar --untardir charts --version v26.3.1

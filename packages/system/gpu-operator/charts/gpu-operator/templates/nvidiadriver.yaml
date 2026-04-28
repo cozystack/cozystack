@@ -78,6 +78,9 @@ spec:
   {{- if .Values.driver.args }}
   args: {{ toYaml .Values.driver.args | nindent 6 }}
   {{- end }}
+  {{- if .Values.driver.hostNetwork }}
+  hostNetwork: {{ .Values.driver.hostNetwork }}
+  {{- end }}
   {{- if .Values.gds.enabled }}
   gds:
     enabled: {{ .Values.gds.enabled }}

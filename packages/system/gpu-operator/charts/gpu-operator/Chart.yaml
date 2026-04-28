@@ -1,5 +1,5 @@
 apiVersion: v2
-appVersion: v26.3.0
+appVersion: v26.3.1
 dependencies:
 - condition: nfd.enabled
   name: node-feature-discovery
@@ -20,4 +20,4 @@ kubeVersion: '>= 1.16.0-0'
 name: gpu-operator
 sources:
 - https://github.com/NVIDIA/gpu-operator
-version: v26.3.0
+version: v26.3.1

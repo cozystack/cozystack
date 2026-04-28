@@ -85,6 +85,9 @@ spec:
     {{- if .Values.validator.args }}
     args: {{ toYaml .Values.validator.args | nindent 6 }}
     {{- end }}
+    {{- if .Values.validator.hostNetwork }}
+    hostNetwork: {{ .Values.validator.hostNetwork }}
+    {{- end }}
     {{- if .Values.validator.plugin }}
     plugin:
       {{- if .Values.validator.plugin.env }}
@@ -253,6 +256,9 @@ spec:
         timeoutSeconds: {{ .Values.driver.upgradePolicy.drain.timeoutSeconds }}
         deleteEmptyDir: {{ .Values.driver.upgradePolicy.drain.deleteEmptyDir | default false}}
     {{- end }}
+    {{- if .Values.driver.hostNetwork }}
+    hostNetwork: {{ .Values.driver.hostNetwork }}
+    {{- end }}
   vgpuManager:
     enabled: {{ .Values.vgpuManager.enabled }}
     {{- if .Values.vgpuManager.repository }}
@@ -281,6 +287,9 @@ spec:
     {{- end }}
     {{- if .Values.vgpuManager.kernelModuleConfig }}
     kernelModuleConfig: {{ toYaml .Values.vgpuManager.kernelModuleConfig | nindent 6 }}
+    {{- end }}
+    {{- if .Values.vgpuManager.hostNetwork }}
+    hostNetwork: {{ .Values.vgpuManager.hostNetwork }}
     {{- end }}
     driverManager:
       {{- if .Values.vgpuManager.driverManager.repository }}
@@ -327,6 +336,9 @@ spec:
     {{- if .Values.kataManager.args }}
     args: {{ toYaml .Values.kataManager.args | nindent 6 }}
     {{- end }}
+    {{- if .Values.kataManager.hostNetwork }}
+    hostNetwork: {{ .Values.kataManager.hostNetwork }}
+    {{- end }}
   vfioManager:
     enabled: {{ .Values.vfioManager.enabled }}
     {{- if .Values.vfioManager.repository }}
@@ -369,6 +381,9 @@ spec:
       {{- if .Values.vfioManager.driverManager.env }}
       env: {{ toYaml .Values.vfioManager.driverManager.env | nindent 8 }}
       {{- end }}
+    {{- if .Values.vfioManager.hostNetwork }}
+    hostNetwork: {{ .Values.vfioManager.hostNetwork }}
+    {{- end }}
   vgpuDeviceManager:
     enabled: {{ .Values.vgpuDeviceManager.enabled }}
     {{- if .Values.vgpuDeviceManager.repository }}
@@ -398,6 +413,9 @@ spec:
     {{- if .Values.vgpuDeviceManager.config }}
     config: {{ toYaml .Values.vgpuDeviceManager.config | nindent 6 }}
     {{- end  }}
+    {{- if .Values.vgpuDeviceManager.hostNetwork }}
+    hostNetwork: {{ .Values.vgpuDeviceManager.hostNetwork }}
+    {{- end }}
   ccManager:
     enabled: {{ .Values.ccManager.enabled }}
     defaultMode: {{ .Values.ccManager.defaultMode | quote }}
@@ -425,6 +443,9 @@ spec:
     {{- if .Values.ccManager.args }}
     args: {{ toYaml .Values.ccManager.args | nindent 6 }}
     {{- end }}
+    {{- if .Values.ccManager.hostNetwork }}
+    hostNetwork: {{ .Values.ccManager.hostNetwork }}
+    {{- end }}
   toolkit:
     enabled: {{ .Values.toolkit.enabled }}
     {{- if .Values.toolkit.repository }}
@@ -450,6 +471,9 @@ spec:
     {{- end }}
     {{- if .Values.toolkit.installDir }}
     installDir: {{ .Values.toolkit.installDir }}
+    {{- end }}
+    {{- if .Values.toolkit.hostNetwork }}
+    hostNetwork: {{ .Values.toolkit.hostNetwork }}
     {{- end }}
   devicePlugin:
     enabled: {{ .Values.devicePlugin.enabled }}
@@ -482,6 +506,9 @@ spec:
       name: {{ .Values.devicePlugin.config.name | quote }}
       default: {{ .Values.devicePlugin.config.default | quote }}
     {{- end }}
+    {{- if .Values.devicePlugin.hostNetwork }}
+    hostNetwork: {{ .Values.devicePlugin.hostNetwork }}
+    {{- end }}
   dcgm:
     enabled: {{ .Values.dcgm.enabled }}
     {{- if .Values.dcgm.repository }}
@@ -507,6 +534,9 @@ spec:
     {{- end }}
     {{- if .Values.dcgm.args }}
     args: {{ toYaml .Values.dcgm.args | nindent 6 }}
+    {{- end }}
+    {{- if .Values.dcgm.hostNetwork }}
+    hostNetwork: {{ .Values.dcgm.hostNetwork }}
     {{- end }}
   dcgmExporter:
     enabled: {{ .Values.dcgmExporter.enabled }}
@@ -579,6 +609,9 @@ spec:
     {{- if .Values.gfd.args }}
     args: {{ toYaml .Values.gfd.args | nindent 6 }}
     {{- end }}
+    {{- if .Values.gfd.hostNetwork }}
+    hostNetwork: {{ .Values.gfd.hostNetwork }}
+    {{- end }}
   migManager:
     enabled: {{ .Values.migManager.enabled }}
     {{- if .Values.migManager.repository }}
@@ -615,6 +648,9 @@ spec:
     {{- if .Values.migManager.gpuClientsConfig }}
     gpuClientsConfig: {{ toYaml .Values.migManager.gpuClientsConfig | nindent 6 }}
     {{- end }}
+    {{- if .Values.migManager.hostNetwork }}
+    hostNetwork: {{ .Values.migManager.hostNetwork }}
+    {{- end }}
   nodeStatusExporter:
     enabled: {{ .Values.nodeStatusExporter.enabled }}
     {{- if .Values.nodeStatusExporter.repository }}
@@ -638,6 +674,9 @@ spec:
     {{- end }}
     {{- if .Values.nodeStatusExporter.args }}
     args: {{ toYaml .Values.nodeStatusExporter.args | nindent 6 }}
+    {{- end }}
+    {{- if .Values.nodeStatusExporter.hostNetwork }}
+    hostNetwork: {{ .Values.nodeStatusExporter.hostNetwork }}
     {{- end }}
   {{- if .Values.gds }}
   gds:
@@ -721,6 +760,9 @@ spec:
     {{- if .Values.sandboxDevicePlugin.args }}
     args: {{ toYaml .Values.sandboxDevicePlugin.args | nindent 6 }}
     {{- end }}
+    {{- if .Values.sandboxDevicePlugin.hostNetwork }}
+    hostNetwork: {{ .Values.sandboxDevicePlugin.hostNetwork }}
+    {{- end }}
   kataSandboxDevicePlugin:
     {{- if ne .Values.kataSandboxDevicePlugin.enabled nil }}
     enabled: {{ .Values.kataSandboxDevicePlugin.enabled }}
@@ -748,4 +790,7 @@ spec:
     {{- end }}
     {{- if .Values.kataSandboxDevicePlugin.args }}
     args: {{ toYaml .Values.kataSandboxDevicePlugin.args | nindent 6 }}
+    {{- end }}
+    {{- if .Values.kataSandboxDevicePlugin.hostNetwork }}
+    hostNetwork: {{ .Values.kataSandboxDevicePlugin.hostNetwork }}
     {{- end }}

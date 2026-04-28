@@ -61,6 +61,7 @@ validator:
   env: []
   args: []
   resources: {}
+  hostNetwork: false
   plugin:
     env: []
 
@@ -204,6 +205,7 @@ driver:
     name: ""
   # Name of Kubernetes Secret which contains secrets to be passed in as environment variables
   secretEnv: ""
+  hostNetwork: false
 
 toolkit:
   enabled: true
@@ -215,6 +217,7 @@ toolkit:
   env: []
   resources: {}
   installDir: "/usr/local/nvidia"
+  hostNetwork: false
 
 devicePlugin:
   enabled: true
@@ -259,6 +262,7 @@ devicePlugin:
   mps:
     # MPS root path on the host
     root: "/run/nvidia/mps"
+  hostNetwork: false
 
 # standalone dcgm hostengine
 dcgm:
@@ -271,6 +275,7 @@ dcgm:
   args: []
   env: []
   resources: {}
+  hostNetwork: false
 
 dcgmExporter:
   enabled: true
@@ -330,6 +335,7 @@ gfd:
   imagePullSecrets: []
   env: []
   resources: {}
+  hostNetwork: false
 
 migManager:
   enabled: true
@@ -392,6 +398,7 @@ migManager:
     data: {}
   gpuClientsConfig:
     name: ""
+  hostNetwork: false
 
 nodeStatusExporter:
   enabled: false
@@ -402,6 +409,7 @@ nodeStatusExporter:
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   resources: {}
+  hostNetwork: false
 
 gds:
   enabled: false
@@ -417,7 +425,7 @@ gdrcopy:
   enabled: false
   repository: nvcr.io/nvidia/cloud-native
   image: gdrdrv
-  version: "v2.5.1"
+  version: "v2.5.2"
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   env: []
@@ -443,6 +451,7 @@ vgpuManager:
    # kernel module configuration for vGPU manager
   kernelModuleConfig:
     name: ""
+  hostNetwork: false
 
 vgpuDeviceManager:
   enabled: true
@@ -455,6 +464,7 @@ vgpuDeviceManager:
   config:
     name: ""
     default: "default"
+  hostNetwork: false
 
 vfioManager:
   enabled: true
@@ -473,6 +483,7 @@ vfioManager:
     version: v0.10.0
     imagePullPolicy: IfNotPresent
     env: []
+  hostNetwork: false
 
 kataManager:
   enabled: false
@@ -481,6 +492,7 @@ kataManager:
   imagePullSecrets: []
   env: []
   resources: {}
+  hostNetwork: false
 
 sandboxDevicePlugin:
   enabled: true
@@ -492,31 +504,31 @@ sandboxDevicePlugin:
   args: []
   env: []
   resources: {}
+  hostNetwork: false
 
 # Kata sandbox device plugin (used when sandboxWorkloads.mode is "kata").
 kataSandboxDevicePlugin:
   enabled: true
   repository: nvcr.io/nvidia/cloud-native
   image: nvidia-sandbox-device-plugin
-  version: "v0.0.2"
+  version: "v0.0.3"
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   args: []
   env: []
   resources: {}
+  hostNetwork: false
 
 ccManager:
   enabled: true
   defaultMode: "on"
   repository: nvcr.io/nvidia/cloud-native
   image: k8s-cc-manager
-  version: v0.3.0
+  version: v0.4.0
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
-  env:
-    - name: CC_CAPABLE_DEVICE_IDS
-      value: "0x2339,0x2331,0x2330,0x2324,0x2322,0x233d"
   resources: {}
+  hostNetwork: false
 
 # Array of extra K8s manifests to deploy
 # Supports use of custom Helm templates
