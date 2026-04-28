@@ -73,6 +73,9 @@ spec:
         {{- if .Values.cozystackOperator.platformSourceRef }}
         - --platform-source-ref={{ .Values.cozystackOperator.platformSourceRef }}
         {{- end }}
+        {{- if .Values.cozystackOperator.platformSourceSecret }}
+        - --platform-source-secret={{ .Values.cozystackOperator.platformSourceSecret }}
+        {{- end }}
         {{- if eq .Values.cozystackOperator.variant "talos" }}
         env:
         # Talos KubePrism endpoint
