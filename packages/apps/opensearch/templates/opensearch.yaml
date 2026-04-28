@@ -40,7 +40,7 @@ spec:
     tls:
       enable: true
       generate: true
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.dashboards.resourcesPreset | default "medium") .Values.dashboards.resources $) | nindent 6 }}
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.dashboards.resourcesPreset | default "s1.medium") .Values.dashboards.resources $) | nindent 6 }}
   {{- end }}
   nodePools:
     - component: nodes

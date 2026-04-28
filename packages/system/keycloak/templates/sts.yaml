@@ -112,7 +112,7 @@ spec:
           args:
             - start
           env:
-            {{- with (fromYaml (include "cozy-lib.resources.defaultingSanitize" (list "small" (default dict .Values.resources.limits) $))) }}
+            {{- with (fromYaml (include "cozy-lib.resources.defaultingSanitize" (list "s1.small" (default dict .Values.resources.limits) $))) }}
             {{- with (mergeOverwrite . $.Values.resources ) }}
             - name: JAVA_OPTS_KC_HEAP
               value: {{ include "cozy-lib.resources.javaHeap" . }}
