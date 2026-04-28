@@ -66,12 +66,12 @@ data:
     DCGM_FI_DEV_ROW_REMAP_FAILURE,           gauge,   Whether remapping of rows has failed.
 
     # Throttle / violation counters (crucial for SLA and tenant monitoring)
-    DCGM_FI_DEV_POWER_VIOLATION,       counter, Throttling duration due to power constraints (in us).
-    DCGM_FI_DEV_THERMAL_VIOLATION,     counter, Throttling duration due to thermal constraints (in us).
-    DCGM_FI_DEV_SYNC_BOOST_VIOLATION,  counter, Throttling duration due to sync-boost constraints (in us).
-    DCGM_FI_DEV_BOARD_LIMIT_VIOLATION, counter, Throttling duration due to board limit constraints (in us).
-    DCGM_FI_DEV_LOW_UTIL_VIOLATION,    counter, Throttling duration due to low utilization (in us).
-    DCGM_FI_DEV_RELIABILITY_VIOLATION, counter, Throttling duration due to reliability constraints (in us).
+    DCGM_FI_DEV_POWER_VIOLATION,       counter, Throttling duration due to power constraints (us per docs; ns on DCGM 3.x).
+    DCGM_FI_DEV_THERMAL_VIOLATION,     counter, Throttling duration due to thermal constraints (us per docs; ns on DCGM 3.x).
+    DCGM_FI_DEV_SYNC_BOOST_VIOLATION,  counter, Throttling duration due to sync-boost constraints (us per docs; ns on DCGM 3.x).
+    DCGM_FI_DEV_BOARD_LIMIT_VIOLATION, counter, Throttling duration due to board limit constraints (us per docs; ns on DCGM 3.x).
+    DCGM_FI_DEV_LOW_UTIL_VIOLATION,    counter, Throttling duration due to low utilization (us per docs; ns on DCGM 3.x).
+    DCGM_FI_DEV_RELIABILITY_VIOLATION, counter, Throttling duration due to reliability constraints (us per docs; ns on DCGM 3.x).
 
     # NVLink — DCGM silently drops this metric on GPUs without NVLink, so
     # enabling it unconditionally is safe and keeps this file reusable
