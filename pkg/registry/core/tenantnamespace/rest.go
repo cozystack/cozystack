@@ -156,6 +156,18 @@ func (r *REST) Get(
 // -----------------------------------------------------------------------------
 
 func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
+	// Extract user identity once for the lifetime of the watch — it does not
+	// change between events and rebuilding it per event is wasteful.
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewUnauthorized("user missing in context")
+	}
+	username := u.GetName()
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
+	}
+
 	nsList := &corev1.NamespaceList{}
 
 	// Build upstream watch options with field and label selectors
@@ -224,10 +236,11 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 				}
 			}
 
-			// Check if user has access to this namespace
-			hasAccess, err := r.hasAccessToNamespace(ctx, ns.Name)
+			// Check if user has access to this namespace using the cached
+			// identity — avoids re-extracting user/groups on every event.
+			hasAccess, err := r.hasAccessToNamespaceForUser(ctx, ns.Name, username, groups)
 			if err != nil {
-				klog.Errorf("Failed to check access for namespace %s in watch: %v", ns.Name, err)
+				klog.ErrorS(err, "Failed to check access for namespace in watch", "namespace", ns.Name)
 				continue
 			}
 			if !hasAccess {
@@ -437,12 +450,22 @@ func (r *REST) hasAccessToNamespace(
 	if !ok {
 		return false, fmt.Errorf("user missing in context")
 	}
-
-	// Check privileged groups
 	groups := make(map[string]struct{})
 	for _, group := range u.GetGroups() {
 		groups[group] = struct{}{}
 	}
+	return r.hasAccessToNamespaceForUser(ctx, namespace, u.GetName(), groups)
+}
+
+// hasAccessToNamespaceForUser is the inner check that does not re-extract user
+// identity from context. Use this in hot paths (e.g. the Watch loop) where the
+// caller has already cached the user name and groups.
+func (r *REST) hasAccessToNamespaceForUser(
+	ctx context.Context,
+	namespace, username string,
+	groups map[string]struct{},
+) (bool, error) {
+	// Check privileged groups
 	if _, ok := groups["system:masters"]; ok {
 		return true, nil
 	}
@@ -461,7 +484,7 @@ func (r *REST) hasAccessToNamespace(
 	for i := range rbs.Items {
 		for j := range rbs.Items[i].Subjects {
 			subj := rbs.Items[i].Subjects[j]
-			if matchesSubject(subj, rbs.Items[i].Namespace, u.GetName(), groups) {
+			if matchesSubject(subj, rbs.Items[i].Namespace, username, groups) {
 				return true, nil
 			}
 		}
