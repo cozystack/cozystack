@@ -39,6 +39,23 @@ tests:
         documentIndex: 0
 
   ##################
+  # Finalizers     #
+  ##################
+
+  - it: sets delete-psmdb-pvc finalizer for automatic PVC cleanup
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pvc
+        documentIndex: 0
+
+  ##################
   # CR Version     #
   ##################
 
