@@ -37,18 +37,36 @@ Run `helm upgrade` after MongoDB is ready to populate the credentials secret wit
 
 ### Data lifecycle
 
-When the MongoDB release is uninstalled, all storage and credentials are reclaimed:
+When the MongoDB release is uninstalled, the operator finalizers reclaim release-scoped resources:
 
-- All PVCs backing the replica set storage (via the `percona.com/delete-psmdb-pvc` finalizer on the `PerconaServerMongoDB` CR).
-- Operator-managed secrets deleted as part of the same finalizer flow:
+**Reclaimed by the `percona.com/delete-psmdb-pvc` finalizer:**
+
+- All PVCs backing the replica set storage. Whether the underlying PersistentVolume and on-disk data are actually deleted depends on the StorageClass `reclaimPolicy` (`Delete` removes them, `Retain` leaves them for manual cleanup).
+- Operator-managed secrets:
+  - `<release>-percona-server-mongodb-users` — operator users credentials
   - `internal-<release>` — internal operator state
-  - `internal-<release>-users` — operator-managed user credentials
+  - `internal-<release>-users` — operator-internal users data
   - `<release>-mongodb-encryption-key` — at-rest encryption key
-  - `percona-server-mongodb-users` — global operator users secret (shared default name; if a tenant has a Secret with this exact name in the namespace, it will also be deleted)
-- Helm-managed secrets removed by the standard `helm uninstall`:
-  - `<release>-credentials` — connection string for application code
-  - `<release>-user-<username>` — per-user passwords
-  - `<release>-s3-creds` — backup destination credentials (if backups are configured)
+
+**Reclaimed by `helm uninstall`:**
+
+- `<release>-credentials` — connection string for application code
+- `<release>-user-<username>` — per-user passwords
+- `<release>-s3-creds` — backup destination credentials (if backups are configured)
+
+**Not reclaimed automatically:**
+
+- TLS secrets `<release>-ssl` and `<release>-ssl-internal` (issued by cert-manager) remain in the namespace after uninstall. Delete them manually if no longer needed.
+
+**Recovery from a stuck deletion:**
+
+If the `psmdb-operator` is uninstalled before MongoDB CRs are deleted, the finalizers cannot run and the `PerconaServerMongoDB` CR hangs in `Terminating`. To recover, clear the finalizers manually:
+
+```bash
+kubectl --namespace <namespace> patch psmdb <release> --type merge --patch '{"metadata":{"finalizers":[]}}'
+```
+
+Note that this skips the operator-driven cleanup — PVCs and operator-managed secrets will remain orphaned and must be removed manually.
 
 If you need to retain data, take a backup before deletion. Refer to the [Percona Operator for MongoDB documentation](https://docs.percona.com/percona-operator-for-mongodb/) for backup/restore workflows.
 
