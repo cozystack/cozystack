@@ -8,36 +8,13 @@
 }
 
 @test "Install Cozystack" {
-  # Install cozy-installer chart (operator installs CRDs on startup via --install-crds)
-  # Pre-create cozy-system with helm-meta annotations + managed-by label so that
-  # helm adopts it during install instead of creating a duplicate. The chart's
-  # Namespace template has helm.sh/resource-policy: keep, but on a fresh cluster:
-  #   - WITH --create-namespace: helm pre-creates ns without helm metadata, then
-  #     the chart's own Namespace apply fails with "already exists".
-  #   - WITHOUT --create-namespace: helm fails to write its release secret to
-  #     cozy-system because the ns doesn't exist yet.
-  # Pre-creating with the right meta lets helm adopt the existing ns cleanly.
-  # The 3x retry was hiding this — second attempt saw a partial release and
-  # took the upgrade path, which doesn't strict-create the namespace.
-  kubectl apply -f - <<'EOF'
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cozy-system
-  labels:
-    app.kubernetes.io/managed-by: Helm
-    cozystack.io/system: "true"
-    cozystack.io/deletion-protected: "true"
-    pod-security.kubernetes.io/enforce: privileged
-  annotations:
-    meta.helm.sh/release-name: installer
-    meta.helm.sh/release-namespace: cozy-system
-    helm.sh/resource-policy: keep
-EOF
-
+  # Install cozy-installer chart (operator installs CRDs on startup via --install-crds).
+  # The chart's pre-install hook patches PSA + cozystack labels onto cozy-system
+  # after --create-namespace bootstraps it.
   helm upgrade installer packages/core/installer \
     --install \
     --namespace cozy-system \
+    --create-namespace \
     --set cozystackOperator.helmReleaseInterval=30s \
     --wait \
     --timeout 2m
