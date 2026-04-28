@@ -68,10 +68,39 @@ spec:
     spec:
       serviceAccountName: cozy-system-labeler
       restartPolicy: OnFailure
+      # The hook runs BEFORE Cilium / kube-ovn / any CNI is installed, so the
+      # cluster's nodes are NotReady-NoSchedule and have no pod network. Mirror
+      # the cozystack-operator deployment's scheduling: hostNetwork=true so the
+      # pod doesn't need CNI, plus the same tolerations the operator uses.
+      hostNetwork: true
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+      - key: "node.cilium.io/agent-not-ready"
+        operator: "Exists"
+      - key: "node.cloudprovider.kubernetes.io/uninitialized"
+        operator: "Exists"
       containers:
       - name: kubectl
         image: alpine/k8s:1.32.0
         imagePullPolicy: IfNotPresent
+        {{- if eq .Values.cozystackOperator.variant "talos" }}
+        env:
+        # Talos KubePrism endpoint — same as cozystack-operator uses to reach
+        # the apiserver before CNI is up.
+        - name: KUBERNETES_SERVICE_HOST
+          value: "localhost"
+        - name: KUBERNETES_SERVICE_PORT
+          value: "7445"
+        {{- else if eq .Values.cozystackOperator.variant "generic" }}
+        env:
+        - name: KUBERNETES_SERVICE_HOST
+          value: {{ required "cozystack.apiServerHost is required in generic mode" .Values.cozystack.apiServerHost | quote }}
+        - name: KUBERNETES_SERVICE_PORT
+          value: {{ .Values.cozystack.apiServerPort | quote }}
+        {{- end }}
         command:
         - kubectl
         - label
