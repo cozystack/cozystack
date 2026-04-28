@@ -11,6 +11,18 @@ cozystackOperator:
   # (operator default: 30s). Controls how fast failed install/upgrade attempts
   # are retried. Decoupled from helmReleaseInterval (healthy reconcile cadence).
   helmReleaseRetryInterval: ""
+  # When non-empty, overrides the operator's --helmrelease-install-timeout flag
+  # (operator default: 10m). Bounds individual k8s operations (job/hook/wait)
+  # during Helm install. Charts with long-running install hooks may need longer.
+  helmReleaseInstallTimeout: ""
+  # When non-empty, overrides the operator's --helmrelease-upgrade-timeout flag
+  # (operator default: 10m). Same semantics as helmReleaseInstallTimeout, for
+  # the Helm upgrade action.
+  helmReleaseUpgradeTimeout: ""
+  # When non-empty, overrides the operator's --helmrelease-max-history flag
+  # (operator default: 5). Number of release revisions Helm keeps per HR.
+  # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
+  helmReleaseMaxHistory: ""
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)
