@@ -9,10 +9,15 @@
 
 @test "Install Cozystack" {
   # Install cozy-installer chart (operator installs CRDs on startup via --install-crds)
+  # The chart declares Namespace cozy-system with helm.sh/resource-policy: keep,
+  # so do NOT pass --create-namespace. Helm v3's --create-namespace pre-creates
+  # the namespace via plain kubectl-create (without helm annotations); the
+  # subsequent chart apply then fails with "namespaces \"cozy-system\" already
+  # exists". The 3x retry was masking this — first attempt failed, second saw
+  # "release exists" and treated it as upgrade. Surfaced after dropping retry.
   helm upgrade installer packages/core/installer \
     --install \
     --namespace cozy-system \
-    --create-namespace \
     --set cozystackOperator.helmReleaseInterval=30s \
     --wait \
     --timeout 2m
