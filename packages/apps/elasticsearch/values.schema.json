@@ -1,0 +1,239 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "external": {
+      "description": "Enable external access from outside the cluster.",
+      "type": "boolean",
+      "default": false
+    },
+    "images": {
+      "description": "Container images used by the operator.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "elasticsearch"
+      ],
+      "properties": {
+        "elasticsearch": {
+          "description": "Elasticsearch image.",
+          "type": "string",
+          "default": "docker.elastic.co/elasticsearch/elasticsearch:8.17.0"
+        }
+      }
+    },
+    "kibana": {
+      "description": "Kibana configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled",
+        "replicas",
+        "resourcesPreset"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Enable Kibana deployment.",
+          "type": "boolean",
+          "default": false
+        },
+        "replicas": {
+          "description": "Number of Kibana replicas.",
+          "type": "integer",
+          "default": 1
+        },
+        "resources": {
+          "description": "Explicit CPU and memory configuration for Kibana.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "cpu": {
+              "description": "CPU available to each node.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            },
+            "memory": {
+              "description": "Memory (RAM) available to each node.",
+              "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "x-kubernetes-int-or-string": true
+            }
+          }
+        },
+        "resourcesPreset": {
+          "description": "Default sizing preset for Kibana.",
+          "type": "string",
+          "default": "medium",
+          "enum": [
+            "nano",
+            "micro",
+            "small",
+            "medium",
+            "large",
+            "xlarge",
+            "2xlarge"
+          ]
+        }
+      }
+    },
+    "nodeRoles": {
+      "description": "Node roles configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "data",
+        "ingest",
+        "master",
+        "ml"
+      ],
+      "properties": {
+        "data": {
+          "description": "Enable data role.",
+          "type": "boolean",
+          "default": true
+        },
+        "ingest": {
+          "description": "Enable ingest role.",
+          "type": "boolean",
+          "default": true
+        },
+        "master": {
+          "description": "Enable master role.",
+          "type": "boolean",
+          "default": true
+        },
+        "ml": {
+          "description": "Enable machine learning role.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "replicas": {
+      "description": "Number of Elasticsearch nodes in the cluster.",
+      "type": "integer",
+      "default": 3
+    },
+    "resources": {
+      "description": "Explicit CPU and memory configuration for each Elasticsearch node. When omitted, the preset defined in `resourcesPreset` is applied.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU available to each node.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory (RAM) available to each node.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "resourcesPreset": {
+      "description": "Default sizing preset used when `resources` is omitted. Elasticsearch requires minimum 2Gi memory.",
+      "type": "string",
+      "default": "large",
+      "enum": [
+        "nano",
+        "micro",
+        "small",
+        "medium",
+        "large",
+        "xlarge",
+        "2xlarge"
+      ]
+    },
+    "size": {
+      "description": "Persistent Volume Claim size available for application data.",
+      "default": "10Gi",
+      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "x-kubernetes-int-or-string": true
+    },
+    "storageClass": {
+      "description": "StorageClass used to store the data.",
+      "type": "string",
+      "default": ""
+    },
+    "topologySpreadPolicy": {
+      "description": "How strictly to enforce pod distribution across nodes and zones.",
+      "type": "string",
+      "default": "soft",
+      "enum": [
+        "soft",
+        "hard"
+      ]
+    },
+    "users": {
+      "description": "Custom Elasticsearch users configuration map.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "description": "Password for the user (auto-generated if omitted).",
+            "type": "string"
+          },
+          "roles": {
+            "description": "List of Elasticsearch roles.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "version": {
+      "description": "Elasticsearch major version to deploy.",
+      "type": "string",
+      "default": "v9",
+      "enum": [
+        "v9",
+        "v8",
+        "v7"
+      ]
+    }
+  }
+}

@@ -1,0 +1,473 @@
+{{- if .Values.webhook.enabled -}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "eck-operator.webhookName" . }}
+  labels:
+    {{- include "eck-operator.labels" . | nindent 4 }}
+{{- with .Values.webhook.certManagerCert }}
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/{{ . }}"
+{{- end }}
+webhooks:
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-agent-k8s-elastic-co-v1alpha1-agent
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-agent-validation-v1alpha1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - agent.k8s.elastic.co
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - agents
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-apm-k8s-elastic-co-v1-apmserver
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-apm-validation-v1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - apm.k8s.elastic.co
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - apmservers
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-apm-k8s-elastic-co-v1beta1-apmserver
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-apm-validation-v1beta1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - apm.k8s.elastic.co
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - apmservers
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-beat-k8s-elastic-co-v1beta1-beat
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-beat-validation-v1beta1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - beat.k8s.elastic.co
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - beats
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-enterprisesearch-k8s-elastic-co-v1-enterprisesearch
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-ent-validation-v1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - enterprisesearch.k8s.elastic.co
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - enterprisesearches
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-enterprisesearch-k8s-elastic-co-v1beta1-enterprisesearch
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-ent-validation-v1beta1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - enterprisesearch.k8s.elastic.co
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - enterprisesearches
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-elasticsearch-k8s-elastic-co-v1-elasticsearch
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-es-validation-v1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - elasticsearch.k8s.elastic.co
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - elasticsearches
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-elasticsearch-k8s-elastic-co-v1beta1-elasticsearch
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-es-validation-v1beta1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - elasticsearch.k8s.elastic.co
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - elasticsearches
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-ems-k8s-elastic-co-v1alpha1-mapsservers
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-ems-validation-v1alpha1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+    - apiGroups:
+        - maps.k8s.elastic.co
+      apiVersions:
+        - v1alpha1
+      operations:
+        - CREATE
+        - UPDATE
+      resources:
+        - mapsservers
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-kibana-k8s-elastic-co-v1-kibana
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-kb-validation-v1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - kibana.k8s.elastic.co
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - kibanas
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-kibana-k8s-elastic-co-v1beta1-kibana
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-kb-validation-v1beta1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+  - apiGroups:
+    - kibana.k8s.elastic.co
+    apiVersions:
+    - v1beta1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - kibanas
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-autoscaling-k8s-elastic-co-v1alpha1-elasticsearchautoscaler
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-esa-validation-v1alpha1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+    - apiGroups:
+        - autoscaling.k8s.elastic.co
+      apiVersions:
+        - v1alpha1
+      operations:
+        - CREATE
+        - UPDATE
+      resources:
+      - elasticsearchautoscalers
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-scp-k8s-elastic-co-v1alpha1-stackconfigpolicies
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-scp-validation-v1alpha1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+    - apiGroups:
+        - stackconfigpolicy.k8s.elastic.co
+      apiVersions:
+        - v1alpha1
+      operations:
+        - CREATE
+        - UPDATE
+      resources:
+      - stackconfigpolicies
+- clientConfig:
+    {{- if and (not .Values.webhook.manageCerts) (not .Values.webhook.certManagerCert) }}
+    caBundle: {{ .Values.webhook.caBundle }}
+    {{- end }}
+    service:
+      name: {{ include "eck-operator.webhookServiceName" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validate-logstash-k8s-elastic-co-v1alpha1-logstash
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+{{- with .Values.webhook.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.webhook.objectSelector }}
+  objectSelector:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+  name: elastic-logstash-validation-v1alpha1.k8s.elastic.co
+  matchPolicy: Exact
+  admissionReviewVersions: [v1]
+  sideEffects: None
+  rules:
+    - apiGroups:
+        - logstash.k8s.elastic.co
+      apiVersions:
+        - v1alpha1
+      operations:
+        - CREATE
+        - UPDATE
+      resources:
+        - logstashes
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "eck-operator.webhookServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "eck-operator.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: https
+      port: 443
+      targetPort: {{ .Values.webhook.port }}
+  selector:
+    {{- include "eck-operator.selectorLabels" . | nindent 4 }}
+{{- if .Values.webhook.manageCerts }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "eck-operator.webhookSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "eck-operator.labels" . | nindent 4 }}
+{{- end }}
+{{- end -}}
