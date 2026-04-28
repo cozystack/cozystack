@@ -1,0 +1,82 @@
+{{/*
+  Pre-install/upgrade hook that labels the cozy-system namespace with the
+  PodSecurity and cozystack identity labels. The chart no longer ships a
+  Namespace resource (helm v3 cannot adopt a namespace pre-created by
+  --create-namespace because it lacks helm meta annotations; without
+  --create-namespace, helm fails to write its release-secret because the
+  namespace does not exist yet — chicken-and-egg).
+  Install commands now use --create-namespace to bootstrap the namespace,
+  and this hook patches the labels the operator depends on (notably
+  pod-security.kubernetes.io/enforce=privileged for the host-network
+  operator pod).
+*/}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozy-system-labeler
+  namespace: cozy-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-200"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy-system-labeler
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-180"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  resourceNames: ["cozy-system"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozy-system-labeler
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-160"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+- kind: ServiceAccount
+  name: cozy-system-labeler
+  namespace: cozy-system
+roleRef:
+  kind: ClusterRole
+  name: cozy-system-labeler
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cozy-system-labeler
+  namespace: cozy-system
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-100"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      serviceAccountName: cozy-system-labeler
+      restartPolicy: OnFailure
+      containers:
+      - name: kubectl
+        image: alpine/k8s:1.32.0
+        imagePullPolicy: IfNotPresent
+        command:
+        - kubectl
+        - label
+        - --overwrite
+        - namespace
+        - cozy-system
+        - cozystack.io/system=true
+        - pod-security.kubernetes.io/enforce=privileged
