@@ -42,7 +42,7 @@ tests:
   # Finalizers     #
   ##################
 
-  - it: renders percona.com/delete-psmdb-pvc finalizer on PSMDB CR
+  - it: renders Percona finalizers on PSMDB CR
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -59,7 +59,7 @@ tests:
           content: percona.com/delete-psmdb-pods-in-order
         documentIndex: 0
 
-  - it: renders percona.com/delete-psmdb-pvc finalizer in sharded mode
+  - it: renders Percona finalizers in sharded mode
     release:
       name: test-mongodb
       namespace: tenant-test
