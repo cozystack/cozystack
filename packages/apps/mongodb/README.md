@@ -35,6 +35,15 @@ When `external: true` is enabled:
 On first install, the credentials secret will be empty until the Percona operator initializes the cluster.
 Run `helm upgrade` after MongoDB is ready to populate the credentials secret with the actual password.
 
+### Data lifecycle
+
+When the MongoDB release is uninstalled, the operator reclaims:
+
+- All PVCs backing the replica set storage (via the `percona.com/delete-psmdb-pvc` finalizer on the `PerconaServerMongoDB` CR).
+- Operator-managed user secrets associated with the cluster.
+
+If you need to retain data, take a backup before deletion. Refer to the [Percona Operator for MongoDB documentation](https://docs.percona.com/percona-operator-for-mongodb/) for backup/restore workflows.
+
 ## Parameters
 
 ### Common parameters
