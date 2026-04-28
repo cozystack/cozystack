@@ -84,6 +84,7 @@ func main() {
 	var telemetryEndpoint string
 	var telemetryInterval string
 	var helmReleaseInterval string
+	var helmReleaseRetryInterval string
 	var cozyValuesSecretName string
 	var cozyValuesSecretNamespace string
 	var cozyValuesNamespaceSelector string
@@ -112,6 +113,12 @@ func main() {
 		"Reconcile interval applied to HelmReleases created by the Package reconciler. "+
 			"Lower values speed up dependency-blocked retries (e.g. during E2E install) at the cost of "+
 			"controller load. Production default 5m matches existing behaviour.")
+	flag.StringVar(&helmReleaseRetryInterval, "helmrelease-retry-interval", "30s",
+		"Retry interval applied to Install.Strategy and Upgrade.Strategy of HelmReleases created "+
+			"by the Package reconciler. With Strategy.Name=RetryOnFailure, this controls how long the "+
+			"controller waits between failed install/upgrade attempts. Decoupled from --helmrelease-interval "+
+			"(which is the healthy reconcile cadence) so failures recover fast without polling healthy "+
+			"releases at the same fast cadence.")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
@@ -130,6 +137,11 @@ func main() {
 	hrIntervalDuration, err := time.ParseDuration(helmReleaseInterval)
 	if err != nil {
 		setupLog.Error(err, "invalid --helmrelease-interval value", "value", helmReleaseInterval)
+		os.Exit(1)
+	}
+	hrRetryIntervalDuration, err := time.ParseDuration(helmReleaseRetryInterval)
+	if err != nil {
+		setupLog.Error(err, "invalid --helmrelease-retry-interval value", "value", helmReleaseRetryInterval)
 		os.Exit(1)
 	}
 
@@ -269,9 +281,10 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client:              mgr.GetClient(),
-		Scheme:              mgr.GetScheme(),
-		HelmReleaseInterval: hrIntervalDuration,
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		HelmReleaseInterval:      hrIntervalDuration,
+		HelmReleaseRetryInterval: hrRetryIntervalDuration,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)

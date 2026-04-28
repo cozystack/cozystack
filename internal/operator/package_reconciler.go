@@ -59,8 +59,9 @@ func parseCRDPolicy(install *cozyv1alpha1.ComponentInstall) helmv2.CRDsPolicy {
 // PackageReconciler reconciles Package resources
 type PackageReconciler struct {
 	client.Client
-	Scheme              *runtime.Scheme
-	HelmReleaseInterval time.Duration
+	Scheme                   *runtime.Scheme
+	HelmReleaseInterval      time.Duration
+	HelmReleaseRetryInterval time.Duration
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=packages,verbs=get;list;watch;create;update;patch;delete
@@ -223,15 +224,22 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					Namespace: "cozy-system",
 				},
 				Install: &helmv2.Install{
-					Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
-					Remediation: &helmv2.InstallRemediation{
-						Retries: -1,
+					Timeout: &metav1.Duration{Duration: 10 * time.Minute},
+					// Strategy=RetryOnFailure (with RetryInterval) replaces the previous
+					// Remediation{Retries:-1} setup. Functionally equivalent ("retry forever
+					// on failure"), but decouples retry timing from spec.Interval so failed
+					// installs recover at HelmReleaseRetryInterval (default 30s) without
+					// also polling healthy releases at the same fast cadence.
+					Strategy: &helmv2.InstallStrategy{
+						Name:          string(helmv2.ActionStrategyRetryOnFailure),
+						RetryInterval: &metav1.Duration{Duration: r.HelmReleaseRetryInterval},
 					},
 				},
 				Upgrade: &helmv2.Upgrade{
-					Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
-					Remediation: &helmv2.UpgradeRemediation{
-						Retries: -1,
+					Timeout: &metav1.Duration{Duration: 10 * time.Minute},
+					Strategy: &helmv2.UpgradeStrategy{
+						Name:          string(helmv2.ActionStrategyRetryOnFailure),
+						RetryInterval: &metav1.Duration{Duration: r.HelmReleaseRetryInterval},
 					},
 					CRDs: parseCRDPolicy(component.Install),
 				},

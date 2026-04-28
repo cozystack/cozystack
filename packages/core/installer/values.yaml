@@ -7,6 +7,10 @@ cozystackOperator:
   # When non-empty, overrides the operator's --helmrelease-interval flag
   # (operator default: 5m). E2E sets this to 30s; production should leave empty.
   helmReleaseInterval: ""
+  # When non-empty, overrides the operator's --helmrelease-retry-interval flag
+  # (operator default: 30s). Controls how fast failed install/upgrade attempts
+  # are retried. Decoupled from helmReleaseInterval (healthy reconcile cadence).
+  helmReleaseRetryInterval: ""
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)
