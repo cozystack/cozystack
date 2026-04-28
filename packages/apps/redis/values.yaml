@@ -44,5 +44,18 @@ version: v8
 ## @section Application-specific parameters
 ##
 
+## @enum {string} MaxmemoryPolicy - Redis eviction policy when maxmemory is reached.
+## @value noeviction
+## @value allkeys-lru
+## @value allkeys-lfu
+## @value volatile-lru
+## @value volatile-lfu
+## @value allkeys-random
+## @value volatile-random
+## @value volatile-ttl
+
+## @param {MaxmemoryPolicy} maxmemoryPolicy="noeviction" - Eviction policy used when Redis reaches its memory limit.
+maxmemoryPolicy: "noeviction"
+
 ## @param {bool} authEnabled - Enable password generation.
 authEnabled: true

@@ -87,6 +87,21 @@
         "v7"
       ]
     },
+    "maxmemoryPolicy": {
+      "description": "Eviction policy used when Redis reaches its memory limit.",
+      "type": "string",
+      "default": "noeviction",
+      "enum": [
+        "noeviction",
+        "allkeys-lru",
+        "allkeys-lfu",
+        "volatile-lru",
+        "volatile-lfu",
+        "allkeys-random",
+        "volatile-random",
+        "volatile-ttl"
+      ]
+    },
     "authEnabled": {
       "description": "Enable password generation.",
       "type": "boolean",
