@@ -4,6 +4,8 @@ apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
 metadata:
   name: {{ .Release.Name }}
+  finalizers:
+    - percona.com/delete-psmdb-pvc
 spec:
   crVersion: 1.21.1
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
