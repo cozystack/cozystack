@@ -61,6 +61,9 @@ spec:
         {{- if .Values.cozystackOperator.helmReleaseInterval }}
         - --helmrelease-interval={{ .Values.cozystackOperator.helmReleaseInterval }}
         {{- end }}
+        {{- if .Values.cozystackOperator.helmReleaseRetryInterval }}
+        - --helmrelease-retry-interval={{ .Values.cozystackOperator.helmReleaseRetryInterval }}
+        {{- end }}
         - --platform-source-name=cozystack-platform
         - --platform-source-url={{ .Values.cozystackOperator.platformSourceUrl }}
         {{- if .Values.cozystackOperator.platformSourceRef }}
