@@ -462,9 +462,9 @@ func TestGet_WithoutAccess(t *testing.T) {
 		t.Errorf("expected nil object, got %v", obj)
 	}
 
-	// Verify it returns NotFound (not Forbidden) to prevent enumeration
-	if !apierrors.IsNotFound(err) {
-		t.Errorf("expected NotFound error, got %v", err)
+	// Verify it returns Forbidden to follow standard K8s RBAC behavior
+	if !apierrors.IsForbidden(err) {
+		t.Errorf("expected Forbidden error, got %v", err)
 	}
 }
 
