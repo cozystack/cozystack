@@ -20,8 +20,11 @@ spec:
   interval: 5m
   timeout: 30m
   install:
+    # 10 retries provides reasonable tolerance for transient failures
+    # (network issues, temporary API unavailability, resource contention)
+    # while avoiding infinite loops. Total: 10 retries × 30m = 5 hours maximum
     remediation:
-      retries: -1
+      retries: 10
   upgrade:
     force: true
     remediation:
