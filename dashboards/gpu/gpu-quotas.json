@@ -38,6 +38,7 @@
         }
       ],
       "title": "GPU allocatable",
+      "description": "Total GPU capacity the cluster can schedule to pods.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -91,6 +92,7 @@
         }
       ],
       "title": "GPU requested",
+      "description": "Sum of GPU requests across all pods cluster-wide, including system namespaces.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -148,6 +150,7 @@
         }
       ],
       "title": "Allocation ratio",
+      "description": "Percentage of allocatable GPUs currently requested by pods.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -213,6 +216,7 @@
         }
       ],
       "title": "Pending pods (GPU)",
+      "description": "Pods requesting GPUs that are stuck in Pending state — indicates capacity shortage.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -284,6 +288,7 @@
         }
       ],
       "title": "GPU requested per namespace",
+      "description": "GPU allocation breakdown by namespace — spot top consumers at a glance.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -352,6 +357,7 @@
         }
       ],
       "title": "GPU allocated over time",
+      "description": "Requested vs allocatable GPUs over time — shows allocation pressure trends.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
@@ -438,6 +444,7 @@
         }
       ],
       "title": "Pods requesting GPU",
+      "description": "Per-pod GPU requests and limits with scheduling status — Running or Pending.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
