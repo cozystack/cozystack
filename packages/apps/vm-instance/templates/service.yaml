@@ -10,6 +10,9 @@ metadata:
     service.kubernetes.io/service-proxy-name: "cozy-proxy"
   annotations:
     networking.cozystack.io/wholeIP: {{ ternary "true" "false" (eq .Values.externalMethod "WholeIP") | quote }}
+    {{- if eq .Values.externalMethod "PortList" }}
+    networking.cozystack.io/allowICMP: {{ ternary "true" "false" (ne .Values.externalAllowICMP false) | quote }}
+    {{- end }}
 {{- end }}
 spec:
   type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
