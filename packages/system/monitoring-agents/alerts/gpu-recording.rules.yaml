@@ -1,0 +1,172 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-gpu-recording.rules
+spec:
+  groups:
+    - name: gpu.recording.cluster.1m
+      interval: 1m
+      params: {}
+      rules:
+        - record: cluster:gpu_count:total
+          expr: count(group by (UUID) (DCGM_FI_DEV_GPU_UTIL))
+        # Kube-allocated GPU count: GPUs requested by *active* pods — Pending
+        # and Running only. Source of truth for "what tenants asked for" — used
+        # for capacity planning and billing. Includes system pods so it stays
+        # consistent with cluster:gpu_count:total when computing :free.
+        #
+        # Phase filter via group_left() on kube_pod_status_phase matches the
+        # canonical pattern from k8s.rules.container_resource.yaml. Without it
+        # kube-state-metrics keeps series for Failed/Succeeded pods until the
+        # apiserver garbage-collects them, which inflates billing hours and
+        # can push :free negative.
+        - record: cluster:gpu_count:allocated
+          expr: |
+            sum(
+              kube_pod_container_resource_requests{resource="nvidia_com_gpu"}
+              * on (namespace, pod) group_left() max by (namespace, pod) (
+                kube_pod_status_phase{phase=~"Pending|Running"} == 1
+              )
+            )
+        # clamp_min guards against transients at DCGM/kube-state-metrics
+        # restart where cluster:gpu_count:total dips before :allocated catches
+        # up, or rare label drift between the two sources.
+        - record: cluster:gpu_count:free
+          expr: clamp_min(cluster:gpu_count:total - (cluster:gpu_count:allocated or vector(0)), 0)
+        # Cluster-layer filter asymmetry — intentional, not a bug:
+        #
+        #   * cluster:gpu_count:total and cluster:gpu_power_watts:sum do NOT
+        #     filter cozy-*/kube-* namespaces because they describe the
+        #     physical hardware fleet. A GPU draws power and occupies a
+        #     slot regardless of which namespace's pod happens to hold it;
+        #     excluding infra pods would under-report raw capacity and
+        #     break capacity-planning math.
+        #
+        # No namespace filter — DCGM exporter metrics carry the exporter's
+        # own namespace, not the workload namespace. Filtering by namespace
+        # here would silently drop all series.
+        - record: cluster:gpu_util:avg
+          expr: avg(DCGM_FI_DEV_GPU_UTIL)
+        - record: cluster:gpu_power_watts:sum
+          expr: sum(DCGM_FI_DEV_POWER_USAGE)
+
+    - name: gpu.recording.node.1m
+      interval: 1m
+      params: {}
+      rules:
+        # Kube-requested GPU count per namespace — billable/allocation view.
+        # This is the only namespace-level rule that works correctly because
+        # kube_pod_container_resource_requests carries the real workload
+        # namespace, unlike DCGM exporter metrics which carry the exporter's
+        # own namespace (cozy-gpu-operator).
+        - record: namespace:gpu_count:allocated
+          expr: |
+            sum by (namespace) (
+              kube_pod_container_resource_requests{resource="nvidia_com_gpu", namespace!="", namespace!~"cozy-.*|kube-.*"}
+              * on (namespace, pod) group_left() max by (namespace, pod) (
+                kube_pod_status_phase{phase=~"Pending|Running"} == 1
+              )
+            )
+        # Hardware metrics aggregated per node (Hostname). DCGM exporter
+        # metrics carry a capital-H "Hostname" label identifying the node
+        # but no usable workload namespace — so hardware telemetry is
+        # aggregated at node/GPU granularity, not namespace.
+        - record: node:gpu_util:avg
+          expr: avg by (Hostname) (DCGM_FI_DEV_GPU_UTIL)
+        - record: node:tensor_active:avg
+          expr: avg by (Hostname) (DCGM_FI_PROF_PIPE_TENSOR_ACTIVE)
+        - record: node:fb_used_bytes:sum
+          expr: sum by (Hostname) (DCGM_FI_DEV_FB_USED) * 1048576
+        - record: node:power_watts:sum
+          expr: sum by (Hostname) (DCGM_FI_DEV_POWER_USAGE)
+
+    # Known gap: there is no lower-bound sanity alert for under-reporting.
+    # If DCGM ever switches POWER/THERMAL_VIOLATION counter units the other
+    # direction — e.g. from the current nanoseconds back to microseconds,
+    # making rate()/1e9 produce values around 0.001 instead of real
+    # fractions — the throttle signal would silently collapse to near-zero
+    # instead of plateauing at 1.0. GPUThrottleFractionOverOne below catches
+    # the >1 drift; the <<1 drift would require correlation with independent
+    # signals (power draw vs TDP, clock dips) that we do not yet wire up.
+    # Documented here so future maintainers know this is a known gap, not
+    # an oversight.
+    - name: gpu.recording.efficiency.1m
+      interval: 1m
+      params: {}
+      rules:
+        # Tensor hardware saturation per GPU — the honest "am I using the GPU"
+        # metric for AI/LLM workloads. Aggregated at GPU level (Hostname +
+        # gpu + UUID) because DCGM metrics don't carry workload namespace.
+        # Stored as a 0..1 ratio; consumers multiply by 100 at display time.
+        - record: gpu:tensor_saturation:avg5m
+          expr: |
+            avg by (Hostname, gpu, UUID) (
+              avg_over_time(DCGM_FI_PROF_PIPE_TENSOR_ACTIVE[5m])
+            )
+
+        # Power efficiency per GPU — utilization per watt, reveals
+        # unoptimized workloads. Explicit on(...) pins the matching set
+        # to GPU-identifying labels.
+        - record: gpu:util_per_watt:avg5m
+          expr: |
+            max by (Hostname, gpu, UUID) (
+              avg_over_time(DCGM_FI_DEV_GPU_UTIL[5m])
+            )
+            / on (Hostname, gpu, UUID)
+            clamp_min(
+              max by (Hostname, gpu, UUID) (
+                avg_over_time(DCGM_FI_DEV_POWER_USAGE[5m])
+              ),
+              1
+            )
+
+        # Fraction of time power-throttled (TDP cap) — 1.0 = fully throttled.
+        # DCGM_FI_DEV_*_VIOLATION is documented as µs but on A10/DCGM 3.x the
+        # counter grows in nanoseconds in practice — divide by 1e9 to get a
+        # 0..1 fraction (verified empirically when /1e6 yielded >100× reality).
+        # clamp_max protects against rate() artefacts at counter resets.
+        #
+        # max by (Hostname, gpu, UUID) collapses duplicate series from
+        # dcgm-exporter's pod-mapping labels (one physical GPU may appear
+        # under multiple pod/container labels during restarts or under
+        # MIG/MPS). Throttling is a physical-GPU property; taking max
+        # keeps consumer avg(...) honest — a naive avg() would dilute the
+        # signal by the number of pods sharing the GPU.
+        - record: gpu:power_throttle_fraction:rate5m
+          expr: clamp_max(max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_POWER_VIOLATION[5m]) / 1e9), 1)
+
+        # Fraction of time thermal-throttled.
+        - record: gpu:thermal_throttle_fraction:rate5m
+          expr: clamp_max(max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9), 1)
+
+    # Regression watch — the /1e9 divisor on *_VIOLATION was derived
+    # empirically against DCGM 3.x on A10. If a future DCGM version
+    # restores the documented µs units, pre-clamp values would exceed 1.0
+    # while clamp_max(..., 1) silently masks the drift — recorded
+    # throttle fractions would plateau at 1.0 and consumers would think
+    # every GPU is always throttled. This alert fires on that condition
+    # so we can rescale to /1e6 before dashboards start lying.
+    - name: gpu.recording.throttle.validation.5m
+      interval: 5m
+      params: {}
+      rules:
+        - alert: GPUThrottleFractionOverOne
+          expr: |
+            max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_POWER_VIOLATION[5m]) / 1e9) > 1
+            or
+            max by (Hostname, gpu, UUID) (rate(DCGM_FI_DEV_THERMAL_VIOLATION[5m]) / 1e9) > 1
+          for: 15m
+          labels:
+            severity: warning
+            component: gpu-monitoring
+          annotations:
+            summary: "DCGM throttle fraction exceeds 1.0 pre-clamp on {{ $labels.Hostname }}/{{ $labels.gpu }}"
+            description: |
+              gpu:{power,thermal}_throttle_fraction:rate5m clamps to 1.0, but the raw
+              rate(DCGM_FI_DEV_*_VIOLATION)/1e9 value is already >1 on this GPU — the
+              empirical nanosecond assumption is broken. Likely the DCGM exporter
+              version changed and the counter now grows in its documented µs units.
+              Re-verify on the exporter Pod and adjust the divisor (/1e9 → /1e6) in
+              gpu.recording.efficiency.1m before dashboards plateau at 100% throttle.
+            verified_on: "NVIDIA A10, DCGM 3.x — other GPU families (H100, L40S) may require a different divisor"
+            runbook: "If this alert fires, DCGM may have changed POWER_VIOLATION/THERMAL_VIOLATION counter units. Recalibrate by comparing raw counter rate against known throttle events; see gpu-recording.rules.yaml comments."
