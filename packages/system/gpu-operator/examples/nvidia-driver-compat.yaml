@@ -61,16 +61,21 @@ spec:
 
               mkdir -p "$DST/bin"
 
-              if [ -f "$GLIBC_LIB/libnvidia-ml.so.1" ]; then
-                cp -f "$GLIBC_LIB/libnvidia-ml.so.1" "$DST/libnvidia-ml.so.1"
-                echo "Copied libnvidia-ml.so.1"
-              fi
+              [ -f "$GLIBC_LIB/libnvidia-ml.so.1" ] || {
+                echo "missing $GLIBC_LIB/libnvidia-ml.so.1" >&2
+                exit 1
+              }
+              [ -f "$SRC_BIN/nvidia-smi" ] || {
+                echo "missing $SRC_BIN/nvidia-smi" >&2
+                exit 1
+              }
 
-              if [ -f "$SRC_BIN/nvidia-smi" ]; then
-                cp -f "$SRC_BIN/nvidia-smi" "$DST/bin/nvidia-smi"
-                chmod +x "$DST/bin/nvidia-smi"
-                echo "Copied nvidia-smi"
-              fi
+              cp -f "$GLIBC_LIB/libnvidia-ml.so.1" "$DST/libnvidia-ml.so.1"
+              echo "Copied libnvidia-ml.so.1"
+
+              cp -f "$SRC_BIN/nvidia-smi" "$DST/bin/nvidia-smi"
+              chmod +x "$DST/bin/nvidia-smi"
+              echo "Copied nvidia-smi"
 
               mkdir -p /host/run/nvidia/validations
               touch /host/run/nvidia/validations/.driver-ctr-ready
