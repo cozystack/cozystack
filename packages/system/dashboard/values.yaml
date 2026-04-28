@@ -1,4 +1,4 @@
-openapiUI:
+console:
   image: 999669/cozystack-ui:latest@sha256:a93a92a8f7b8d7c4842876215f737d782ad373ff8f4ceb89d7b536945184341e
 tokenProxy:
   image: ghcr.io/cozystack/cozystack/token-proxy:v1.3.0@sha256:2e280991e07853ea48f97b0a42946afffa10d03d6a83d41099ed83e6ffc94fdc
