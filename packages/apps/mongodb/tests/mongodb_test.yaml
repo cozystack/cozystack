@@ -54,6 +54,10 @@ tests:
           path: metadata.finalizers
           content: percona.com/delete-psmdb-pvc
         documentIndex: 0
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pods-in-order
+        documentIndex: 0
 
   - it: renders percona.com/delete-psmdb-pvc finalizer in sharded mode
     release:
@@ -75,6 +79,10 @@ tests:
       - contains:
           path: metadata.finalizers
           content: percona.com/delete-psmdb-pvc
+        documentIndex: 0
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pods-in-order
         documentIndex: 0
 
   ##################
