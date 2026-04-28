@@ -59,9 +59,12 @@ func parseCRDPolicy(install *cozyv1alpha1.ComponentInstall) helmv2.CRDsPolicy {
 // PackageReconciler reconciles Package resources
 type PackageReconciler struct {
 	client.Client
-	Scheme                   *runtime.Scheme
-	HelmReleaseInterval      time.Duration
-	HelmReleaseRetryInterval time.Duration
+	Scheme                    *runtime.Scheme
+	HelmReleaseInterval       time.Duration
+	HelmReleaseRetryInterval  time.Duration
+	HelmReleaseInstallTimeout time.Duration
+	HelmReleaseUpgradeTimeout time.Duration
+	HelmReleaseMaxHistory     int
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=packages,verbs=get;list;watch;create;update;patch;delete
@@ -217,14 +220,15 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Labels:    labels,
 			},
 			Spec: helmv2.HelmReleaseSpec{
-				Interval: metav1.Duration{Duration: r.HelmReleaseInterval},
+				Interval:   metav1.Duration{Duration: r.HelmReleaseInterval},
+				MaxHistory: &r.HelmReleaseMaxHistory,
 				ChartRef: &helmv2.CrossNamespaceSourceReference{
 					Kind:      "ExternalArtifact",
 					Name:      artifactName,
 					Namespace: "cozy-system",
 				},
 				Install: &helmv2.Install{
-					Timeout: &metav1.Duration{Duration: 10 * time.Minute},
+					Timeout: &metav1.Duration{Duration: r.HelmReleaseInstallTimeout},
 					// Strategy=RetryOnFailure (with RetryInterval) replaces the previous
 					// Remediation{Retries:-1} setup. Functionally equivalent ("retry forever
 					// on failure"), but decouples retry timing from spec.Interval so failed
@@ -236,7 +240,7 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					},
 				},
 				Upgrade: &helmv2.Upgrade{
-					Timeout: &metav1.Duration{Duration: 10 * time.Minute},
+					Timeout: &metav1.Duration{Duration: r.HelmReleaseUpgradeTimeout},
 					Strategy: &helmv2.UpgradeStrategy{
 						Name:          string(helmv2.ActionStrategyRetryOnFailure),
 						RetryInterval: &metav1.Duration{Duration: r.HelmReleaseRetryInterval},

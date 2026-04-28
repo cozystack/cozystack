@@ -85,6 +85,9 @@ func main() {
 	var telemetryInterval string
 	var helmReleaseInterval string
 	var helmReleaseRetryInterval string
+	var helmReleaseInstallTimeout string
+	var helmReleaseUpgradeTimeout string
+	var helmReleaseMaxHistory int
 	var cozyValuesSecretName string
 	var cozyValuesSecretNamespace string
 	var cozyValuesNamespaceSelector string
@@ -119,6 +122,18 @@ func main() {
 			"controller waits between failed install/upgrade attempts. Decoupled from --helmrelease-interval "+
 			"(which is the healthy reconcile cadence) so failures recover fast without polling healthy "+
 			"releases at the same fast cadence.")
+	flag.StringVar(&helmReleaseInstallTimeout, "helmrelease-install-timeout", "10m",
+		"Timeout for the Helm install action of HelmReleases created by the Package reconciler "+
+			"(Spec.Install.Timeout). Bounds how long an individual Kubernetes operation (Job/hook/wait) "+
+			"may take during install.")
+	flag.StringVar(&helmReleaseUpgradeTimeout, "helmrelease-upgrade-timeout", "10m",
+		"Timeout for the Helm upgrade action of HelmReleases created by the Package reconciler "+
+			"(Spec.Upgrade.Timeout). Bounds how long an individual Kubernetes operation (Job/hook/wait) "+
+			"may take during upgrade.")
+	flag.IntVar(&helmReleaseMaxHistory, "helmrelease-max-history", 5,
+		"Number of release revisions Helm keeps for HelmReleases created by the Package reconciler "+
+			"(Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default. Lower values reduce "+
+			"per-release Secret accumulation in clusters that bounce HRs frequently (e.g. E2E sandboxes).")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
@@ -142,6 +157,20 @@ func main() {
 	hrRetryIntervalDuration, err := time.ParseDuration(helmReleaseRetryInterval)
 	if err != nil {
 		setupLog.Error(err, "invalid --helmrelease-retry-interval value", "value", helmReleaseRetryInterval)
+		os.Exit(1)
+	}
+	hrInstallTimeoutDuration, err := time.ParseDuration(helmReleaseInstallTimeout)
+	if err != nil {
+		setupLog.Error(err, "invalid --helmrelease-install-timeout value", "value", helmReleaseInstallTimeout)
+		os.Exit(1)
+	}
+	hrUpgradeTimeoutDuration, err := time.ParseDuration(helmReleaseUpgradeTimeout)
+	if err != nil {
+		setupLog.Error(err, "invalid --helmrelease-upgrade-timeout value", "value", helmReleaseUpgradeTimeout)
+		os.Exit(1)
+	}
+	if helmReleaseMaxHistory < 0 {
+		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
 		os.Exit(1)
 	}
 
@@ -281,10 +310,13 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client:                   mgr.GetClient(),
-		Scheme:                   mgr.GetScheme(),
-		HelmReleaseInterval:      hrIntervalDuration,
-		HelmReleaseRetryInterval: hrRetryIntervalDuration,
+		Client:                    mgr.GetClient(),
+		Scheme:                    mgr.GetScheme(),
+		HelmReleaseInterval:       hrIntervalDuration,
+		HelmReleaseRetryInterval:  hrRetryIntervalDuration,
+		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
+		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
+		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
