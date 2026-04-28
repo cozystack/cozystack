@@ -812,30 +812,6 @@
         "auto": false,
         "auto_min": "10s",
         "auto_count": 30
-      },
-      {
-        "type": "query",
-        "name": "namespace",
-        "label": "Namespace",
-        "skipUrlSync": false,
-        "query": "label_values(DCGM_FI_DEV_GPU_UTIL{namespace!=\"\",namespace!~\"cozy-.*|kube-.*\"}, namespace)",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "$ds_prometheus"
-        },
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
-        "multi": true,
-        "allowCustomValue": true,
-        "refresh": 2,
-        "sort": 1,
-        "includeAll": true,
-        "auto": false,
-        "auto_min": "10s",
-        "auto_count": 30
       }
     ]
   },
