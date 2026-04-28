@@ -86,6 +86,23 @@ tests:
         documentIndex: 0
 
   ##################
+  # Secrets        #
+  ##################
+
+  - it: scopes users secret name to the release for namespace isolation
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.secrets.users
+          value: test-mongodb-percona-server-mongodb-users
+        documentIndex: 0
+
+  ##################
   # CR Version     #
   ##################
 
