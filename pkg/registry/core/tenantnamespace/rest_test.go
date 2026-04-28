@@ -15,6 +15,8 @@ import (
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
 func TestMakeListSortsAlphabetically(t *testing.T) {
@@ -408,8 +410,18 @@ func TestGet_WithAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if obj == nil {
-		t.Fatal("expected object, got nil")
+	tn, ok := obj.(*corev1alpha1.TenantNamespace)
+	if !ok {
+		t.Fatalf("expected *TenantNamespace, got %T", obj)
+	}
+	if tn.Name != "tenant-test" {
+		t.Errorf("expected name %q, got %q", "tenant-test", tn.Name)
+	}
+	if tn.Kind != "TenantNamespace" {
+		t.Errorf("expected Kind=TenantNamespace, got %q", tn.Kind)
+	}
+	if tn.APIVersion != corev1alpha1.SchemeGroupVersion.String() {
+		t.Errorf("expected APIVersion=%q, got %q", corev1alpha1.SchemeGroupVersion.String(), tn.APIVersion)
 	}
 }
 
