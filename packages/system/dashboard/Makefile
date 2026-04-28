@@ -4,7 +4,28 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-image: image-token-proxy
+image: image-console image-token-proxy
+
+CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
+CONSOLE_REF ?= main
+
+image-console:
+	rm -rf .tmp-cozystack-ui
+	git clone --depth 1 --branch $(CONSOLE_REF) $(CONSOLE_REPO) .tmp-cozystack-ui
+	docker buildx build .tmp-cozystack-ui \
+		--provenance false \
+		--builder=$(BUILDER) \
+		--platform=linux/amd64,linux/arm64 \
+		--tag $(REGISTRY)/cozystack-ui:$(call settag,$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/cozystack-ui:latest \
+		--cache-to type=inline \
+		--metadata-file images/console.json \
+		--push=$(PUSH) \
+		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack-ui" \
+		--load=$(LOAD)
+	IMAGE="$(REGISTRY)/cozystack-ui:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/console.json -r)" \
+		yq -i '.console.image = strenv(IMAGE)' values.yaml
+	rm -rf .tmp-cozystack-ui images/console.json
 
 image-token-proxy:
 	docker buildx build images/token-proxy \
