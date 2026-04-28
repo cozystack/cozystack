@@ -860,7 +860,7 @@
         }
       ],
       "title": "Max GPU temperature",
-      "description": "Hottest GPU in the fleet right now. A10 sustained target \u003c83°C.",
+      "description": "Hottest GPU in the fleet right now. Adjust thresholds to match your GPU model specifications.",
       "transparent": false,
       "datasource": {
         "type": "prometheus",
