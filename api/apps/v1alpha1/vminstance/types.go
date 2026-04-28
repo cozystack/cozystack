@@ -26,6 +26,9 @@ type ConfigSpec struct {
 	// Ports to forward from outside the cluster.
 	// +kubebuilder:default:={22}
 	ExternalPorts []int `json:"externalPorts,omitempty"`
+	// Whether to accept ICMP traffic to the VM in PortList mode (preserves ping and PMTU discovery). No effect in WholeIP mode. Default true so ping behaves as users expect even when port filtering is in effect.
+	// +kubebuilder:default:=true
+	ExternalAllowICMP bool `json:"externalAllowICMP"`
 	// Requested running state of the VirtualMachineInstance
 	// +kubebuilder:default:="Always"
 	RunStrategy RunStrategy `json:"runStrategy"`
