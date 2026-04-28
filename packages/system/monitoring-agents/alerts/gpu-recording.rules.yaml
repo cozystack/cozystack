@@ -109,13 +109,15 @@ spec:
         # to GPU-identifying labels.
         - record: gpu:util_per_watt:avg5m
           expr: |
-            avg by (Hostname, gpu, UUID) (
+            max by (Hostname, gpu, UUID) (
               avg_over_time(DCGM_FI_DEV_GPU_UTIL[5m])
-              / on (Hostname, gpu, UUID)
-              clamp_min(
-                avg_over_time(DCGM_FI_DEV_POWER_USAGE[5m]),
-                1
-              )
+            )
+            / on (Hostname, gpu, UUID)
+            clamp_min(
+              max by (Hostname, gpu, UUID) (
+                avg_over_time(DCGM_FI_DEV_POWER_USAGE[5m])
+              ),
+              1
             )
 
         # Fraction of time power-throttled (TDP cap) — 1.0 = fully throttled.
