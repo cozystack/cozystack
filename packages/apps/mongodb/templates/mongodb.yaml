@@ -5,6 +5,7 @@ kind: PerconaServerMongoDB
 metadata:
   name: {{ .Release.Name }}
   finalizers:
+    - percona.com/delete-psmdb-pods-in-order
     - percona.com/delete-psmdb-pvc
 spec:
   crVersion: 1.21.1
