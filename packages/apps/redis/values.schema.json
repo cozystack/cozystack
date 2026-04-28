@@ -87,6 +87,17 @@
         "v7"
       ]
     },
+    "persistenceMode": {
+      "description": "Persistence strategy. rdb uses periodic snapshots, aof uses append-only file, both enables both, none disables persistence.",
+      "type": "string",
+      "default": "rdb",
+      "enum": [
+        "rdb",
+        "aof",
+        "both",
+        "none"
+      ]
+    },
     "authEnabled": {
       "description": "Enable password generation.",
       "type": "boolean",
