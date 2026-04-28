@@ -37,10 +37,11 @@ Run `helm upgrade` after MongoDB is ready to populate the credentials secret wit
 
 ### Data lifecycle
 
-When the MongoDB release is uninstalled, the operator reclaims:
+When the MongoDB release is uninstalled, all storage and credentials are reclaimed:
 
 - All PVCs backing the replica set storage (via the `percona.com/delete-psmdb-pvc` finalizer on the `PerconaServerMongoDB` CR).
-- Operator-managed user secrets associated with the cluster.
+- Internal operator-managed secrets (e.g. `internal-<release>-users`) are deleted as part of the same finalizer flow.
+- Helm-managed secrets (`<release>-credentials`, `<release>-user-*`, `<release>-s3-creds`) are removed by the standard `helm uninstall`.
 
 If you need to retain data, take a backup before deletion. Refer to the [Percona Operator for MongoDB documentation](https://docs.percona.com/percona-operator-for-mongodb/) for backup/restore workflows.
 
