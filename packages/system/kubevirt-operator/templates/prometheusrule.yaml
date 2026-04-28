@@ -17,12 +17,10 @@ spec:
         ) == 1
       labels:
         severity: critical
-        namespace: "{{ $labels.exported_namespace }}"
+        namespace: '{{ "{{" }} $labels.exported_namespace {{ "}}" }}'
       annotations:
-        summary: "VM '{{ $labels.name }}' in namespace '{{ $labels.exported_namespace }}' is not Running for more than 10 minutes"
-        description: >
-          The VM '{{ $labels.name }}' in namespace '{{ $labels.exported_namespace }}' has been in a non-Running state
-          for more than 10 minutes. Please investigate the issue.
+        summary: 'VM {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} is not Running for more than 10 minutes'
+        description: 'The VM {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} has been in a non-Running state for more than 10 minutes. Please investigate the issue.'
     - alert: VMINotRunningFor10Minutes
       expr: |
         max_over_time(
@@ -34,9 +32,7 @@ spec:
         ) == 1
       labels:
         severity: critical
-        namespace: "{{ $labels.exported_namespace }}"
+        namespace: '{{ "{{" }} $labels.exported_namespace {{ "}}" }}'
       annotations:
-        summary: "VMI '{{ $labels.name }}' in namespace '{{ $labels.exported_namespace }}' is not Running for more than 10 minutes"
-        description: >
-          The VM '{{ $labels.name }}' in namespace '{{ $labels.exported_namespace }}' has been in a non-Running state
-          for more than 10 minutes. Please investigate the issue.
+        summary: 'VMI {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} is not Running for more than 10 minutes'
+        description: 'The VMI {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} has been in a non-Running state for more than 10 minutes. Please investigate the issue.'
