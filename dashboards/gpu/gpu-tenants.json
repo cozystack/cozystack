@@ -35,7 +35,7 @@
       "id": 2,
       "targets": [
         {
-          "expr": "count(namespace:gpu_count:allocated{namespace=~\"$namespace\"})",
+          "expr": "count(namespace:gpu_count:allocated{namespace=~\"$namespace\"} \u003e 0)",
           "refId": "A"
         }
       ],
