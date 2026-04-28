@@ -42,7 +42,7 @@ tests:
   # Finalizers     #
   ##################
 
-  - it: sets delete-psmdb-pvc finalizer for automatic PVC cleanup
+  - it: renders percona.com/delete-psmdb-pvc finalizer on PSMDB CR
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -53,6 +53,11 @@ tests:
       - contains:
           path: metadata.finalizers
           content: percona.com/delete-psmdb-pvc
+        documentIndex: 0
+      - equal:
+          path: metadata.finalizers
+          value:
+            - percona.com/delete-psmdb-pvc
         documentIndex: 0
 
   ##################
