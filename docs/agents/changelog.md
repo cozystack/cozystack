@@ -6,6 +6,20 @@ This file contains detailed instructions for AI-powered IDE on how to generate c
 
 Follow these instructions when the user explicitly asks to generate a changelog.
 
+## Scope and boundaries
+
+**Your single deliverable is the file `docs/changelogs/v<version>.md`.** Write the complete, verified changelog to that path. That is the entire task. Exit as soon as the file is written and verified against the checklist in Step 9.
+
+Unless the caller explicitly instructs otherwise:
+
+- **In the cozystack working tree**, do not run `git commit`, `git push`, `git checkout` (to switch branches), `git branch`, `git tag`, `git reset`, `git merge`, or `git rebase`. Do not write to local branches, tags, or HEAD. `git fetch` is expected and fine (see the read-only analysis list below).
+- **Do not** push to any remote, open pull requests, or issue GitHub API write calls (POST / PATCH / DELETE) for any repository.
+- In the cozystack working tree, the **only** file you create or modify is `docs/changelogs/v<version>.md`. Cloning auxiliary repositories under `_repos/` for cross-repo analysis (see Step 6) is fine; local git operations inside those disposable clones (`git checkout`, `git pull`, etc.) are allowed — just never push from them or open PRs against them.
+
+The caller — a GitHub Actions workflow in CI, or a developer running you interactively — owns branching, committing, pushing, and PR creation. They will perform those actions after you exit. Do not pre-empt them even if the working tree looks ready.
+
+Read-only analysis is expected and encouraged: `git log`, `git show`, `git fetch`, `git diff`, `gh pr view`, `gh api` GET requests, and reading any file in the repository.
+
 ## Required Tools
 
 Before generating changelogs, ensure you have access to `gh` (GitHub CLI) tool, which is used to fetch commit and PR author information. The GitHub CLI is used to correctly identify PR authors from commits and pull requests.
@@ -607,6 +621,8 @@ Create a new changelog file in the format matching previous versions:
 
 **Save the changelog:**
 Save the changelog to file `docs/changelogs/v<version>.md` according to the version for which the changelog is being generated.
+
+**Then exit.** Do not commit, push, create a branch, or open a pull request — the caller handles all git and GitHub operations after you return. See the "Scope and boundaries" section at the top of this document.
 
 ### Important notes
 

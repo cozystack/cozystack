@@ -4,6 +4,7 @@ coredns:
     clusterIP: "10.95.0.10"
 {{- end }}
 
+{{- if .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -42,3 +43,4 @@ spec:
   {{- end }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
+{{- end }}

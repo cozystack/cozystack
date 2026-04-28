@@ -154,6 +154,7 @@ backup:
 ## @field {bool} enabled - Whether to restore from a backup.
 ## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 ## @field {string} oldName - Previous cluster name before deletion.
+## @field {string} [serverName] - Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name.
 
 ## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
@@ -161,3 +162,4 @@ bootstrap:
   # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
   oldName: ""
+  serverName: ""

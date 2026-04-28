@@ -6,7 +6,7 @@ package kubernetes
 
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// Kubernetes control-plane configuration.
 	// +kubebuilder:default:={}
 	ControlPlane ControlPlane `json:"controlPlane"`
+	// Optional image overrides for air-gapped or rate-limited registries.
+	// +kubebuilder:default:={}
+	Images Images `json:"images"`
 }
 
 type APIServer struct {
@@ -167,6 +170,12 @@ type HAMiAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
+type Images struct {
+	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+	// +kubebuilder:default:=""
+	WaitForKubeconfig string `json:"waitForKubeconfig,omitempty"`
 }
 
 type IngressNginxAddon struct {

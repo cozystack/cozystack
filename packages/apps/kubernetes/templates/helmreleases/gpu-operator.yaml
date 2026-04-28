@@ -6,7 +6,7 @@ gpu-operator:
 {{- end }}
 {{- end }}
 
-{{- if .Values.addons.gpuOperator.enabled }}
+{{- if and .Values.addons.gpuOperator.enabled .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
