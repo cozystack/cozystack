@@ -8,13 +8,30 @@
 }
 
 @test "Install Cozystack" {
+  # Pre-create the cozy-system namespace with the labels the operator pod needs.
+  # The chart no longer ships a Namespace resource (helm v3's --create-namespace
+  # collides with chart-defined Namespace). On Talos clusters that enforce PSA
+  # baseline-by-default, the cozystack-operator pod (hostNetwork=true) is
+  # rejected unless the namespace is labelled enforce=privileged BEFORE the
+  # pod is scheduled. A pre-install hook can't bootstrap that label because
+  # the hook itself runs in the same namespace and faces the same PSA gate.
+  # So apply the namespace from the caller (this bats / production install docs)
+  # — same pattern as kube-prometheus-stack, argo-cd, cert-manager.
+  kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cozy-system
+  labels:
+    cozystack.io/system: "true"
+    cozystack.io/deletion-protected: "true"
+    pod-security.kubernetes.io/enforce: privileged
+EOF
+
   # Install cozy-installer chart (operator installs CRDs on startup via --install-crds).
-  # The chart's pre-install hook patches PSA + cozystack labels onto cozy-system
-  # after --create-namespace bootstraps it.
   helm upgrade installer packages/core/installer \
     --install \
     --namespace cozy-system \
-    --create-namespace \
     --set cozystackOperator.helmReleaseInterval=30s \
     --wait \
     --timeout 2m
