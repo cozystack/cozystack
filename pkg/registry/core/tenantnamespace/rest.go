@@ -17,6 +17,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -130,8 +132,8 @@ func (r *REST) Get(
 		return nil, err
 	}
 	if !hasAccess {
-		// Return NotFound instead of Forbidden to prevent enumeration
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		// Return Forbidden to follow standard K8s RBAC behavior
+		return nil, apierrors.NewForbidden(r.gvr.GroupResource(), name, fmt.Errorf("access denied"))
 	}
 
 	ns := &corev1.Namespace{}
@@ -155,10 +157,20 @@ func (r *REST) Get(
 
 func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
 	nsList := &corev1.NamespaceList{}
-	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: &metav1.ListOptions{
+
+	// Build upstream watch options with field and label selectors
+	rawOpts := &metav1.ListOptions{
 		Watch:           true,
 		ResourceVersion: opts.ResourceVersion,
-	}})
+	}
+	if opts.FieldSelector != nil {
+		rawOpts.FieldSelector = opts.FieldSelector.String()
+	}
+	if opts.LabelSelector != nil {
+		rawOpts.LabelSelector = opts.LabelSelector.String()
+	}
+
+	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: rawOpts})
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +210,18 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 			ns, ok := ev.Object.(*corev1.Namespace)
 			if !ok || !strings.HasPrefix(ns.Name, prefix) {
 				continue
+			}
+
+			// Apply defensive filtering for field and label selectors
+			if opts.FieldSelector != nil {
+				if !opts.FieldSelector.Matches(fields.Set{"metadata.name": ns.Name}) {
+					continue
+				}
+			}
+			if opts.LabelSelector != nil {
+				if !opts.LabelSelector.Matches(labels.Set(ns.Labels)) {
+					continue
+				}
 			}
 
 			// Check if user has access to this namespace
@@ -331,6 +355,26 @@ func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alph
 	return out
 }
 
+// matchesSubject checks if a RoleBinding subject matches the user's identity.
+// It handles Group, User, and ServiceAccount subjects with proper namespace fallback.
+func matchesSubject(subj rbacv1.Subject, bindingNamespace, username string, groups map[string]struct{}) bool {
+	switch subj.Kind {
+	case "Group":
+		_, ok := groups[subj.Name]
+		return ok
+	case "User":
+		return subj.Name == username
+	case "ServiceAccount":
+		saNamespace := subj.Namespace
+		if saNamespace == "" {
+			saNamespace = bindingNamespace
+		}
+		return username == fmt.Sprintf("system:serviceaccount:%s:%s", saNamespace, subj.Name)
+	default:
+		return false
+	}
+}
+
 func (r *REST) filterAccessible(
 	ctx context.Context,
 	names []string,
@@ -369,26 +413,9 @@ func (r *REST) filterAccessible(
 	subjectLoop:
 		for j := range rbs.Items[i].Subjects {
 			subj := rbs.Items[i].Subjects[j]
-			switch subj.Kind {
-			case "Group":
-				if _, ok = groups[subj.Name]; ok {
-					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
-					break subjectLoop
-				}
-			case "User":
-				if subj.Name == u.GetName() {
-					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
-					break subjectLoop
-				}
-			case "ServiceAccount":
-				saNamespace := subj.Namespace
-				if saNamespace == "" {
-					saNamespace = rbs.Items[i].Namespace
-				}
-				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", saNamespace, subj.Name) {
-					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
-					break subjectLoop
-				}
+			if matchesSubject(subj, rbs.Items[i].Namespace, u.GetName(), groups) {
+				allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+				break subjectLoop
 			}
 		}
 	}
@@ -434,23 +461,8 @@ func (r *REST) hasAccessToNamespace(
 	for i := range rbs.Items {
 		for j := range rbs.Items[i].Subjects {
 			subj := rbs.Items[i].Subjects[j]
-			switch subj.Kind {
-			case "Group":
-				if _, ok := groups[subj.Name]; ok {
-					return true, nil
-				}
-			case "User":
-				if subj.Name == u.GetName() {
-					return true, nil
-				}
-			case "ServiceAccount":
-				saNamespace := subj.Namespace
-				if saNamespace == "" {
-					saNamespace = rbs.Items[i].Namespace
-				}
-				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", saNamespace, subj.Name) {
-					return true, nil
-				}
+			if matchesSubject(subj, rbs.Items[i].Namespace, u.GetName(), groups) {
+				return true, nil
 			}
 		}
 	}
