@@ -13,6 +13,7 @@ image-console:
 	rm -rf .tmp-cozystack-ui
 	git clone --depth 1 --branch $(CONSOLE_REF) $(CONSOLE_REPO) .tmp-cozystack-ui
 	docker buildx build .tmp-cozystack-ui \
+		--file .tmp-cozystack-ui/Containerfile \
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=linux/amd64,linux/arm64 \
