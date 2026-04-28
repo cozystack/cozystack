@@ -529,7 +529,7 @@
       "targets": [
         {
           "expr": "node:gpu_util:avg",
-          "legendFormat": "{{node}}",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
@@ -585,7 +585,7 @@
       "targets": [
         {
           "expr": "node:tensor_active:avg * 100",
-          "legendFormat": "{{node}}",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
@@ -654,7 +654,7 @@
       "targets": [
         {
           "expr": "node:power_watts:sum",
-          "legendFormat": "{{node}}",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
@@ -988,7 +988,7 @@
       "targets": [
         {
           "expr": "sum_over_time(node:power_watts:sum[24h:1m]) / 60 / 1000",
-          "legendFormat": "{{node}}",
+          "legendFormat": "{{Hostname}}",
           "refId": "A"
         }
       ],
