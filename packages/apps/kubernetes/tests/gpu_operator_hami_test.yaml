@@ -1,6 +1,8 @@
 suite: GPU Operator HelmRelease HAMi integration tests
 templates:
   - templates/helmreleases/gpu-operator.yaml
+values:
+  - values-ci.yaml
 tests:
   - it: should disable devicePlugin when hami is enabled
     set:
