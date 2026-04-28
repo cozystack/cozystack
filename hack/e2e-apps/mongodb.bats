@@ -36,6 +36,7 @@ EOF
   # Wait for endpoints
   timeout 180 sh -ec "until kubectl -n tenant-test get endpoints mongodb-$name-rs0 -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   # Wait for StatefulSet replicas
+  timeout 60 sh -ec "until kubectl -n tenant-test get statefulset.apps/mongodb-$name-rs0 >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait statefulset.apps/mongodb-$name-rs0 --timeout=300s --for=jsonpath='{.status.replicas}'=1
   # Cleanup
   kubectl -n tenant-test delete mongodbs.apps.cozystack.io $name

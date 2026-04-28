@@ -41,9 +41,11 @@ EOF
   kubectl -n tenant-test wait hr mariadb-$name --timeout=30s --for=condition=ready
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 60 sh -ec "until kubectl -n tenant-test get statefulset.apps/mariadb-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait statefulset.apps/mariadb-$name --timeout=110s --for=jsonpath='{.status.replicas}'=2
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name-metrics -o jsonpath='{.spec.ports[0].port}' | grep -q '9104'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name-metrics -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 60 sh -ec "until kubectl -n tenant-test get deployment.apps/mariadb-$name-metrics >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait deployment.apps/mariadb-$name-metrics --timeout=90s --for=jsonpath='{.status.replicas}'=1
   kubectl -n tenant-test delete mariadbs.apps.cozystack.io $name
 }

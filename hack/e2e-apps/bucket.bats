@@ -20,8 +20,11 @@ EOF
 
   # Wait for the bucket to be ready
   kubectl -n tenant-test wait hr bucket-${name} --timeout=100s --for=condition=ready
+  timeout 60 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=300s --for=jsonpath='{.status.bucketReady}'
+  timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-admin >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'
+  timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'
 
   # Get admin (readwrite) credentials
