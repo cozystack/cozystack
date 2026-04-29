@@ -1,4 +1,4 @@
 cozystackController:
-  image: ghcr.io/cozystack/cozystack/cozystack-controller:v1.3.0@sha256:d03d19b78c4c98f970ac549a68b01ef6bd1ad755f5e0dcb9e08503511cdf2fdc
+  image: ghcr.io/cozystack/cozystack/cozystack-controller:v1.3.1@sha256:4b13d34b01e3e778feb2098053a3cccfe3260806af0b595fd7a6e27c0ff96faf
   debug: false
   disableTelemetry: false
