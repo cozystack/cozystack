@@ -27,6 +27,8 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+  labels:
+    apps.cozystack.io/user-secret: "true"
 stringData:
   admin-password: {{ $adminPassword | quote }}
   redis-password: {{ $redisPassword | quote }}
