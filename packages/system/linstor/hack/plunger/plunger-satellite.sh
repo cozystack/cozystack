@@ -20,6 +20,34 @@ drbd_status_json() {
   drbdsetup status --json 2>/dev/null || true
 }
 
+# Detect DRBD resources stuck in Primary on this node with no consumer.
+# Auto-promote can promote a resource to Primary (e.g. during mkfs.ext4
+# at provisioning time), but auto-demote sometimes fails to fire on
+# close. The resource then stays Primary on a node that has no
+# consumer and blocks NodePublishVolume on the actual target node with
+# "failed to set source device readwrite". Upstream tracker:
+#   https://github.com/piraeusdatastore/piraeus-operator/issues/942
+#
+# `open == false` on every device of the resource guarantees nobody is
+# using it, so `drbdadm secondary` is safe — at worst it's a no-op
+# that auto-promote will redo when a real consumer arrives.
+drbd_fix_idle_primary() {
+  local json
+  json="$(drbd_status_json)"
+  [ -n "$json" ] || return 0
+
+  printf '%s' "$json" | jq -r '
+    .[]?
+    | select(.role == "Primary")
+    | select(all(.devices[]?; .open == false))
+    | .name
+  ' | while IFS= read -r res; do
+    [ -n "$res" ] || continue
+    log "Idle Primary detected: res=$res open:no -> drbdadm secondary"
+    drbdadm secondary "$res" || log "WARN: secondary failed for $res"
+  done
+}
+
 # Detect DRBD resources where resync is stuck:
 # - at least one local device is Inconsistent
 # - there is an active SyncTarget peer
@@ -153,6 +181,9 @@ while true; do
     drbdadm down "${secondary}" || echo "Command failed"
     drbdadm up "${secondary}" || echo "Command failed"
   ); done
+
+  # Detect and demote idle Primary resources stuck after auto-promote
+  drbd_fix_idle_primary || true
 
   # Detect and fix stalled DRBD resync by switching SyncTarget peer
   drbd_fix_stalled_sync || true
