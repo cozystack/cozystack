@@ -5,6 +5,13 @@
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @enum {string} Version - Kafka version to deploy.
+## @value v3.9
+## @value v3.8
+
+## @param {Version} version - Kafka version to deploy.
+version: "v3.9"
+
 ##
 ## @section Application-specific parameters
 ##
@@ -56,6 +63,7 @@ topics: []
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
 ## @field {quantity} size - Persistent Volume size for Kafka.
 ## @field {string} storageClass - StorageClass used to store the Kafka data.
+## @field {quantity} [controllerStorageSize] - Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).
 
 ## @param {Kafka} kafka - Kafka configuration.
 kafka:
@@ -64,19 +72,20 @@ kafka:
   resourcesPreset: "small"
   size: 10Gi
   storageClass: ""
+  controllerStorageSize: 5Gi
 
 ##
 ## @section ZooKeeper configuration
 ##
 
-## @typedef {struct} ZooKeeper - ZooKeeper configuration.
+## @typedef {struct} ZooKeeper - ZooKeeper configuration (only used for existing instances migrating from ZooKeeper to KRaft).
 ## @field {int} replicas - Number of ZooKeeper replicas.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
 ## @field {quantity} size - Persistent Volume size for ZooKeeper.
 ## @field {string} storageClass - StorageClass used to store the ZooKeeper data.
 
-## @param {ZooKeeper} zookeeper - ZooKeeper configuration.
+## @param {ZooKeeper} [zookeeper] - ZooKeeper configuration (only used for existing instances migrating from ZooKeeper to KRaft).
 zookeeper:
   replicas: 3
   resources: {}
