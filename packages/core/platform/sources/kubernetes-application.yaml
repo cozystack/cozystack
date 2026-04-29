@@ -52,6 +52,8 @@ spec:
           path: system/cilium
         - name: kubernetes-gpu-operator
           path: system/gpu-operator
+        - name: kubernetes-hami
+          path: system/hami
         - name: kubernetes-vertical-pod-autoscaler
           path: system/vertical-pod-autoscaler
         - name: kubernetes-prometheus-operator-crds

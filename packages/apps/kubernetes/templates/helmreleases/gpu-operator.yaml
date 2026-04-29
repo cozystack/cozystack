@@ -1,3 +1,11 @@
+{{- define "cozystack.defaultGpuOperatorValues" -}}
+{{- if .Values.addons.hami.enabled }}
+gpu-operator:
+  devicePlugin:
+    enabled: false
+{{- end }}
+{{- end }}
+
 {{- if and .Values.addons.gpuOperator.enabled .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -29,9 +37,12 @@ spec:
     force: true
     remediation:
       retries: -1
-  {{- with .Values.addons.gpuOperator.valuesOverride }}
+  {{- $defaults := fromYaml (include "cozystack.defaultGpuOperatorValues" .) }}
+  {{- $overrides := deepCopy (default (dict) .Values.addons.gpuOperator.valuesOverride) }}
+  {{- $merged := mergeOverwrite (default (dict) $defaults) $overrides }}
+  {{- if $merged }}
   values:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml $merged | nindent 4 }}
   {{- end }}
 
   dependsOn:

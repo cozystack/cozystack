@@ -5,7 +5,7 @@ metadata:
   labels:
     app: lineage-controller-webhook
 spec:
-  internalTrafficPolicy: Local
+  trafficDistribution: PreferClose
   type: ClusterIP
   ports:
     - port: 443

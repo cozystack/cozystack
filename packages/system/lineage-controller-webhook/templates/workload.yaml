@@ -1,10 +1,11 @@
 apiVersion: apps/v1
-kind: DaemonSet
+kind: Deployment
 metadata:
   name: lineage-controller-webhook
   labels:
     app: lineage-controller-webhook
 spec:
+  replicas: {{ .Values.lineageControllerWebhook.replicas }}
   selector:
     matchLabels:
       app: lineage-controller-webhook
@@ -13,13 +14,25 @@ spec:
       labels:
         app: lineage-controller-webhook
     spec:
-      {{- with .Values.lineageControllerWebhook.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+      serviceAccountName: lineage-controller-webhook
       tolerations:
       - operator: Exists
-      serviceAccountName: lineage-controller-webhook
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: lineage-controller-webhook
       containers:
       - name: lineage-controller-webhook
         image: "{{ .Values.lineageControllerWebhook.image }}"

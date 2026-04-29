@@ -1,10 +1,13 @@
 lineageControllerWebhook:
   image: ghcr.io/cozystack/cozystack/lineage-controller-webhook:v1.3.0@sha256:e8984709686a5eaf19b89da378d7b8c688ea5607e0783a88d9c9e4ccfca96fb0
   debug: false
+  replicas: 2
+  # DEPRECATED. Injects KUBERNETES_SERVICE_HOST=status.hostIP and
+  # KUBERNETES_SERVICE_PORT=6443 so the webhook talks to the apiserver on its
+  # own node — only valid when the pod is actually scheduled on an apiserver-
+  # bearing node. Now that the chart's nodeAffinity to control-plane is soft
+  # (preferred, not required), the pod can land off-control-plane and crash-
+  # loop dialing a non-apiserver hostIP. Slated for removal once webhook
+  # performance work obviates the locality motivation. Leave disabled.
   localK8sAPIEndpoint:
-    enabled: true
-  # nodeSelector for the DaemonSet
-  # Talos uses empty value: "node-role.kubernetes.io/control-plane": ""
-  # Generic k8s (k3s, kubeadm) uses: "node-role.kubernetes.io/control-plane": "true"
-  nodeSelector:
-    node-role.kubernetes.io/control-plane: ""
+    enabled: false
