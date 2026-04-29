@@ -8,10 +8,23 @@
 }
 
 @test "Pre-pull platform images" {
-  # Pull timing-sensitive images to all nodes before Cozystack installation.
   # Cluster-member workloads (OVN raft, LINSTOR) fail if replicas start at
-  # different times due to image-pull stagger. See hack/e2e-prepull-images.sh.
-  hack/e2e-prepull-images.sh
+  # different times due to image-pull stagger across nodes. Pre-pull these
+  # images to every node so all replicas start with images already cached.
+  #
+  # Source images directly from the rendered charts so version bumps stay in
+  # sync automatically. yq walks every PodSpec-shaped object and emits the
+  # images of each container — this scopes the result to images the kubelet
+  # actually pulls (skips configmap fields and CRD examples that happen to
+  # contain an `image:` key). Add a chart here when a new peer-sensitive
+  # workload is found.
+  {
+    helm template packages/system/kubeovn
+    helm template packages/system/linstor
+  } | yq -N '
+      (..|select(has("containers"))|.containers[]|.image),
+      (..|select(has("initContainers"))|.initContainers[]|.image)
+    ' | hack/e2e-prepull-images.sh
 }
 
 @test "Install Cozystack" {
