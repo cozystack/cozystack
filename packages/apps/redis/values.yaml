@@ -56,6 +56,11 @@ authEnabled: true
 ## @field {string} secretName - Name of an existing kubernetes.io/tls secret. When non-empty, cert-manager Certificate is NOT rendered and the user manages the secret.
 ## @field {TLSIssuerRef} issuerRef - cert-manager Issuer reference. Used only when secretName is empty.
 
+## TLS limitations:
+## - Internal connections must use <release>-master:6380 (writes) or <release>-replicas:6380 (reads). Direct connection only — no Sentinel-aware service discovery over TLS.
+## - Sentinel HA clients (rfs-*:26379) operate on plaintext and resolve master IP as <ip>:6379 (the operator hardcodes the plaintext port). To use Sentinel-aware clients with TLS, the operator would need patching — out of scope.
+## - For applications that need automatic master failover with TLS: use <release>-master:6380 (the K8s Service's selector follows the master role label, so it auto-routes to the new master after failover).
+
 ## @param {TLS} tls - TLS configuration for client-facing connections. When enabled, an nginx stream sidecar terminates TLS on port 6380. Intra-cluster traffic on 6379 (operator probes, sentinel, replication) remains plaintext.
 tls:
   enabled: false
