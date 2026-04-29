@@ -4,7 +4,12 @@ NAMESPACE=cozy-system
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+.PHONY: test
+
 image: image-lineage-controller-webhook
+
+test:
+	helm unittest .
 
 image-lineage-controller-webhook:
 	docker buildx build -f images/lineage-controller-webhook/Dockerfile ../../.. \
