@@ -38,9 +38,8 @@ Most modern ML/AI base images (CUDA 12.x, PyTorch 2.x, TensorFlow 2.x) use Ubunt
 
 **Upstream tracking issues:**
 
-- [HAMi-core#174](https://github.com/Project-HAMi/HAMi-core/issues/174) — `_dl_sym` removal breaks HAMi-core on glibc >= 2.34
-- [HAMi#1190](https://github.com/Project-HAMi/HAMi/issues/1190) — degraded isolation across glibc versions
-- [HAMi#173](https://github.com/Project-HAMi/HAMi/issues/173) — documentation incorrectly states glibc < 2.30 (actual boundary is 2.34)
+- [HAMi-core#174](https://github.com/Project-HAMi/HAMi-core/issues/174) — `_dl_sym` removal in glibc 2.34 breaks HAMi-core's CUDA symbol resolution at the symbol level
+- [HAMi#1190](https://github.com/Project-HAMi/HAMi/issues/1190) — maintainer thread confirming the empirical per-glibc-version isolation behavior shown in the table above
 
 ### musl libc (Alpine) incompatibility
 
