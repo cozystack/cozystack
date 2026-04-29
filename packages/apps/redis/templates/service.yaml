@@ -1,3 +1,47 @@
+{{- if .Values.tls.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-master
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/part-of: redis-failover
+    redisfailovers-role: master
+  ports:
+  - name: redis-tls
+    port: 6380
+    targetPort: redis-tls
+    protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-replicas
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/part-of: redis-failover
+    redisfailovers-role: slave
+  ports:
+  - name: redis-tls
+    port: 6380
+    targetPort: redis-tls
+    protocol: TCP
+{{- end }}
 {{- if .Values.external }}
 ---
 apiVersion: v1
