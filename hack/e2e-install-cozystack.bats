@@ -7,6 +7,13 @@
   fi
 }
 
+@test "Pre-pull platform images" {
+  # Pull timing-sensitive images to all nodes before Cozystack installation.
+  # Cluster-member workloads (OVN raft, LINSTOR) fail if replicas start at
+  # different times due to image-pull stagger. See hack/e2e-prepull-images.sh.
+  hack/e2e-prepull-images.sh
+}
+
 @test "Install Cozystack" {
   # Pre-create the cozy-system namespace with the labels the operator pod needs.
   # The chart no longer ships a Namespace resource (helm v3's --create-namespace
