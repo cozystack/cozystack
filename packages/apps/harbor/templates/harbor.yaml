@@ -65,9 +65,15 @@ spec:
     name: {{ .Release.Name }}-credentials
     valuesKey: redis-password
     targetPath: harbor.redis.external.password
+  # BucketInfo is populated by the COSI BucketAccess controller. Sourcing it via
+  # valuesFrom both gates reconciliation on the Secret being ready and forces a
+  # config-digest change (and thus a helm upgrade) when its contents change —
+  # Flux HR dependsOn cannot reference COSI resources directly.
+  - kind: Secret
+    name: {{ .Release.Name }}-registry-bucket
+    valuesKey: BucketInfo
+    targetPath: bucket.bucketInfo
   values:
-    bucket:
-      secretName: {{ .Release.Name }}-registry-bucket
     db:
       replicas: {{ .Values.database.replicas }}
       size: {{ .Values.database.size }}
