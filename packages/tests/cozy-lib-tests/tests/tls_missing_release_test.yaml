@@ -1,0 +1,25 @@
+suite: TLS certificate helper - Release validation
+
+templates:
+  - templates/tests/tls-missing-release.yaml
+
+tests:
+  # Missing Release triggers a validation error
+  - it: errors when Release is not provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: missing-release-tls
+        secretName: missing-release-tls-secret
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ERROR: "Release" is required for cozy-lib.tls.certificate. Pass the Helm release object via the context dict.'

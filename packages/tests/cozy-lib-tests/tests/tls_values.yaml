@@ -1,0 +1,12 @@
+tls:
+  name: my-redis-tls
+  secretName: my-redis-tls-secret
+  dnsNames:
+    - redis-svc
+    - redis-svc.tenant-test.svc
+  issuerRef:
+    name: selfsigned-cluster-issuer
+    kind: ClusterIssuer
+
+_cluster: {}
+_namespace: {}
