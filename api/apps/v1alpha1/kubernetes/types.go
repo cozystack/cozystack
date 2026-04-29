@@ -206,6 +206,8 @@ type MonitoringAgentsAddon struct {
 }
 
 type NodeGroup struct {
+	// Pod affinity applied to worker VMI virt-launcher pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread worker VMIs across different hypervisor hosts.
+	Affinity k8sRuntime.RawExtension `json:"affinity,omitempty"`
 	// Ephemeral storage size.
 	// +kubebuilder:default:="20Gi"
 	EphemeralStorage resource.Quantity `json:"ephemeralStorage"`
@@ -224,6 +226,8 @@ type NodeGroup struct {
 	Resources Resources `json:"resources"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
+	// Pod topology spread constraints applied to worker VMI virt-launcher pods (standard Kubernetes corev1.TopologySpreadConstraint). When set, takes precedence over any cluster-wide globalAppTopologySpreadConstraints.
+	TopologySpreadConstraints []k8sRuntime.RawExtension `json:"topologySpreadConstraints,omitempty"`
 }
 
 type Resources struct {

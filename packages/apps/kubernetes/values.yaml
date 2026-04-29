@@ -33,6 +33,8 @@ storageClass: replicated
 ## @field {[]string} roles - List of node roles.
 ## @field {Resources} resources - CPU and memory resources for each worker node.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
+## @field {object} [affinity] - Pod affinity applied to worker VMI virt-launcher pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread worker VMIs across different hypervisor hosts.
+## @field {[]object} [topologySpreadConstraints] - Pod topology spread constraints applied to worker VMI virt-launcher pods (standard Kubernetes corev1.TopologySpreadConstraint). When set, takes precedence over any cluster-wide globalAppTopologySpreadConstraints.
 
 ## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map.
 nodeGroups:
