@@ -1,0 +1,18 @@
+{{- if and .Values.tls.enabled (not .Values.tls.secretName) }}
+{{- $dnsNames := list -}}
+{{- $dnsNames = append $dnsNames (printf "%s-external-lb" .Release.Name) -}}
+{{- $dnsNames = append $dnsNames (printf "%s-external-lb.%s" .Release.Name .Release.Namespace) -}}
+{{- $dnsNames = append $dnsNames (printf "%s-external-lb.%s.svc" .Release.Name .Release.Namespace) -}}
+{{- $dnsNames = append $dnsNames (printf "%s-external-lb.%s.svc.cluster.local" .Release.Name .Release.Namespace) -}}
+{{- $dnsNames = append $dnsNames (printf "rfs-%s" .Release.Name) -}}
+{{- $dnsNames = append $dnsNames (printf "rfs-%s.%s" .Release.Name .Release.Namespace) -}}
+{{- $dnsNames = append $dnsNames (printf "rfs-%s.%s.svc" .Release.Name .Release.Namespace) -}}
+{{- $dnsNames = append $dnsNames (printf "rfs-%s.%s.svc.cluster.local" .Release.Name .Release.Namespace) -}}
+{{- include "cozy-lib.tls.certificate" (dict
+    "Release"    .Release
+    "name"       (printf "%s-redis-tls" .Release.Name)
+    "secretName" (include "redis.tls.secretName" .)
+    "dnsNames"   $dnsNames
+    "issuerRef"  .Values.tls.issuerRef
+) }}
+{{- end }}
