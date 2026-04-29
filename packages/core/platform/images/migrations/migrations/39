@@ -2,25 +2,42 @@
 # Migration 39 --> 40
 # Migrate resourcesPreset values from flat names to instance-type names (s1/u1/m1)
 #
-# Series selection per app type:
-#   m1 (Memory, 1:8)  — memory-intensive: redis, opensearch, qdrant
-#   u1 (Universal, 1:4) — databases & messaging: postgres, mariadb, mongodb,
-#                          clickhouse, foundationdb, kafka, rabbitmq, nats, ferretdb
-#   s1 (Standard, 1:2) — stateless services: harbor, vpn, tcp-balancer,
-#                          http-cache, openbao, ingress, external-dns
-#   u1 — fallback for unknown app types
+# Series selection per app kind (read from the
+# apps.cozystack.io/application.kind label):
+#   m1 (Memory, 1:8)  — memory-intensive: Redis, OpenSearch, Qdrant
+#   u1 (Universal, 1:4) — databases & messaging: Postgres, MariaDB, MongoDB,
+#                          ClickHouse, FoundationDB, Kafka, RabbitMQ, NATS,
+#                          plus Kubernetes/VMInstance and any app without the
+#                          kind label (safe over-sizing fallback).
+#   s1 (Standard, 1:2) — stateless services: Harbor, VPN, TCPBalancer,
+#                          HTTPCache, OpenBAO, Ingress, ExternalDNS
+#
+# Limitation: a single series is applied uniformly across every nested
+# resourcesPreset in the values tree. A few apps have mixed series in their
+# chart defaults (e.g. ClickHouse top u1 + clickhouseKeeper s1; OpenSearch top
+# m1 + dashboards s1; Kubernetes apiServer u1 + controllerManager/scheduler/
+# konnectivity s1). Users who explicitly overrode resourcesPreset on those
+# nested fields will end up with the parent app's series there too — i.e.
+# slightly over-sized sub-components. The chart defaults still apply for
+# fields the user did not override, so the common case is unaffected.
 
 set -euo pipefail
 
 echo "Migrating HelmReleases: renaming resourcesPreset values to instance-type format"
 
-# Determine the target series based on HelmRelease name prefix
+# Determine the target series based on the application kind label set by
+# cozystack-api on every HelmRelease it creates
+# (apps.cozystack.io/application.kind, see pkg/apis/apps/v1alpha1/types.go).
+# Keying off the label avoids duplicating the release.prefix list from
+# ApplicationDefinitions and works regardless of the HR name the user picked.
+# HelmReleases without this label (e.g. created outside cozystack-api)
+# fall through to the u1 default — a safe over-sizing on the universal series.
 get_series() {
-  local name="$1"
-  case "$name" in
-    redis-*|opensearch-*|qdrant-*)
+  local kind="$1"
+  case "$kind" in
+    Redis|OpenSearch|Qdrant)
       echo "m1" ;;
-    harbor-*|vpn-*|tcp-balancer-*|http-cache-*|openbao-*|ingress-*|external-dns-*)
+    Harbor|VPN|TCPBalancer|HTTPCache|OpenBAO|Ingress|ExternalDNS)
       echo "s1" ;;
     *)
       echo "u1" ;;
@@ -29,11 +46,13 @@ get_series() {
 
 # Find all HelmReleases that have resourcesPreset in their spec.values
 kubectl get helmreleases --all-namespaces -o json | \
-  jq -r '.items[] | select(.spec.values | tostring | test("resourcesPreset")) | "\(.metadata.namespace)|\(.metadata.name)"' | \
-  while IFS='|' read -r namespace name; do
-    echo "Processing HelmRelease $namespace/$name"
+  jq -r '.items[]
+    | select(.spec.values | tostring | test("resourcesPreset"))
+    | "\(.metadata.namespace)|\(.metadata.name)|\(.metadata.labels["apps.cozystack.io/application.kind"] // "")"' | \
+  while IFS='|' read -r namespace name kind; do
+    echo "Processing HelmRelease $namespace/$name (kind: ${kind:-<none>})"
 
-    series=$(get_series "$name")
+    series=$(get_series "$kind")
     echo "  Using series: $series"
 
     values=$(kubectl get helmrelease -n "$namespace" "$name" -o jsonpath='{.spec.values}')
