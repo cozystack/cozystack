@@ -9,7 +9,7 @@ include ../../../hack/package.mk
 image: image-console image-token-proxy
 
 CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
-CONSOLE_REF ?= 7b68287478dd134382cf4c01f4817eeda3a27df4
+CONSOLE_REF ?= dd1ff0bdbd5e6e2fb6614fd1d831c4cb5c8f8025
 
 image-console:
 	rm -rf .tmp-cozystack-ui
