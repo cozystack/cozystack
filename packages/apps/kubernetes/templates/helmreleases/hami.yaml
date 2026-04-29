@@ -1,4 +1,4 @@
-{{- if .Values.addons.hami.enabled }}
+{{- if and .Values.addons.hami.enabled .Values._namespace.etcd }}
 {{- if not .Values.addons.gpuOperator.enabled }}
 {{- fail "addons.hami requires addons.gpuOperator to be enabled" }}
 {{- end }}

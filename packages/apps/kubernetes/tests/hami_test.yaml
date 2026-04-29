@@ -1,6 +1,8 @@
 suite: HAMi HelmRelease tests
 templates:
   - templates/helmreleases/hami.yaml
+values:
+  - values-ci.yaml
 tests:
   - it: should not render when hami is disabled
     set:
