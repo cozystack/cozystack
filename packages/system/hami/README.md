@@ -57,7 +57,7 @@ addons:
     enabled: true
 ```
 
-When HAMi is enabled, GPU Operator's built-in device plugin is automatically disabled to avoid conflicts.
+When HAMi is enabled, GPU Operator's built-in device plugin is automatically disabled to avoid conflicts. This default is preserved by setting `addons.gpuOperator.valuesOverride.gpu-operator.devicePlugin.enabled: false`; advanced topologies that partition GPU pools (e.g. some nodes use HAMi while others run the standard NVIDIA device plugin via node selectors) can re-enable it explicitly through `valuesOverride`.
 
 ### Requesting fractional GPU resources
 
