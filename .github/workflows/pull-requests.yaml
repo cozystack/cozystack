@@ -313,6 +313,20 @@ jobs:
           name: image-list
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
 
+      # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach
+      #   to the live runner, inspect Talos/Cozystack state and resume with
+      #   `breakpoint resume`. Times out after 30m.
+      #   Configured via the BREAKPOINT_ENDPOINT repository variable — in fork
+      #   PRs repository variables are not exposed, so the step is skipped and
+      #   forks cannot reach the self-hosted rendezvous server.
+      - name: Breakpoint on E2E failure
+        if: failure() && vars.BREAKPOINT_ENDPOINT != ''
+        uses: namespacelabs/breakpoint-action@v0
+        with:
+          duration: 30m
+          endpoint: ${{ vars.BREAKPOINT_ENDPOINT }}
+          authorized-users: kvaps, gecube, kingdonb, lllamnyp, aobort, tym83, klinch0, nbykov0, matthieu-robin, mattia-eleuteri
+
       # ▸ Tear down environment (always runs)
       - name: Tear down sandbox
         if: always()
