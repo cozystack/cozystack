@@ -1,32 +1,27 @@
-{{- define "cozystack.defaultGpuOperatorValues" -}}
-{{- if .Values.addons.hami.enabled }}
-gpu-operator:
-  devicePlugin:
-    enabled: false
+{{- if and .Values.addons.hami.enabled .Values._namespace.etcd }}
+{{- if not .Values.addons.gpuOperator.enabled }}
+{{- fail "addons.hami requires addons.gpuOperator to be enabled" }}
 {{- end }}
-{{- end }}
-
-{{- if and .Values.addons.gpuOperator.enabled .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: {{ .Release.Name }}-gpu-operator
+  name: {{ .Release.Name }}-hami
   labels:
     cozystack.io/repository: system
     cozystack.io/target-cluster-name: {{ .Release.Name }}
     sharding.fluxcd.io/key: tenants
 spec:
-  releaseName: gpu-operator
+  releaseName: hami
   chartRef:
     kind: ExternalArtifact
-    name: cozystack-kubernetes-application-kubevirt-kubernetes-gpu-operator
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-hami
     namespace: cozy-system
   kubeConfig:
     secretRef:
       name: {{ .Release.Name }}-admin-kubeconfig
       key: super-admin.svc
-  targetNamespace: cozy-gpu-operator
-  storageNamespace: cozy-gpu-operator
+  targetNamespace: cozy-hami
+  storageNamespace: cozy-hami
   interval: 5m
   timeout: 10m
   install:
@@ -37,12 +32,9 @@ spec:
     force: true
     remediation:
       retries: -1
-  {{- $defaults := fromYaml (include "cozystack.defaultGpuOperatorValues" .) }}
-  {{- $overrides := deepCopy (default (dict) .Values.addons.gpuOperator.valuesOverride) }}
-  {{- $merged := mergeOverwrite (default (dict) $defaults) $overrides }}
-  {{- if $merged }}
+  {{- with .Values.addons.hami.valuesOverride }}
   values:
-    {{- toYaml $merged | nindent 4 }}
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
   dependsOn:
@@ -51,5 +43,7 @@ spec:
     namespace: {{ .Release.Namespace }}
   {{- end }}
   - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-gpu-operator
     namespace: {{ .Release.Namespace }}
 {{- end }}
