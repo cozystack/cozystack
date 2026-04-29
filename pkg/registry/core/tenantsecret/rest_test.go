@@ -223,6 +223,39 @@ func TestList_WithEverythingSelector_BehavesLikeNoSelector(t *testing.T) {
 	}
 }
 
+func TestList_WithNothingSelector_ReturnsEmpty(t *testing.T) {
+	r := newTestREST(t, makeTenantSecret("bucket-creds", map[string]string{
+		"apps.cozystack.io/application.kind": "Bucket",
+	}))
+
+	list := listTenantSecrets(t, r, &metainternal.ListOptions{LabelSelector: labels.Nothing()})
+
+	if len(list.Items) != 0 {
+		t.Fatalf("expected empty list for Nothing() selector, got %v", itemNames(list.Items))
+	}
+}
+
+func TestWatch_WithNothingSelector_ClosesImmediately(t *testing.T) {
+	r := newTestREST(t)
+
+	ctx, cancel := context.WithCancel(request.WithNamespace(context.Background(), testNamespace))
+	defer cancel()
+
+	w, err := r.Watch(ctx, &metainternal.ListOptions{LabelSelector: labels.Nothing()})
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+
+	select {
+	case _, ok := <-w.ResultChan():
+		if ok {
+			t.Fatal("expected closed channel for Nothing() selector, got an event")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for channel to close")
+	}
+}
+
 // TestWatch_WithLabelSelector_FiltersEvents reproduces issue
 // cozystack/cozystack#2527: TenantSecret Watch ignored opts.LabelSelector
 // and streamed every tenant Secret in the namespace, regardless of the

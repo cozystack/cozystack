@@ -192,6 +192,26 @@ func (r *REST) GroupVersionKind(_ schema.GroupVersion) schema.GroupVersionKind {
 }
 func (*REST) GetSingularName() string { return singularName }
 
+// buildTenantSelector merges the required tenant-resource label with any
+// user-provided requirements from opts.LabelSelector.
+// Returns (selector, true) on success; (nil, false) when the user selector is
+// non-selectable (e.g. labels.Nothing()) — callers should return an empty result.
+func buildTenantSelector(opts *metainternal.ListOptions) (labels.Selector, bool) {
+	ls := labels.NewSelector()
+	req, _ := labels.NewRequirement(tsLabelKey, selection.Equals, []string{tsLabelValue})
+	ls = ls.Add(*req)
+	if opts.LabelSelector != nil {
+		reqs, selectable := opts.LabelSelector.Requirements()
+		if !selectable {
+			return nil, false
+		}
+		if len(reqs) > 0 {
+			ls = ls.Add(reqs...)
+		}
+	}
+	return ls, true
+}
+
 // -----------------------------------------------------------------------------
 // CRUD
 // -----------------------------------------------------------------------------
@@ -241,9 +261,7 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		return nil, err
 	}
 
-	ls := labels.NewSelector()
-	req, _ := labels.NewRequirement(tsLabelKey, selection.Equals, []string{tsLabelValue})
-	ls = ls.Add(*req)
+	ls, selectable := buildTenantSelector(opts)
 
 	emptyList := func() *corev1alpha1.TenantSecretList {
 		return &corev1alpha1.TenantSecretList{
@@ -254,15 +272,9 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		}
 	}
 
-	if opts.LabelSelector != nil {
-		reqs, selectable := opts.LabelSelector.Requirements()
-		if !selectable {
-			// labels.Nothing() and other non-selectable selectors match no objects.
-			return emptyList(), nil
-		}
-		if len(reqs) > 0 {
-			ls = ls.Add(reqs...)
-		}
+	if !selectable {
+		// labels.Nothing() and other non-selectable selectors match no objects.
+		return emptyList(), nil
 	}
 
 	// Parse field selector for manual filtering
@@ -445,23 +457,12 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
-	// Build the same selector as List() does: required tenant-resource label
-	// plus any user-provided requirements.
-	ls := labels.NewSelector()
-	tsReq, _ := labels.NewRequirement(tsLabelKey, selection.Equals, []string{tsLabelValue})
-	ls = ls.Add(*tsReq)
-
-	if opts.LabelSelector != nil {
-		reqs, selectable := opts.LabelSelector.Requirements()
-		if !selectable {
-			// labels.Nothing(): match no objects, return a watcher that closes immediately.
-			ch := make(chan watch.Event)
-			close(ch)
-			return watch.NewProxyWatcher(ch), nil
-		}
-		if len(reqs) > 0 {
-			ls = ls.Add(reqs...)
-		}
+	ls, selectable := buildTenantSelector(opts)
+	if !selectable {
+		// labels.Nothing(): match no objects, return a watcher that closes immediately.
+		ch := make(chan watch.Event)
+		close(ch)
+		return watch.NewProxyWatcher(ch), nil
 	}
 
 	secList := &corev1.SecretList{}
@@ -517,7 +518,11 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 			// Defensive: post-filter against the merged selector. The underlying
 			// watch already filters by label, but this guards against any client
 			// implementation that doesn't honor LabelSelector on Watch.
-			if !ls.Matches(labels.Set(sec.Labels)) {
+			// DELETED events must always pass through: when a Secret's labels mutate
+			// out of the selector, the apiserver synthesizes a DELETED with the new
+			// (non-matching) labels — dropping it would leave cached clients with
+			// stale entries.
+			if ev.Type != watch.Deleted && !ls.Matches(labels.Set(sec.Labels)) {
 				continue
 			}
 
