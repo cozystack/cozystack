@@ -1,0 +1,29 @@
+suite: Dashboard RBAC includes TLS secret
+templates:
+  - templates/dashboard-resourcemap.yaml
+release:
+  namespace: tenant-test
+tests:
+  - it: TLS secret not in RBAC when tls.enabled is false
+    set:
+      tls:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules[?(@.resources[0]=='secrets')].resourceNames
+          content: RELEASE-NAME-redis-tls
+
+  - it: TLS secret added to RBAC when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[?(@.resources[0]=='secrets')].resourceNames
+          content: RELEASE-NAME-redis-tls

@@ -1,0 +1,56 @@
+suite: TLS Certificate
+templates:
+  - templates/tls-certificate.yaml
+tests:
+  - it: does not render when tls.enabled is false
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments: { count: 0 }
+
+  - it: does not render when tls.secretName is provided (user owns secret)
+    set:
+      tls:
+        enabled: true
+        secretName: my-existing-secret
+    asserts:
+      - hasDocuments: { count: 0 }
+
+  - it: renders Certificate when tls.enabled and secretName empty
+    set:
+      tls:
+        enabled: true
+        secretName: ""
+    asserts:
+      - hasDocuments: { count: 1 }
+      - isKind: { of: Certificate }
+      - equal: { path: apiVersion, value: cert-manager.io/v1 }
+      - equal: { path: spec.secretName, value: RELEASE-NAME-redis-tls }
+
+  - it: uses default issuerRef
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal: { path: spec.issuerRef.name, value: selfsigned-cluster-issuer }
+      - equal: { path: spec.issuerRef.kind, value: ClusterIssuer }
+
+  - it: respects custom issuerRef
+    set:
+      tls:
+        enabled: true
+        issuerRef:
+          name: letsencrypt-prod
+          kind: ClusterIssuer
+    asserts:
+      - equal: { path: spec.issuerRef.name, value: letsencrypt-prod }
+
+  - it: dnsNames include external-lb and rfs- service variants
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb }
+      - contains: { path: spec.dnsNames, content: rfs-RELEASE-NAME }
+      - contains: { path: spec.dnsNames, content: rfs-RELEASE-NAME.NAMESPACE.svc.cluster.local }
