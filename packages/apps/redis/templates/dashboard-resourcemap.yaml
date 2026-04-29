@@ -19,6 +19,9 @@ rules:
   - secrets
   resourceNames:
   - "{{ .Release.Name }}-auth"
+  {{- if .Values.tls.enabled }}
+  - "{{ include "redis.tls.secretName" . }}"
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
