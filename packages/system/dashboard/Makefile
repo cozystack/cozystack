@@ -18,7 +18,7 @@ image-console:
 		--file .tmp-cozystack-ui/Containerfile \
 		--provenance false \
 		--builder=$(BUILDER) \
-		--platform=linux/amd64,linux/arm64 \
+		--platform=linux/amd64 \
 		--tag $(REGISTRY)/cozystack-ui:$(call settag,$(TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/cozystack-ui:latest \
 		--cache-to type=inline \
