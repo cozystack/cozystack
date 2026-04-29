@@ -7,11 +7,13 @@ include ../../../hack/package.mk
 image: image-console image-token-proxy
 
 CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
-CONSOLE_REF ?= main
+CONSOLE_REF ?= 2b197ef9d8e2cdf7da632086690c4ab16e9ed0d7
 
 image-console:
 	rm -rf .tmp-cozystack-ui
-	git clone --depth 1 --branch $(CONSOLE_REF) $(CONSOLE_REPO) .tmp-cozystack-ui
+	git clone --no-checkout $(CONSOLE_REPO) .tmp-cozystack-ui
+	git -C .tmp-cozystack-ui fetch --depth 1 origin $(CONSOLE_REF)
+	git -C .tmp-cozystack-ui checkout FETCH_HEAD
 	docker buildx build .tmp-cozystack-ui \
 		--file .tmp-cozystack-ui/Containerfile \
 		--provenance false \
@@ -21,6 +23,7 @@ image-console:
 		--cache-from type=registry,ref=$(REGISTRY)/cozystack-ui:latest \
 		--cache-to type=inline \
 		--metadata-file images/console.json \
+		--build-arg COZYSTACK_VERSION=$(COZYSTACK_VERSION) \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack-ui" \
 		--load=$(LOAD)
