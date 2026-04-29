@@ -23,7 +23,7 @@ image-console:
 		--cache-from type=registry,ref=$(REGISTRY)/cozystack-ui:latest \
 		--cache-to type=inline \
 		--metadata-file images/console.json \
-		--build-arg COZYSTACK_VERSION=$(COZYSTACK_VERSION) \
+		--build-arg APP_VERSION=$(COZYSTACK_VERSION) \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack-ui" \
 		--load=$(LOAD)
