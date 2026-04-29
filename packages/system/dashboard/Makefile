@@ -4,6 +4,8 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+.PHONY: image image-console image-token-proxy
+
 image: image-console image-token-proxy
 
 CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git

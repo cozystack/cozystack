@@ -13,16 +13,6 @@ rules:
   - list
   - watch
 - apiGroups:
-  - core.cozystack.io
-  resources:
-  - tenantmodules
-  - tenantnamespaces
-  - tenantsecrets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - dashboard.cozystack.io
   resources:
   - '*'
@@ -46,20 +36,6 @@ rules:
   - get
   - list
   - watch
-- apiGroups:
-  - kubevirt.io
-  resources:
-  - virtualmachineinstances
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - subresources.kubevirt.io
-  resources:
-  - virtualmachineinstances/vnc
-  verbs:
-  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
