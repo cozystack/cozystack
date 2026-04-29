@@ -316,8 +316,13 @@ jobs:
       # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach
       #   to the live runner, inspect Talos/Cozystack state and resume with
       #   `breakpoint resume`. Times out after 30m.
+      #   Gated by the BREAKPOINT_ENABLED secret — in fork PRs the secret is
+      #   not exposed, so the step is skipped and forks cannot reach the
+      #   self-hosted rendezvous server.
       - name: Breakpoint on E2E failure
-        if: failure()
+        if: failure() && env.BREAKPOINT_ENABLED == 'true'
+        env:
+          BREAKPOINT_ENABLED: ${{ secrets.BREAKPOINT_ENABLED }}
         uses: namespacelabs/breakpoint-action@v0
         with:
           duration: 30m
