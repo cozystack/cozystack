@@ -313,6 +313,17 @@ jobs:
           name: image-list
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
 
+      # ▸ Open an SSH breakpoint to the failing sandbox (opt-in via `debug` label).
+      #   Maintainers can SSH into the live runner, inspect Talos/Cozystack state
+      #   and resume the workflow with `breakpoint resume`. Times out after 30m.
+      - name: Breakpoint on E2E failure
+        if: failure() && contains(github.event.pull_request.labels.*.name, 'debug')
+        uses: namespacelabs/breakpoint-action@v0
+        with:
+          duration: 30m
+          endpoint: 158.101.126.45:5000
+          authorized-users: kvaps, gecube, kingdonb, lllamnyp, aobort, tym83, klinch0, nbykov0, matthieu-robin, mattia-eleuteri
+
       # ▸ Tear down environment (always runs)
       - name: Tear down sandbox
         if: always()
