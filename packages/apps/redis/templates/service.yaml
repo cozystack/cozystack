@@ -21,7 +21,15 @@ spec:
     app.kubernetes.io/part-of: redis-failover
     redisfailovers-role: master
   ports:
+  {{- if .Values.tls.enabled }}
+  - name: redis-tls
+    port: 6380
+    targetPort: redis-tls
+    protocol: TCP
+  {{- else }}
   - name: redis
     port: 6379
     targetPort: redis
+    protocol: TCP
+  {{- end }}
 {{- end }}
