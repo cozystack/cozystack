@@ -13,6 +13,16 @@ rules:
   - list
   - watch
 - apiGroups:
+  - core.cozystack.io
+  resources:
+  - tenantmodules
+  - tenantnamespaces
+  - tenantsecrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - dashboard.cozystack.io
   resources:
   - '*'
