@@ -13,4 +13,4 @@ linstor:
 linstorCSI:
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
-    tag: v1.10.5@sha256:b8f59b5659fb1791cb764d3f37df4cf29920aadcc10637231ba7d857233f377d
+    tag: v1.10.6@sha256:aef5c6a8351a86daba781390c123f39f947da7ade59075b59f89fa8e3edeb75a
