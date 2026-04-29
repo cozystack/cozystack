@@ -46,11 +46,31 @@ tests:
     asserts:
       - equal: { path: spec.issuerRef.name, value: letsencrypt-prod }
 
-  - it: dnsNames include external-lb and rfs- service variants
+  - it: dnsNames include master, replicas and external-lb service variants
     set:
       tls:
         enabled: true
     asserts:
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-master }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-master.NAMESPACE.svc.cluster.local }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-replicas }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-replicas.NAMESPACE.svc.cluster.local }
       - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb }
-      - contains: { path: spec.dnsNames, content: rfs-RELEASE-NAME }
-      - contains: { path: spec.dnsNames, content: rfs-RELEASE-NAME.NAMESPACE.svc.cluster.local }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb.NAMESPACE.svc.cluster.local }
+
+  - it: dnsNames do not contain rfs- operator plaintext service
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notContains: { path: spec.dnsNames, content: rfs-RELEASE-NAME }
+      - notContains: { path: spec.dnsNames, content: rfs-RELEASE-NAME.NAMESPACE.svc.cluster.local }
+
+  - it: dnsNames include external-lb variants even when external is false
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb.NAMESPACE.svc.cluster.local }
