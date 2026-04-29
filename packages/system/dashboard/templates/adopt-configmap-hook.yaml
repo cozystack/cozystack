@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozy-dashboard-adopt
+  namespace: cozy-dashboard
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozy-dashboard-adopt
+  namespace: cozy-dashboard
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["cozy-dashboard-console-config"]
+  verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozy-dashboard-adopt
+  namespace: cozy-dashboard
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozy-dashboard-adopt
+subjects:
+- kind: ServiceAccount
+  name: cozy-dashboard-adopt
+  namespace: cozy-dashboard
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cozy-dashboard-adopt-configmap
+  namespace: cozy-dashboard
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-install
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  template:
+    spec:
+      serviceAccountName: cozy-dashboard-adopt
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: adopt
+        image: rancher/kubectl:v1.29.10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        command:
+        - /bin/sh
+        - -c
+        - |
+          kubectl annotate configmap cozy-dashboard-console-config \
+            --namespace cozy-dashboard \
+            meta.helm.sh/release-name={{ .Release.Name }} \
+            meta.helm.sh/release-namespace={{ .Release.Namespace }} \
+            --overwrite 2>/dev/null || true
+          kubectl label configmap cozy-dashboard-console-config \
+            --namespace cozy-dashboard \
+            app.kubernetes.io/managed-by=Helm \
+            --overwrite 2>/dev/null || true
