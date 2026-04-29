@@ -41,6 +41,9 @@ type ConfigSpec struct {
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
+	// TLS configuration for client-facing connections. When enabled, an nginx stream sidecar terminates TLS on port 6380. Intra-cluster traffic on 6379 (operator probes, sentinel, replication) remains plaintext.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 }
 
 type Resources struct {
@@ -48,6 +51,27 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type TLS struct {
+	// Enable TLS termination via nginx stream sidecar.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// cert-manager Issuer reference. Used only when secretName is empty.
+	// +kubebuilder:default:={}
+	IssuerRef TLSIssuerRef `json:"issuerRef"`
+	// Name of an existing kubernetes.io/tls secret. When non-empty, cert-manager Certificate is NOT rendered and the user manages the secret.
+	// +kubebuilder:default:=""
+	SecretName string `json:"secretName"`
+}
+
+type TLSIssuerRef struct {
+	// Either "Issuer" or "ClusterIssuer".
+	// +kubebuilder:default:="ClusterIssuer"
+	Kind string `json:"kind"`
+	// Issuer/ClusterIssuer resource name.
+	// +kubebuilder:default:="selfsigned-cluster-issuer"
+	Name string `json:"name"`
 }
 
 // +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
