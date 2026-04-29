@@ -91,6 +91,42 @@
       "description": "Enable password generation.",
       "type": "boolean",
       "default": true
+    },
+    "tls": {
+      "description": "TLS configuration for client-facing connections. When enabled, an nginx stream sidecar terminates TLS on port 6380. Intra-cluster traffic on 6379 (operator probes, sentinel, replication) remains plaintext.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable TLS termination via nginx stream sidecar.",
+          "type": "boolean",
+          "default": false
+        },
+        "secretName": {
+          "description": "Name of an existing kubernetes.io/tls secret. When non-empty, cert-manager Certificate is NOT rendered and the user manages the secret.",
+          "type": "string",
+          "default": ""
+        },
+        "issuerRef": {
+          "description": "cert-manager Issuer reference. Used only when secretName is empty.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "Issuer/ClusterIssuer resource name.",
+              "type": "string",
+              "default": "selfsigned-cluster-issuer"
+            },
+            "kind": {
+              "description": "Either \"Issuer\" or \"ClusterIssuer\".",
+              "type": "string",
+              "default": "ClusterIssuer",
+              "enum": [
+                "Issuer",
+                "ClusterIssuer"
+              ]
+            }
+          }
+        }
+      }
     }
   }
 }

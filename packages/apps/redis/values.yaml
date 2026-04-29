@@ -46,3 +46,16 @@ version: v8
 
 ## @param {bool} authEnabled - Enable password generation.
 authEnabled: true
+
+## @param {struct} tls - TLS configuration for client-facing connections. When enabled, an nginx stream sidecar terminates TLS on port 6380. Intra-cluster traffic on 6379 (operator probes, sentinel, replication) remains plaintext.
+## @field {bool} enabled - Enable TLS termination via nginx stream sidecar.
+## @field {string} secretName - Name of an existing kubernetes.io/tls secret. When non-empty, cert-manager Certificate is NOT rendered and the user manages the secret.
+## @field {struct} issuerRef - cert-manager Issuer reference. Used only when secretName is empty.
+## @field {string} issuerRef.name - Issuer/ClusterIssuer resource name.
+## @field {string} issuerRef.kind - Either "Issuer" or "ClusterIssuer".
+tls:
+  enabled: false
+  secretName: ""
+  issuerRef:
+    name: "selfsigned-cluster-issuer"
+    kind: "ClusterIssuer"
