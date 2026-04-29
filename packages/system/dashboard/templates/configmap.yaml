@@ -4,4 +4,4 @@ kind: ConfigMap
 metadata:
   name: cozy-dashboard-console-config
 data:
-  config.json: {{ $branding | toJson }}
+  config.json: {{ $branding | toJson | quote }}
