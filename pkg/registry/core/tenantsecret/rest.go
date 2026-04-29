@@ -245,8 +245,22 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	req, _ := labels.NewRequirement(tsLabelKey, selection.Equals, []string{tsLabelValue})
 	ls = ls.Add(*req)
 
+	emptyList := func() *corev1alpha1.TenantSecretList {
+		return &corev1alpha1.TenantSecretList{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       kindTenantSecretList,
+			},
+		}
+	}
+
 	if opts.LabelSelector != nil {
-		if reqs, _ := opts.LabelSelector.Requirements(); len(reqs) > 0 {
+		reqs, selectable := opts.LabelSelector.Requirements()
+		if !selectable {
+			// labels.Nothing() and other non-selectable selectors match no objects.
+			return emptyList(), nil
+		}
+		if len(reqs) > 0 {
 			ls = ls.Add(reqs...)
 		}
 	}
@@ -261,12 +275,7 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 
 	// If field selector specifies namespace different from context, return empty list
 	if fieldFilter.Namespace != "" && ns != "" && ns != fieldFilter.Namespace {
-		return &corev1alpha1.TenantSecretList{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
-				Kind:       kindTenantSecretList,
-			},
-		}, nil
+		return emptyList(), nil
 	}
 
 	list := &corev1.SecretList{}
@@ -436,8 +445,26 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
+	// Build the same selector as List() does: required tenant-resource label
+	// plus any user-provided requirements.
+	ls := labels.NewSelector()
+	tsReq, _ := labels.NewRequirement(tsLabelKey, selection.Equals, []string{tsLabelValue})
+	ls = ls.Add(*tsReq)
+
+	if opts.LabelSelector != nil {
+		reqs, selectable := opts.LabelSelector.Requirements()
+		if !selectable {
+			// labels.Nothing(): match no objects, return a watcher that closes immediately.
+			ch := make(chan watch.Event)
+			close(ch)
+			return watch.NewProxyWatcher(ch), nil
+		}
+		if len(reqs) > 0 {
+			ls = ls.Add(reqs...)
+		}
+	}
+
 	secList := &corev1.SecretList{}
-	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector()
 	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
 		Namespace:     ns,
 		LabelSelector: ls,
@@ -484,6 +511,13 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 			sec, ok := ev.Object.(*corev1.Secret)
 			if !ok || sec == nil {
+				continue
+			}
+
+			// Defensive: post-filter against the merged selector. The underlying
+			// watch already filters by label, but this guards against any client
+			// implementation that doesn't honor LabelSelector on Watch.
+			if !ls.Matches(labels.Set(sec.Labels)) {
 				continue
 			}
 
