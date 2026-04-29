@@ -1,0 +1,7 @@
+{{- $branding := .Values._cluster.branding | default dict }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozy-dashboard-console-config
+data:
+  config.json: {{ $branding | toJson }}

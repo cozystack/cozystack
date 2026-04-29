@@ -83,6 +83,14 @@ spec:
               type: RuntimeDefault
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
+          volumeMounts:
+            - name: console-config
+              mountPath: /usr/share/nginx/html/config.json
+              subPath: config.json
+      volumes:
+        - name: console-config
+          configMap:
+            name: cozy-dashboard-console-config
       dnsPolicy: ClusterFirst
       enableServiceLinks: false
       hostIPC: false
