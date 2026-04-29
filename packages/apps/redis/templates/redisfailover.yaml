@@ -64,6 +64,48 @@ spec:
       - appendonly no
       - save ""
       {{- end }}
+    {{- if .Values.tls.enabled }}
+    extraContainers:
+      - name: tls-proxy
+        image: nginxinc/nginx-unprivileged:1.29-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 6380
+            name: redis-tls
+            protocol: TCP
+        volumeMounts:
+          - name: tls-certs
+            mountPath: /etc/nginx/tls
+            readOnly: true
+          - name: nginx-tls-config
+            mountPath: /etc/nginx/nginx.conf
+            subPath: nginx.conf
+            readOnly: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        livenessProbe:
+          tcpSocket:
+            port: 6380
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 6380
+          initialDelaySeconds: 2
+          periodSeconds: 5
+    extraVolumes:
+      - name: tls-certs
+        secret:
+          secretName: {{ include "redis.tls.secretName" . }}
+      - name: nginx-tls-config
+        configMap:
+          name: {{ .Release.Name }}-redis-tls-nginx
+    {{- end }}
   {{- if .Values.authEnabled }}
   auth:
     secretPath: {{ .Release.Name }}-auth
