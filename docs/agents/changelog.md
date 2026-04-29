@@ -103,40 +103,42 @@ git branch --show-current
 
 **Important**: Determine if you're generating a changelog for a **minor release** (vX.Y.0) or a **patch release** (vX.Y.Z where Z > 0).
 
+**⚠️ CRITICAL — use the tag, not HEAD:** Always compare the previous version against the **tag for the release you are generating** (e.g. `v1.3.1`), never against `HEAD`. Patch releases are cut from `release-X.Y` branches, so when CI checks out the tag and runs `git log v<prev>..HEAD` you might get the right answer — but if the tag is missing locally, or if a developer runs this on `main`, `HEAD` will contain commits merged to main that are NOT in the release. Using the tag explicitly removes this footgun.
+
 **For patch releases (vX.Y.Z where Z > 0):**
-Get the list of commits starting from the previous patch version to HEAD:
+Get the list of commits between the previous patch tag and the new tag:
 
 **⚠️ CRITICAL: Do NOT use --first-parent flag! It will skip merge commits including backports!**
 
 ```bash
-# Get all commits including merge commits (backports)
-git log <previous_version>..HEAD --pretty=format:"%h - %s (%an, %ar)"
+# Get all commits including merge commits (backports), bounded by the new tag
+git log <previous_version>..v<new_version> --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 For example, if generating changelog for `v0.37.2`:
 ```bash
-git log v0.37.1..HEAD --pretty=format:"%h - %s (%an, %ar)"
+git log v0.37.1..v0.37.2 --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 **⚠️ IMPORTANT: Check for backports:**
 - Look for commits with "[Backport release-X.Y]" in the commit message
 - For backport PRs, find the original PR number mentioned in the backport commit message or PR description
 - Use the original PR author (not the backport PR author) when creating changelog entries
-- Include both the original PR number and backport PR number in the changelog entry (e.g., `#1606, #1609`)
+- **MUST** combine the original and backport into a **single entry** with both PR numbers (e.g. `#1606, backport #1609`). Do NOT list the original and the backport as two separate entries — that produces duplicates in the changelog.
 
 **For minor releases (vX.Y.0):**
-Minor releases must include **all changes** from patch releases of the previous minor version. Get commits from the previous minor release:
+Minor releases must include **all changes** from patch releases of the previous minor version. Get commits from the previous minor release tag up to the new tag:
 
 **⚠️ CRITICAL: Do NOT use --first-parent flag! It will skip merge commits including backports!**
 
 ```bash
 # For v0.38.0, get all commits since v0.37.0 (including all patch releases v0.37.1, v0.37.2, etc.)
-git log v<previous_minor_version>..HEAD --pretty=format:"%h - %s (%an, %ar)"
+git log v<previous_minor_version>..v<new_version> --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 For example, if generating changelog for `v0.38.0`:
 ```bash
-git log v0.37.0..HEAD --pretty=format:"%h - %s (%an, %ar)"
+git log v0.37.0..v0.38.0 --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 This will include all commits from v0.37.1, v0.37.2, v0.37.3, etc., up to v0.38.0.
@@ -279,8 +281,9 @@ git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+'
 - Backport PRs have format: `[Backport release-X.Y] <original title> (#BACKPORT_PR_NUMBER)`
 - The backport commit message or PR description usually mentions the original PR number
 - For backport entries in changelog, use the original PR author (not the backport PR author)
-- Include both original and backport PR numbers in the changelog entry (e.g., `#1606, #1609`)
+- **MUST** combine the original and backport PR into a **single changelog entry** with both PR numbers (e.g. `#1606, backport #1609`). NEVER list the original and the backport as two separate entries — that produces visible duplicates and was the primary defect that motivated this rule.
 - To find original PR from backport: Check the backport PR description or commit message for "Backport of #ORIGINAL_PR"
+- If a release range contains a backport but its original PR is **not** in the same range (because the original was merged earlier and already shipped in a previous release), drop the entry entirely — it has already been changelog'd.
 
 **For each PR number, get the author:**
    
@@ -437,6 +440,8 @@ Create a new changelog file in the format matching previous versions:
 
 3. **Entry format:**
    - Use the format: `* **Brief description**: detailed description ([**@username**](https://github.com/username) in #PR_NUMBER)`
+   - **⚠️ The brief description and the detailed description MUST NOT be the same string.** The brief description is typically the conventional-commit subject (e.g. `fix(api): drop legacy field`); the detailed description is a one-or-two-sentence explanation of what the change means for users — what is fixed, what is now possible, what behavior changed. If you find yourself writing `* **fix(foo): X**: fix(foo): X (...)` you have not done the second half of the work — go read the PR body or commit diff and write the user-facing description.
+   - **⚠️ Do NOT invent entries.** Every entry must correspond to a commit in the `git log v<previous>..v<new>` range. If you can't find a commit for an entry you wrote, drop the entry. PR numbers from outside the release range (e.g. PRs from years ago, or PRs that were merged after the tag commit) MUST NOT appear in the changelog.
    - **CRITICAL - Get authorship correctly**: 
      - **ALWAYS use PR author, not commit author**: Extract PR number from commit message, then use `gh pr view` to get the PR author. The commit author (especially for squash/merge commits) is usually the person who merged the PR (or GitHub bot), NOT the person who wrote the code.
        ```bash
@@ -494,19 +499,16 @@ Create a new changelog file in the format matching previous versions:
    Since you've already generated the changelog with all PR authors correctly identified, simply extract GitHub usernames from the changelog entries:
    
    ```bash
-   # Extract all GitHub usernames from the current release changelog
-   # This method is simpler and more reliable than extracting from git history
-   
-   # For patch releases: extract from the current changelog file
-   grep -oE '\[@[a-zA-Z0-9_-]+\]' docs/changelogs/v<version>.md | \
-     sed 's/\[@/@/' | sed 's/\]//' | \
-     sort -u
-   
-   # For minor releases: extract from the current changelog file
-   grep -oE '\[@[a-zA-Z0-9_-]+\]' docs/changelogs/v<version>.md | \
-     sed 's/\[@/@/' | sed 's/\]//' | \
+   # Extract all GitHub usernames from the current release changelog,
+   # filtering out CI/bot accounts that should not appear as human contributors.
+   # This method is simpler and more reliable than extracting from git history.
+   grep -oE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v<version>.md | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u
    ```
+   
+   **⚠️ MANDATORY: Exclude bot/CI accounts from the human Contributors list.** Accounts whose login starts with `app/`, ends with `[bot]`, or matches `cozystack-ci`, `github-actions`, `dependabot`, or `renovate` represent automation, not human contributions, and must NOT appear under "Contributors". They may legitimately appear in **entry attribution** (e.g. a Renovate PR is attributed to `@app/renovate`) — but never in the contributors list.
    
    **Get all previous contributors (to identify new ones):**
    ```bash
