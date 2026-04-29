@@ -15,3 +15,6 @@ Custom patches for piraeus-server (linstor-server) v1.33.2.
 - **retry-adjust-after-stale-bitmap.diff** — Retry `drbdadm adjust` after detaching a stale local bitmap state
   - Source PR: [#491](https://github.com/LINBIT/linstor-server/pull/491)
   - Backported from commit: [`51ae50a84`](https://github.com/kvaps/linstor-server/commit/51ae50a84dcb98093f543b819652c750a94d96c9)
+- **retry-secondary-after-mkfs.diff** — Retry `drbdadm secondary` after mkfs when DRBD reports the device as held open by an external probe (Talos block-controller, udev, multipathd, etc.). Without this retry, a transient `Device is held open by someone` aborts resource initialization, leaves the satellite in an intermediate state, and prevents the controller from receiving the final `UpToDate` event — orphan PVs in `Released` then cannot be cleaned up.
+  - Related upstream issue: [#268](https://github.com/LINBIT/linstor-server/issues/268)
+  - Related upstream issue: [drbd #74](https://github.com/LINBIT/drbd/issues/74) (same EBUSY pattern with multipathd)
