@@ -37,10 +37,15 @@ cd gpu-driver-container/vgpu-manager/ubuntu24.04
 # Place the .run alongside the Dockerfile (do not check it in)
 cp /path/to/NVIDIA-Linux-x86_64-595.58.02-vgpu-kvm.run .
 
+# --platform linux/amd64 is mandatory on arm64 build hosts (Apple
+# Silicon): GPU nodes are amd64 and the kubelet pull fails with
+# 'no matching manifest' if the image was built native on arm64.
 docker build \
+  --platform linux/amd64 \
   --build-arg DRIVER_VERSION=595.58.02 \
   -t registry.example.com/nvidia/vgpu-manager:595.58.02-ubuntu24.04 .
 
+# docker login first if your registry needs auth.
 docker push registry.example.com/nvidia/vgpu-manager:595.58.02-ubuntu24.04
 ```
 
