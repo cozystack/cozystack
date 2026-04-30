@@ -14,7 +14,7 @@ This guide focuses on the **SR-IOV path**, which is the only model NVIDIA suppor
 ## Prerequisites
 
 - An Ada Lovelace (or newer) NVIDIA GPU that supports SR-IOV vGPU (L4, L40, L40S, etc.).
-- Ubuntu 24.04 host OS. Older Ubuntu releases also work if the upstream `gpu-driver-container` repo has a matching `vgpu-manager/` Dockerfile. **Talos Linux is not recommended** — we tried, NVIDIA does not grant redistribution rights for the proprietary vGPU `.run`, and Sidero closed [siderolabs/extensions#461](https://github.com/siderolabs/extensions/issues/461) as «won't fix». Building a Talos system extension that includes the driver in-tree is therefore not feasible without a private fork that violates the EULA.
+- Ubuntu 24.04 host OS. Older Ubuntu releases also work if the upstream `gpu-driver-container` repo has a matching `vgpu-manager/` Dockerfile. **Talos Linux is not recommended** for vGPU. NVIDIA does not publicly distribute the vGPU guest driver — it requires NVIDIA Enterprise Portal access — and Sidero [closed siderolabs/extensions#461](https://github.com/siderolabs/extensions/issues/461) noting that they cannot support vGPU «unless NVIDIA changes their licensing terms or provides us a way to obtain, test, and distribute the software». Building a Talos system extension that includes the driver in-tree is therefore not feasible without a private fork that violates the EULA.
 - KubeVirt **v1.9.0 or later**. SR-IOV vGPU passthrough was added by [kubevirt/kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890) («vGPU: SRIOV support», merged to `main` 2026-04-10) and will ship in the v1.9.0 release (ETA July 2026). Earlier released tags (`v1.6.x` / `v1.7.x` / `v1.8.x`) do not include the patch — backports are not planned. If you need vGPU before v1.9.0 lands you have to run a `main`-based nightly build of `virt-handler`; the rest of the operator can stay on the latest released tag.
 - An NVIDIA vGPU Software / NVIDIA AI Enterprise subscription (the `.run` is not redistributable).
 - A reachable NVIDIA Delegated License Service (DLS) instance and a matching `client_configuration_token.tok` file.
@@ -173,7 +173,7 @@ Operators upgrading from the previous Cozystack release (gpu-operator chart v25.
 
 ## Sample VirtualMachine
 
-For SR-IOV vGPU use `hostDevices`, not `gpus` (the latter expects an mdev resource and will not match a `pciHostDevices` entry):
+Either `hostDevices` or `gpus` accepts the resource (the upstream KubeVirt API resolves both PCI and mediated-device pools), but the convention is to use `hostDevices` for VF-style PCI passthrough:
 
 ```yaml
 apiVersion: kubevirt.io/v1
