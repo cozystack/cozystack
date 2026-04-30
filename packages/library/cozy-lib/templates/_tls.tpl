@@ -20,6 +20,7 @@ Parameters:
   - name       (required) - Certificate CR metadata.name
   - secretName (required) - TLS secret name to create (can be same as name). Required when calling directly. When using through tls.yaml, defaults to name.
   - dnsNames   (required) - list of DNS SANs
+  - extraDnsNames (optional) - additional DNS SANs to append (e.g. user-supplied custom domains)
   - issuerRef  (required) - dict with "name" and "kind" (e.g. ClusterIssuer, Issuer)
   - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset
   - renewBefore (optional) - renewal window, defaults to 720h (30 days)
@@ -74,7 +75,10 @@ spec:
     {{- end }}
   dnsNames:
     {{- range .dnsNames }}
-    - {{ . }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- range .extraDnsNames }}
+    - {{ . | quote }}
     {{- end }}
   issuerRef:
     name: {{ .issuerRef.name }}
