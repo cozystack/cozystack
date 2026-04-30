@@ -24,10 +24,22 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+)
+
+// routeKind discriminates HTTPRoute vs TLSRoute when stamping
+// RouteParentStatus back. Without this, status writes would target
+// the wrong resource type entirely.
+type routeKind int
+
+const (
+	routeKindHTTP routeKind = iota
+	routeKindTLS
 )
 
 // ControllerName is the value used in HTTPRoute.Status.Parents[].ControllerName
@@ -35,9 +47,13 @@ import (
 // controllerName (Cilium etc.) so multiple controllers can coexist.
 const ControllerName gatewayv1.GatewayController = "gateway.cozystack.io/tenantgateway-controller"
 
-// routeRef is a lightweight identifier of an HTTPRoute as far as
-// hostname-conflict resolution is concerned.
+// routeRef is a lightweight identifier of an HTTPRoute or TLSRoute
+// as far as hostname-conflict resolution is concerned. The kind
+// field is required so status updates write to the right resource
+// type — TLSRoute and HTTPRoute may share namespace/name but live
+// at different GVKs.
 type routeRef struct {
+	kind      routeKind
 	namespace string
 	name      string
 	parentRef gatewayv1.ParentReference // exact ref the route used to attach
@@ -142,37 +158,49 @@ func (r *Reconciler) updateRouteStatuses(
 }
 
 // updateRouteParentStatus locates or creates the RouteParentStatus
-// entry for our ControllerName on the given HTTPRoute and overwrites
-// its Conditions with the supplied set.
+// entry for our ControllerName on the given route (HTTPRoute or
+// TLSRoute, by ref.kind) and overwrites its Conditions with the
+// supplied set.
 func (r *Reconciler) updateRouteParentStatus(ctx context.Context, ref routeRef, conds []metav1.Condition) error {
-	route := &gatewayv1.HTTPRoute{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, route); err != nil {
-		return fmt.Errorf("get route: %w", err)
-	}
-
-	updated := false
-	found := false
-	for i := range route.Status.Parents {
-		ps := &route.Status.Parents[i]
-		if ps.ControllerName != ControllerName {
-			continue
+	switch ref.kind {
+	case routeKindHTTP:
+		route := &gatewayv1.HTTPRoute{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, route); err != nil {
+			return fmt.Errorf("get HTTPRoute: %w", err)
 		}
-		found = true
-		ps.ParentRef = ref.parentRef
-		ps.Conditions = conds
-		updated = true
-		break
+		mergeRouteParentStatus(&route.Status.Parents, ref.parentRef, conds)
+		return r.Status().Update(ctx, route)
+	case routeKindTLS:
+		route := &gatewayv1alpha2.TLSRoute{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, route); err != nil {
+			return fmt.Errorf("get TLSRoute: %w", err)
+		}
+		mergeRouteParentStatus(&route.Status.Parents, ref.parentRef, conds)
+		return r.Status().Update(ctx, route)
+	default:
+		return fmt.Errorf("unknown route kind %d for %s/%s", ref.kind, ref.namespace, ref.name)
 	}
-	if !found {
-		route.Status.Parents = append(route.Status.Parents, gatewayv1.RouteParentStatus{
-			ControllerName: ControllerName,
-			ParentRef:      ref.parentRef,
-			Conditions:     conds,
-		})
-		updated = true
-	}
-	if !updated {
-		return nil
-	}
-	return r.Status().Update(ctx, route)
 }
+
+// mergeRouteParentStatus updates or appends the RouteParentStatus
+// entry tagged with our ControllerName. Other entries (Cilium,
+// other controllers) are left alone.
+func mergeRouteParentStatus(parents *[]gatewayv1.RouteParentStatus, ref gatewayv1.ParentReference, conds []metav1.Condition) {
+	for i := range *parents {
+		ps := &(*parents)[i]
+		if ps.ControllerName == ControllerName {
+			ps.ParentRef = ref
+			ps.Conditions = conds
+			return
+		}
+	}
+	*parents = append(*parents, gatewayv1.RouteParentStatus{
+		ControllerName: ControllerName,
+		ParentRef:      ref,
+		Conditions:     conds,
+	})
+}
+
+// silence the unused-import lints — client is referenced indirectly
+// through the test scaffolding only.
+var _ = client.Object(nil)

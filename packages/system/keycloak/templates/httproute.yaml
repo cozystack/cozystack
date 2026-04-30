@@ -13,7 +13,6 @@ spec:
     kind: Gateway
     name: cozystack
     namespace: {{ $exposeIngress }}
-    sectionName: https
   hostnames:
   - {{ $ingressHost | quote }}
   rules:

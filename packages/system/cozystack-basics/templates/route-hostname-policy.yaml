@@ -21,7 +21,15 @@
   to v1 is tracked upstream and we will follow the rename when it
   lands.
 */}}
-{{- $celValidator := `(!has(object.spec.hostnames) || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? true : object.spec.hostnames.all(h, h == namespaceObject.metadata.labels["namespace.cozystack.io/host"] || h.endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"]))` -}}
+{{- /*
+  CEL safety note: has() only works on field access expressions, not
+  on top-level variables. namespaceObject is a top-level var supplied
+  by the apiserver, so the nil check uses `!= null` first; the
+  nested has() then walks into metadata.labels safely. The
+  companion gateway-hostname-policy uses the same pattern. See the
+  feedback memory cel-has-field-only.md.
+*/}}
+{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels) || !has(object.spec.hostnames)) ? true : object.spec.hostnames.all(h, h == namespaceObject.metadata.labels["namespace.cozystack.io/host"] || h.endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"]))` -}}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy

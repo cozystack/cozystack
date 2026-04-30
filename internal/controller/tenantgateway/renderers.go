@@ -30,6 +30,42 @@ import (
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
 
+// buildAllowedRoutes computes the AllowedRoutes block applied to
+// every listener on the rendered Gateway: a Selector that matches
+// the built-in `kubernetes.io/metadata.name` label (kube-apiserver-
+// written, unspoofable). The accepted set is the publishing tenant
+// namespace plus tgw.Spec.AttachedNamespaces. This is Layer 1 of
+// the security model documented in the gateway chart README.
+func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
+	values := []string{tgw.Namespace}
+	seen := map[string]struct{}{tgw.Namespace: {}}
+	for _, ns := range tgw.Spec.AttachedNamespaces {
+		if ns == "" {
+			continue
+		}
+		if _, dup := seen[ns]; dup {
+			continue
+		}
+		seen[ns] = struct{}{}
+		values = append(values, ns)
+	}
+	from := gatewayv1.NamespacesFromSelector
+	return &gatewayv1.AllowedRoutes{
+		Namespaces: &gatewayv1.RouteNamespaces{
+			From: &from,
+			Selector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{
+						Key:      "kubernetes.io/metadata.name",
+						Operator: metav1.LabelSelectorOpIn,
+						Values:   values,
+					},
+				},
+			},
+		},
+	}
+}
+
 // hostnameFirstLabel returns the first DNS label of a hostname (the
 // part before the first '.'), used for derived listener and cert
 // names. "harbor.foo.example.com" → "harbor".

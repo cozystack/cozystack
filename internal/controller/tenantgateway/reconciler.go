@@ -147,6 +147,7 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 			continue
 		}
 		ref := routeRef{
+			kind:      routeKindHTTP,
 			namespace: route.Namespace,
 			name:      route.Name,
 			parentRef: matchingRef,
@@ -167,6 +168,7 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 			continue
 		}
 		ref := routeRef{
+			kind:      routeKindTLS,
 			namespace: route.Namespace,
 			name:      route.Name,
 			parentRef: matchingRef,
@@ -370,12 +372,21 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // each becomes an HTTPS listener with its own per-listener cert. In
 // DNS-01 mode dynHostnames is expected to be empty (collector returns
 // nothing) — the wildcard listener handles all subdomains.
+//
+// Every listener is gated by an unspoofable namespace selector
+// (kubernetes.io/metadata.name In [...]) so only the publishing
+// tenant namespace plus the TenantGateway.Spec.AttachedNamespaces
+// list (cozy-* platform namespaces) can attach routes. This is
+// Layer 1 of the security model documented in
+// packages/extra/gateway/README.md.
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string) (*gatewayv1.Gateway, error) {
+	allowedRoutes := buildAllowedRoutes(tgw)
 	listeners := []gatewayv1.Listener{
 		{
-			Name:     "http",
-			Port:     80,
-			Protocol: gatewayv1.HTTPProtocolType,
+			Name:          "http",
+			Port:          80,
+			Protocol:      gatewayv1.HTTPProtocolType,
+			AllowedRoutes: allowedRoutes,
 		},
 	}
 
@@ -395,6 +406,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
+				AllowedRoutes: allowedRoutes,
 			},
 			gatewayv1.Listener{
 				Name:     "https-apex",
@@ -407,6 +419,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
+				AllowedRoutes: allowedRoutes,
 			},
 		)
 	} else {
@@ -428,8 +441,37 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
+				AllowedRoutes: allowedRoutes,
 			})
 		}
+	}
+
+	// TLS-passthrough listeners. One per service in
+	// Spec.TLSPassthroughServices, named "tls-<service>", hostname
+	// "<service>.<apex>", port 443, mode Passthrough. AllowedRoutes
+	// restrict the kinds to TLSRoute (HTTPRoute makes no sense on a
+	// Passthrough listener). The corresponding TLSRoute templates
+	// (cozystack-api, vm-exportproxy, cdi-uploadproxy) attach to
+	// these listeners by sectionName.
+	for _, svc := range tgw.Spec.TLSPassthroughServices {
+		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
+		passthroughAllowed := *allowedRoutes
+		passthroughAllowed.Kinds = []gatewayv1.RouteGroupKind{
+			{
+				Group: ptrGroup(gatewayv1.GroupName),
+				Kind:  "TLSRoute",
+			},
+		}
+		listeners = append(listeners, gatewayv1.Listener{
+			Name:     gatewayv1.SectionName("tls-" + svc),
+			Port:     443,
+			Protocol: gatewayv1.TLSProtocolType,
+			Hostname: &host,
+			TLS: &gatewayv1.ListenerTLSConfig{
+				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
+			},
+			AllowedRoutes: &passthroughAllowed,
+		})
 	}
 
 	className := tgw.Spec.GatewayClassName
@@ -474,11 +516,11 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&cmv1.Certificate{}).
 		Watches(
 			&gatewayv1.HTTPRoute{},
-			routeToTenantGateway(),
+			r.routeToTenantGateway(),
 		).
 		Watches(
 			&gatewayv1alpha2.TLSRoute{},
-			routeToTenantGateway(),
+			r.routeToTenantGateway(),
 		).
 		Complete(r)
 }

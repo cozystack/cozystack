@@ -697,6 +697,127 @@ func TestReconcile_DNS01ModeIgnoresHTTPRoutesForListeners(t *testing.T) {
 // RouteParentStatus entries. Mirrors the constant in conflict.go.
 const testControllerName = "gateway.cozystack.io/tenantgateway-controller"
 
+// TestReconcile_ListenersHaveAllowedRoutesSelector pins Layer 1 of
+// the security model: every listener carries an AllowedRoutes
+// selector keyed on kubernetes.io/metadata.name (kube-apiserver-
+// written, unspoofable). Without this, routes from outside the
+// tenant namespace silently fail to attach (default From: Same).
+func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor", "cozy-dashboard"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil ||
+			l.AllowedRoutes.Namespaces.From == nil ||
+			*l.AllowedRoutes.Namespaces.From != gatewayv1.NamespacesFromSelector {
+			t.Fatalf("listener %s missing Selector AllowedRoutes: %+v", l.Name, l.AllowedRoutes)
+		}
+		sel := l.AllowedRoutes.Namespaces.Selector
+		if sel == nil || len(sel.MatchExpressions) != 1 {
+			t.Fatalf("listener %s expected one MatchExpression, got %+v", l.Name, sel)
+		}
+		expr := sel.MatchExpressions[0]
+		if expr.Key != "kubernetes.io/metadata.name" {
+			t.Errorf("listener %s selector key=%q, want kubernetes.io/metadata.name", l.Name, expr.Key)
+		}
+		want := []string{"tenant-foo", "cozy-harbor", "cozy-dashboard"}
+		got := expr.Values
+		if len(got) != len(want) {
+			t.Errorf("listener %s selector values=%v, want %v", l.Name, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("listener %s selector values[%d]=%q, want %q", l.Name, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// TestReconcile_TLSPassthroughListenersRendered pins the Passthrough
+// listener flow: each entry in TLSPassthroughServices materialises a
+// dedicated tls-<svc> listener (port 443, protocol TLS, mode
+// Passthrough) with hostname <svc>.<apex> and AllowedRoutes.Kinds
+// restricted to TLSRoute. The TLSRoute templates for cozystack-api,
+// vm-exportproxy and cdi-uploadproxy attach to these by sectionName.
+func TestReconcile_TLSPassthroughListenersRendered(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: []string{"api", "vm-exportproxy", "cdi-uploadproxy"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	wanted := map[string]string{
+		"tls-api":             "api.foo.example.com",
+		"tls-vm-exportproxy":  "vm-exportproxy.foo.example.com",
+		"tls-cdi-uploadproxy": "cdi-uploadproxy.foo.example.com",
+	}
+	for _, l := range gw.Spec.Listeners {
+		host, want := wanted[string(l.Name)]
+		if !want {
+			continue
+		}
+		delete(wanted, string(l.Name))
+
+		if l.Protocol != gatewayv1.TLSProtocolType {
+			t.Errorf("%s protocol=%s, want TLS", l.Name, l.Protocol)
+		}
+		if l.Port != 443 {
+			t.Errorf("%s port=%d, want 443", l.Name, l.Port)
+		}
+		if l.Hostname == nil || string(*l.Hostname) != host {
+			t.Errorf("%s hostname=%v, want %s", l.Name, l.Hostname, host)
+		}
+		if l.TLS == nil || l.TLS.Mode == nil || *l.TLS.Mode != gatewayv1.TLSModePassthrough {
+			t.Errorf("%s TLS mode is not Passthrough: %+v", l.Name, l.TLS)
+		}
+		if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 1 ||
+			l.AllowedRoutes.Kinds[0].Kind != "TLSRoute" {
+			t.Errorf("%s AllowedRoutes.Kinds restriction missing: %+v", l.Name, l.AllowedRoutes)
+		}
+	}
+	if len(wanted) > 0 {
+		t.Errorf("expected listeners not rendered: %+v", wanted)
+	}
+}
+
 // TestReconcile_StatusObservedGeneration pins observedGeneration: the
 // status field tracks .metadata.generation so operators can tell
 // whether the controller has caught up with the latest spec.
@@ -787,10 +908,13 @@ func TestReconcile_StatusListenersMirrorGateway(t *testing.T) {
 	}
 }
 
-// TestReconcile_StatusReadyCondition pins .status.conditions: a
-// successfully reconciled TenantGateway carries a Ready=True condition
-// so operators can `kubectl wait --for=condition=Ready tgw/<name>`.
-func TestReconcile_StatusReadyCondition(t *testing.T) {
+// TestReconcile_StatusReadyFalseUntilGatewayProgrammed pins the
+// readiness contract: until the Gateway controller marks the
+// underlying Gateway Programmed=True, the TenantGateway carries
+// Ready=False with a non-empty Reason. Operators waiting on
+// `kubectl wait --for=condition=Ready` see real progress, not a
+// fictional green flag the moment the CR is created.
+func TestReconcile_StatusReadyFalseUntilGatewayProgrammed(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
@@ -823,8 +947,91 @@ func TestReconcile_StatusReadyCondition(t *testing.T) {
 	if ready == nil {
 		t.Fatalf("expected Ready condition, got %+v", got.Status.Conditions)
 	}
-	if ready.Status != metav1.ConditionTrue {
-		t.Errorf("Ready.Status=%s, want True", ready.Status)
+	if ready.Status != metav1.ConditionFalse {
+		t.Errorf("Ready.Status=%s, want False (Gateway not yet Programmed)", ready.Status)
+	}
+	if ready.Reason == "" {
+		t.Errorf("expected non-empty Reason on Ready=False, got %+v", ready)
+	}
+}
+
+// TestReconcile_StatusReadyTrueWhenGatewayProgrammed pins the green
+// path: once the Gateway controller writes Accepted=True +
+// Programmed=True on the Gateway and per-listener Accepted=True +
+// Programmed=True on each ListenerStatus, the TenantGateway flips
+// Ready=True.
+func TestReconcile_StatusReadyTrueWhenGatewayProgrammed(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	// First reconcile creates the Gateway; we then patch its status to
+	// simulate Cilium's controller having reconciled it, and run a
+	// second reconcile so the TenantGateway picks up the new status.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	gw.Status.Conditions = []metav1.Condition{
+		{Type: "Accepted", Status: metav1.ConditionTrue, Reason: "Accepted", LastTransitionTime: metav1.Now()},
+		{Type: "Programmed", Status: metav1.ConditionTrue, Reason: "Programmed", LastTransitionTime: metav1.Now()},
+	}
+	gw.Status.Listeners = make([]gatewayv1.ListenerStatus, 0, len(gw.Spec.Listeners))
+	for _, l := range gw.Spec.Listeners {
+		gw.Status.Listeners = append(gw.Status.Listeners, gatewayv1.ListenerStatus{
+			Name: l.Name,
+			Conditions: []metav1.Condition{
+				{Type: "Accepted", Status: metav1.ConditionTrue, Reason: "Accepted", LastTransitionTime: metav1.Now()},
+				{Type: "Programmed", Status: metav1.ConditionTrue, Reason: "Programmed", LastTransitionTime: metav1.Now()},
+			},
+			SupportedKinds: []gatewayv1.RouteGroupKind{},
+		})
+	}
+	if err := c.Status().Update(context.TODO(), gw); err != nil {
+		t.Fatalf("patch Gateway status: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	got := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	var ready *metav1.Condition
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == "Ready" {
+			ready = &got.Status.Conditions[i]
+			break
+		}
+	}
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Errorf("expected Ready=True after Gateway Programmed, got %+v", ready)
+	}
+	for _, l := range got.Status.Listeners {
+		if !l.Ready {
+			t.Errorf("expected listener %s ready=true, got %+v", l.Name, l)
+		}
 	}
 }
 
