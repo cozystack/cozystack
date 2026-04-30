@@ -5,6 +5,7 @@ include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
 .PHONY: image image-console image-token-proxy
+.NOTPARALLEL: image
 
 image: image-console image-token-proxy
 
