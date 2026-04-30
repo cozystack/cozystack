@@ -199,4 +199,3 @@ func mergeRouteParentStatus(parents *[]gatewayv1.RouteParentStatus, ref gatewayv
 		Conditions:     conds,
 	})
 }
-

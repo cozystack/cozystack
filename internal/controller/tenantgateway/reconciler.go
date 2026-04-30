@@ -617,8 +617,8 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			Name:      tgw.Name,
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
-				"cozystack.io/gateway":     tgw.Namespace,
-				"cozystack.io/managed-by":  "cozystack-controller",
+				"cozystack.io/gateway":    tgw.Namespace,
+				"cozystack.io/managed-by": "cozystack-controller",
 			},
 		},
 		Spec: gatewayv1.GatewaySpec{
@@ -657,4 +657,3 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Complete(r)
 }
-
