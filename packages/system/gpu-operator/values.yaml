@@ -1,1 +1,25 @@
-gpu-operator: {}
+# Defaults applied to every variant of the gpu-operator package.
+# The variant-specific files (values-talos.yaml, values-vgpu.yaml) layer
+# on top.
+gpu-operator:
+  # Upstream chart v26.x flips ccManager.enabled to true and
+  # ccManager.defaultMode to "on". On Hopper-class hardware
+  # (H100/H200/B100) with Confidential Computing capability this would
+  # auto-enable CC mode after a chart upgrade — a non-trivial behavior
+  # change. On non-CC-capable GPUs (L40S, A100, T4, …) the DaemonSet
+  # deploys, probes the hardware, and no-ops, but it still enters the
+  # cluster's resource graph. Pin to false so the default footprint
+  # stays as it was on v25.x; users who want CC enable it explicitly.
+  ccManager:
+    enabled: false
+  # Upstream v26.x also flips vgpuDeviceManager.enabled to true. The
+  # device manager only schedules onto nodes labelled
+  # nvidia.com/gpu.deploy.vgpu-device-manager=true, which the operator
+  # does not apply in passthrough mode, so practically the DaemonSet
+  # stays at zero pods — but it is still rendered into the cluster.
+  # The vGPU variant also walks /sys/class/mdev_bus/, which does not
+  # exist on Ada+ (L4/L40/L40S/B100 with vGPU 17/20). Pin to false by
+  # default; the vgpu variant explicitly re-affirms this in
+  # values-vgpu.yaml.
+  vgpuDeviceManager:
+    enabled: false

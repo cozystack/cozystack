@@ -5,13 +5,11 @@
 # packages/system/gpu-operator/examples/dcgm-custom-metrics.yaml
 # (the project's custom CSV).
 #
-# Source: https://github.com/NVIDIA/dcgm-exporter/blob/4.1.1-4.0.4/etc/default-counters.csv
+# Source: https://github.com/NVIDIA/dcgm-exporter/blob/4.5.1-4.8.0/etc/default-counters.csv
 # Pinned to the DCGM Exporter image tag shipped by the gpu-operator
 # chart under packages/system/gpu-operator/charts/gpu-operator/values.yaml
-# (dcgmExporter.version = 4.1.1-4.0.4-ubuntu22.04). When that image is
-# bumped, refresh this file from the matching tag in the NVIDIA/dcgm-exporter
-# repo and re-run `./hack/cozytest.sh hack/check-gpu-recording-rules.bats`.
-
+# (`dcgmExporter.version`).
+#
 # Format
 # If line starts with a '#' it is considered a comment
 # DCGM FIELD, Prometheus metric type, help message
@@ -41,16 +39,24 @@ DCGM_FI_DEV_DEC_UTIL ,     gauge, Decoder utilization (in %).
 
 # Errors and violations
 DCGM_FI_DEV_XID_ERRORS,              gauge,   Value of the last XID error encountered.
-# DCGM_FI_DEV_POWER_VIOLATION,       counter, Throttling duration due to power constraints (in us).
-# DCGM_FI_DEV_THERMAL_VIOLATION,     counter, Throttling duration due to thermal constraints (in us).
-# DCGM_FI_DEV_SYNC_BOOST_VIOLATION,  counter, Throttling duration due to sync-boost constraints (in us).
-# DCGM_FI_DEV_BOARD_LIMIT_VIOLATION, counter, Throttling duration due to board limit constraints (in us).
-# DCGM_FI_DEV_LOW_UTIL_VIOLATION,    counter, Throttling duration due to low utilization (in us).
-# DCGM_FI_DEV_RELIABILITY_VIOLATION, counter, Throttling duration due to reliability constraints (in us).
+# DCGM_FI_DEV_POWER_VIOLATION,       counter, Throttling duration due to power constraints (in ns).
+# DCGM_FI_DEV_THERMAL_VIOLATION,     counter, Throttling duration due to thermal constraints (in ns).
+# DCGM_FI_DEV_SYNC_BOOST_VIOLATION,  counter, Throttling duration due to sync-boost constraints (in ns).
+# DCGM_FI_DEV_BOARD_LIMIT_VIOLATION, counter, Throttling duration due to board limit constraints (in ns).
+# DCGM_FI_DEV_LOW_UTIL_VIOLATION,    counter, Throttling duration due to low utilization (in ns).
+# DCGM_FI_DEV_RELIABILITY_VIOLATION, counter, Throttling duration due to reliability constraints (in ns).
+
+# DCGM Exporter fields
+
+# DCGM_EXP_CLOCK_EVENTS_COUNT, counter, reported clock events
+# DCGM_EXP_XID_ERRORS_COUNT, counter, reported XIDs during last window
+# DCGM_EXP_GPU_HEALTH_STATUS, counter, DCGM reported health status
+# DCGM_EXP_P2P_STATUS, counter, P2P NvLink status
 
 # Memory usage
 DCGM_FI_DEV_FB_FREE, gauge, Framebuffer memory free (in MiB).
 DCGM_FI_DEV_FB_USED, gauge, Framebuffer memory used (in MiB).
+DCGM_FI_DEV_FB_RESERVED, gauge, Framebuffer memory reserved (in MiB).
 
 # ECC
 # DCGM_FI_DEV_ECC_SBE_VOL_TOTAL, counter, Total number of single-bit volatile ECC errors.

@@ -112,9 +112,11 @@ spec:
   configuration:
     permittedHostDevices:
       pciHostDevices:
-      - pciVendorSelector: "10DE:26B9"   # L40S device ID
+      - pciVendorSelector: "10DE:26B9"   # L40S — same device ID for PF and VF
         resourceName: nvidia.com/L40S-24Q
 ```
+
+On L40S (and other Ada-Lovelace cards) the SR-IOV VFs report the same PCI device ID as the PF — `lspci -nn -d 10de:` on the host shows both as `[10de:26b9]`. `virt-handler` distinguishes them by `is-VF + has-vGPU-profile`, so a single `pciVendorSelector` matches the right set. Verify on your specific GPU before assuming this — some other generations split PF/VF IDs.
 
 `externalResourceProvider: true` is **not** required here (and should be omitted) — the device plugin lives inside `virt-handler` itself, no external sandbox-device-plugin advertises this resource.
 
@@ -126,35 +128,41 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.a
 
 ## Licensing (DLS)
 
-vGPU 17/20 uses NVIDIA Delegated License Service. The legacy `ServerAddress=` / `ServerPort=7070` syntax in `gridd.conf` is no longer authoritative — `nvidia-gridd` reads the DLS endpoint from the ClientConfigToken file itself.
+vGPU 17/20 uses the NVIDIA Delegated License Service. The legacy `ServerAddress=` / `ServerPort=7070` lines in `gridd.conf` are no longer authoritative — `nvidia-gridd` (running **inside the guest**) reads the DLS endpoint from the ClientConfigToken file directly.
 
-Create a Secret with the token:
+The host vGPU Manager DaemonSet does not request a license — it only enables SR-IOV and loads `nvidia.ko`. Licensing is consumed entirely by the guest. The gpu-operator chart's `driver.licensingConfig.secretName` would mount the Secret into the **driver pod on the host**, where it has no effect for SR-IOV vGPU; do not wire the licensing Secret through it.
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: licensing-config
-  namespace: cozy-gpu-operator
-data:
-  client_configuration_token.tok: <base64 token>
-stringData:
-  gridd.conf: |
-    # FeatureType=0 → auto-detect (recommended).
-    # FeatureType=2 explicitly selects NVIDIA RTX Virtual Workstation.
-    FeatureType=0
-```
-
-Reference it in the Package values:
+Instead, deliver the token and `gridd.conf` to the guest via cloud-init or a containerDisk overlay:
 
 ```yaml
-gpu-operator:
-  driver:
-    licensingConfig:
-      secretName: licensing-config
+# inside the VirtualMachine cloudInitNoCloud userData
+write_files:
+- path: /etc/nvidia/ClientConfigToken/client_configuration_token.tok
+  permissions: '0600'
+  encoding: b64
+  content: <base64 token>
+- path: /etc/nvidia/gridd.conf
+  permissions: '0644'
+  content: |
+    # FeatureType selects which vGPU Software license the guest requests.
+    # 0 — unlicensed state (no license requested; Q profiles run in
+    #     reduced mode after the grace period).
+    # 1 — NVIDIA vGPU. The driver auto-selects the correct license
+    #     type from the configured vGPU profile (Q → vWS, B → vPC,
+    #     A → vCS / Compute). Use this for SR-IOV vGPU profiles.
+    # 2 — explicitly NVIDIA RTX Virtual Workstation.
+    # 4 — explicitly NVIDIA Virtual Compute Server.
+    FeatureType=1
 ```
 
-The Secret is consumed inside the **guest** (cloud-init can drop the token into `/etc/nvidia/ClientConfigToken/` and `gridd.conf` into `/etc/nvidia/`). The host vGPU Manager itself does not need a license.
+Verify activation inside the guest:
+
+```bash
+nvidia-smi -q | grep -A 1 'License Status'
+# License Status   : Licensed
+```
+
+If the guest reports `Unlicensed (Unrestricted)` for more than a couple of minutes, check `journalctl _COMM=nvidia-gridd` for handshake errors against the DLS endpoint baked into the token.
 
 ## Sample VirtualMachine
 
