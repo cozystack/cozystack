@@ -22,7 +22,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	StorageClass string `json:"storageClass"`
 	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"ephemeralStorage":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
+	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
@@ -218,9 +218,9 @@ type MonitoringAgentsAddon struct {
 }
 
 type NodeGroup struct {
-	// Ephemeral storage size.
+	// Persistent disk size for kubelet and containerd data.
 	// +kubebuilder:default:="20Gi"
-	EphemeralStorage resource.Quantity `json:"ephemeralStorage"`
+	DiskSize resource.Quantity `json:"diskSize"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	Gpus []GPU `json:"gpus,omitempty"`
 	// Virtual machine instance type.
@@ -236,6 +236,8 @@ type NodeGroup struct {
 	Resources Resources `json:"resources"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
+	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
+	StorageClass string `json:"storageClass,omitempty"`
 }
 
 type Resources struct {
