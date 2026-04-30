@@ -300,16 +300,24 @@ jobs:
           fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
 
+      # Check whether the changelog already exists on origin/main.
+      # The previous step checked out the tag commit, which never has the
+      # changelog (the changelog PR merges to main AFTER the tag is cut).
+      # Looking at origin/main is what the gate is supposed to do — skip
+      # generation on workflow reruns when the changelog has already merged.
       - name: Check if changelog already exists
         id: check_changelog
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          CHANGELOG_FILE="docs/changelogs/v${{ steps.tag.outputs.version }}.md"
-          if [ -f "$CHANGELOG_FILE" ]; then
+          CHANGELOG_FILE="docs/changelogs/v${VERSION}.md"
+          git fetch origin main --depth=1
+          if git cat-file -e "origin/main:${CHANGELOG_FILE}" 2>/dev/null; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Changelog file $CHANGELOG_FILE already exists"
+            echo "Changelog file $CHANGELOG_FILE already exists on origin/main"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Changelog file $CHANGELOG_FILE does not exist"
+            echo "Changelog file $CHANGELOG_FILE does not exist on origin/main"
           fi
 
       - name: Setup Node.js
