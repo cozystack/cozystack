@@ -17,6 +17,8 @@ limitations under the License.
 package tenantgateway
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -28,6 +30,15 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+)
+
+// Label keys / values written by this controller. Hoisted to consts
+// to keep occurrences in sync (CI's goconst flags ≥2 duplicates).
+const (
+	cozystackManagedByLabel   = "cozystack.io/managed-by"
+	cozystackManagedByValue   = "cozystack-controller"
+	cozystackTenantGatewayKey = "cozystack.io/tenantgateway"
+	cozystackPerListenerCert  = "cozystack.io/per-listener-cert"
 )
 
 // acmeServerForIssuer maps the operator-facing issuerName field to
@@ -81,8 +92,8 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 }
 
 // hostnameFirstLabel returns the first DNS label of a hostname (the
-// part before the first '.'), used for derived listener and cert
-// names. "harbor.foo.example.com" → "harbor".
+// part before the first '.'). Used as a human-friendly prefix in
+// derived names.
 func hostnameFirstLabel(hostname string) string {
 	if i := strings.Index(hostname, "."); i >= 0 {
 		return hostname[:i]
@@ -90,19 +101,31 @@ func hostnameFirstLabel(hostname string) string {
 	return hostname
 }
 
+// hostnameSuffix returns a short stable suffix derived from the full
+// hostname so that two routes whose first label collides
+// ("harbor.foo.example.com" vs "harbor.alice.example.com") produce
+// distinct listener / cert names. Without this suffix, listener
+// admission rejects the second listener with a duplicate-name error
+// and the entire Gateway becomes Programmed=False.
+func hostnameSuffix(hostname string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(hostname)))
+	return hex.EncodeToString(sum[:4])
+}
+
 // perListenerName produces the Gateway listener name for a per-app
-// HTTPS listener: "https-<first-label>". Collisions are pathological
-// (operator would have to publish two completely different apex
-// trees with the same first label) and would surface as Gateway
-// admission errors rather than silent override.
+// HTTPS listener: "https-<first-label>-<8-hex>". The hex suffix is a
+// 32-bit prefix of sha256(hostname), which makes collision between
+// two distinct hostnames a 1-in-2^32 event — well below any
+// realistic chart load. The first-label prefix is kept for
+// human readability when reading Gateway.spec.listeners.
 func perListenerName(hostname string) string {
-	return "https-" + hostnameFirstLabel(hostname)
+	return "https-" + hostnameFirstLabel(hostname) + "-" + hostnameSuffix(hostname)
 }
 
 // perListenerCertName produces the cert-manager Certificate name for
-// a per-listener cert: "<tgw>-<first-label>-tls".
+// a per-listener cert: "<tgw>-<first-label>-<8-hex>-tls".
 func perListenerCertName(tgw *gatewayv1alpha1.TenantGateway, hostname string) string {
-	return tgw.Name + "-" + hostnameFirstLabel(hostname) + "-tls"
+	return tgw.Name + "-" + hostnameFirstLabel(hostname) + "-" + hostnameSuffix(hostname) + "-tls"
 }
 
 // renderIssuer builds the per-tenant ACME Issuer. The solver block
@@ -242,6 +265,57 @@ func ptrGroup(g string) *gatewayv1.Group {
 func ptrKind(k string) *gatewayv1.Kind {
 	kk := gatewayv1.Kind(k)
 	return &kk
+}
+
+// renderHTTPRedirect builds the HTTPRoute that catches every hostname
+// on the Gateway's HTTP listener and 301-redirects to HTTPS. Without
+// this, app-owned HTTPRoutes that attach to the Gateway by hostname
+// (no sectionName) silently serve plaintext on port 80 — the legacy
+// nginx Ingress flow had ssl-redirect: "true" enabled by default; the
+// new TenantGateway path replicates that contract here.
+func (r *Reconciler) renderHTTPRedirect(tgw *gatewayv1alpha1.TenantGateway) (*gatewayv1.HTTPRoute, error) {
+	section := gatewayv1.SectionName("http")
+	scheme := "https"
+	statusCode := 301
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tgw.Name + "-http-redirect",
+			Namespace: tgw.Namespace,
+			Labels: map[string]string{
+				cozystackManagedByLabel:   cozystackManagedByValue,
+				cozystackTenantGatewayKey: tgw.Name,
+			},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{
+						Group:       ptrGroup(gatewayv1.GroupName),
+						Kind:        ptrKind("Gateway"),
+						Name:        gatewayv1.ObjectName(tgw.Name),
+						SectionName: &section,
+					},
+				},
+			},
+			Rules: []gatewayv1.HTTPRouteRule{
+				{
+					Filters: []gatewayv1.HTTPRouteFilter{
+						{
+							Type: gatewayv1.HTTPRouteFilterRequestRedirect,
+							RequestRedirect: &gatewayv1.HTTPRequestRedirectFilter{
+								Scheme:     &scheme,
+								StatusCode: &statusCode,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(tgw, route, r.Scheme); err != nil {
+		return nil, fmt.Errorf("set controller reference on redirect HTTPRoute: %w", err)
+	}
+	return route, nil
 }
 
 // renderPerListenerCertificate builds a cert-manager Certificate for a

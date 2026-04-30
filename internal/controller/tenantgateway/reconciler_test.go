@@ -129,6 +129,127 @@ func TestReconcile_TenantGatewayProducesGateway(t *testing.T) {
 	}
 }
 
+// TestReconcile_RouteFromUnwhitelistedNamespaceIgnored pins the
+// safety filter: HTTPRoutes whose namespace is not the tenant
+// namespace and not in Spec.AttachedNamespaces are ignored by the
+// reconciler (no per-listener cert, no listener). The Gateway's
+// own allowedRoutes selector rejects the actual attach at runtime,
+// but provisioning a cert for that hostname would still eat LE rate
+// limits and leak the operator's reachable hostnames.
+func TestReconcile_RouteFromUnwhitelistedNamespaceIgnored(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	// Route in cozy-harbor — allowed.
+	allowed := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+	// Route in tenant-attacker — NOT in AttachedNamespaces.
+	stray := httpRouteAttached("phish", "tenant-attacker", "phish.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, allowed, stray).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "phish.foo.example.com" {
+			t.Errorf("listener for unwhitelisted-namespace hostname rendered: %+v", l)
+		}
+	}
+
+	// The harbor cert exists; no phish cert is provisioned.
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("list certs: %v", err)
+	}
+	var sawHarbor, sawPhish bool
+	for _, ct := range certs.Items {
+		if len(ct.Spec.DNSNames) == 1 {
+			switch ct.Spec.DNSNames[0] {
+			case "harbor.foo.example.com":
+				sawHarbor = true
+			case "phish.foo.example.com":
+				sawPhish = true
+			}
+		}
+	}
+	if !sawHarbor {
+		t.Errorf("expected harbor cert (allowed namespace) — none of %d certs match", len(certs.Items))
+	}
+	if sawPhish {
+		t.Errorf("phish cert was provisioned despite tenant-attacker not being in AttachedNamespaces")
+	}
+}
+
+// TestReconcile_RendersHTTPToHTTPSRedirectRoute pins the security
+// contract: every TenantGateway materialises a controller-owned
+// HTTPRoute attached to sectionName=http carrying a 301 redirect to
+// HTTPS. Without this, app HTTPRoutes that attach to the Gateway by
+// hostname (no sectionName) silently serve plaintext on port 80,
+// downgrading the legacy nginx Ingress ssl-redirect contract.
+func TestReconcile_RendersHTTPToHTTPSRedirectRoute(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("expected redirect HTTPRoute cozystack-http-redirect: %v", err)
+	}
+	if len(got.Spec.ParentRefs) != 1 {
+		t.Fatalf("expected one parentRef, got %+v", got.Spec.ParentRefs)
+	}
+	pr := got.Spec.ParentRefs[0]
+	if pr.SectionName == nil || string(*pr.SectionName) != "http" {
+		t.Errorf("parentRef.SectionName=%v, want http", pr.SectionName)
+	}
+	if len(got.Spec.Rules) != 1 || len(got.Spec.Rules[0].Filters) != 1 {
+		t.Fatalf("expected exactly one rule with one filter, got %+v", got.Spec.Rules)
+	}
+	f := got.Spec.Rules[0].Filters[0]
+	if f.Type != gatewayv1.HTTPRouteFilterRequestRedirect {
+		t.Errorf("filter type=%s, want RequestRedirect", f.Type)
+	}
+	if f.RequestRedirect == nil || f.RequestRedirect.Scheme == nil || *f.RequestRedirect.Scheme != "https" {
+		t.Errorf("filter scheme=%v, want https", f.RequestRedirect)
+	}
+	if f.RequestRedirect.StatusCode == nil || *f.RequestRedirect.StatusCode != 301 {
+		t.Errorf("filter status=%v, want 301", f.RequestRedirect.StatusCode)
+	}
+}
+
 // TestReconcile_GatewayUpdatePreservesForeignLabels pins the
 // label-merge contract: a Gateway carrying labels written by other
 // actors (Cilium operator, kubectl label, future controllers) keeps
@@ -692,12 +813,21 @@ func TestReconcile_HTTP01ProducesCertificateForHTTPRoute(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	cert := &cmv1.Certificate{}
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-harbor-tls", Namespace: "tenant-foo"}, cert); err != nil {
-		t.Fatalf("expected Certificate cozystack-harbor-tls: %v", err)
+	// Listener+cert names embed a content-addressed hostname suffix
+	// to avoid collisions; look up the cert by DNSNames instead.
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("list certs: %v", err)
 	}
-	if got := cert.Spec.DNSNames; len(got) != 1 || got[0] != "harbor.foo.example.com" {
-		t.Errorf("DNSNames=%v, want [harbor.foo.example.com]", got)
+	var cert *cmv1.Certificate
+	for i := range certs.Items {
+		if len(certs.Items[i].Spec.DNSNames) == 1 && certs.Items[i].Spec.DNSNames[0] == "harbor.foo.example.com" {
+			cert = &certs.Items[i]
+			break
+		}
+	}
+	if cert == nil {
+		t.Fatalf("expected Certificate with dnsNames=[harbor.foo.example.com], got %d certs", len(certs.Items))
 	}
 	if cert.Spec.IssuerRef.Name != "cozystack-gateway" {
 		t.Errorf("IssuerRef.Name=%q, want cozystack-gateway", cert.Spec.IssuerRef.Name)

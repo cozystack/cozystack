@@ -31,6 +31,7 @@ import (
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -88,9 +89,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if err := r.runReconcileSteps(ctx, tgw); err != nil {
+		// Surface the failure on the TenantGateway status so
+		// operators see something in `kubectl get tgw` rather than
+		// a silent stale Ready condition while the controller
+		// hot-loops in logs.
+		if statusErr := r.markFailed(ctx, tgw, err); statusErr != nil {
+			return ctrl.Result{}, fmt.Errorf("reconcile failed: %w (status update also failed: %v)", err, statusErr)
+		}
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// runReconcileSteps executes the desired-state work in order. Splitting
+// out from Reconcile keeps the error-handling/status-update wrapper
+// in one place.
+func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
 	claims, err := r.collectHostnameClaims(ctx, tgw)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("collect attached hostnames: %w", err)
+		return fmt.Errorf("collect attached hostnames: %w", err)
 	}
 	winners, losers := resolveHostnameOwners(claims)
 
@@ -101,34 +120,103 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	sort.Strings(dynHostnames)
 
 	if err := r.reconcileGateway(ctx, tgw, dynHostnames); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if err := r.reconcileIssuer(ctx, tgw); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if err := r.reconcileWildcardCertificate(ctx, tgw); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if err := r.reconcilePerListenerCertificates(ctx, tgw, dynHostnames); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 	if err := r.updateRouteStatuses(ctx, tgw, winners, losers); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
-	if err := r.reconcileStatus(ctx, tgw, dynHostnames); err != nil {
-		return ctrl.Result{}, err
+	if err := r.reconcileHTTPToHTTPSRedirect(ctx, tgw); err != nil {
+		return err
+	}
+	return r.reconcileStatus(ctx, tgw, dynHostnames)
+}
+
+// markFailed writes a Ready=False condition with Reason=ReconcileError
+// and the underlying error message. controller-runtime will requeue
+// from the returned error so the next reconcile attempts to clear
+// the failure.
+func (r *Reconciler) markFailed(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway, cause error) error {
+	cond := metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: tgw.Generation,
+		Reason:             "ReconcileError",
+		Message:            cause.Error(),
+	}
+	stale := tgw.DeepCopy()
+	stale.Status.ObservedGeneration = tgw.Generation
+	apimeta.SetStatusCondition(&stale.Status.Conditions, cond)
+	if statusEqual(tgw.Status, stale.Status) {
+		return nil
+	}
+	tgw.Status = stale.Status
+	return r.Status().Update(ctx, tgw)
+}
+
+// reconcileHTTPToHTTPSRedirect ensures a controller-owned HTTPRoute
+// named "<tgw>-http-redirect" attached to sectionName=http on the
+// tenant Gateway. The route carries a single RequestRedirect filter
+// (scheme=https, status=301) so plaintext requests landing on port
+// 80 do not silently reach app backends. App-owned HTTPRoutes
+// attaching by hostname without sectionName otherwise pick up the
+// HTTP listener too — Harbor / dashboard / keycloak credentials in
+// the clear. The redirect HTTPRoute matches any host on path /.
+func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	logger := log.FromContext(ctx)
+	desired, err := r.renderHTTPRedirect(tgw)
+	if err != nil {
+		return fmt.Errorf("render redirect HTTPRoute: %w", err)
 	}
 
-	return ctrl.Result{}, nil
+	existing := &gatewayv1.HTTPRoute{}
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, existing)
+	switch {
+	case apierrors.IsNotFound(getErr):
+		if err := r.Create(ctx, desired); err != nil {
+			return fmt.Errorf("create redirect HTTPRoute: %w", err)
+		}
+		logger.V(1).Info("created redirect HTTPRoute", "name", desired.Name, "namespace", desired.Namespace)
+	case getErr != nil:
+		return fmt.Errorf("get redirect HTTPRoute: %w", getErr)
+	default:
+		existing.Spec = desired.Spec
+		if err := r.Update(ctx, existing); err != nil {
+			return fmt.Errorf("update redirect HTTPRoute: %w", err)
+		}
+	}
+	return nil
 }
 
 // collectHostnameClaims lists HTTPRoutes and TLSRoutes cluster-wide
 // and returns a map of hostname -> []routeRef of routes claiming
-// it via parentRefs targeting this TenantGateway's Gateway. Empty
-// map in DNS-01 mode (wildcard handles everything).
+// it via parentRefs targeting this TenantGateway's Gateway. Routes
+// whose namespace is not the tenant namespace and not in
+// Spec.AttachedNamespaces are filtered out — Gateway listener
+// allowedRoutes selectors reject those routes at runtime, but the
+// reconciler must not provision certs / listeners for them either
+// (each unused cert eats LE rate limits and leaks the operator's
+// reachable hostname set). Empty map in DNS-01 mode (wildcard
+// handles everything).
 func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string][]routeRef, error) {
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 {
 		return nil, nil
+	}
+
+	allowed := map[string]struct{}{tgw.Namespace: {}}
+	for _, ns := range tgw.Spec.AttachedNamespaces {
+		if ns == "" {
+			continue
+		}
+		allowed[ns] = struct{}{}
 	}
 
 	out := map[string][]routeRef{}
@@ -139,6 +227,9 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 	}
 	for i := range httpRoutes.Items {
 		route := &httpRoutes.Items[i]
+		if _, ok := allowed[route.Namespace]; !ok {
+			continue
+		}
 		matchingRef, ok := pickAttachingParentRef(route.Spec.ParentRefs, route.Namespace, tgw)
 		if !ok {
 			continue
@@ -160,6 +251,9 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 	}
 	for i := range tlsRoutes.Items {
 		route := &tlsRoutes.Items[i]
+		if _, ok := allowed[route.Namespace]; !ok {
+			continue
+		}
 		matchingRef, ok := pickAttachingParentRef(route.Spec.ParentRefs, route.Namespace, tgw)
 		if !ok {
 			continue
@@ -244,7 +338,7 @@ func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *
 	// Garbage-collect Certificates this controller previously created
 	// for hostnames that no longer have an attached route.
 	owned := &cmv1.CertificateList{}
-	if err := r.List(ctx, owned, client.InNamespace(tgw.Namespace), client.MatchingLabels{"cozystack.io/managed-by": "cozystack-controller"}); err != nil {
+	if err := r.List(ctx, owned, client.InNamespace(tgw.Namespace), client.MatchingLabels{cozystackManagedByLabel: cozystackManagedByValue}); err != nil {
 		return fmt.Errorf("list owned Certificates: %w", err)
 	}
 	for i := range owned.Items {
