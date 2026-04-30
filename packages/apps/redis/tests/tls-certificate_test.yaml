@@ -42,9 +42,10 @@ tests:
         enabled: true
         issuerRef:
           name: letsencrypt-prod
-          kind: ClusterIssuer
+          kind: Issuer
     asserts:
       - equal: { path: spec.issuerRef.name, value: letsencrypt-prod }
+      - equal: { path: spec.issuerRef.kind, value: Issuer }
 
   - it: dnsNames include master, replicas and external-lb service variants
     set:
