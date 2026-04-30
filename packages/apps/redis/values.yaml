@@ -55,6 +55,7 @@ authEnabled: true
 ## @field {bool} enabled - Enable TLS termination via nginx stream sidecar.
 ## @field {string} secretName - Name of an existing kubernetes.io/tls secret. When non-empty, cert-manager Certificate is NOT rendered and the user manages the secret.
 ## @field {TLSIssuerRef} issuerRef - cert-manager Issuer reference. Used only when secretName is empty.
+## @field {[]string} [extraDnsNames] - Extra DNS SANs to include in the TLS certificate (e.g. custom domains).
 
 ## TLS limitations:
 ## - Internal connections must use <release>-master:6380 (writes) or <release>-replicas:6380 (reads). Direct connection only — no Sentinel-aware service discovery over TLS.
@@ -68,3 +69,4 @@ tls:
   issuerRef:
     name: "selfsigned-cluster-issuer"
     kind: "ClusterIssuer"
+  extraDnsNames: []

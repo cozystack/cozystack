@@ -107,6 +107,14 @@
           "type": "boolean",
           "default": false
         },
+        "extraDnsNames": {
+          "description": "Extra DNS SANs to include in the TLS certificate (e.g. custom domains).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "issuerRef": {
           "description": "cert-manager Issuer reference. Used only when secretName is empty.",
           "type": "object",

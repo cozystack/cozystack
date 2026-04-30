@@ -75,3 +75,15 @@ tests:
     asserts:
       - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb }
       - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb.NAMESPACE.svc.cluster.local }
+
+  - it: extraDnsNames are appended to dnsNames
+    set:
+      tls:
+        enabled: true
+        extraDnsNames:
+          - redis.custom.example.com
+          - "*.redis.example.com"
+    asserts:
+      - contains: { path: spec.dnsNames, content: redis.custom.example.com }
+      - contains: { path: spec.dnsNames, content: "*.redis.example.com" }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-master }

@@ -6,7 +6,7 @@ package redis
 
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // +kubebuilder:object:root=true
@@ -57,6 +57,9 @@ type TLS struct {
 	// Enable TLS termination via nginx stream sidecar.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+	// Extra DNS SANs to include in the TLS certificate (e.g. custom domains).
+	// +kubebuilder:default:={}
+	ExtraDnsNames []string `json:"extraDnsNames,omitempty"`
 	// cert-manager Issuer reference. Used only when secretName is empty.
 	// +kubebuilder:default:={}
 	IssuerRef TLSIssuerRef `json:"issuerRef"`
@@ -68,7 +71,6 @@ type TLS struct {
 type TLSIssuerRef struct {
 	// Either "Issuer" or "ClusterIssuer".
 	// +kubebuilder:default:="ClusterIssuer"
-	// +kubebuilder:validation:Enum="Issuer";"ClusterIssuer"
 	Kind string `json:"kind"`
 	// Issuer/ClusterIssuer resource name.
 	// +kubebuilder:default:="selfsigned-cluster-issuer"

@@ -17,6 +17,7 @@
     "name"       (printf "%s-redis-tls" .Release.Name)
     "secretName" (include "redis.tls.secretName" .)
     "dnsNames"   $dnsNames
+    "extraDnsNames" .Values.tls.extraDnsNames
     "issuerRef"  .Values.tls.issuerRef
 ) }}
 {{- end }}
