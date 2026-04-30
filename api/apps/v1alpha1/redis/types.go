@@ -6,7 +6,7 @@ package redis
 
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // +kubebuilder:object:root=true
@@ -68,6 +68,7 @@ type TLS struct {
 type TLSIssuerRef struct {
 	// Either "Issuer" or "ClusterIssuer".
 	// +kubebuilder:default:="ClusterIssuer"
+	// +kubebuilder:validation:Enum="Issuer";"ClusterIssuer"
 	Kind string `json:"kind"`
 	// Issuer/ClusterIssuer resource name.
 	// +kubebuilder:default:="selfsigned-cluster-issuer"
