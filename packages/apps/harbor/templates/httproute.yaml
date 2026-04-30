@@ -7,12 +7,17 @@ kind: HTTPRoute
 metadata:
   name: {{ .Release.Name }}
 spec:
+  # No sectionName: the route attaches to whichever listener on the
+  # tenant Gateway matches the hostname. In HTTP-01 mode the
+  # controller renders a per-app listener (e.g. https-harbor with
+  # hostname harbor.<apex>); in DNS-01 mode the wildcard https
+  # listener (*.<apex>) matches. Either way, hostname-driven
+  # attachment is correct.
   parentRefs:
   - group: gateway.networking.k8s.io
     kind: Gateway
     name: cozystack
     namespace: {{ $gateway }}
-    sectionName: https
   hostnames:
   - {{ $harborHost | quote }}
   rules:
