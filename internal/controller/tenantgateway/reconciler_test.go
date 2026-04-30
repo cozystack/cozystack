@@ -693,6 +693,152 @@ func TestReconcile_DNS01ModeIgnoresHTTPRoutesForListeners(t *testing.T) {
 	}
 }
 
+// ControllerName is the controllerName used by this controller in
+// RouteParentStatus entries. Mirrors the constant in conflict.go.
+const testControllerName = "gateway.cozystack.io/tenantgateway-controller"
+
+// TestReconcile_TwoRoutesSameHostnameCozyWins pins the conflict
+// resolution rule: when two HTTPRoutes attached to the same Gateway
+// claim the same hostname but live in different namespaces, the
+// cozy-* namespace wins and the other route gets a
+// HostnameConflict condition under our controllerName in its
+// Status.Parents.
+func TestReconcile_TwoRoutesSameHostnameCozyWins(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor", "tenant-foo"},
+		},
+	}
+	cozyRoute := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+	tenantRoute := httpRouteAttached("harbor-shadow", "tenant-foo", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, cozyRoute, tenantRoute).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Listener / cert exist (winner served).
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var sawHarbor bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "harbor.foo.example.com" {
+			sawHarbor = true
+			break
+		}
+	}
+	if !sawHarbor {
+		t.Errorf("expected harbor listener present (winner served), got %+v", gw.Spec.Listeners)
+	}
+
+	// Loser HTTPRoute carries HostnameConflict condition under our
+	// controllerName in Status.Parents.
+	got := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "harbor-shadow", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get loser route: %v", err)
+	}
+	var sawConflict bool
+	for _, ps := range got.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for _, cond := range ps.Conditions {
+			if cond.Type == "Accepted" && cond.Status == metav1.ConditionFalse && cond.Reason == "HostnameConflict" {
+				sawConflict = true
+				break
+			}
+		}
+	}
+	if !sawConflict {
+		t.Errorf("expected HostnameConflict condition on loser route, got Status.Parents=%+v", got.Status.Parents)
+	}
+
+	// Winner HTTPRoute carries Accepted=True (no conflict) under our
+	// controllerName.
+	winner := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "harbor", Namespace: "cozy-harbor"}, winner); err != nil {
+		t.Fatalf("get winner route: %v", err)
+	}
+	var sawAccepted bool
+	for _, ps := range winner.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for _, cond := range ps.Conditions {
+			if cond.Type == "Accepted" && cond.Status == metav1.ConditionTrue {
+				sawAccepted = true
+			}
+		}
+	}
+	if !sawAccepted {
+		t.Errorf("expected Accepted=True on winner route, got Status.Parents=%+v", winner.Status.Parents)
+	}
+}
+
+// TestReconcile_SameNamespaceSameHostnameNoConflict pins the dedup
+// path: two HTTPRoutes in the same namespace claiming the same
+// hostname is normal (canary, version split) — no conflict
+// condition should be raised.
+func TestReconcile_SameNamespaceSameHostnameNoConflict(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	r1 := httpRouteAttached("harbor-main", "cozy-harbor", "harbor.foo.example.com")
+	r2 := httpRouteAttached("harbor-canary", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, r1, r2).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, name := range []string{"harbor-main", "harbor-canary"} {
+		got := &gatewayv1.HTTPRoute{}
+		if err := c.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: "cozy-harbor"}, got); err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		for _, ps := range got.Status.Parents {
+			if string(ps.ControllerName) != testControllerName {
+				continue
+			}
+			for _, cond := range ps.Conditions {
+				if cond.Reason == "HostnameConflict" {
+					t.Errorf("unexpected HostnameConflict on %s (same-namespace dedup is not a conflict)", name)
+				}
+			}
+		}
+	}
+}
+
 // TestReconcile_HTTP01DoesNotCreateWildcardCertificate pins the
 // inverse: HTTP-01 mode must NOT create the wildcard Certificate (the
 // underlying ACME challenge type can't issue wildcards).

@@ -90,10 +90,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	dynHostnames, err := r.collectAttachedHostnames(ctx, tgw)
+	claims, err := r.collectHostnameClaims(ctx, tgw)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("collect attached hostnames: %w", err)
 	}
+	winners, losers := resolveHostnameOwners(claims)
+
+	dynHostnames := make([]string, 0, len(winners))
+	for h := range winners {
+		dynHostnames = append(dynHostnames, h)
+	}
+	sort.Strings(dynHostnames)
 
 	if err := r.reconcileGateway(ctx, tgw, dynHostnames); err != nil {
 		return ctrl.Result{}, err
@@ -107,61 +114,72 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.reconcilePerListenerCertificates(ctx, tgw, dynHostnames); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.updateRouteStatuses(ctx, tgw, winners, losers); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	_ = logger
 	return ctrl.Result{}, nil
 }
 
-// collectAttachedHostnames lists HTTPRoutes and TLSRoutes cluster-wide
-// and returns the set of hostnames whose parentRefs target this
-// TenantGateway's Gateway. Returned slice is sorted for stable
-// rendering. Empty in DNS-01 mode (the wildcard listener handles
-// everything; per-app listeners are not produced).
-func (r *Reconciler) collectAttachedHostnames(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) ([]string, error) {
+// collectHostnameClaims lists HTTPRoutes and TLSRoutes cluster-wide
+// and returns a map of hostname -> []routeRef of routes claiming
+// it via parentRefs targeting this TenantGateway's Gateway. Empty
+// map in DNS-01 mode (wildcard handles everything).
+func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string][]routeRef, error) {
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 {
 		return nil, nil
 	}
+
+	out := map[string][]routeRef{}
 
 	httpRoutes := &gatewayv1.HTTPRouteList{}
 	if err := r.List(ctx, httpRoutes); err != nil {
 		return nil, fmt.Errorf("list HTTPRoutes: %w", err)
 	}
+	for i := range httpRoutes.Items {
+		route := &httpRoutes.Items[i]
+		matchingRef, ok := pickAttachingParentRef(route.Spec.ParentRefs, route.Namespace, tgw)
+		if !ok {
+			continue
+		}
+		ref := routeRef{
+			namespace: route.Namespace,
+			name:      route.Name,
+			parentRef: matchingRef,
+		}
+		for _, h := range route.Spec.Hostnames {
+			out[string(h)] = append(out[string(h)], ref)
+		}
+	}
+
 	tlsRoutes := &gatewayv1alpha2.TLSRouteList{}
 	if err := r.List(ctx, tlsRoutes); err != nil {
 		return nil, fmt.Errorf("list TLSRoutes: %w", err)
 	}
-
-	seen := map[string]struct{}{}
-	for i := range httpRoutes.Items {
-		if !routeAttachesToGateway(httpRoutes.Items[i].Spec.ParentRefs, httpRoutes.Items[i].Namespace, tgw) {
-			continue
-		}
-		for _, h := range httpRoutes.Items[i].Spec.Hostnames {
-			seen[string(h)] = struct{}{}
-		}
-	}
 	for i := range tlsRoutes.Items {
-		if !routeAttachesToGateway(tlsRoutes.Items[i].Spec.ParentRefs, tlsRoutes.Items[i].Namespace, tgw) {
+		route := &tlsRoutes.Items[i]
+		matchingRef, ok := pickAttachingParentRef(route.Spec.ParentRefs, route.Namespace, tgw)
+		if !ok {
 			continue
 		}
-		for _, h := range tlsRoutes.Items[i].Spec.Hostnames {
-			seen[string(h)] = struct{}{}
+		ref := routeRef{
+			namespace: route.Namespace,
+			name:      route.Name,
+			parentRef: matchingRef,
+		}
+		for _, h := range route.Spec.Hostnames {
+			out[string(h)] = append(out[string(h)], ref)
 		}
 	}
-
-	out := make([]string, 0, len(seen))
-	for h := range seen {
-		out = append(out, h)
-	}
-	sort.Strings(out)
 	return out, nil
 }
 
-// routeAttachesToGateway returns true if any of the given parentRefs
-// targets the gateway.networking.k8s.io/v1 Gateway named tgw.Name in
-// tgw.Namespace. parentRef.Namespace defaults to the route's own
-// namespace when unset.
-func routeAttachesToGateway(refs []gatewayv1.ParentReference, routeNs string, tgw *gatewayv1alpha1.TenantGateway) bool {
+// pickAttachingParentRef returns the first ParentRef in refs that
+// attaches to tgw's Gateway, plus a boolean ok. Used both to decide
+// whether to read hostnames from the route and to record the exact
+// ref that gets stamped back into RouteParentStatus.
+func pickAttachingParentRef(refs []gatewayv1.ParentReference, routeNs string, tgw *gatewayv1alpha1.TenantGateway) (gatewayv1.ParentReference, bool) {
 	for _, ref := range refs {
 		group := ""
 		if ref.Group != nil {
@@ -179,10 +197,10 @@ func routeAttachesToGateway(refs []gatewayv1.ParentReference, routeNs string, tg
 			kind == "Gateway" &&
 			ns == tgw.Namespace &&
 			string(ref.Name) == tgw.Name {
-			return true
+			return ref, true
 		}
 	}
-	return false
+	return gatewayv1.ParentReference{}, false
 }
 
 // reconcilePerListenerCertificates creates a Certificate for each
