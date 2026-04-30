@@ -69,7 +69,7 @@ spec:
       {{- if has $normalizedKey $dangerousParams }}
       {{- fail (printf "SECURITY: Parameter '%s' is blocked for security reasons. This parameter could allow arbitrary shell command execution and is managed by CloudNativePG operator." $key) }}
       {{- end }}
-      {{ $key }}: {{ $value | quote }}
+      {{ $key }}: {{ $value | toString | quote }}
       {{- end }}
 
   minSyncReplicas: {{ .Values.quorum.minSyncReplicas }}

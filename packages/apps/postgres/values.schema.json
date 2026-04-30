@@ -103,7 +103,10 @@
             "max_connections": "100"
           },
           "additionalProperties": {
-            "type": "string"
+            "anyOf": [
+              {"type": "string"},
+              {"type": "integer"}
+            ]
           }
         }
       }
