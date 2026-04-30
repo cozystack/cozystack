@@ -24,17 +24,14 @@
 # 'gpu-operator:' Helm-subchart prefix because we render the subchart
 # directly here — the prefix is meaningful only when the parent wrapper
 # chart is in play.
+#
+# Compatible with both `bats` directly and the in-repo cozytest.sh runner.
+# cozytest.sh runs each @test in a fresh subshell with `set -u` and does
+# not honor bats setup()/teardown(), so we provision TMP inline per test.
 
-CHART="${BATS_TEST_DIRNAME}/../packages/system/gpu-operator/charts/gpu-operator"
-VALUES_DIR="${BATS_TEST_DIRNAME}/../packages/system/gpu-operator"
-
-setup() {
-  TMP=$(mktemp -d)
-}
-
-teardown() {
-  rm -rf "$TMP"
-}
+REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
+CHART="$REPO_ROOT/packages/system/gpu-operator/charts/gpu-operator"
+VALUES_DIR="$REPO_ROOT/packages/system/gpu-operator"
 
 # Strip the 'gpu-operator:' wrapper-prefix so the values can be applied
 # directly to the subchart in `helm template`.
@@ -48,31 +45,31 @@ unwrap() {
 }
 
 render_variant() {
-  local variant="$1"
+  variant="$1"
   unwrap "$VALUES_DIR/values.yaml"             > "$TMP/values.yaml"
   unwrap "$VALUES_DIR/values-${variant}.yaml"  > "$TMP/variant.yaml"
   helm template t "$CHART" \
     --values "$TMP/values.yaml" \
     --values "$TMP/variant.yaml" \
     > "$TMP/rendered.yaml" 2>"$TMP/err"
-  [ -s "$TMP/rendered.yaml" ] || {
-    cat "$TMP/err" >&2
-    return 1
-  }
+  [ -s "$TMP/rendered.yaml" ] || { cat "$TMP/err" >&2; return 1; }
 }
 
 @test "default variant: ccManager and vgpuDeviceManager pinned off" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
   render_variant passthrough
   grep -A 1 '^  ccManager:'         "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  vgpuDeviceManager:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
 }
 
 @test "default variant: defaultWorkload is vm-passthrough" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
   render_variant passthrough
   grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'defaultWorkload: vm-passthrough'
 }
 
 @test "default variant: driver and devicePlugin disabled, vfioManager left on" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
   render_variant passthrough
   grep -A 1 '^  driver:'       "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  devicePlugin:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
@@ -80,17 +77,20 @@ render_variant() {
 }
 
 @test "vgpu variant: ccManager and vgpuDeviceManager pinned off" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
   render_variant vgpu
   grep -A 1 '^  ccManager:'         "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  vgpuDeviceManager:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
 }
 
 @test "vgpu variant: defaultWorkload is vm-vgpu" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
   render_variant vgpu
   grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'defaultWorkload: vm-vgpu'
 }
 
 @test "vgpu variant: vgpuManager enabled, driver and devicePlugin disabled" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
   render_variant vgpu
   grep -A 1 '^  vgpuManager:'  "$TMP/rendered.yaml" | grep -q 'enabled: true'
   grep -A 1 '^  driver:'       "$TMP/rendered.yaml" | grep -q 'enabled: false'
