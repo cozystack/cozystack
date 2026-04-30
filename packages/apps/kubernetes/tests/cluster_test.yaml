@@ -1,0 +1,446 @@
+suite: cluster.yaml template tests
+
+templates:
+  - templates/cluster.yaml
+
+values:
+  - values/common.yaml
+
+# The KubevirtMachineTemplate is document index 5 when rendering with one
+# nodeGroup (md0).  Documents before it: Cluster(0), KamajiControlPlane(1),
+# WorkloadMonitor-cp(2), KubevirtCluster(3), KubeadmConfigTemplate-md0(4).
+# The named template "kubevirtmachinetemplate" is inlined inside document 5
+# under spec.template.spec.
+#
+# Note: instanceType must be set to "" to bypass the lookup() call that
+# validates VirtualMachineClusterInstancetype existence against a live cluster.
+
+tests:
+  ###############################################
+  # dataVolumeTemplates — default disk size     #
+  ###############################################
+
+  - it: falls back to 20Gi when diskSize is not set
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: "20Gi"
+        documentIndex: 5
+
+  - it: renders dataVolumeTemplate with default 20Gi storage
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.diskSize: 20Gi
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.name
+          value: disk-kubelet
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.blank
+          value: {}
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 20Gi
+        documentIndex: 5
+
+  ###############################################
+  # dataVolumeTemplates — custom disk size      #
+  ###############################################
+
+  - it: renders dataVolumeTemplate with custom 50Gi storage
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.diskSize: 50Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 50Gi
+        documentIndex: 5
+
+  ###############################################
+  # storageClassName omitted when empty         #
+  ###############################################
+
+  - it: omits storageClassName when storageClass is empty
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.storageClass: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+        documentIndex: 5
+
+  ###############################################
+  # storageClassName present when set           #
+  ###############################################
+
+  - it: sets storageClassName when storageClass is provided
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.storageClass: "my-storage"
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+          value: my-storage
+        documentIndex: 5
+
+  ###############################################
+  # ephemeral-storage is always 2Gi             #
+  ###############################################
+
+  - it: hardcodes ephemeral-storage to 2Gi with default diskSize
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.diskSize: 20Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: 2Gi
+        documentIndex: 5
+
+  - it: hardcodes ephemeral-storage to 2Gi even with large diskSize
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.diskSize: 100Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.ephemeral-storage
+          value: 2Gi
+        documentIndex: 5
+
+  ###############################################
+  # disk-kubelet name consistency               #
+  ###############################################
+
+  - it: uses disk-kubelet name consistently across dataVolumeTemplates, volumes, and disks
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      # dataVolumeTemplates name
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.name
+          value: disk-kubelet
+        documentIndex: 5
+      # disks name
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.devices.disks[1].name
+          value: disk-kubelet
+        documentIndex: 5
+      # volumes name
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.volumes[1].name
+          value: disk-kubelet
+        documentIndex: 5
+      # volumes dataVolume reference
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.volumes[1].dataVolume.name
+          value: disk-kubelet
+        documentIndex: 5
+
+  ###############################################
+  # CDI populator annotation                    #
+  ###############################################
+
+  - it: includes CDI populator annotation on dataVolumeTemplate
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations["cdi.kubevirt.io/storage.usePopulator"]
+          value: "false"
+        documentIndex: 5
+
+  ###############################################
+  # multiple node groups — independent storage  #
+  ###############################################
+
+  # With two nodeGroups (md0, md1) the range loop emits per-group documents
+  # alphabetically.  Documents before the loop: Cluster(0),
+  # KamajiControlPlane(1), WorkloadMonitor-cp(2), KubevirtCluster(3).
+  # Each group adds: KubeadmConfigTemplate, KubevirtMachineTemplate,
+  # MachineDeployment, MachineHealthCheck, WorkloadMonitor.
+  # md0 KubevirtMachineTemplate → index 5, md1 → index 10.
+
+  - it: renders independent dataVolumeTemplates per node group
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.minReplicas: 0
+      nodeGroups.md0.maxReplicas: 10
+      nodeGroups.md0.instanceType: ""
+      nodeGroups.md0.roles[0]: worker
+      nodeGroups.md0.resources.cpu: 2
+      nodeGroups.md0.resources.memory: 4Gi
+      nodeGroups.md0.diskSize: 20Gi
+      nodeGroups.md1.minReplicas: 0
+      nodeGroups.md1.maxReplicas: 5
+      nodeGroups.md1.instanceType: ""
+      nodeGroups.md1.roles[0]: worker
+      nodeGroups.md1.resources.cpu: 4
+      nodeGroups.md1.resources.memory: 8Gi
+      nodeGroups.md1.diskSize: 50Gi
+      nodeGroups.md1.storageClass: my-storage-class
+    asserts:
+      # --- md0: KubevirtMachineTemplate at document index 5 ---
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 20Gi
+        documentIndex: 5
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+        documentIndex: 5
+      # --- md1: KubevirtMachineTemplate at document index 10 ---
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 10
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 50Gi
+        documentIndex: 10
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+          value: my-storage-class
+        documentIndex: 10
+
+  ###############################################
+  # KubeadmConfigTemplate — persistent storage  #
+  ###############################################
+
+  # KubeadmConfigTemplate is document index 4 when rendering with one
+  # nodeGroup (md0).
+
+  - it: configures persistent filesystem as xfs with label persistent
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].label
+          value: persistent
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].overwrite
+          value: false
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].filesystem
+          value: xfs
+        documentIndex: 4
+
+  - it: configures persistent filesystem device and partition
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].device
+          value: /dev/vdb
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.diskSetup.filesystems[0].partition
+          value: "none"
+        documentIndex: 4
+
+  - it: mounts persistent volume and bind-mounts kubelet and containerd
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.mounts[0]
+          value:
+            - LABEL=persistent
+            - /persistent
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.mounts[1]
+          value:
+            - /persistent/kubelet
+            - /var/lib/kubelet
+            - none
+            - bind,nofail
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.mounts[2]
+          value:
+            - /persistent/containerd
+            - /var/lib/containerd
+            - none
+            - bind,nofail
+        documentIndex: 4
+
+  - it: includes mountpoint guards in preKubeadmCommands
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: "mountpoint -q /var/lib/kubelet || mount -o bind /persistent/kubelet /var/lib/kubelet"
+        documentIndex: 4
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: "mountpoint -q /var/lib/containerd || mount -o bind /persistent/containerd /var/lib/containerd"
+        documentIndex: 4
+
+  - it: creates persistent directories in preKubeadmCommands
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: "mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd"
+        documentIndex: 4
+
+  ###############################################
+  # disk-kubelet matchVolume blockSize          #
+  ###############################################
+
+  - it: sets matchVolume blockSize on disk-kubelet
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.devices.disks[1].blockSize.matchVolume.enabled
+          value: true
+        documentIndex: 5
+
+  ###############################################
+  # ephemeralStorage migration guard            #
+  ###############################################
+
+  - it: fails when ephemeralStorage is set instead of diskSize
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.ephemeralStorage: 50Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+
+  - it: fails when ephemeralStorage is set to empty string
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.ephemeralStorage: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+
+  - it: fails when both ephemeralStorage and diskSize are set
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.ephemeralStorage: 50Gi
+      nodeGroups.md0.diskSize: 50Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+
+  ###############################################
+  # KubeadmConfigTemplate — files block         #
+  ###############################################
+
+  # When the containerd patch Secret does not exist (lookup returns nil),
+  # only the update-k8s.sh entry must appear in the files list.
+
+  - it: includes update-k8s.sh in KubeadmConfigTemplate files
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.files[0].path
+          value: /usr/bin/update-k8s.sh
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.files[0].permissions
+          value: "0755"
+        documentIndex: 4
+      - matchRegex:
+          path: spec.template.spec.files[0].content
+          pattern: "KUBELET_VERSION"
+        documentIndex: 4
+      - matchRegex:
+          path: spec.template.spec.files[0].content
+          pattern: "curl -fsSL"
+        documentIndex: 4
+
+  - it: has exactly one file entry when no containerd patch Secret exists
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.files
+          value:
+            - path: /usr/bin/update-k8s.sh
+              owner: root:root
+              permissions: "0755"
+              content: |
+                #!/usr/bin/env bash
+                set -euo pipefail
+
+                # Expected to be passed in via preKubeadmCommands
+                : "${KUBELET_VERSION:?KUBELET_VERSION must be set, e.g. v1.31.0}"
+
+                ARCH="$(uname -m)"
+                case "${ARCH}" in
+                  x86_64) ARCH=amd64 ;;
+                  aarch64) ARCH=arm64 ;;
+                esac
+
+                # Use your internal mirror here for real-world use.
+                BASE_URL="https://dl.k8s.io/release/${KUBELET_VERSION}/bin/linux/${ARCH}"
+
+                echo "Installing kubelet and kubeadm  ${KUBELET_VERSION} for ${ARCH}..."
+                curl -fsSL "${BASE_URL}/kubelet" -o /root/kubelet
+                curl -fsSL "${BASE_URL}/kubeadm" -o /root/kubeadm
+                chmod 0755 /root/kubelet
+                chmod 0755 /root/kubeadm
+                if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
+                if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
+        documentIndex: 4

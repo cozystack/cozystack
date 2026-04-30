@@ -12,7 +12,7 @@
       "type": "object",
       "default": {
         "md0": {
-          "ephemeralStorage": "20Gi",
+          "diskSize": "20Gi",
           "gpus": [],
           "instanceType": "u1.medium",
           "kubelet": {},
@@ -21,21 +21,22 @@
           "resources": {},
           "roles": [
             "ingress-nginx"
-          ]
+          ],
+          "storageClass": ""
         }
       },
       "additionalProperties": {
         "type": "object",
         "required": [
-          "ephemeralStorage",
+          "diskSize",
           "instanceType",
           "maxReplicas",
           "minReplicas",
           "resources"
         ],
         "properties": {
-          "ephemeralStorage": {
-            "description": "Ephemeral storage size.",
+          "diskSize": {
+            "description": "Persistent disk size for kubelet and containerd data.",
             "default": "20Gi",
             "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
             "anyOf": [
@@ -149,6 +150,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "storageClass": {
+            "description": "StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).",
+            "type": "string"
           }
         }
       }
@@ -182,6 +187,7 @@
         "fluxcd",
         "gatewayAPI",
         "gpuOperator",
+        "hami",
         "ingressNginx",
         "monitoringAgents",
         "velero",
@@ -290,6 +296,28 @@
           "properties": {
             "enabled": {
               "description": "Enable GPU Operator.",
+              "type": "boolean",
+              "default": false
+            },
+            "valuesOverride": {
+              "description": "Custom Helm values overrides.",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "hami": {
+          "description": "HAMi GPU virtualization middleware.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "enabled",
+            "valuesOverride"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Enable HAMi (requires GPU Operator).",
               "type": "boolean",
               "default": false
             },

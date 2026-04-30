@@ -92,6 +92,9 @@ type Bootstrap struct {
 	// Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 	// +kubebuilder:default:=""
 	RecoveryTime string `json:"recoveryTime,omitempty"`
+	// Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name.
+	// +kubebuilder:default:=""
+	ServerName string `json:"serverName,omitempty"`
 }
 
 type Database struct {
@@ -109,15 +112,9 @@ type DatabaseRoles struct {
 }
 
 type PostgreSQL struct {
-	// PostgreSQL server parameters.
-	// +kubebuilder:default:={}
-	Parameters PostgreSQLParameters `json:"parameters,omitempty"`
-}
-
-type PostgreSQLParameters struct {
-	// Maximum number of concurrent connections to the database server.
-	// +kubebuilder:default:=100
-	MaxConnections int `json:"max_connections,omitempty"`
+	// PostgreSQL server parameters. All values must be strings (quote numbers: "100"). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
+	// +kubebuilder:default:={"max_connections":"100"}
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 type Quorum struct {

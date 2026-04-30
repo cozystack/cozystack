@@ -37,7 +37,8 @@ storageClass: replicated
 ## @field {int} minReplicas=0 - Minimum number of replicas.
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
 ## @field {string} instanceType="u1.medium" - Virtual machine instance type.
-## @field {quantity} ephemeralStorage="20Gi" - Ephemeral storage size.
+## @field {quantity} diskSize="20Gi" - Persistent disk size for kubelet and containerd data.
+## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
 ## @field {[]string} roles - List of node roles.
 ## @field {Resources} resources - CPU and memory resources for each worker node.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
@@ -49,7 +50,8 @@ nodeGroups:
     minReplicas: 0
     maxReplicas: 10
     instanceType: "u1.medium"
-    ephemeralStorage: 20Gi
+    diskSize: 20Gi
+    storageClass: ""
     roles:
     - ingress-nginx
     resources: {}
@@ -104,6 +106,10 @@ host: ""
 ## @field {bool} enabled - Enable FluxCD.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
+## @typedef {struct} HAMiAddon - HAMi GPU virtualization middleware.
+## @field {bool} enabled - Enable HAMi (requires GPU Operator).
+## @field {object} valuesOverride - Custom Helm values overrides.
+
 ## @typedef {struct} MonitoringAgentsAddon - Monitoring agents (Fluent Bit, VMAgents).
 ## @field {bool} enabled - Enable monitoring agents.
 ## @field {object} valuesOverride - Custom Helm values overrides.
@@ -124,6 +130,7 @@ host: ""
 ## @field {GatewayAPIAddon} gatewayAPI - Gateway API addon.
 ## @field {IngressNginxAddon} ingressNginx - Ingress-NGINX controller.
 ## @field {GPUOperatorAddon} gpuOperator - NVIDIA GPU Operator.
+## @field {HAMiAddon} hami - HAMi GPU virtualization middleware.
 ## @field {FluxCDAddon} fluxcd - FluxCD GitOps operator.
 ## @field {MonitoringAgentsAddon} monitoringAgents - Monitoring agents.
 ## @field {VerticalPodAutoscalerAddon} verticalPodAutoscaler - Vertical Pod Autoscaler.
@@ -145,6 +152,9 @@ addons:
     hosts: []
     valuesOverride: {}
   gpuOperator:
+    enabled: false
+    valuesOverride: {}
+  hami:
     enabled: false
     valuesOverride: {}
   fluxcd:

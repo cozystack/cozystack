@@ -1,0 +1,34 @@
+_cluster: {}
+_namespace:
+  etcd: cozy-etcd
+  ingress: nginx
+  host: example.com
+version: "v1.32"
+controlPlane:
+  replicas: 2
+  apiServer:
+    resources: {}
+    resourcesPreset: "large"
+  controllerManager:
+    resources: {}
+    resourcesPreset: "micro"
+  scheduler:
+    resources: {}
+    resourcesPreset: "micro"
+  konnectivity:
+    server:
+      resources: {}
+      resourcesPreset: "micro"
+# diskSize and storageClass are intentionally omitted from md0 to verify template
+# fallback defaults: diskSize defaults to "20Gi", storageClass falls back to cluster default.
+nodeGroups:
+  md0:
+    minReplicas: 0
+    maxReplicas: 10
+    instanceType: ""
+    roles:
+      - worker
+    resources:
+      cpu: 2
+      memory: 4Gi
+    gpus: []

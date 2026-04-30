@@ -22,7 +22,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	StorageClass string `json:"storageClass"`
 	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"ephemeralStorage":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
+	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
@@ -69,6 +69,9 @@ type Addons struct {
 	// NVIDIA GPU Operator.
 	// +kubebuilder:default:={}
 	GpuOperator GPUOperatorAddon `json:"gpuOperator"`
+	// HAMi GPU virtualization middleware.
+	// +kubebuilder:default:={}
+	Hami HAMiAddon `json:"hami"`
 	// Ingress-NGINX controller.
 	// +kubebuilder:default:={}
 	IngressNginx IngressNginxAddon `json:"ingressNginx"`
@@ -160,6 +163,15 @@ type GatewayAPIAddon struct {
 	Enabled bool `json:"enabled"`
 }
 
+type HAMiAddon struct {
+	// Enable HAMi (requires GPU Operator).
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Custom Helm values overrides.
+	// +kubebuilder:default:={}
+	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
 type Images struct {
 	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 	// +kubebuilder:default:=""
@@ -223,9 +235,9 @@ type MonitoringAgentsAddon struct {
 }
 
 type NodeGroup struct {
-	// Ephemeral storage size.
+	// Persistent disk size for kubelet and containerd data.
 	// +kubebuilder:default:="20Gi"
-	EphemeralStorage resource.Quantity `json:"ephemeralStorage"`
+	DiskSize resource.Quantity `json:"diskSize"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	Gpus []GPU `json:"gpus,omitempty"`
 	// Virtual machine instance type.
@@ -243,6 +255,8 @@ type NodeGroup struct {
 	Resources Resources `json:"resources"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
+	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
+	StorageClass string `json:"storageClass,omitempty"`
 }
 
 type Resources struct {

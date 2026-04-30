@@ -1,25 +1,7 @@
 diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
-index f544493..98e7fde 100644
+index ac4651d..46d565d 100644
 --- a/pkg/client/linstor.go
 +++ b/pkg/client/linstor.go
-@@ -181,7 +181,7 @@ func LogLevel(s string) func(*Linstor) error {
- func (s *Linstor) ListAllWithStatus(ctx context.Context) ([]volume.VolumeStatus, error) {
- 	var vols []volume.VolumeStatus
- 
--	resourcesByName := make(map[string][]lapi.Resource)
-+	resourcesByName := make(map[string][]lapi.ResourceWithVolumes)
- 
- 	resDefs, err := s.client.ResourceDefinitions.GetAll(ctx, lapi.RDGetAllRequest{WithVolumeDefinitions: true})
- 	if err != nil {
-@@ -194,7 +194,7 @@ func (s *Linstor) ListAllWithStatus(ctx context.Context) ([]volume.VolumeStatus,
- 	}
- 
- 	for i := range allResources {
--		resourcesByName[allResources[i].Name] = append(resourcesByName[allResources[i].Name], allResources[i].Resource)
-+		resourcesByName[allResources[i].Name] = append(resourcesByName[allResources[i].Name], allResources[i])
- 	}
- 
- 	for _, rd := range resDefs {
 @@ -462,6 +462,14 @@ func (s *Linstor) Clone(ctx context.Context, vol, src *volume.Info, params *volu
  		return err
  	}
@@ -35,7 +17,7 @@ index f544493..98e7fde 100644
  	logger.Debug("reconcile extra properties")
  
  	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
-@@ -1280,6 +1288,14 @@ func (s *Linstor) VolFromSnap(ctx context.Context, snap *volume.Snapshot, vol *v
+@@ -1297,6 +1305,14 @@ func (s *Linstor) VolFromSnap(ctx context.Context, snap *volume.Snapshot, vol *v
  		return err
  	}
  
@@ -50,7 +32,7 @@ index f544493..98e7fde 100644
  	logger.Debug("reconcile extra properties")
  
  	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
-@@ -1470,9 +1486,8 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+@@ -1487,9 +1503,8 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
  		return fmt.Errorf("snapshot '%s' not deployed on any node", snap.Name)
  	}
  
@@ -62,7 +44,7 @@ index f544493..98e7fde 100644
  	for _, snapNode := range snap.Nodes {
  		if err := s.NodeAvailable(ctx, snapNode); err != nil {
  			logger.WithField("selected node candidate", snapNode).WithError(err).Debug("node is not available")
-@@ -1480,13 +1495,23 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+@@ -1497,13 +1512,23 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
  		}
  
  		if slices.Contains(preferredNodes, snapNode) {
@@ -92,7 +74,7 @@ index f544493..98e7fde 100644
  	}
  
  	if selectedNode == "" {
-@@ -1679,6 +1704,114 @@ func (s *Linstor) reconcileResourcePlacement(ctx context.Context, vol *volume.In
+@@ -1696,6 +1721,114 @@ func (s *Linstor) reconcileResourcePlacement(ctx context.Context, vol *volume.In
  	return nil
  }
  
@@ -207,40 +189,8 @@ index f544493..98e7fde 100644
  // FindSnapsByID searches the snapshot in the backend
  func (s *Linstor) FindSnapsByID(ctx context.Context, id string) ([]*volume.Snapshot, error) {
  	snapshotId, err := volume.ParseSnapshotId(id)
-@@ -2173,7 +2306,7 @@ func (s *Linstor) Status(ctx context.Context, volId string) ([]string, *csi.Volu
- 		"volume": volId,
- 	}).Debug("getting assignments")
- 
--	ress, err := s.client.Resources.GetAll(ctx, volId)
-+	ress, err := s.client.Resources.GetResourceView(ctx, &lapi.ListOpts{Resource: []string{volId}})
- 	if err != nil {
- 		return nil, nil, fmt.Errorf("failed to list resources for '%s': %w", volId, err)
- 	}
-@@ -2261,13 +2394,20 @@ func GetSnapshotRemoteAndReadiness(snap *lapi.Snapshot) (string, bool, error) {
- 	return "", slices.Contains(snap.Flags, lapiconsts.FlagSuccessful), nil
- }
- 
--func NodesAndConditionFromResources(ress []lapi.Resource) ([]string, *csi.VolumeCondition) {
-+func NodesAndConditionFromResources(ress []lapi.ResourceWithVolumes) ([]string, *csi.VolumeCondition) {
- 	var allNodes, abnormalNodes []string
- 
- 	for i := range ress {
- 		res := &ress[i]
- 
--		allNodes = append(allNodes, res.NodeName)
-+		// A resource is a CSI publish target if any of its volumes were created
-+		// by ControllerPublishVolume, identified by the temporary-diskless-attach property.
-+		if slices.ContainsFunc(res.Volumes, func(v lapi.Volume) bool {
-+			createdFor, ok := v.Props[linstor.PropertyCreatedFor]
-+			return ok && createdFor == linstor.CreatedForTemporaryDisklessAttach
-+		}) {
-+			allNodes = append(allNodes, res.NodeName)
-+		}
- 
- 		if res.State == nil {
- 			abnormalNodes = append(abnormalNodes, res.NodeName)
 diff --git a/pkg/volume/parameter.go b/pkg/volume/parameter.go
-index 39acd95..aed18ab 100644
+index 39acd95..54d1dfb 100644
 --- a/pkg/volume/parameter.go
 +++ b/pkg/volume/parameter.go
 @@ -50,6 +50,7 @@ const (

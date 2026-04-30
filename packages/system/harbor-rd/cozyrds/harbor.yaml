@@ -33,6 +33,8 @@ spec:
     include:
       - resourceNames:
           - "{{ .name }}-credentials"
+      - matchLabels:
+          apps.cozystack.io/user-secret: "true"
   services:
     exclude: []
     include:

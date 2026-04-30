@@ -63,6 +63,9 @@ Deploying it involves the following components:
 
 -   **Worker Nodes**: Virtual Machines are provisioned to serve as worker nodes using KubeVirt.
     These nodes are configured to join the tenant Kubernetes cluster, enabling the deployment and management of workloads.
+    Worker node disks automatically detect and match the underlying volume's block size
+    (`blockSize.matchVolume`) to ensure compatibility with storage backends that use
+    non-512-byte sectors, such as LINSTOR DRBD with 4Kn drives.
 
 -   **Cluster API**: Cozystack is using the [Kubernetes Cluster API](https://cluster-api.sigs.k8s.io/) to provision the components of a cluster.
 
@@ -80,6 +83,10 @@ See the reference for components utilized in this service:
 - [github.com/kubernetes-sigs/cluster-api-provider-kubevirt](https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt)
 - [github.com/kubevirt/csi-driver](https://github.com/kubevirt/csi-driver)
 
+## Breaking Changes
+
+- **`ephemeralStorage` renamed to `diskSize`**: The `nodeGroups[name].ephemeralStorage` field has been renamed to `nodeGroups[name].diskSize` to better reflect its purpose (persistent disk for kubelet and containerd data). There is no backward-compatibility fallback; users MUST update their configurations to use `diskSize` instead of `ephemeralStorage`. If `ephemeralStorage` is still present in values, Helm template rendering will fail with an error directing you to use `diskSize`. When upgrading the CRD directly (bypassing Helm), the unrecognized field is silently dropped and kubelet storage reverts to the default 20Gi. Existing VMs will be automatically rolling-updated via CAPI when the new values are applied. State persists across same-VM reboots (virt-launcher restart, guest reboot, node failure); VM replacement by CAPI (e.g. nodeGroup field change, MachineHealthCheck remediation) provisions a fresh PVC.
+
 ## Parameters
 
 ### Common Parameters
@@ -91,28 +98,29 @@ See the reference for components utilized in this service:
 
 ### Application-specific Parameters
 
-| Name                                            | Description                                                                                    | Type                | Value       |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------- | ----------- |
-| `nodeGroups`                                    | Worker nodes configuration map.                                                                | `map[string]object` | `{...}`     |
-| `nodeGroups[name].minReplicas`                  | Minimum number of replicas.                                                                    | `int`               | `0`         |
-| `nodeGroups[name].maxReplicas`                  | Maximum number of replicas.                                                                    | `int`               | `10`        |
-| `nodeGroups[name].instanceType`                 | Virtual machine instance type.                                                                 | `string`            | `u1.medium` |
-| `nodeGroups[name].ephemeralStorage`             | Ephemeral storage size.                                                                        | `quantity`          | `20Gi`      |
-| `nodeGroups[name].roles`                        | List of node roles.                                                                            | `[]string`          | `[]`        |
-| `nodeGroups[name].resources`                    | CPU and memory resources for each worker node.                                                 | `object`            | `{}`        |
-| `nodeGroups[name].resources.cpu`                | CPU available.                                                                                 | `quantity`          | `""`        |
-| `nodeGroups[name].resources.memory`             | Memory (RAM) available.                                                                        | `quantity`          | `""`        |
-| `nodeGroups[name].gpus`                         | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                            | `[]object`          | `[]`        |
-| `nodeGroups[name].gpus[i].name`                 | Name of GPU, such as "nvidia.com/AD102GL_L40S".                                                | `string`            | `""`        |
-| `nodeGroups[name].kubelet`                      | Kubelet resource reservations for this node group.                                             | `object`            | `{}`        |
-| `nodeGroups[name].kubelet.systemReservedMemory` | Memory reserved for host OS. Auto-computed from instanceType if empty.                         | `string`            | `""`        |
-| `nodeGroups[name].kubelet.kubeReservedMemory`   | Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.   | `string`            | `""`        |
-| `nodeGroups[name].kubelet.systemReservedCpu`    | CPU reserved for host OS. Auto-computed from instanceType if empty.                            | `string`            | `""`        |
-| `nodeGroups[name].kubelet.kubeReservedCpu`      | CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.      | `string`            | `""`        |
-| `nodeGroups[name].kubelet.evictionHardMemory`   | Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).                | `string`            | `7%`        |
-| `nodeGroups[name].kubelet.evictionSoftMemory`   | Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).                 | `string`            | `10%`       |
-| `version`                                       | Kubernetes major.minor version to deploy                                                       | `string`            | `v1.35`     |
-| `host`                                          | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty. | `string`            | `""`        |
+| Name                                            | Description                                                                                                                                                                        | Type                | Value       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----------- |
+| `nodeGroups`                                    | Worker nodes configuration map.                                                                                                                                                    | `map[string]object` | `{...}`     |
+| `nodeGroups[name].minReplicas`                  | Minimum number of replicas.                                                                                                                                                        | `int`               | `0`         |
+| `nodeGroups[name].maxReplicas`                  | Maximum number of replicas.                                                                                                                                                        | `int`               | `10`        |
+| `nodeGroups[name].instanceType`                 | Virtual machine instance type.                                                                                                                                                     | `string`            | `u1.medium` |
+| `nodeGroups[name].diskSize`                     | Persistent disk size for kubelet and containerd data.                                                                                                                              | `quantity`          | `20Gi`      |
+| `nodeGroups[name].storageClass`                 | StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). | `string`            | `""`        |
+| `nodeGroups[name].roles`                        | List of node roles.                                                                                                                                                                | `[]string`          | `[]`        |
+| `nodeGroups[name].resources`                    | CPU and memory resources for each worker node.                                                                                                                                     | `object`            | `{}`        |
+| `nodeGroups[name].resources.cpu`                | CPU available.                                                                                                                                                                     | `quantity`          | `""`        |
+| `nodeGroups[name].resources.memory`             | Memory (RAM) available.                                                                                                                                                            | `quantity`          | `""`        |
+| `nodeGroups[name].gpus`                         | List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).                                                                                                                | `[]object`          | `[]`        |
+| `nodeGroups[name].gpus[i].name`                 | Name of GPU, such as "nvidia.com/AD102GL_L40S".                                                                                                                                    | `string`            | `""`        |
+| `nodeGroups[name].kubelet`                      | Kubelet resource reservations for this node group.                                                                                                                                 | `object`            | `{}`        |
+| `nodeGroups[name].kubelet.systemReservedMemory` | Memory reserved for host OS. Auto-computed from instanceType if empty.                                                                                                             | `string`            | `""`        |
+| `nodeGroups[name].kubelet.kubeReservedMemory`   | Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.                                                                                       | `string`            | `""`        |
+| `nodeGroups[name].kubelet.systemReservedCpu`    | CPU reserved for host OS. Auto-computed from instanceType if empty.                                                                                                                | `string`            | `""`        |
+| `nodeGroups[name].kubelet.kubeReservedCpu`      | CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.                                                                                          | `string`            | `""`        |
+| `nodeGroups[name].kubelet.evictionHardMemory`   | Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).                                                                                                    | `string`            | `7%`        |
+| `nodeGroups[name].kubelet.evictionSoftMemory`   | Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).                                                                                                     | `string`            | `10%`       |
+| `version`                                       | Kubernetes major.minor version to deploy                                                                                                                                           | `string`            | `v1.35`     |
+| `host`                                          | External hostname for Kubernetes cluster. Defaults to `<cluster-name>.<tenant-host>` if empty.                                                                                     | `string`            | `""`        |
 
 
 ### Cluster Addons
@@ -135,6 +143,9 @@ See the reference for components utilized in this service:
 | `addons.gpuOperator`                          | NVIDIA GPU Operator.                                                        | `object`   | `{}`      |
 | `addons.gpuOperator.enabled`                  | Enable GPU Operator.                                                        | `bool`     | `false`   |
 | `addons.gpuOperator.valuesOverride`           | Custom Helm values overrides.                                               | `object`   | `{}`      |
+| `addons.hami`                                 | HAMi GPU virtualization middleware.                                         | `object`   | `{}`      |
+| `addons.hami.enabled`                         | Enable HAMi (requires GPU Operator).                                        | `bool`     | `false`   |
+| `addons.hami.valuesOverride`                  | Custom Helm values overrides.                                               | `object`   | `{}`      |
 | `addons.fluxcd`                               | FluxCD GitOps operator.                                                     | `object`   | `{}`      |
 | `addons.fluxcd.enabled`                       | Enable FluxCD.                                                              | `bool`     | `false`   |
 | `addons.fluxcd.valuesOverride`                | Custom Helm values overrides.                                               | `object`   | `{}`      |
