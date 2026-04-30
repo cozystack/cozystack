@@ -513,12 +513,13 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // packages/extra/gateway/README.md.
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string) (*gatewayv1.Gateway, error) {
 	allowedRoutes := buildAllowedRoutes(tgw)
+	httpAllowedRoutes := buildHTTPListenerAllowedRoutes(tgw)
 	listeners := []gatewayv1.Listener{
 		{
 			Name:          "http",
 			Port:          80,
 			Protocol:      gatewayv1.HTTPProtocolType,
-			AllowedRoutes: allowedRoutes,
+			AllowedRoutes: httpAllowedRoutes,
 		},
 	}
 

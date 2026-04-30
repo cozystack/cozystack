@@ -129,6 +129,84 @@ func TestReconcile_TenantGatewayProducesGateway(t *testing.T) {
 	}
 }
 
+// TestReconcile_HTTPListenerExcludesAppNamespaces pins the
+// security contract: the HTTP listener (port 80) accepts routes
+// only from the tenant namespace (controller's redirect HTTPRoute)
+// and the cert-manager challenge namespace. App namespaces
+// (cozy-harbor, cozy-keycloak, etc.) are explicitly excluded so
+// app HTTPRoutes that attach by hostname (no sectionName) cannot
+// bind to port 80 and silently serve plaintext.
+func TestReconcile_HTTPListenerExcludesAppNamespaces(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor", "cozy-keycloak", "cozy-cert-manager"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+
+	var httpListener *gatewayv1.Listener
+	var httpsListener *gatewayv1.Listener
+	for i := range gw.Spec.Listeners {
+		switch gw.Spec.Listeners[i].Name {
+		case "http":
+			httpListener = &gw.Spec.Listeners[i]
+		}
+		if gw.Spec.Listeners[i].Hostname != nil {
+			httpsListener = &gw.Spec.Listeners[i]
+		}
+	}
+	if httpListener == nil {
+		t.Fatalf("http listener not found")
+	}
+
+	httpValues := httpListener.AllowedRoutes.Namespaces.Selector.MatchExpressions[0].Values
+	if !containsString(httpValues, "tenant-foo") {
+		t.Errorf("http listener missing tenant-foo: %v", httpValues)
+	}
+	if !containsString(httpValues, "cozy-cert-manager") {
+		t.Errorf("http listener missing cozy-cert-manager (HTTP-01 ACME would break): %v", httpValues)
+	}
+	for _, app := range []string{"cozy-harbor", "cozy-keycloak"} {
+		if containsString(httpValues, app) {
+			t.Errorf("http listener accepts %s — apps from this namespace can serve plaintext on port 80: %v", app, httpValues)
+		}
+	}
+
+	if httpsListener != nil {
+		httpsValues := httpsListener.AllowedRoutes.Namespaces.Selector.MatchExpressions[0].Values
+		// HTTPS listeners keep the broader app-namespaces list.
+		if !containsString(httpsValues, "cozy-harbor") {
+			t.Errorf("https listener should still accept cozy-harbor: %v", httpsValues)
+		}
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // TestReconcile_CertModeTransitionHTTP01ToDNS01CleansPerListenerCerts
 // pins the GC contract: switching certMode from http01 to dns01
 // reclaims per-listener Certificates created during the http01
@@ -1128,7 +1206,15 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 		if expr.Key != "kubernetes.io/metadata.name" {
 			t.Errorf("listener %s selector key=%q, want kubernetes.io/metadata.name", l.Name, expr.Key)
 		}
-		want := []string{"tenant-foo", "cozy-harbor", "cozy-dashboard"}
+		// http listener carries a narrower allowedRoutes (tenant ns
+		// + cert-manager challenge ns) — see TestReconcile_HTTPListenerExcludesAppNamespaces.
+		// Other listeners get the broad attached-namespaces list.
+		var want []string
+		if string(l.Name) == "http" {
+			want = []string{"tenant-foo", "cozy-cert-manager"}
+		} else {
+			want = []string{"tenant-foo", "cozy-harbor", "cozy-dashboard"}
+		}
 		got := expr.Values
 		if len(got) != len(want) {
 			t.Errorf("listener %s selector values=%v, want %v", l.Name, got, want)

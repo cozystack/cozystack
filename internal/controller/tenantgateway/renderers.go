@@ -55,10 +55,16 @@ func acmeServerForIssuer(name gatewayv1alpha1.IssuerName) (string, error) {
 	}
 }
 
+// acmeChallengeNamespace is the namespace cert-manager publishes
+// HTTP-01 challenge HTTPRoutes from. Hardcoded to the cozystack
+// platform default; if you ever move cert-manager out of cozy-cert-
+// manager, add a TenantGateway spec field to override this.
+const acmeChallengeNamespace = "cozy-cert-manager"
+
 // buildAllowedRoutes computes the AllowedRoutes block applied to
-// every listener on the rendered Gateway: a Selector that matches
-// the built-in `kubernetes.io/metadata.name` label (kube-apiserver-
-// written, unspoofable). The accepted set is the publishing tenant
+// HTTPS / TLS-passthrough listeners: a Selector that matches the
+// built-in `kubernetes.io/metadata.name` label (kube-apiserver-
+// written, unspoofable). Accepted set is the publishing tenant
 // namespace plus tgw.Spec.AttachedNamespaces. This is Layer 1 of
 // the security model documented in the gateway chart README.
 func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
@@ -74,6 +80,33 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 		seen[ns] = struct{}{}
 		values = append(values, ns)
 	}
+	return allowedRoutesFromValues(values)
+}
+
+// buildHTTPListenerAllowedRoutes returns a strictly narrower
+// allowedRoutes for the port-80 listener: only the tenant namespace
+// (the controller-owned http→https redirect HTTPRoute lives there)
+// and the cert-manager challenge namespace (HTTP-01 ACME challenges
+// publish a transient HTTPRoute under /.well-known/acme-challenge/).
+//
+// Why: app HTTPRoutes (harbor, keycloak, dashboard, bucket) attach
+// by hostname with no sectionName, so without this narrower filter
+// they would also bind to the HTTP listener — Gateway API
+// tie-breaks merged routes by creationTimestamp, so an app route
+// created before the controller's redirect would silently serve
+// plaintext on port 80 and leak credentials. Restricting the HTTP
+// listener's allowedRoutes namespaces excludes the cozy-* / tenant-*
+// namespaces apps live in, while keeping cert-manager's challenge
+// namespace open so ACME still completes.
+func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
+	values := []string{tgw.Namespace}
+	if acmeChallengeNamespace != tgw.Namespace {
+		values = append(values, acmeChallengeNamespace)
+	}
+	return allowedRoutesFromValues(values)
+}
+
+func allowedRoutesFromValues(values []string) *gatewayv1.AllowedRoutes {
 	from := gatewayv1.NamespacesFromSelector
 	return &gatewayv1.AllowedRoutes{
 		Namespaces: &gatewayv1.RouteNamespaces{
