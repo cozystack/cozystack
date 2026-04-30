@@ -1,5 +1,6 @@
 {{- $issuerName := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $provider := (index .Values._cluster "dns01-provider") | default "cloudflare" }}
 {{- $acmeServer := "" }}
 {{- if eq $issuerName "letsencrypt-prod" }}
   {{- $acmeServer = "https://acme-v02.api.letsencrypt.org/directory" }}
@@ -24,6 +25,27 @@
 {{- else if ne $solver "dns01" }}
   {{- fail (printf "packages/extra/gateway currently supports publishing.certificates.solver=dns01 only (got %q). Extend templates/issuer.yaml to add additional solver types." $solver) }}
 {{- end }}
+{{- /*
+  DNS-01 provider dispatch. Each branch validates its required inputs and
+  renders the cert-manager solver block matching the provider's schema.
+  Adding a provider: add a branch here and a corresponding test case in
+  tests/issuer_dns01_providers_test.yaml. Reserved values: cloudflare,
+  route53, digitalocean, rfc2136.
+*/}}
+{{- $supported := list "cloudflare" "route53" "digitalocean" "rfc2136" }}
+{{- if not (has $provider $supported) }}
+  {{- fail (printf "packages/extra/gateway: unsupported _cluster.dns01-provider=%q. Supported values: cloudflare, route53, digitalocean, rfc2136. To add another provider, extend templates/issuer.yaml with the corresponding solver block." $provider) }}
+{{- end }}
+{{- if eq $provider "route53" }}
+  {{- if not (index .Values._cluster "dns01-route53-region") }}
+    {{- fail "packages/extra/gateway: _cluster.dns01-route53-region is required when dns01-provider=route53" }}
+  {{- end }}
+{{- end }}
+{{- if eq $provider "rfc2136" }}
+  {{- if not (index .Values._cluster "dns01-rfc2136-nameserver") }}
+    {{- fail "packages/extra/gateway: _cluster.dns01-rfc2136-nameserver is required when dns01-provider=rfc2136" }}
+  {{- end }}
+{{- end }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
@@ -36,7 +58,29 @@ spec:
       name: gateway-acme-account
     solvers:
     - dns01:
+    {{- if eq $provider "cloudflare" }}
         cloudflare:
           apiTokenSecretRef:
-            name: cloudflare-api-token-secret
-            key: api-token
+            name: {{ (index .Values._cluster "dns01-cloudflare-secret-name") | default "cloudflare-api-token-secret" }}
+            key: {{ (index .Values._cluster "dns01-cloudflare-secret-key") | default "api-token" }}
+    {{- else if eq $provider "route53" }}
+        route53:
+          region: {{ (index .Values._cluster "dns01-route53-region") | quote }}
+          accessKeyID: {{ (index .Values._cluster "dns01-route53-access-key-id") | quote }}
+          secretAccessKeySecretRef:
+            name: {{ (index .Values._cluster "dns01-route53-secret-name") | quote }}
+            key: {{ (index .Values._cluster "dns01-route53-secret-key") | default "secret-access-key" }}
+    {{- else if eq $provider "digitalocean" }}
+        digitalocean:
+          tokenSecretRef:
+            name: {{ (index .Values._cluster "dns01-digitalocean-secret-name") | default "digitalocean-api-token-secret" }}
+            key: {{ (index .Values._cluster "dns01-digitalocean-secret-key") | default "access-token" }}
+    {{- else if eq $provider "rfc2136" }}
+        rfc2136:
+          nameserver: {{ (index .Values._cluster "dns01-rfc2136-nameserver") | quote }}
+          tsigKeyName: {{ (index .Values._cluster "dns01-rfc2136-tsig-key-name") | quote }}
+          tsigAlgorithm: {{ (index .Values._cluster "dns01-rfc2136-tsig-algorithm") | default "HMACSHA256" }}
+          tsigSecretSecretRef:
+            name: {{ (index .Values._cluster "dns01-rfc2136-secret-name") | quote }}
+            key: {{ (index .Values._cluster "dns01-rfc2136-secret-key") | default "tsig-secret-key" }}
+    {{- end }}
