@@ -14,8 +14,8 @@ This guide focuses on the **SR-IOV path**, which is the only model NVIDIA suppor
 ## Prerequisites
 
 - An Ada Lovelace (or newer) NVIDIA GPU that supports SR-IOV vGPU (L4, L40, L40S, etc.).
-- Ubuntu 24.04 host OS. Older Ubuntu releases also work if the upstream `gpu-driver-container` repo has a matching `vgpu-manager/` Dockerfile. **Talos Linux is not recommended** for vGPU. NVIDIA does not publicly distribute the vGPU guest driver — it requires NVIDIA Enterprise Portal access — and Sidero [closed siderolabs/extensions#461](https://github.com/siderolabs/extensions/issues/461) noting that they cannot support vGPU «unless NVIDIA changes their licensing terms or provides us a way to obtain, test, and distribute the software». Building a Talos system extension that includes the driver in-tree is therefore not feasible without a private fork that violates the EULA.
-- KubeVirt **v1.9.0 or later**. SR-IOV vGPU passthrough was added by [kubevirt/kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890) («vGPU: SRIOV support», merged to `main` 2026-04-10) and will ship in the v1.9.0 release (ETA July 2026). Earlier released tags (`v1.6.x` / `v1.7.x` / `v1.8.x`) do not include the patch — backports are not planned. If you need vGPU before v1.9.0 lands you have to run a `main`-based nightly build of `virt-handler`; the rest of the operator can stay on the latest released tag.
+- Ubuntu 24.04 host OS. Older Ubuntu releases also work if the upstream `gpu-driver-container` repo has a matching `vgpu-manager/` Dockerfile. **Talos Linux is not recommended** for vGPU. NVIDIA does not publicly distribute the vGPU guest driver — it requires NVIDIA Enterprise Portal access — and Sidero [closed siderolabs/extensions#461](https://github.com/siderolabs/extensions/issues/461) noting that they cannot support vGPU "unless NVIDIA changes their licensing terms or provides us a way to obtain, test, and distribute the software". Building a Talos system extension that includes the driver in-tree is therefore not feasible without a private fork that violates the EULA.
+- KubeVirt with [kubevirt/kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890) ("vGPU: SRIOV support", merged to `main` 2026-04-10). Targeted at the next minor release (v1.9.0); track the PR for the actual release tag. Released tags up to and including v1.8.x do not include the patch and backports are not planned. If you need vGPU before v1.9.0 lands you have to run a `main`-based nightly build of `virt-handler`; the rest of the operator can stay on the latest released tag.
 - An NVIDIA vGPU Software / NVIDIA AI Enterprise subscription (the `.run` is not redistributable).
 - A reachable NVIDIA Delegated License Service (DLS) instance and a matching `client_configuration_token.tok` file.
 
@@ -44,7 +44,7 @@ docker build \
 docker push registry.example.com/nvidia/vgpu-manager:595.58.02-ubuntu24.04
 ```
 
-The build downloads kernel headers at container start time and compiles `nvidia.ko` against the host kernel, so a single image works across kernel patch versions for the same Ubuntu release. The proprietary `.run` is the **Linux KVM** variant (not the Ubuntu KVM `.deb`, which ships pre-built modules for stock kernels only).
+The container's entrypoint downloads kernel headers at pod start time and compiles `nvidia.ko` against the running kernel, so a single image works across kernel patch versions for the same Ubuntu release. The proprietary `.run` is the **Linux KVM** variant (not the Ubuntu KVM `.deb`, which ships pre-built modules for stock kernels only).
 
 > **EULA:** never push the resulting image to a publicly readable registry. Use a private registry (in-cluster Harbor works well as a non-proxy project).
 
@@ -87,7 +87,7 @@ kubectl -n cozy-gpu-operator exec -it <pod> -- nvidia-smi
 
 ## Profile assignment (SR-IOV path)
 
-> **The `vgpu` variant is experimental on Ada+ and ships without a profile-assignment loop.** NVIDIA's `vgpu-device-manager` walks `/sys/class/mdev_bus/`, which does not exist on Ada+ — the DaemonSet errors with «no parent devices found for GPU at index '0'» and is therefore disabled by default in `values-vgpu.yaml`. Until an SR-IOV-aware controller is shipped, profile assignment is an out-of-band step that must be re-applied after every node reboot (`current_vgpu_type` resets to 0 on PCIe re-enumeration). Without this step, `permittedHostDevices.pciHostDevices` will report zero allocatable resources and no VM can request the vGPU. **Do not deploy the `vgpu` variant in production until you have an automated profile-assignment mechanism in place** — typically a small DaemonSet that reads a ConfigMap (`<bus-id> = <profile-id>`) and writes the corresponding `current_vgpu_type` files at boot.
+> **The `vgpu` variant is experimental on Ada+ and ships without a profile-assignment loop.** NVIDIA's `vgpu-device-manager` walks `/sys/class/mdev_bus/`, which does not exist on Ada+ — the DaemonSet errors with "no parent devices found for GPU at index '0'" and is therefore disabled by default in `values-vgpu.yaml`. Until an SR-IOV-aware controller is shipped, profile assignment is an out-of-band step that must be re-applied after every node reboot (`current_vgpu_type` resets to 0 on PCIe re-enumeration). Without this step, `permittedHostDevices.pciHostDevices` will report zero allocatable resources and no VM can request the vGPU. **Do not deploy the `vgpu` variant in production until you have an automated profile-assignment mechanism in place** — typically a small DaemonSet that reads a ConfigMap (`<bus-id> = <profile-id>`) and writes the corresponding `current_vgpu_type` files at boot.
 
 Once `nvidia.ko` is loaded the driver enables SR-IOV (16 VFs per L40S by default). Each VF needs a vGPU profile written to its sysfs:
 
@@ -161,7 +161,7 @@ write_files:
 Verify activation inside the guest:
 
 ```bash
-nvidia-smi -q | grep -A 1 'License Status'
+nvidia-smi -q | grep 'License Status'
 # License Status   : Licensed
 ```
 
@@ -169,7 +169,7 @@ If the guest reports `Unlicensed (Unrestricted)` for more than a couple of minut
 
 ### Migrating from chart v25.x
 
-Operators upgrading from the previous Cozystack release (gpu-operator chart v25.3.0) should also note that the upstream chart deprecated `driver.licensingConfig.configMapName` in favour of `driver.licensingConfig.secretName`. The old key still works but emits a deprecation warning at render time. If your existing `Package` CR set the licensing reference via `configMapName`, switch it to `secretName` on this upgrade — the Secret content (`gridd.conf` and the ClientConfigToken) does not need to change. This applies to passthrough deployments that drove host-side licensing through the gpu-operator chart; SR-IOV vGPU does not consume the host-side licensing knob at all (see «Licensing (DLS)» above).
+Operators upgrading from the previous Cozystack release (gpu-operator chart v25.3.0) should also note that the upstream chart deprecated `driver.licensingConfig.configMapName` in favour of `driver.licensingConfig.secretName`. The old key still works but emits a deprecation warning at render time. If your existing `Package` CR set the licensing reference via `configMapName`, switch it to `secretName` on this upgrade — the Secret content (`gridd.conf` and the ClientConfigToken) does not need to change. This applies to passthrough deployments that drove host-side licensing through the gpu-operator chart; SR-IOV vGPU does not consume the host-side licensing knob at all (see "Licensing (DLS)" above).
 
 ## Sample VirtualMachine
 
