@@ -112,7 +112,7 @@ Get the list of commits between the previous patch tag and the new tag:
 
 ```bash
 # Get all commits including merge commits (backports), bounded by the new tag
-git log <previous_version>..v<new_version> --pretty=format:"%h - %s (%an, %ar)"
+git log v<previous_version>..v<new_version> --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 For example, if generating changelog for `v0.37.2`:
@@ -274,7 +274,7 @@ Cozystack release may include changes from related repositories. Check and inclu
 
 ```bash
 # Extract all PR numbers from commit messages in the release range (including merge commits)
-git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#'
+git log v<previous_version>..v<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#'
 ```
 
 **⚠️ IMPORTANT: Handle backports correctly:**
@@ -283,7 +283,6 @@ git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+'
 - For backport entries in changelog, use the original PR author (not the backport PR author)
 - **MUST** combine the original and backport PR into a **single changelog entry** with both PR numbers (e.g. `#1606, backport #1609`). NEVER list the original and the backport as two separate entries — that produces visible duplicates and was the primary defect that motivated this rule.
 - To find original PR from backport: Check the backport PR description or commit message for "Backport of #ORIGINAL_PR"
-- If a release range contains a backport but its original PR is **not** in the same range (because the original was merged earlier and already shipped in a previous release), drop the entry entirely — it has already been changelog'd.
 
 **For each PR number, get the author:**
    
@@ -296,7 +295,7 @@ git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+'
    ```bash
    # Usage: Get PR author - MANDATORY for EVERY PR
    # Loop through ALL PR numbers and get PR author (including backports)
-   git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#' | while read PR_NUMBER; do
+   git log v<previous_version>..v<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#' | while read PR_NUMBER; do
      # Check if this is a backport PR
      BACKPORT_INFO=$(gh pr view "$PR_NUMBER" --json body --jq '.body' 2>/dev/null | grep -i "backport of #" || echo "")
      if [ -n "$BACKPORT_INFO" ]; then
@@ -512,21 +511,25 @@ Create a new changelog file in the format matching previous versions:
    
    **Get all previous contributors (to identify new ones):**
    ```bash
-   # Extract GitHub usernames from all previous changelogs
-   grep -hE '\[@[a-zA-Z0-9_-]+\]' docs/changelogs/v*.md | \
-     grep -oE '@[a-zA-Z0-9_-]+' | \
+   # Extract GitHub usernames from all previous changelogs (filtering out bot/CI accounts)
+   grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v*.md | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/previous_contributors.txt
    ```
    
    **Identify new contributors (first-time contributors):**
    ```bash
-   # Get current release contributors from the changelog
-   grep -oE '@[a-zA-Z0-9_-]+' docs/changelogs/v<version>.md | \
+   # Get current release contributors from the changelog (filtering out bot/CI accounts)
+   grep -oE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v<version>.md | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/current_contributors.txt
    
-   # Get all previous contributors
-   grep -hE '@[a-zA-Z0-9_-]+' docs/changelogs/v*.md | \
-     grep -oE '@[a-zA-Z0-9_-]+' | \
+   # Get all previous contributors (filtering out bot/CI accounts)
+   grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v*.md | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/all_previous_contributors.txt
    
    # Find new contributors (those in current but not in previous)
