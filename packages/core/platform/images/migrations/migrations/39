@@ -1,0 +1,97 @@
+#!/bin/bash
+# Migration 39 --> 40
+# Migrate resourcesPreset values from flat names to instance-type names (s1/u1/m1)
+#
+# Series selection per app kind (read from the
+# apps.cozystack.io/application.kind label):
+#   m1 (Memory, 1:8)  — memory-intensive: Redis, OpenSearch, Qdrant
+#   u1 (Universal, 1:4) — databases & messaging: Postgres, MariaDB, MongoDB,
+#                          ClickHouse, FoundationDB, Kafka, RabbitMQ, NATS,
+#                          plus Kubernetes/VMInstance and any app without the
+#                          kind label (safe over-sizing fallback).
+#   s1 (Standard, 1:2) — stateless services: Harbor, VPN, TCPBalancer,
+#                          HTTPCache, OpenBAO, Ingress, ExternalDNS
+#
+# Limitation: a single series is applied uniformly across every nested
+# resourcesPreset in the values tree. A few apps have mixed series in their
+# chart defaults (e.g. ClickHouse top u1 + clickhouseKeeper s1; OpenSearch top
+# m1 + dashboards s1; Kubernetes apiServer u1 + controllerManager/scheduler/
+# konnectivity s1). Users who explicitly overrode resourcesPreset on those
+# nested fields will end up with the parent app's series there too — i.e.
+# slightly over-sized sub-components. The chart defaults still apply for
+# fields the user did not override, so the common case is unaffected.
+
+set -euo pipefail
+
+echo "Migrating HelmReleases: renaming resourcesPreset values to instance-type format"
+
+# Determine the target series based on the application kind label set by
+# cozystack-api on every HelmRelease it creates
+# (apps.cozystack.io/application.kind, see pkg/apis/apps/v1alpha1/types.go).
+# Keying off the label avoids duplicating the release.prefix list from
+# ApplicationDefinitions and works regardless of the HR name the user picked.
+# HelmReleases without this label (e.g. created outside cozystack-api)
+# fall through to the u1 default — a safe over-sizing on the universal series.
+get_series() {
+  local kind="$1"
+  case "$kind" in
+    Redis|OpenSearch|Qdrant)
+      echo "m1" ;;
+    Harbor|VPN|TCPBalancer|HTTPCache|OpenBAO|Ingress|ExternalDNS)
+      echo "s1" ;;
+    *)
+      echo "u1" ;;
+  esac
+}
+
+# Find all HelmReleases that have resourcesPreset in their spec.values
+kubectl get helmreleases --all-namespaces -o json | \
+  jq -r '.items[]
+    | select(.spec.values | tostring | test("resourcesPreset"))
+    | "\(.metadata.namespace)|\(.metadata.name)|\(.metadata.labels["apps.cozystack.io/application.kind"] // "")"' | \
+  while IFS='|' read -r namespace name kind; do
+    echo "Processing HelmRelease $namespace/$name (kind: ${kind:-<none>})"
+
+    series=$(get_series "$kind")
+    echo "  Using series: $series"
+
+    values=$(kubectl get helmrelease -n "$namespace" "$name" -o jsonpath='{.spec.values}')
+
+    # Use jq to find and replace all resourcesPreset fields at any nesting level
+    # Walk the entire values tree and rename any old-style preset
+    new_values=$(echo "$values" | jq --arg series "$series" '
+      def map_preset($s):
+        if . == "nano" then "\($s).nano"
+        elif . == "micro" then "\($s).micro"
+        elif . == "small" then "\($s).small"
+        elif . == "medium" then "\($s).medium"
+        elif . == "large" then "\($s).large"
+        elif . == "xlarge" then "\($s).xlarge"
+        elif . == "2xlarge" then "\($s).2xlarge"
+        else .
+        end;
+
+      walk(
+        if type == "object" and has("resourcesPreset") and (.resourcesPreset | type) == "string" then
+          .resourcesPreset |= map_preset($series)
+        else .
+        end
+      )
+    ')
+
+    # Check if anything changed
+    if [ "$values" = "$new_values" ]; then
+      echo "  Skipping: no old-style presets found"
+      continue
+    fi
+
+    # Patch the HelmRelease
+    kubectl patch helmrelease -n "$namespace" "$name" --type=merge -p "{\"spec\":{\"values\":$new_values}}"
+    echo "  Successfully migrated"
+  done
+
+echo "Resource preset migration completed"
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=40 --dry-run=client -o yaml | kubectl apply -f-

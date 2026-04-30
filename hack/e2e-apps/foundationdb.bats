@@ -24,7 +24,7 @@ spec:
   storage:
     size: "1Gi"
     storageClass: ""
-  resourcesPreset: "small"
+  resourcesPreset: "u1.small"
   backup:
     enabled: false
     s3:

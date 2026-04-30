@@ -48,7 +48,7 @@ type Core struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="s1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 }
 
@@ -66,7 +66,7 @@ type Jobservice struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="nano"
+	// +kubebuilder:default:="s1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 }
 
@@ -84,7 +84,7 @@ type Registry struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="s1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 }
 
@@ -103,12 +103,12 @@ type Trivy struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="nano"
+	// +kubebuilder:default:="s1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 	// Persistent Volume size for vulnerability database cache.
 	// +kubebuilder:default:="5Gi"
 	Size resource.Quantity `json:"size"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge"
 type ResourcesPreset string

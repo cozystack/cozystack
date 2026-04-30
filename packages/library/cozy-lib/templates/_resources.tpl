@@ -135,7 +135,7 @@
   ========================================
   resources:
     cpu: "1"
-  resourcesPreset: "nano"
+  resourcesPreset: "s1.nano"
 
   Example output:
   ===============
@@ -143,11 +143,11 @@
     limits:
       cpu: "1" # == user input
       ephemeral-storage: 2Gi # == default ephemeral storage limit
-      memory: 128Mi # from "nano"
+      memory: 512Mi # from "s1.nano"
     requests:
       cpu: 100m # == 1 / 10
       ephemeral-storage: 50Mi # == default ephemeral storage request
-      memory: 128Mi # memory request == limit
+      memory: 512Mi # memory request == limit
 */}}
 {{- define "cozy-lib.resources.defaultingSanitize" }}
 {{-   $preset := index . 0 }}

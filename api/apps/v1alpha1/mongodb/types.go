@@ -24,7 +24,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="u1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
@@ -142,7 +142,7 @@ type User struct {
 	Password string `json:"password,omitempty"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge"
 type ResourcesPreset string
 
 // +kubebuilder:validation:Enum="v8";"v7";"v6"

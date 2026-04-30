@@ -14,7 +14,7 @@ spec:
   size: 10Gi
   replicas: 1
   storageClass: ""
-  resourcesPreset: "small"
+  resourcesPreset: "u1.small"
   users:
     testuser:
       password: xai7Wepo
