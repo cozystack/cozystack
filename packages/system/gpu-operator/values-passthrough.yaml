@@ -5,6 +5,15 @@
 gpu-operator:
   sandboxWorkloads:
     enabled: true
+    # Without this override the upstream default 'container' applies
+    # on GPU nodes that lack the per-node label
+    # 'nvidia.com/gpu.workload.config'. In that case the operator
+    # picks the container workload (driver / devicePlugin DaemonSets),
+    # which are disabled below — so nothing GPU-related runs on the
+    # node and vfio-manager never starts. Setting the cluster-wide
+    # default to 'vm-passthrough' makes the variant work out of the
+    # box; mirrors the symmetric override in values-vgpu.yaml.
+    defaultWorkload: vm-passthrough
   driver:
     enabled: false
   devicePlugin:

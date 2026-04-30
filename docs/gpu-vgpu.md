@@ -167,6 +167,10 @@ nvidia-smi -q | grep -A 1 'License Status'
 
 If the guest reports `Unlicensed (Unrestricted)` for more than a couple of minutes, check `journalctl _COMM=nvidia-gridd` for handshake errors against the DLS endpoint baked into the token.
 
+### Migrating from chart v25.x
+
+Operators upgrading from the previous Cozystack release (gpu-operator chart v25.3.0) should also note that the upstream chart deprecated `driver.licensingConfig.configMapName` in favour of `driver.licensingConfig.secretName`. The old key still works but emits a deprecation warning at render time. If your existing `Package` CR set the licensing reference via `configMapName`, switch it to `secretName` on this upgrade — the Secret content (`gridd.conf` and the ClientConfigToken) does not need to change. This applies to passthrough deployments that drove host-side licensing through the gpu-operator chart; SR-IOV vGPU does not consume the host-side licensing knob at all (see «Licensing (DLS)» above).
+
 ## Sample VirtualMachine
 
 For SR-IOV vGPU use `hostDevices`, not `gpus` (the latter expects an mdev resource and will not match a `pciHostDevices` entry):

@@ -13,14 +13,15 @@ gpu-operator:
   ccManager:
     enabled: false
   # Upstream v26.x also flips vgpuDeviceManager.enabled to true. The
-  # device manager only schedules onto nodes labelled
-  # nvidia.com/gpu.deploy.vgpu-device-manager=true, which the operator
-  # does not apply in passthrough mode, so practically the DaemonSet
-  # stays at zero pods — but it is still rendered into the cluster.
-  # The vGPU variant also walks /sys/class/mdev_bus/, which does not
-  # exist on Ada Lovelace (L4/L40/L40S, …) or Blackwell (B100, …) on
-  # the vGPU 17/20 driver branch. Pin to false by
-  # default; the vgpu variant explicitly re-affirms this in
+  # primary reason this is pinned back to false: the device manager
+  # walks /sys/class/mdev_bus/, which does not exist on Ada Lovelace
+  # (L4/L40/L40S, …) or Blackwell (B100, …) on the vGPU 17/20 driver
+  # branch — it errors with «no parent devices found». Keeping the
+  # default-on would crashloop the DaemonSet on any modern GPU.
+  # Secondary consideration: in passthrough mode the operator does not
+  # apply the nvidia.com/gpu.deploy.vgpu-device-manager=true label, so
+  # the DaemonSet would stay at zero pods, but it would still render
+  # into the cluster. The vgpu variant explicitly re-affirms this in
   # values-vgpu.yaml.
   vgpuDeviceManager:
     enabled: false
