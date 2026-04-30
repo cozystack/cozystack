@@ -62,7 +62,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: adopt
-        image: rancher/kubectl:v1.29.10
+        image: docker.io/clastix/kubectl:v1.32
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
