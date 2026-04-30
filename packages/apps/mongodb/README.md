@@ -70,6 +70,33 @@ Note that this skips the operator-driven cleanup — PVCs and operator-managed s
 
 If you need to retain data, take a backup before deletion. Refer to the [Percona Operator for MongoDB documentation](https://docs.percona.com/percona-operator-for-mongodb/) for backup/restore workflows.
 
+### Upgrading from earlier versions
+
+Earlier versions of this chart referenced a namespace-shared system users secret (`percona-server-mongodb-users`). Upgrading to a release that scopes this secret per CR (`<release>-percona-server-mongodb-users`) triggers a password rotation for the operator-managed system users. The rotation is performed in place by the Percona operator via `db.changeUserPassword()` against the running mongod (operator log: `Secret data changed. Updating users...`); pods are not restarted and the cluster stays available.
+
+**Rotated automatically on upgrade:**
+
+- The five operator-managed system accounts: `databaseAdmin`, `userAdmin`, `backup`, `clusterAdmin`, `clusterMonitor`.
+- Secret `<release>-percona-server-mongodb-users` (newly created, per-CR) and `internal-<release>-users` receive the new values.
+- Secret `<release>-credentials` is regenerated; its `password` and `uri` keys reflect the new `databaseAdmin` password.
+
+**Not affected:**
+
+- Custom users defined under `users:` in chart values. Their `<release>-user-<name>` secrets are not touched.
+- The at-rest encryption key (`<release>-mongodb-encryption-key`) and replica set keyfile (`<release>-mongodb-keyfile`) are unchanged, so on-disk data remains readable.
+
+**Action required after upgrade:**
+
+Workloads that mount `<release>-credentials` keep using the cached old password until they re-read the secret. Restart those pods, or run a controller such as [Reloader](https://github.com/stakater/Reloader) to roll them automatically. Without this, application connections fail with authentication errors once their existing sessions expire.
+
+**Orphaned legacy secret:**
+
+The previous namespace-shared secret `percona-server-mongodb-users` is no longer referenced by any MongoDB CR after upgrade, but the operator does not garbage-collect it. If multiple MongoDB releases in the same namespace previously shared it, all of them rotate to their own per-CR secrets — passwords are no longer shared across CRs in the namespace, which is the intended outcome. Confirm no other consumers reference it, then remove it manually:
+
+```bash
+kubectl --namespace <namespace> delete secret percona-server-mongodb-users
+```
+
 ## Parameters
 
 ### Common parameters
