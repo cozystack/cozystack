@@ -48,16 +48,32 @@ version: v18
 ## @section Application-specific parameters
 ##
 
-## @typedef {struct} PostgreSQLParameters - PostgreSQL server parameters.
-## @field {int} [max_connections] - Maximum number of concurrent connections to the database server.
-
 ## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
-## @field {PostgreSQLParameters} [parameters] - PostgreSQL server parameters.
+## @field {map[string]string} [parameters] - PostgreSQL server parameters. All values must be strings (quote numbers: "100"). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 
 ## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
 postgresql:
   parameters:
-    max_connections: 100
+    max_connections: "100"
+## Additional parameters examples:
+##   shared_buffers: "1GB"
+##   effective_cache_size: "4GB"
+##   bgwriter_delay: "200ms"
+##   commit_delay: "100"
+##   commit_siblings: "5"
+##   work_mem: "256MB"
+##
+## SECURITY: The following parameters are BLOCKED (enable arbitrary code execution):
+##   archive_command, restore_command, ssl_passphrase_command (shell commands),
+##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
+##   shared_preload_libraries (arbitrary .so loading)
+##
+## IMPORTANT: Do NOT override CloudNativePG-managed parameters:
+##   archive_mode, primary_conninfo, wal_level, max_replication_slots
+##
+## NOTE: Some parameters require pod restart (not just reload):
+##   shared_buffers, max_connections, max_prepared_transactions,
+##   wal_buffers, max_wal_senders
 
 ##
 ## @section Quorum-based synchronous replication

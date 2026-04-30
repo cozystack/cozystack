@@ -60,9 +60,16 @@ spec:
   {{- end }}
   postgresql:
     parameters:
-      max_wal_senders: "30"
-      {{- with .Values.postgresql.parameters.max_connections }}
-      max_connections: "{{ . }}"
+      {{- $defaults := dict "max_wal_senders" "30" }}
+      {{- $params := merge (dict) .Values.postgresql.parameters $defaults }}
+      {{- /* Security: Block parameters that enable arbitrary code execution (shell commands or .so loading) */ -}}
+      {{- $dangerousParams := list "archive_command" "restore_command" "ssl_passphrase_command" "dynamic_library_path" "local_preload_libraries" "session_preload_libraries" "shared_preload_libraries" }}
+      {{- range $key, $value := $params }}
+      {{- $normalizedKey := lower $key }}
+      {{- if has $normalizedKey $dangerousParams }}
+      {{- fail (printf "SECURITY: Parameter '%s' is blocked. This parameter can enable arbitrary code execution and must not be set by tenants." $key) }}
+      {{- end }}
+      {{ $key }}: {{ $value | toString | quote }}
       {{- end }}
 
   minSyncReplicas: {{ .Values.quorum.minSyncReplicas }}
