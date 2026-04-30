@@ -302,41 +302,50 @@ func pickAttachingParentRef(refs []gatewayv1.ParentReference, routeNs string, tg
 // reconcilePerListenerCertificates creates a Certificate for each
 // dynamic hostname (HTTP-01 mode only) and deletes Certificates owned
 // by this TenantGateway that no longer correspond to a live HTTPRoute
-// hostname.
+// hostname OR were left behind by a switch from HTTP-01 to DNS-01
+// mode. The garbage-collect loop runs unconditionally so per-listener
+// certs do not leak across mode transitions.
 func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway, hostnames []string) error {
-	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeHTTP01 && tgw.Spec.CertMode != "" {
-		return nil
-	}
 	logger := log.FromContext(ctx)
 
 	desiredNames := map[string]struct{}{}
-	for _, h := range hostnames {
-		desired, err := r.renderPerListenerCertificate(tgw, h)
-		if err != nil {
-			return fmt.Errorf("render per-listener Certificate for %s: %w", h, err)
-		}
-		desiredNames[desired.Name] = struct{}{}
-
-		existing := &cmv1.Certificate{}
-		getErr := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: desired.Name}, existing)
-		switch {
-		case apierrors.IsNotFound(getErr):
-			if err := r.Create(ctx, desired); err != nil {
-				return fmt.Errorf("create per-listener Certificate %s: %w", desired.Name, err)
+	// Provision per-listener certs only in HTTP-01 mode (wildcard
+	// cert in DNS-01 mode covers everything). DNS-01 mode falls
+	// through to the GC loop below with an empty desired set, which
+	// then deletes any stale per-listener certs from a previous
+	// HTTP-01 reconcile.
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeHTTP01 || tgw.Spec.CertMode == "" {
+		for _, h := range hostnames {
+			desired, err := r.renderPerListenerCertificate(tgw, h)
+			if err != nil {
+				return fmt.Errorf("render per-listener Certificate for %s: %w", h, err)
 			}
-			logger.V(1).Info("created per-listener Certificate", "namespace", tgw.Namespace, "name", desired.Name)
-		case getErr != nil:
-			return fmt.Errorf("get per-listener Certificate %s: %w", desired.Name, getErr)
-		default:
-			existing.Spec = desired.Spec
-			if err := r.Update(ctx, existing); err != nil {
-				return fmt.Errorf("update per-listener Certificate %s: %w", desired.Name, err)
+			desiredNames[desired.Name] = struct{}{}
+
+			existing := &cmv1.Certificate{}
+			getErr := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: desired.Name}, existing)
+			switch {
+			case apierrors.IsNotFound(getErr):
+				if err := r.Create(ctx, desired); err != nil {
+					return fmt.Errorf("create per-listener Certificate %s: %w", desired.Name, err)
+				}
+				logger.V(1).Info("created per-listener Certificate", "namespace", tgw.Namespace, "name", desired.Name)
+			case getErr != nil:
+				return fmt.Errorf("get per-listener Certificate %s: %w", desired.Name, getErr)
+			default:
+				existing.Spec = desired.Spec
+				if err := r.Update(ctx, existing); err != nil {
+					return fmt.Errorf("update per-listener Certificate %s: %w", desired.Name, err)
+				}
 			}
 		}
 	}
 
-	// Garbage-collect Certificates this controller previously created
-	// for hostnames that no longer have an attached route.
+	// Garbage-collect: delete owned Certificates whose name no longer
+	// matches a desired per-listener cert. Runs in both HTTP-01 and
+	// DNS-01 modes — the empty desiredNames set in DNS-01 mode means
+	// every per-listener cert from a previous HTTP-01 phase is
+	// reclaimed.
 	owned := &cmv1.CertificateList{}
 	if err := r.List(ctx, owned, client.InNamespace(tgw.Namespace), client.MatchingLabels{cozystackManagedByLabel: cozystackManagedByValue}); err != nil {
 		return fmt.Errorf("list owned Certificates: %w", err)
@@ -344,7 +353,9 @@ func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *
 	for i := range owned.Items {
 		c := &owned.Items[i]
 		if c.Name == gatewayCertificateName(tgw) {
-			// Wildcard cert is handled by reconcileWildcardCertificate.
+			// Wildcard cert lifecycle is owned by
+			// reconcileWildcardCertificate (which now also handles
+			// the DNS-01→HTTP-01 transition cleanup).
 			continue
 		}
 		if _, keep := desiredNames[c.Name]; keep {
@@ -436,12 +447,29 @@ func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.T
 }
 
 func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	logger := log.FromContext(ctx)
+
 	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeDNS01 {
-		// HTTP-01 mode does not use a wildcard cert; per-listener
-		// certs are produced by route-driven reconciliation.
+		// HTTP-01 mode: wildcard cert must not exist. Delete any
+		// stale wildcard cert left over from a previous DNS-01
+		// reconcile so a mode toggle doesn't leak Certificates.
+		stale := &cmv1.Certificate{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: gatewayCertificateName(tgw)}, stale)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get wildcard Certificate for cleanup: %w", err)
+		}
+		if !ownedByTenantGateway(stale.OwnerReferences, tgw) {
+			return nil
+		}
+		if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale wildcard Certificate %s: %w", stale.Name, err)
+		}
+		logger.V(1).Info("deleted stale wildcard Certificate after switch to HTTP-01", "name", stale.Name)
 		return nil
 	}
-	logger := log.FromContext(ctx)
 	desired, err := r.renderWildcardCertificate(tgw)
 	if err != nil {
 		return fmt.Errorf("render Certificate: %w", err)

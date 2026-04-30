@@ -129,6 +129,138 @@ func TestReconcile_TenantGatewayProducesGateway(t *testing.T) {
 	}
 }
 
+// TestReconcile_CertModeTransitionHTTP01ToDNS01CleansPerListenerCerts
+// pins the GC contract: switching certMode from http01 to dns01
+// reclaims per-listener Certificates created during the http01
+// phase. Without it, those Certificates outlive the mode change,
+// keep their backing Secrets around, and count against LE rate
+// limits indefinitely.
+func TestReconcile_CertModeTransitionHTTP01ToDNS01CleansPerListenerCerts(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, route).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+
+	// Phase 1: HTTP-01 reconcile creates a per-listener cert.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 1 reconcile: %v", err)
+	}
+	preCerts := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), preCerts); err != nil {
+		t.Fatalf("phase 1 list certs: %v", err)
+	}
+	var sawHarborCert bool
+	for _, ct := range preCerts.Items {
+		if len(ct.Spec.DNSNames) == 1 && ct.Spec.DNSNames[0] == "harbor.foo.example.com" {
+			sawHarborCert = true
+		}
+	}
+	if !sawHarborCert {
+		t.Fatalf("expected per-listener harbor cert after HTTP-01 phase, got %d certs", len(preCerts.Items))
+	}
+
+	// Phase 2: flip certMode to DNS-01 and reconcile again. The
+	// per-listener cert from phase 1 must be gone.
+	updated := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, updated); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	updated.Spec.CertMode = gatewayv1alpha1.CertModeDNS01
+	updated.Spec.DNS01 = &gatewayv1alpha1.DNS01Config{
+		Provider: "cloudflare",
+		Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+			APITokenSecretRef: corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+				Key:                  "api-token",
+			},
+		},
+	}
+	if err := c.Update(context.TODO(), updated); err != nil {
+		t.Fatalf("flip certMode: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 2 reconcile: %v", err)
+	}
+
+	postCerts := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), postCerts); err != nil {
+		t.Fatalf("phase 2 list certs: %v", err)
+	}
+	for _, ct := range postCerts.Items {
+		if len(ct.Spec.DNSNames) == 1 && ct.Spec.DNSNames[0] == "harbor.foo.example.com" {
+			t.Errorf("per-listener harbor cert leaked into DNS-01 phase: %+v", ct.Name)
+		}
+	}
+}
+
+// TestReconcile_CertModeTransitionDNS01ToHTTP01CleansWildcardCert
+// pins the symmetric path: switching from dns01 to http01 deletes
+// the wildcard Certificate left behind by the previous DNS-01
+// phase.
+func TestReconcile_CertModeTransitionDNS01ToHTTP01CleansWildcardCert(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 1 reconcile: %v", err)
+	}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-foo"}, &cmv1.Certificate{}); err != nil {
+		t.Fatalf("expected wildcard cert in DNS-01 phase: %v", err)
+	}
+
+	updated := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, updated); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	updated.Spec.CertMode = gatewayv1alpha1.CertModeHTTP01
+	updated.Spec.DNS01 = nil
+	if err := c.Update(context.TODO(), updated); err != nil {
+		t.Fatalf("flip certMode: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 2 reconcile: %v", err)
+	}
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-foo"}, &cmv1.Certificate{}); err == nil {
+		t.Errorf("wildcard cert leaked after switch to HTTP-01")
+	}
+}
+
 // TestReconcile_RouteFromUnwhitelistedNamespaceIgnored pins the
 // safety filter: HTTPRoutes whose namespace is not the tenant
 // namespace and not in Spec.AttachedNamespaces are ignored by the
