@@ -18,6 +18,7 @@ package tenantgateway
 
 import (
 	"fmt"
+	"strings"
 
 	cmacmev1 "github.com/cert-manager/cert-manager/pkg/apis/acme/v1"
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -28,6 +29,31 @@ import (
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
+
+// hostnameFirstLabel returns the first DNS label of a hostname (the
+// part before the first '.'), used for derived listener and cert
+// names. "harbor.foo.example.com" → "harbor".
+func hostnameFirstLabel(hostname string) string {
+	if i := strings.Index(hostname, "."); i >= 0 {
+		return hostname[:i]
+	}
+	return hostname
+}
+
+// perListenerName produces the Gateway listener name for a per-app
+// HTTPS listener: "https-<first-label>". Collisions are pathological
+// (operator would have to publish two completely different apex
+// trees with the same first label) and would surface as Gateway
+// admission errors rather than silent override.
+func perListenerName(hostname string) string {
+	return "https-" + hostnameFirstLabel(hostname)
+}
+
+// perListenerCertName produces the cert-manager Certificate name for
+// a per-listener cert: "<tgw>-<first-label>-tls".
+func perListenerCertName(tgw *gatewayv1alpha1.TenantGateway, hostname string) string {
+	return tgw.Name + "-" + hostnameFirstLabel(hostname) + "-tls"
+}
 
 // renderIssuer builds the per-tenant ACME Issuer. The solver block
 // is selected by certMode: HTTP-01 with a gatewayHTTPRoute solver
@@ -165,4 +191,35 @@ func ptrGroup(g string) *gatewayv1.Group {
 func ptrKind(k string) *gatewayv1.Kind {
 	kk := gatewayv1.Kind(k)
 	return &kk
+}
+
+// renderPerListenerCertificate builds a cert-manager Certificate for a
+// single hostname (HTTP-01 mode). Each per-app listener references
+// this cert via its TLS configuration.
+func (r *Reconciler) renderPerListenerCertificate(tgw *gatewayv1alpha1.TenantGateway, hostname string) *cmv1.Certificate {
+	name := perListenerCertName(tgw, hostname)
+	cert := &cmv1.Certificate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: tgw.Namespace,
+			Labels: map[string]string{
+				"cozystack.io/managed-by":          "cozystack-controller",
+				"cozystack.io/tenantgateway":       tgw.Name,
+				"cozystack.io/per-listener-cert":   "true",
+			},
+		},
+		Spec: cmv1.CertificateSpec{
+			SecretName: name,
+			IssuerRef: cmmetav1.ObjectReference{
+				Kind: "Issuer",
+				Name: gatewayIssuerName(tgw),
+			},
+			DNSNames: []string{hostname},
+		},
+	}
+	// Best-effort owner reference — ignore the error: even if the
+	// scheme has not registered the type, the Certificate is still
+	// valid; cleanup falls back to the per-listener-cert label.
+	_ = controllerutil.SetControllerReference(tgw, cert, r.Scheme)
+	return cert
 }

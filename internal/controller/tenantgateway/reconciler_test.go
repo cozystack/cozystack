@@ -461,11 +461,241 @@ func TestReconcile_DNS01CreatesWildcardCertificate(t *testing.T) {
 	}
 }
 
+// httpRouteAttached builds an HTTPRoute in the given namespace with a
+// parentRef pointing at the tenant-foo/cozystack Gateway and a single
+// hostname.
+func httpRouteAttached(name, ns, hostname string) *gatewayv1.HTTPRoute {
+	gwGroup := gatewayv1.Group(gatewayv1.GroupName)
+	gwKind := gatewayv1.Kind("Gateway")
+	gwNs := gatewayv1.Namespace("tenant-foo")
+	return &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{
+						Group:     &gwGroup,
+						Kind:      &gwKind,
+						Namespace: &gwNs,
+						Name:      gatewayv1.ObjectName("cozystack"),
+					},
+				},
+			},
+			Hostnames: []gatewayv1.Hostname{gatewayv1.Hostname(hostname)},
+		},
+	}
+}
+
+// TestReconcile_HTTP01ProducesListenerForHTTPRoute pins the route-driven
+// listener flow: an HTTPRoute attached to the tenant Gateway with
+// hostname `harbor.<apex>` causes Reconcile to append a per-app HTTPS
+// listener to the Gateway, with the matching Certificate name and
+// hostname.
+func TestReconcile_HTTP01ProducesListenerForHTTPRoute(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var sawHarbor bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "harbor.foo.example.com" && l.Protocol == gatewayv1.HTTPSProtocolType {
+			sawHarbor = true
+			if l.TLS == nil || len(l.TLS.CertificateRefs) == 0 {
+				t.Errorf("expected TLS config with certificateRefs, got %+v", l.TLS)
+			}
+			break
+		}
+	}
+	if !sawHarbor {
+		t.Errorf("expected per-app listener for harbor.foo.example.com, got %+v", gw.Spec.Listeners)
+	}
+}
+
+// TestReconcile_HTTP01ProducesCertificateForHTTPRoute pins the
+// per-listener Certificate flow: each unique HTTPRoute hostname gets a
+// Certificate named after the hostname's first label, with dnsNames
+// containing exactly that hostname (not wildcard).
+func TestReconcile_HTTP01ProducesCertificateForHTTPRoute(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cert := &cmv1.Certificate{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-harbor-tls", Namespace: "tenant-foo"}, cert); err != nil {
+		t.Fatalf("expected Certificate cozystack-harbor-tls: %v", err)
+	}
+	if got := cert.Spec.DNSNames; len(got) != 1 || got[0] != "harbor.foo.example.com" {
+		t.Errorf("DNSNames=%v, want [harbor.foo.example.com]", got)
+	}
+	if cert.Spec.IssuerRef.Name != "cozystack-gateway" {
+		t.Errorf("IssuerRef.Name=%q, want cozystack-gateway", cert.Spec.IssuerRef.Name)
+	}
+}
+
+// TestReconcile_MultipleHTTPRoutesSameHostnameDeduplicates pins
+// dedup: two HTTPRoutes with the same hostname (e.g. main + canary)
+// produce exactly one listener and one Certificate, not two.
+func TestReconcile_MultipleHTTPRoutesSameHostnameDeduplicates(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	r1 := httpRouteAttached("harbor-main", "cozy-harbor", "harbor.foo.example.com")
+	r2 := httpRouteAttached("harbor-canary", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, r1, r2).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var harborCount int
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "harbor.foo.example.com" {
+			harborCount++
+		}
+	}
+	if harborCount != 1 {
+		t.Errorf("expected exactly one harbor listener, got %d", harborCount)
+	}
+
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("list certs: %v", err)
+	}
+	var harborCertCount int
+	for _, ct := range certs.Items {
+		if len(ct.Spec.DNSNames) == 1 && ct.Spec.DNSNames[0] == "harbor.foo.example.com" {
+			harborCertCount++
+		}
+	}
+	if harborCertCount != 1 {
+		t.Errorf("expected exactly one harbor cert, got %d", harborCertCount)
+	}
+}
+
+// TestReconcile_DNS01ModeIgnoresHTTPRoutesForListeners pins the inverse:
+// in DNS-01 mode the wildcard listener handles everything, so the
+// reconciler must NOT add per-app listeners or certs in response to
+// HTTPRoutes. The static https / https-apex pair stays the only
+// HTTPS listeners.
+func TestReconcile_DNS01ModeIgnoresHTTPRoutesForListeners(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "harbor.foo.example.com" {
+			t.Errorf("DNS-01 mode must not render per-app listener; found %+v", l)
+		}
+	}
+	cert := &cmv1.Certificate{}
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-harbor-tls", Namespace: "tenant-foo"}, cert)
+	if err == nil {
+		t.Errorf("DNS-01 mode must not render per-app cert")
+	}
+}
+
 // TestReconcile_HTTP01DoesNotCreateWildcardCertificate pins the
 // inverse: HTTP-01 mode must NOT create the wildcard Certificate (the
-// underlying ACME challenge type can't issue wildcards). Per-listener
-// certs in HTTP-01 mode are added by Commit 11 alongside route-driven
-// listener creation.
+// underlying ACME challenge type can't issue wildcards).
 func TestReconcile_HTTP01DoesNotCreateWildcardCertificate(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{

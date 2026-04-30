@@ -27,6 +27,7 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -89,7 +90,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.reconcileGateway(ctx, tgw); err != nil {
+	dynHostnames, err := r.collectAttachedHostnames(ctx, tgw)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("collect attached hostnames: %w", err)
+	}
+
+	if err := r.reconcileGateway(ctx, tgw, dynHostnames); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileIssuer(ctx, tgw); err != nil {
@@ -98,14 +104,158 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.reconcileWildcardCertificate(ctx, tgw); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcilePerListenerCertificates(ctx, tgw, dynHostnames); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	_ = logger
 	return ctrl.Result{}, nil
 }
 
-func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+// collectAttachedHostnames lists HTTPRoutes and TLSRoutes cluster-wide
+// and returns the set of hostnames whose parentRefs target this
+// TenantGateway's Gateway. Returned slice is sorted for stable
+// rendering. Empty in DNS-01 mode (the wildcard listener handles
+// everything; per-app listeners are not produced).
+func (r *Reconciler) collectAttachedHostnames(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) ([]string, error) {
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 {
+		return nil, nil
+	}
+
+	httpRoutes := &gatewayv1.HTTPRouteList{}
+	if err := r.List(ctx, httpRoutes); err != nil {
+		return nil, fmt.Errorf("list HTTPRoutes: %w", err)
+	}
+	tlsRoutes := &gatewayv1alpha2.TLSRouteList{}
+	if err := r.List(ctx, tlsRoutes); err != nil {
+		return nil, fmt.Errorf("list TLSRoutes: %w", err)
+	}
+
+	seen := map[string]struct{}{}
+	for i := range httpRoutes.Items {
+		if !routeAttachesToGateway(httpRoutes.Items[i].Spec.ParentRefs, httpRoutes.Items[i].Namespace, tgw) {
+			continue
+		}
+		for _, h := range httpRoutes.Items[i].Spec.Hostnames {
+			seen[string(h)] = struct{}{}
+		}
+	}
+	for i := range tlsRoutes.Items {
+		if !routeAttachesToGateway(tlsRoutes.Items[i].Spec.ParentRefs, tlsRoutes.Items[i].Namespace, tgw) {
+			continue
+		}
+		for _, h := range tlsRoutes.Items[i].Spec.Hostnames {
+			seen[string(h)] = struct{}{}
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for h := range seen {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// routeAttachesToGateway returns true if any of the given parentRefs
+// targets the gateway.networking.k8s.io/v1 Gateway named tgw.Name in
+// tgw.Namespace. parentRef.Namespace defaults to the route's own
+// namespace when unset.
+func routeAttachesToGateway(refs []gatewayv1.ParentReference, routeNs string, tgw *gatewayv1alpha1.TenantGateway) bool {
+	for _, ref := range refs {
+		group := ""
+		if ref.Group != nil {
+			group = string(*ref.Group)
+		}
+		kind := "Gateway"
+		if ref.Kind != nil {
+			kind = string(*ref.Kind)
+		}
+		ns := routeNs
+		if ref.Namespace != nil {
+			ns = string(*ref.Namespace)
+		}
+		if (group == gatewayv1.GroupName || group == "") &&
+			kind == "Gateway" &&
+			ns == tgw.Namespace &&
+			string(ref.Name) == tgw.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// reconcilePerListenerCertificates creates a Certificate for each
+// dynamic hostname (HTTP-01 mode only) and deletes Certificates owned
+// by this TenantGateway that no longer correspond to a live HTTPRoute
+// hostname.
+func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway, hostnames []string) error {
+	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeHTTP01 && tgw.Spec.CertMode != "" {
+		return nil
+	}
 	logger := log.FromContext(ctx)
-	desired, err := r.renderGateway(tgw)
+
+	desiredNames := map[string]struct{}{}
+	for _, h := range hostnames {
+		desired := r.renderPerListenerCertificate(tgw, h)
+		desiredNames[desired.Name] = struct{}{}
+
+		existing := &cmv1.Certificate{}
+		getErr := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: desired.Name}, existing)
+		switch {
+		case apierrors.IsNotFound(getErr):
+			if err := r.Create(ctx, desired); err != nil {
+				return fmt.Errorf("create per-listener Certificate %s: %w", desired.Name, err)
+			}
+			logger.V(1).Info("created per-listener Certificate", "namespace", tgw.Namespace, "name", desired.Name)
+		case getErr != nil:
+			return fmt.Errorf("get per-listener Certificate %s: %w", desired.Name, getErr)
+		default:
+			existing.Spec = desired.Spec
+			if err := r.Update(ctx, existing); err != nil {
+				return fmt.Errorf("update per-listener Certificate %s: %w", desired.Name, err)
+			}
+		}
+	}
+
+	// Garbage-collect Certificates this controller previously created
+	// for hostnames that no longer have an attached route.
+	owned := &cmv1.CertificateList{}
+	if err := r.List(ctx, owned, client.InNamespace(tgw.Namespace), client.MatchingLabels{"cozystack.io/managed-by": "cozystack-controller"}); err != nil {
+		return fmt.Errorf("list owned Certificates: %w", err)
+	}
+	for i := range owned.Items {
+		c := &owned.Items[i]
+		if c.Name == gatewayCertificateName(tgw) {
+			// Wildcard cert is handled by reconcileWildcardCertificate.
+			continue
+		}
+		if _, keep := desiredNames[c.Name]; keep {
+			continue
+		}
+		if !ownedByTenantGateway(c.OwnerReferences, tgw) {
+			continue
+		}
+		if err := r.Delete(ctx, c); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete orphan Certificate %s: %w", c.Name, err)
+		}
+		logger.V(1).Info("deleted orphan Certificate", "namespace", tgw.Namespace, "name", c.Name)
+	}
+	return nil
+}
+
+func ownedByTenantGateway(refs []metav1.OwnerReference, tgw *gatewayv1alpha1.TenantGateway) bool {
+	for _, ref := range refs {
+		if ref.UID == tgw.UID && ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string) error {
+	logger := log.FromContext(ctx)
+	desired, err := r.renderGateway(tgw, dynHostnames)
 	if err != nil {
 		return fmt.Errorf("render Gateway: %w", err)
 	}
@@ -193,7 +343,13 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // renderGateway builds the Gateway resource that should exist for the
 // given TenantGateway. The result is owned by the TenantGateway via
 // controllerutil.SetControllerReference so cascade delete works.
-func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway) (*gatewayv1.Gateway, error) {
+//
+// dynHostnames is the deduplicated list of hostnames pulled from
+// HTTPRoutes / TLSRoutes attached to this Gateway. In HTTP-01 mode
+// each becomes an HTTPS listener with its own per-listener cert. In
+// DNS-01 mode dynHostnames is expected to be empty (collector returns
+// nothing) — the wildcard listener handles all subdomains.
+func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string) (*gatewayv1.Gateway, error) {
 	listeners := []gatewayv1.Listener{
 		{
 			Name:     "http",
@@ -232,6 +388,27 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway) (*gateway
 				},
 			},
 		)
+	} else {
+		// HTTP-01 (default): per-app HTTPS listener per attached
+		// HTTPRoute / TLSRoute hostname. Names + cert refs are
+		// derived from the hostname's first label.
+		for _, h := range dynHostnames {
+			hostnameVal := gatewayv1.Hostname(h)
+			listenerName := perListenerName(h)
+			certName := perListenerCertName(tgw, h)
+			listeners = append(listeners, gatewayv1.Listener{
+				Name:     gatewayv1.SectionName(listenerName),
+				Port:     443,
+				Protocol: gatewayv1.HTTPSProtocolType,
+				Hostname: &hostnameVal,
+				TLS: &gatewayv1.ListenerTLSConfig{
+					Mode: ptrTLSMode(gatewayv1.TLSModeTerminate),
+					CertificateRefs: []gatewayv1.SecretObjectReference{
+						{Name: gatewayv1.ObjectName(certName)},
+					},
+				},
+			})
+		}
 	}
 
 	className := tgw.Spec.GatewayClassName
