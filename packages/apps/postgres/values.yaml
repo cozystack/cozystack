@@ -63,10 +63,10 @@ postgresql:
 ##   commit_siblings: "5"
 ##   work_mem: "256MB"
 ##
-## SECURITY: The following parameters are BLOCKED for security reasons
-## (could allow arbitrary shell command execution):
-##   archive_command, restore_command, ssl_passphrase_command,
-##   log_destination, event_source
+## SECURITY: The following parameters are BLOCKED (enable arbitrary code execution):
+##   archive_command, restore_command, ssl_passphrase_command (shell commands),
+##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
+##   shared_preload_libraries (arbitrary .so loading)
 ##
 ## IMPORTANT: Do NOT override CloudNativePG-managed parameters:
 ##   archive_mode, primary_conninfo, wal_level, max_replication_slots
