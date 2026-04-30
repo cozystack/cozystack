@@ -1,0 +1,11 @@
+# Passthrough variant overrides — applied to every node that runs
+# the `default` variant (vfio-pci, whole GPU to one VM). The settings
+# are not Talos-specific despite the file's previous name; they apply
+# to any host OS that uses the open vfio-pci driver path.
+gpu-operator:
+  sandboxWorkloads:
+    enabled: true
+  driver:
+    enabled: false
+  devicePlugin:
+    enabled: false

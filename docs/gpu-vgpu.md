@@ -67,10 +67,11 @@ spec:
             repository: registry.example.com/nvidia
             image: vgpu-manager
             version: "595.58.02-ubuntu24.04"
-          # imagePullSecrets is a list of strings, not [{name: ...}]
-          # — match the gpu-operator chart contract.
-          imagePullSecrets:
-          - nvidia-registry-secret
+            # imagePullSecrets lives per-component (vgpuManager,
+            # driver, validator, dcgmExporter, …). The value is a
+            # list of strings, not [{name: ...}].
+            imagePullSecrets:
+            - nvidia-registry-secret
 ```
 
 The `nvidia-registry-secret` should be a docker-registry Secret created beforehand in `cozy-gpu-operator`.
@@ -86,6 +87,8 @@ kubectl -n cozy-gpu-operator exec -it <pod> -- nvidia-smi
 
 ## Profile assignment (SR-IOV path)
 
+> **The `vgpu` variant is experimental on Ada+ and ships without a profile-assignment loop.** NVIDIA's `vgpu-device-manager` walks `/sys/class/mdev_bus/`, which does not exist on Ada+ — the DaemonSet errors with «no parent devices found for GPU at index '0'» and is therefore disabled by default in `values-vgpu.yaml`. Until an SR-IOV-aware controller is shipped, profile assignment is an out-of-band step that must be re-applied after every node reboot (`current_vgpu_type` resets to 0 on PCIe re-enumeration). Without this step, `permittedHostDevices.pciHostDevices` will report zero allocatable resources and no VM can request the vGPU. **Do not deploy the `vgpu` variant in production until you have an automated profile-assignment mechanism in place** — typically a small DaemonSet that reads a ConfigMap (`<bus-id> = <profile-id>`) and writes the corresponding `current_vgpu_type` files at boot.
+
 Once `nvidia.ko` is loaded the driver enables SR-IOV (16 VFs per L40S by default). Each VF needs a vGPU profile written to its sysfs:
 
 ```bash
@@ -99,7 +102,7 @@ The numeric profile ID can be discovered per-VF:
 cat /sys/bus/pci/devices/0000:02:00.5/nvidia/creatable_vgpu_types
 ```
 
-> **Caveat — `vgpuDeviceManager` is disabled by default.** NVIDIA's vGPU Device Manager DaemonSet walks `/sys/class/mdev_bus/` and reports «no parent devices found for GPU at index '0'» on Ada+. Until upstream catches up to the SR-IOV model, profile assignment must be done out of band — a small DaemonSet that writes `current_vgpu_type` per VF based on a ConfigMap, or manual `kubectl exec`. The flag stays default-off so modern hardware works out of the box; flip it to `true` only on Pascal–Ampere where the mdev model still applies.
+For Pascal–Ampere GPUs (V100, T4, A100, A30) the mdev model still applies. Flip `vgpuDeviceManager.enabled: true` in your Package CR overrides — NVIDIA's device manager works correctly there.
 
 ## KubeVirt configuration
 

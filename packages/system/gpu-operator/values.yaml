@@ -1,6 +1,6 @@
 # Defaults applied to every variant of the gpu-operator package.
-# The variant-specific files (values-talos.yaml, values-vgpu.yaml) layer
-# on top.
+# The variant-specific files (values-passthrough.yaml, values-vgpu.yaml)
+# layer on top.
 gpu-operator:
   # Upstream chart v26.x flips ccManager.enabled to true and
   # ccManager.defaultMode to "on". On Hopper-class hardware
