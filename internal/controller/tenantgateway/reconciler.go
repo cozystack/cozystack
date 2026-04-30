@@ -1,5 +1,5 @@
 /*
-Copyright 2025 The Cozystack Authors.
+Copyright 2026 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -115,6 +115,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	if err := r.updateRouteStatuses(ctx, tgw, winners, losers); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileStatus(ctx, tgw, dynHostnames); err != nil {
 		return ctrl.Result{}, err
 	}
 

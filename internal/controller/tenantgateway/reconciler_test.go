@@ -1,5 +1,5 @@
 /*
-Copyright 2025 The Cozystack Authors.
+Copyright 2026 The Cozystack Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -696,6 +696,137 @@ func TestReconcile_DNS01ModeIgnoresHTTPRoutesForListeners(t *testing.T) {
 // ControllerName is the controllerName used by this controller in
 // RouteParentStatus entries. Mirrors the constant in conflict.go.
 const testControllerName = "gateway.cozystack.io/tenantgateway-controller"
+
+// TestReconcile_StatusObservedGeneration pins observedGeneration: the
+// status field tracks .metadata.generation so operators can tell
+// whether the controller has caught up with the latest spec.
+func TestReconcile_StatusObservedGeneration(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "cozystack",
+			Namespace:  "tenant-foo",
+			Generation: 7,
+		},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	if got.Status.ObservedGeneration != 7 {
+		t.Errorf("Status.ObservedGeneration=%d, want 7", got.Status.ObservedGeneration)
+	}
+}
+
+// TestReconcile_StatusListenersMirrorGateway pins
+// status.listeners — one TenantGatewayListenerStatus entry per
+// Listener on the rendered Gateway. The static `http` listener is
+// always present in HTTP-01 mode; the test asserts at least that one
+// shows up with its hostname carried through.
+func TestReconcile_StatusListenersMirrorGateway(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	var sawHTTP, sawHarbor bool
+	for _, l := range got.Status.Listeners {
+		if l.Name == "http" {
+			sawHTTP = true
+		}
+		if l.Hostname == "harbor.foo.example.com" {
+			sawHarbor = true
+			if l.CertificateName == "" {
+				t.Errorf("expected CertificateName populated for harbor listener, got %+v", l)
+			}
+		}
+	}
+	if !sawHTTP {
+		t.Errorf("expected http listener in Status.Listeners, got %+v", got.Status.Listeners)
+	}
+	if !sawHarbor {
+		t.Errorf("expected harbor listener in Status.Listeners, got %+v", got.Status.Listeners)
+	}
+}
+
+// TestReconcile_StatusReadyCondition pins .status.conditions: a
+// successfully reconciled TenantGateway carries a Ready=True condition
+// so operators can `kubectl wait --for=condition=Ready tgw/<name>`.
+func TestReconcile_StatusReadyCondition(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	var ready *metav1.Condition
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == "Ready" {
+			ready = &got.Status.Conditions[i]
+			break
+		}
+	}
+	if ready == nil {
+		t.Fatalf("expected Ready condition, got %+v", got.Status.Conditions)
+	}
+	if ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready.Status=%s, want True", ready.Status)
+	}
+}
 
 // TestReconcile_TwoRoutesSameHostnameCozyWins pins the conflict
 // resolution rule: when two HTTPRoutes attached to the same Gateway
