@@ -331,7 +331,7 @@ jobs:
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
           copilot \
-            --prompt "Generate the release changelog for tag v${VERSION}. The repository is checked out at the v${VERSION} tag commit, so HEAD == the release commit. Use v${VERSION} (or HEAD) as the upper bound when comparing against the previous version — never assume HEAD is on main, because patch releases are cut from release-X.Y branches. Follow the instructions in @docs/agents/changelog.md exactly, including the 'Scope and boundaries' section at the top. Your deliverable is the single file docs/changelogs/v${VERSION}.md — write it and exit; this workflow handles branching, committing, pushing, and opening the PR." \
+            --prompt "Generate the release changelog for tag v${VERSION}. The repository is checked out at the v${VERSION} tag commit. Use v${VERSION} as the upper bound when comparing against the previous version — never use HEAD, because if the tag is missing locally HEAD may diverge from the release commit. Follow the instructions in @docs/agents/changelog.md exactly, including the 'Scope and boundaries' section at the top. Your deliverable is the single file docs/changelogs/v${VERSION}.md — write it and exit; this workflow handles branching, committing, pushing, and opening the PR." \
             --allow-all-tools --allow-all-paths < /dev/null
 
       - name: Create changelog branch and commit
