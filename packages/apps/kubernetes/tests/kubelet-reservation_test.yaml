@@ -28,7 +28,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -85,7 +85,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -128,7 +128,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -162,7 +162,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -209,7 +209,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -250,7 +250,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -284,7 +284,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -315,7 +315,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -347,7 +347,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -383,7 +383,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -415,7 +415,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -445,7 +445,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -477,7 +477,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -513,7 +513,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -549,7 +549,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -588,7 +588,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -615,7 +615,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -642,7 +642,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -673,7 +673,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -715,7 +715,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -742,7 +742,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -773,7 +773,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -799,7 +799,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -829,7 +829,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -837,7 +837,7 @@ tests:
           minReplicas: 1
           maxReplicas: 5
           instanceType: ""
-          ephemeralStorage: 40Gi
+          diskSize: 40Gi
           roles:
             - worker
           resources:
@@ -922,7 +922,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -949,7 +949,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -976,7 +976,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1014,7 +1014,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1041,7 +1041,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1068,7 +1068,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1095,7 +1095,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1122,7 +1122,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1153,7 +1153,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1182,7 +1182,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1211,7 +1211,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1249,7 +1249,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1279,7 +1279,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1324,7 +1324,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1373,7 +1373,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1406,7 +1406,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1441,7 +1441,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1469,7 +1469,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1501,7 +1501,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1560,7 +1560,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: "u1.medium"
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1588,7 +1588,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1625,7 +1625,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1662,7 +1662,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1699,7 +1699,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources:
@@ -1733,7 +1733,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1763,7 +1763,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles:
             - worker
           resources: {}
@@ -1793,7 +1793,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles: []
           gpus: []
           kubelet: {}
@@ -1825,7 +1825,7 @@ tests:
           minReplicas: 0
           maxReplicas: 10
           instanceType: ""
-          ephemeralStorage: 20Gi
+          diskSize: 20Gi
           roles: []
           gpus: []
           kubelet: {}
