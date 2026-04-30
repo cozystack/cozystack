@@ -348,3 +348,54 @@ tests:
       - equal:
           path: spec.renewBefore
           value: 720h
+
+  # extraDnsNames are appended to dnsNames
+  - it: appends extraDnsNames to dnsNames
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: extra-dns-tls
+        dnsNames:
+          - redis-svc
+        extraDnsNames:
+          - custom.example.com
+          - redis.internal.local
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "redis-svc"
+      - contains:
+          path: spec.dnsNames
+          content: "custom.example.com"
+      - contains:
+          path: spec.dnsNames
+          content: "redis.internal.local"
+
+  # extraDnsNames with wildcard domain are properly quoted
+  - it: quotes wildcard domains in extraDnsNames
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: wildcard-tls
+        dnsNames:
+          - redis-svc
+        extraDnsNames:
+          - "*.example.com"
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.example.com"
