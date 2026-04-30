@@ -5,6 +5,7 @@ include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
 .PHONY: image image-console image-token-proxy
+.PHONY: clone-console build-console update-values-console clean-console
 .NOTPARALLEL: image
 
 image: image-console image-token-proxy
@@ -12,11 +13,16 @@ image: image-console image-token-proxy
 CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
 CONSOLE_REF ?= dd1ff0bdbd5e6e2fb6614fd1d831c4cb5c8f8025
 
-image-console:
+image-console: clone-console build-console update-values-console clean-console
+
+clone-console:
 	rm -rf .tmp-cozystack-ui
-	git clone --no-checkout $(CONSOLE_REPO) .tmp-cozystack-ui
+	git init .tmp-cozystack-ui
+	git -C .tmp-cozystack-ui remote add origin $(CONSOLE_REPO)
 	git -C .tmp-cozystack-ui fetch --depth 1 origin $(CONSOLE_REF)
 	git -C .tmp-cozystack-ui checkout FETCH_HEAD
+
+build-console:
 	docker buildx build .tmp-cozystack-ui \
 		--file .tmp-cozystack-ui/Containerfile \
 		--provenance false \
@@ -30,8 +36,12 @@ image-console:
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack-ui" \
 		--load=$(LOAD)
+
+update-values-console:
 	IMAGE="$(REGISTRY)/cozystack-ui:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/console.json -r)" \
 		yq -i '.console.image = strenv(IMAGE)' values.yaml
+
+clean-console:
 	rm -rf .tmp-cozystack-ui images/console.json
 
 image-token-proxy:
