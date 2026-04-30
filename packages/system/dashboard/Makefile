@@ -11,7 +11,7 @@ include ../../../hack/package.mk
 image: image-console image-token-proxy
 
 CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
-CONSOLE_BRANCH ?= main
+CONSOLE_BRANCH ?= feat/ui-overhaul
 
 image-console: clone-console build-console update-values-console clean-console
 
