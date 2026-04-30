@@ -1,6 +1,4 @@
 harbor: {}
-bucket:
-  bucketInfo: ""
 db:
   replicas: 2
   size: 5Gi
