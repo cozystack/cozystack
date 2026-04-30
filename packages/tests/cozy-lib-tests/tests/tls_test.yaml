@@ -31,7 +31,7 @@ tests:
           path: spec.privateKey.size
           value: 2048
 
-  # dnsNames are correctly set
+  # dnsNames are correctly set and quoted
   - it: sets dnsNames correctly
     values:
       - tls_values.yaml
@@ -42,8 +42,8 @@ tests:
       - equal:
           path: spec.dnsNames
           value:
-            - redis-svc
-            - redis-svc.tenant-test.svc
+            - "redis-svc"
+            - "redis-svc.tenant-test.svc"
 
   # issuerRef is correctly set
   - it: sets issuerRef correctly
@@ -321,6 +321,56 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'ERROR: issuerRef.kind must be "Issuer" or "ClusterIssuer"'
+
+  # extraDnsNames are appended to dnsNames
+  - it: appends extraDnsNames to dnsNames
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: extra-dns-tls
+        dnsNames:
+          - redis-svc
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+        extraDnsNames:
+          - custom.example.com
+          - backup.example.com
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - "redis-svc"
+            - "custom.example.com"
+            - "backup.example.com"
+
+  # Wildcard dnsNames are properly quoted for YAML safety
+  - it: quotes wildcard domains in dnsNames and extraDnsNames
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: wildcard-tls
+        dnsNames:
+          - "*.redis.example.com"
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+        extraDnsNames:
+          - "*.example.com"
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - "*.redis.example.com"
+            - "*.example.com"
 
   # Empty string duration should fall back to default 8760h
   - it: uses default duration when duration is an empty string
