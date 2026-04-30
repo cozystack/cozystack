@@ -54,11 +54,18 @@ This is necessary to get up-to-date information about tags and commits from the 
 
 ### 2. Checking current branch
 
-Make sure we are on the `main` branch:
+Verify the working tree is at a sensible starting point. Two configurations are valid:
 
-```bash
-git branch --show-current
-```
+- **Interactive use:** the working tree is on the `main` branch.
+  ```bash
+  git branch --show-current   # should print "main"
+  ```
+- **CI use:** HEAD is detached at the release tag being generated (this is how `.github/workflows/tags.yaml` runs).
+  ```bash
+  git describe --exact-match HEAD   # should print e.g. "v1.3.1"
+  ```
+
+If neither holds, stop — the caller invoked you from the wrong place. Do **not** switch branches yourself; the "Scope and boundaries" section forbids it.
 
 ### 3. Determining release type and previous version
 
@@ -176,7 +183,7 @@ Cozystack release may include changes from related repositories. Check and inclu
    # Get dates for the release period
    cd /path/to/cozystack
    RELEASE_START=$(git log -1 --format=%ai v<previous_version>)
-   RELEASE_END=$(git log -1 --format=%ai HEAD)
+   RELEASE_END=$(git log -1 --format=%ai v<new_version>)
    ```
 
 2. **Check for commits in website repository (always required):**
@@ -219,7 +226,7 @@ Cozystack release may include changes from related repositories. Check and inclu
    ```bash
    # Get release period dates
    RELEASE_START=$(git log -1 --format=%ai v<previous_version>)
-   RELEASE_END=$(git log -1 --format=%ai HEAD)
+   RELEASE_END=$(git log -1 --format=%ai v<new_version>)
    
    # Run the script to check all optional repositories
    ./docs/changelogs/hack/check-optional-repos.sh "$RELEASE_START" "$RELEASE_END"
