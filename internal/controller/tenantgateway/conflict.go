@@ -24,7 +24,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -201,6 +200,3 @@ func mergeRouteParentStatus(parents *[]gatewayv1.RouteParentStatus, ref gatewayv
 	})
 }
 
-// silence the unused-import lints — client is referenced indirectly
-// through the test scaffolding only.
-var _ = client.Object(nil)

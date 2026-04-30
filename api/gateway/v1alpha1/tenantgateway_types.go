@@ -37,6 +37,18 @@ const (
 	CertModeDNS01 CertMode = "dns01"
 )
 
+// IssuerName selects the Let's Encrypt environment the per-tenant
+// Issuer points at. Operators running staging or non-production
+// clusters should pick "letsencrypt-stage" to avoid eating into the
+// production rate limits.
+// +kubebuilder:validation:Enum=letsencrypt-prod;letsencrypt-stage
+type IssuerName string
+
+const (
+	IssuerNameLetsEncryptProd  IssuerName = "letsencrypt-prod"
+	IssuerNameLetsEncryptStage IssuerName = "letsencrypt-stage"
+)
+
 // DNS01Provider names a supported cert-manager DNS-01 solver.
 // +kubebuilder:validation:Enum=cloudflare;route53;digitalocean;rfc2136
 type DNS01Provider string
@@ -132,6 +144,13 @@ type TenantGatewaySpec struct {
 	// a wildcard cert via DNS-01.
 	// +kubebuilder:default=http01
 	CertMode CertMode `json:"certMode,omitempty"`
+
+	// IssuerName picks the Let's Encrypt environment the controller
+	// configures the per-tenant Issuer with. Defaults to
+	// letsencrypt-prod. Set to letsencrypt-stage on dev clusters to
+	// avoid the LE production rate limits.
+	// +kubebuilder:default=letsencrypt-prod
+	IssuerName IssuerName `json:"issuerName,omitempty"`
 
 	// DNS01 configures the DNS-01 solver when CertMode=dns01. Ignored
 	// otherwise. Required (provider + matching config block) when

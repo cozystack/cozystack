@@ -257,6 +257,17 @@ spec:
                   GatewayClassName names the GatewayClass to attach the rendered
                   Gateway to. Default cilium.
                 type: string
+              issuerName:
+                default: letsencrypt-prod
+                description: |-
+                  IssuerName picks the Let's Encrypt environment the controller
+                  configures the per-tenant Issuer with. Defaults to
+                  letsencrypt-prod. Set to letsencrypt-stage on dev clusters to
+                  avoid the LE production rate limits.
+                enum:
+                - letsencrypt-prod
+                - letsencrypt-stage
+                type: string
               tlsPassthroughServices:
                 description: |-
                   TLSPassthroughServices names services exposed via TLS-passthrough

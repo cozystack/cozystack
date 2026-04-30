@@ -30,6 +30,20 @@ import (
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 )
 
+// acmeServerForIssuer maps the operator-facing issuerName field to
+// the concrete ACME server URL. Empty → default to letsencrypt-prod
+// to match the CRD default and the historical chart behaviour.
+func acmeServerForIssuer(name gatewayv1alpha1.IssuerName) (string, error) {
+	switch name {
+	case "", gatewayv1alpha1.IssuerNameLetsEncryptProd:
+		return letsencryptProdServer, nil
+	case gatewayv1alpha1.IssuerNameLetsEncryptStage:
+		return letsencryptStageServer, nil
+	default:
+		return "", fmt.Errorf("unsupported issuerName %q (supported: letsencrypt-prod, letsencrypt-stage)", name)
+	}
+}
+
 // buildAllowedRoutes computes the AllowedRoutes block applied to
 // every listener on the rendered Gateway: a Selector that matches
 // the built-in `kubernetes.io/metadata.name` label (kube-apiserver-
@@ -94,12 +108,13 @@ func perListenerCertName(tgw *gatewayv1alpha1.TenantGateway, hostname string) st
 // renderIssuer builds the per-tenant ACME Issuer. The solver block
 // is selected by certMode: HTTP-01 with a gatewayHTTPRoute solver
 // pointing back at the tenant's own Gateway/http listener, or DNS-01
-// with the operator-supplied provider config.
+// with the operator-supplied provider config. The ACME server URL is
+// selected by spec.issuerName.
 func (r *Reconciler) renderIssuer(tgw *gatewayv1alpha1.TenantGateway) (*cmv1.Issuer, error) {
-	server := letsencryptProdServer
-	// IssuerName/server selection is currently hardcoded to LE-prod;
-	// the chart surface accepted publishing.certificates.issuerName,
-	// which migrates to TenantGateway.spec in a future commit.
+	server, err := acmeServerForIssuer(tgw.Spec.IssuerName)
+	if err != nil {
+		return nil, err
+	}
 
 	solver, err := buildSolver(tgw)
 	if err != nil {
@@ -231,17 +246,20 @@ func ptrKind(k string) *gatewayv1.Kind {
 
 // renderPerListenerCertificate builds a cert-manager Certificate for a
 // single hostname (HTTP-01 mode). Each per-app listener references
-// this cert via its TLS configuration.
-func (r *Reconciler) renderPerListenerCertificate(tgw *gatewayv1alpha1.TenantGateway, hostname string) *cmv1.Certificate {
+// this cert via its TLS configuration. Returns an error if the
+// scheme can't establish the controllerRef back to the
+// TenantGateway — without it, deleting the TenantGateway leaves
+// orphan Certificates behind.
+func (r *Reconciler) renderPerListenerCertificate(tgw *gatewayv1alpha1.TenantGateway, hostname string) (*cmv1.Certificate, error) {
 	name := perListenerCertName(tgw, hostname)
 	cert := &cmv1.Certificate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
-				"cozystack.io/managed-by":          "cozystack-controller",
-				"cozystack.io/tenantgateway":       tgw.Name,
-				"cozystack.io/per-listener-cert":   "true",
+				"cozystack.io/managed-by":        "cozystack-controller",
+				"cozystack.io/tenantgateway":     tgw.Name,
+				"cozystack.io/per-listener-cert": "true",
 			},
 		},
 		Spec: cmv1.CertificateSpec{
@@ -253,9 +271,8 @@ func (r *Reconciler) renderPerListenerCertificate(tgw *gatewayv1alpha1.TenantGat
 			DNSNames: []string{hostname},
 		},
 	}
-	// Best-effort owner reference — ignore the error: even if the
-	// scheme has not registered the type, the Certificate is still
-	// valid; cleanup falls back to the per-listener-cert label.
-	_ = controllerutil.SetControllerReference(tgw, cert, r.Scheme)
-	return cert
+	if err := controllerutil.SetControllerReference(tgw, cert, r.Scheme); err != nil {
+		return nil, fmt.Errorf("set controller reference on Certificate %s: %w", name, err)
+	}
+	return cert, nil
 }

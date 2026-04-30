@@ -38,6 +38,7 @@ spec:
   apex: {{ $host | quote }}
   gatewayClassName: {{ .Values.gatewayClassName | quote }}
   certMode: {{ $solver | quote }}
+  issuerName: {{ $issuerName | quote }}
   {{- if eq $solver "dns01" }}
   dns01:
     provider: {{ $provider | quote }}

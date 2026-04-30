@@ -83,8 +83,6 @@ type Reconciler struct {
 // commits. DNS-01 mode: `http` plus the wildcard `https` and apex
 // `https-apex` HTTPS listeners that the chart used to render directly.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
 	tgw := &gatewayv1alpha1.TenantGateway{}
 	if err := r.Get(ctx, req.NamespacedName, tgw); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -121,7 +119,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	_ = logger
 	return ctrl.Result{}, nil
 }
 
@@ -220,7 +217,10 @@ func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *
 
 	desiredNames := map[string]struct{}{}
 	for _, h := range hostnames {
-		desired := r.renderPerListenerCertificate(tgw, h)
+		desired, err := r.renderPerListenerCertificate(tgw, h)
+		if err != nil {
+			return fmt.Errorf("render per-listener Certificate for %s: %w", h, err)
+		}
 		desiredNames[desired.Name] = struct{}{}
 
 		existing := &cmv1.Certificate{}
@@ -295,7 +295,17 @@ func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.
 		return fmt.Errorf("get Gateway: %w", getErr)
 	default:
 		existing.Spec = desired.Spec
-		existing.Labels = desired.Labels
+		// Merge labels: keep keys other actors (Cilium operator,
+		// kubectl label, future controllers) wrote, only add /
+		// overwrite the keys this controller owns. Wholesale
+		// replacement would clobber a Gateway's accumulated label
+		// set on every reconcile.
+		if existing.Labels == nil {
+			existing.Labels = make(map[string]string, len(desired.Labels))
+		}
+		for k, v := range desired.Labels {
+			existing.Labels[k] = v
+		}
 		if err := r.Update(ctx, existing); err != nil {
 			return fmt.Errorf("update Gateway: %w", err)
 		}

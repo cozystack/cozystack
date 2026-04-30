@@ -129,6 +129,63 @@ func TestReconcile_TenantGatewayProducesGateway(t *testing.T) {
 	}
 }
 
+// TestReconcile_GatewayUpdatePreservesForeignLabels pins the
+// label-merge contract: a Gateway carrying labels written by other
+// actors (Cilium operator, kubectl label, future controllers) keeps
+// those labels across reconciliation. Wholesale replacement would
+// drop them — Gateway is shared infra, not an operator-only field.
+func TestReconcile_GatewayUpdatePreservesForeignLabels(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+
+	// First reconcile creates the Gateway.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	// Simulate another actor stamping a foreign label.
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	if gw.Labels == nil {
+		gw.Labels = map[string]string{}
+	}
+	gw.Labels["example.com/owner"] = "someone-else"
+	if err := c.Update(context.TODO(), gw); err != nil {
+		t.Fatalf("foreign label update: %v", err)
+	}
+
+	// Second reconcile must merge, not clobber.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	got := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	if got.Labels["example.com/owner"] != "someone-else" {
+		t.Errorf("foreign label dropped on update; labels=%v", got.Labels)
+	}
+	if got.Labels["cozystack.io/managed-by"] != "cozystack-controller" {
+		t.Errorf("controller label missing; labels=%v", got.Labels)
+	}
+}
+
 // TestReconcile_OwnerReferenceOnGateway pins the lifecycle contract:
 // the rendered Gateway must carry the TenantGateway as its
 // controller-owner so cascade-delete works (deleting the TenantGateway
@@ -356,6 +413,75 @@ func TestReconcile_HTTP01IssuerHasGatewayHTTPRouteSolver(t *testing.T) {
 	}
 	if pr.SectionName == nil || string(*pr.SectionName) != "http" {
 		t.Errorf("parentRef.SectionName=%v, want http", pr.SectionName)
+	}
+}
+
+// TestReconcile_IssuerNameStagingHitsStagingACME pins the LE-stage
+// path: spec.issuerName=letsencrypt-stage produces an Issuer pointing
+// at the LE staging ACME server, NOT the production one. Without this
+// wiring an operator who set issuerName=letsencrypt-stage on a dev
+// cluster would silently get prod-issued certs and burn through real
+// LE rate limits.
+func TestReconcile_IssuerNameStagingHitsStagingACME(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			IssuerName:       gatewayv1alpha1.IssuerNameLetsEncryptStage,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	iss := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	if iss.Spec.ACME == nil {
+		t.Fatalf("expected ACME issuer, got %+v", iss.Spec)
+	}
+	if iss.Spec.ACME.Server != "https://acme-staging-v02.api.letsencrypt.org/directory" {
+		t.Errorf("ACME.Server=%q, want LE staging URL", iss.Spec.ACME.Server)
+	}
+}
+
+// TestReconcile_IssuerNameProdHitsProdACME pins the default path:
+// no issuerName set (or letsencrypt-prod) → prod ACME server.
+func TestReconcile_IssuerNameProdHitsProdACME(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			// IssuerName intentionally unset.
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	iss := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	if iss.Spec.ACME.Server != "https://acme-v02.api.letsencrypt.org/directory" {
+		t.Errorf("ACME.Server=%q, want LE prod URL", iss.Spec.ACME.Server)
 	}
 }
 
