@@ -310,6 +310,95 @@ EOF
   fi
 }
 
+@test "TenantGateway CRD is installed (gateway.cozystack.io/v1alpha1)" {
+  # Shipped via packages/system/cozystack-controller/definitions; the
+  # controller cannot reconcile anything without it being Established.
+  kubectl wait crd/tenantgateways.gateway.cozystack.io --for=condition=Established --timeout=60s
+}
+
+@test "TenantGatewayReconciler materialises Gateway + Issuer from a TenantGateway CR" {
+  # Create the CR directly (the chart renders one of these per tenant
+  # with tenant.spec.gateway=true; this test exercises the controller
+  # in isolation without going through the full tenant flow).
+  kubectl apply -f - <<'EOF'
+apiVersion: gateway.cozystack.io/v1alpha1
+kind: TenantGateway
+metadata:
+  name: tg-e2e-probe
+  namespace: tenant-test
+spec:
+  apex: test.example.org
+  certMode: http01
+  gatewayClassName: cilium
+EOF
+
+  # Controller creates the Gateway (same name, same namespace).
+  timeout 120 sh -ec 'until kubectl -n tenant-test get gateway tg-e2e-probe >/dev/null 2>&1; do sleep 2; done'
+  kubectl -n tenant-test get gateway tg-e2e-probe -o yaml
+
+  # And the per-tenant ACME Issuer.
+  timeout 120 sh -ec 'until kubectl -n tenant-test get issuer.cert-manager.io tg-e2e-probe-gateway >/dev/null 2>&1; do sleep 2; done'
+
+  # Status is reported back: ObservedGeneration tracks .metadata.generation,
+  # Ready=True after a clean reconcile.
+  timeout 120 sh -ec 'until kubectl -n tenant-test get tenantgateways.gateway.cozystack.io tg-e2e-probe -o jsonpath="{.status.conditions[?(@.type==\"Ready\")].status}" 2>/dev/null | grep -q True; do sleep 2; done'
+
+  # Cleanup. Cascade-delete relies on OwnerReferences set by the reconciler.
+  kubectl -n tenant-test delete tenantgateways.gateway.cozystack.io tg-e2e-probe --ignore-not-found --timeout=1m
+}
+
+@test "cozystack-route-hostname-policy VAP rejects HTTPRoute claiming a foreign apex" {
+  # tenant-test's namespace.cozystack.io/host label is test.example.org.
+  # An HTTPRoute claiming attacker.com (or any hostname not under
+  # test.example.org) must be denied by Layer 7 of the security model.
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route-hostname-hijack-probe
+  namespace: tenant-test
+spec:
+  hostnames:
+  - "attacker.com"
+  rules:
+  - backendRefs:
+    - name: kubernetes
+      namespace: default
+      port: 443
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -qi "hostnames must equal"
+  else
+    kubectl -n tenant-test delete httproute route-hostname-hijack-probe --ignore-not-found
+    echo "BUG: admission accepted cross-apex HTTPRoute hostname — route was created" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-route-hostname-policy VAP allows HTTPRoute under the namespace's apex" {
+  # Sanity check the inverse: a route with a hostname under
+  # test.example.org must NOT be rejected by the VAP.
+  kubectl apply -f - <<'EOF'
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route-hostname-allow-probe
+  namespace: tenant-test
+spec:
+  hostnames:
+  - "harbor.test.example.org"
+  rules:
+  - backendRefs:
+    - name: kubernetes
+      namespace: default
+      port: 443
+EOF
+
+  kubectl -n tenant-test delete httproute route-hostname-allow-probe --ignore-not-found
+}
+
 @test "HTTPRoute with a matching parentRef reaches Accepted status" {
   # Put a Gateway and a route in the same namespace so allowedRoutes: Same accepts them.
   kubectl apply -f - <<'EOF'
