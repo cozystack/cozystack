@@ -141,7 +141,10 @@ Instead, deliver the token and `gridd.conf` to the guest via cloud-init or a con
 # inside the VirtualMachine cloudInitNoCloud userData
 write_files:
 - path: /etc/nvidia/ClientConfigToken/client_configuration_token.tok
-  permissions: '0600'
+  # 0744 follows NVIDIA's recommendation in the Licensing User Guide
+  # so nvidia-gridd (which does not necessarily run as the file owner)
+  # can read it.
+  permissions: '0744'
   encoding: b64
   content: <base64 token>
 - path: /etc/nvidia/gridd.conf
