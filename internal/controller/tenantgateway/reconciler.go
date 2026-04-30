@@ -45,10 +45,22 @@ import (
 
 // gatewayCertificateName returns the cert-manager Certificate name for
 // the tenant Gateway's wildcard cert (DNS-01 mode only). Per-listener
-// certs in HTTP-01 mode are named separately (Commit 10).
+// certs in HTTP-01 mode are named separately (Commit 11).
 func gatewayCertificateName(tgw *gatewayv1alpha1.TenantGateway) string {
 	return tgw.Name + "-gateway-tls"
 }
+
+// gatewayIssuerName returns the per-tenant ACME Issuer name. The
+// Issuer lives in the same namespace as the TenantGateway and is
+// referenced by every Certificate this controller renders.
+func gatewayIssuerName(tgw *gatewayv1alpha1.TenantGateway) string {
+	return tgw.Name + "-gateway"
+}
+
+const (
+	letsencryptProdServer  = "https://acme-v02.api.letsencrypt.org/directory"
+	letsencryptStageServer = "https://acme-staging-v02.api.letsencrypt.org/directory"
+)
 
 // +kubebuilder:rbac:groups=gateway.cozystack.io,resources=tenantgateways,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.cozystack.io,resources=tenantgateways/status,verbs=get;update;patch
@@ -77,9 +89,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if err := r.reconcileGateway(ctx, tgw); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileIssuer(ctx, tgw); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileWildcardCertificate(ctx, tgw); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	_ = logger
+	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	logger := log.FromContext(ctx)
 	desired, err := r.renderGateway(tgw)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("render Gateway: %w", err)
+		return fmt.Errorf("render Gateway: %w", err)
 	}
 
 	existing := &gatewayv1.Gateway{}
@@ -87,24 +115,79 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	switch {
 	case apierrors.IsNotFound(getErr):
 		if err := r.Create(ctx, desired); err != nil {
-			return ctrl.Result{}, fmt.Errorf("create Gateway: %w", err)
+			return fmt.Errorf("create Gateway: %w", err)
 		}
 		logger.V(1).Info("created Gateway", "namespace", tgw.Namespace, "name", tgw.Name)
 	case getErr != nil:
-		return ctrl.Result{}, fmt.Errorf("get Gateway: %w", getErr)
+		return fmt.Errorf("get Gateway: %w", getErr)
 	default:
-		// Update only if spec changed; preserves any controller-owned
-		// dynamic listeners that later commits append (the merge logic
-		// for those lands together with route-driven reconciliation).
 		existing.Spec = desired.Spec
 		existing.Labels = desired.Labels
 		if err := r.Update(ctx, existing); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update Gateway: %w", err)
+			return fmt.Errorf("update Gateway: %w", err)
 		}
 		logger.V(1).Info("updated Gateway", "namespace", tgw.Namespace, "name", tgw.Name)
 	}
+	return nil
+}
 
-	return ctrl.Result{}, nil
+func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	logger := log.FromContext(ctx)
+	desired, err := r.renderIssuer(tgw)
+	if err != nil {
+		return fmt.Errorf("render Issuer: %w", err)
+	}
+
+	existing := &cmv1.Issuer{}
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: gatewayIssuerName(tgw)}, existing)
+	switch {
+	case apierrors.IsNotFound(getErr):
+		if err := r.Create(ctx, desired); err != nil {
+			return fmt.Errorf("create Issuer: %w", err)
+		}
+		logger.V(1).Info("created Issuer", "namespace", tgw.Namespace, "name", desired.Name)
+	case getErr != nil:
+		return fmt.Errorf("get Issuer: %w", getErr)
+	default:
+		existing.Spec = desired.Spec
+		if err := r.Update(ctx, existing); err != nil {
+			return fmt.Errorf("update Issuer: %w", err)
+		}
+		logger.V(1).Info("updated Issuer", "namespace", tgw.Namespace, "name", desired.Name)
+	}
+	return nil
+}
+
+func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	if tgw.Spec.CertMode != gatewayv1alpha1.CertModeDNS01 {
+		// HTTP-01 mode does not use a wildcard cert; per-listener
+		// certs are produced by route-driven reconciliation.
+		return nil
+	}
+	logger := log.FromContext(ctx)
+	desired, err := r.renderWildcardCertificate(tgw)
+	if err != nil {
+		return fmt.Errorf("render Certificate: %w", err)
+	}
+
+	existing := &cmv1.Certificate{}
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: desired.Name}, existing)
+	switch {
+	case apierrors.IsNotFound(getErr):
+		if err := r.Create(ctx, desired); err != nil {
+			return fmt.Errorf("create Certificate: %w", err)
+		}
+		logger.V(1).Info("created Certificate", "namespace", tgw.Namespace, "name", desired.Name)
+	case getErr != nil:
+		return fmt.Errorf("get Certificate: %w", getErr)
+	default:
+		existing.Spec = desired.Spec
+		if err := r.Update(ctx, existing); err != nil {
+			return fmt.Errorf("update Certificate: %w", err)
+		}
+		logger.V(1).Info("updated Certificate", "namespace", tgw.Namespace, "name", desired.Name)
+	}
+	return nil
 }
 
 // renderGateway builds the Gateway resource that should exist for the
