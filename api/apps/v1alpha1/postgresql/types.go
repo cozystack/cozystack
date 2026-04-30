@@ -112,7 +112,7 @@ type DatabaseRoles struct {
 }
 
 type PostgreSQL struct {
-	// PostgreSQL server parameters. All values must be strings (enclose numbers in quotes). See PostgreSQL documentation for available parameters. WARNING: Some parameters are managed by CloudNativePG and should NOT be overridden (archive_mode, archive_command, restore_command, primary_conninfo, etc.). Incorrect values may break backup/replication or require pod restart.
+	// PostgreSQL server parameters. All values must be strings (quote numbers: "100"). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 	// +kubebuilder:default:={"max_connections":"100"}
 	Parameters map[string]string `json:"parameters,omitempty"`
 }
