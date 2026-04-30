@@ -5,6 +5,9 @@ export NAME=s3manager-system
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	@echo Nothing to update
 

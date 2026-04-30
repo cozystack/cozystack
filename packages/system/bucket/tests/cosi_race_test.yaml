@@ -1,0 +1,63 @@
+suite: COSI bootstrap race guards
+
+release:
+  name: bucket
+  namespace: tenant-root
+
+# Coverage scope: helm-unittest's `lookup` always returns nil (no
+# cluster). The outer `if $existingSecret` guard already existed
+# before this PR, so removing only the new inner
+# `hasKey ($existingSecret.data | default dict) "BucketInfo"` check
+# leaves these cases passing — the inner guard handles a real-cluster
+# race state (Secret exists, `data.BucketInfo` not yet populated by
+# the COSI BucketAccess driver) that cannot be mocked under
+# helm-unittest. Cluster-level coverage of that branch lives in the
+# bucket e2e flow.
+#
+# What this suite pins: the templates render without error and emit
+# zero credentials documents while the source Secret is absent or
+# while no users are declared. The deployment falls back to the
+# computed `s3.<host>` endpoint when no source Secret is reachable.
+# These guard the OUTER branch, the values-shape contract, and the
+# default-endpoint fallback against accidental refactor regressions.
+#
+# Shared values (_namespace, _cluster) are populated below because
+# the chart includes ingress.yaml that references them; helm-unittest
+# renders every template even when the assertions target one file.
+set:
+  bucketName: cozystack
+  _namespace:
+    host: example.com
+    ingress: ""
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: user-credentials emits no Secret when source is absent
+    template: templates/user-credentials.yaml
+    set:
+      users:
+        alice:
+          accessPolicy: readwrite
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: user-credentials emits nothing when no users are declared
+    template: templates/user-credentials.yaml
+    set:
+      users: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: deployment falls back to default endpoint when source is absent
+    template: templates/deployment.yaml
+    set:
+      users:
+        alice:
+          accessPolicy: readwrite
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="ENDPOINT")].value
+          value: s3.example.com
