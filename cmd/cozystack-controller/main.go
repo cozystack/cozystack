@@ -36,13 +36,18 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
 	"github.com/cozystack/cozystack/internal/controller/dashboard"
+	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -56,6 +61,10 @@ func init() {
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(dashboard.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(gatewayv1alpha2.Install(scheme))
+	utilruntime.Must(cmv1.AddToScheme(scheme))
 	utilruntime.Must(helmv2.AddToScheme(scheme))
 	utilruntime.Must(cosiv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
@@ -217,6 +226,14 @@ func main() {
 	}
 	if err = dashboardManager.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "DashboardReconciler")
+		os.Exit(1)
+	}
+
+	if err = (&tenantgateway.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
 		os.Exit(1)
 	}
 
