@@ -96,13 +96,12 @@ helm-unit-tests:
 go-unit-tests:
 	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
 
-# Go tests for controllers shipped in cozystack-controller, the lineage
-# webhook, and the backup controllers. Scoped narrowly: pkg/ and cmd/
-# tests are run separately by go-unit-tests above. A later round in this
-# PR widened the scope to ./internal/... so new controller subpackages
-# get picked up automatically without needing this list edited. Run as
-# its own step in CI alongside helm/bats unit tests; locally invoke
-# directly (`make test-controllers`) or chain (`make unit-tests test-controllers`).
+# Go tests for the controllers and supporting packages under ./internal.
+# Excludes ./pkg/... and ./cmd/... — those are run separately by
+# go-unit-tests above (pkg subset) and skipped (cmd) until their tests
+# stabilise. Run as its own step in CI alongside helm/bats unit tests;
+# locally invoke directly (`make test-controllers`) or chain
+# (`make unit-tests test-controllers`).
 test-controllers:
 	go test ./internal/... -count=1
 
