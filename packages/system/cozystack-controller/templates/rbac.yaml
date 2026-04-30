@@ -3,7 +3,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: cozystack-controller
 rules:
-- apiGroups: ['cozystack.io', 'dashboard.cozystack.io']
+- apiGroups: ['cozystack.io', 'dashboard.cozystack.io', 'gateway.cozystack.io']
   resources: ['*']
   verbs: ['*']
 - apiGroups: ["helm.toolkit.fluxcd.io"]
