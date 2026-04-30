@@ -8,17 +8,17 @@ controlPlane:
   replicas: 2
   apiServer:
     resources: {}
-    resourcesPreset: "large"
+    resourcesPreset: "u1.small"
   controllerManager:
     resources: {}
-    resourcesPreset: "micro"
+    resourcesPreset: "s1.micro"
   scheduler:
     resources: {}
-    resourcesPreset: "micro"
+    resourcesPreset: "s1.micro"
   konnectivity:
     server:
       resources: {}
-      resourcesPreset: "micro"
+      resourcesPreset: "s1.micro"
 # diskSize and storageClass are intentionally omitted from md0 to verify template
 # fallback defaults: diskSize defaults to "20Gi", storageClass falls back to cluster default.
 nodeGroups:
