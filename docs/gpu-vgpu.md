@@ -2,6 +2,8 @@
 
 This document describes how to configure the GPU Operator package with NVIDIA vGPU support so that a single physical GPU can be sliced and shared across multiple virtual machines.
 
+**Last verified:** 2026-04-29 against KubeVirt `main` (`virt-handler` nightly `20260429_74d7c52588`) + this PR's `vgpu` variant + NVIDIA vGPU 20.0 host driver `595.58.02` + GRID guest driver `595.58.03`.
+
 ## Two driver models
 
 NVIDIA's vGPU driver uses two different host-side models depending on GPU generation:
