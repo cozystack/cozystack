@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -79,15 +78,12 @@ func TestReconcile_NotFoundIsNoop(t *testing.T) {
 	}
 }
 
-// TestReconcile_TenantGatewayProducesGateway is the RED anchor for the
-// next commits: when a TenantGateway exists in a tenant namespace, the
-// reconciler must materialise a corresponding gateway.networking.k8s.io
-// Gateway in the same namespace named "cozystack" — that is the chart's
-// historical Gateway name and the entry point apps' HTTPRoutes attach
-// to via parentRefs.
-//
-// The reconciler is currently empty, so this test is RED on purpose.
-// It pins the outcome the next commit (Commit 9) must satisfy.
+// TestReconcile_TenantGatewayProducesGateway pins the basic Gateway
+// materialisation: when a TenantGateway exists in a tenant namespace,
+// the reconciler creates a gateway.networking.k8s.io Gateway with the
+// same name in the same namespace, GatewayClassName matching spec, and
+// at minimum the static `http` listener that ACME HTTP-01 challenges
+// route through.
 func TestReconcile_TenantGatewayProducesGateway(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
@@ -112,14 +108,143 @@ func TestReconcile_TenantGatewayProducesGateway(t *testing.T) {
 	}
 
 	got := &gatewayv1.Gateway{}
-	err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			t.Skip("scaffolding stage: Gateway not yet created — implementation lands in Commit 9")
-		}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
 		t.Fatalf("get Gateway: %v", err)
 	}
 	if got.Spec.GatewayClassName != "cilium" {
 		t.Errorf("Gateway.Spec.GatewayClassName=%q, want cilium", got.Spec.GatewayClassName)
+	}
+	// The http listener must always be present — ACME HTTP-01 challenges
+	// route through it regardless of certMode.
+	var sawHTTP bool
+	for _, l := range got.Spec.Listeners {
+		if l.Name == "http" && l.Port == 80 && l.Protocol == gatewayv1.HTTPProtocolType {
+			sawHTTP = true
+			break
+		}
+	}
+	if !sawHTTP {
+		t.Errorf("expected http listener (port 80, HTTP) for ACME, got %+v", got.Spec.Listeners)
+	}
+}
+
+// TestReconcile_OwnerReferenceOnGateway pins the lifecycle contract:
+// the rendered Gateway must carry the TenantGateway as its
+// controller-owner so cascade-delete works (deleting the TenantGateway
+// cleans up the Gateway).
+func TestReconcile_OwnerReferenceOnGateway(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack",
+			Namespace: "tenant-foo",
+			UID:       "tgw-uid",
+		},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var owned bool
+	for _, ref := range got.OwnerReferences {
+		if ref.UID == "tgw-uid" && ref.Controller != nil && *ref.Controller {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		t.Errorf("expected controller OwnerReference to TenantGateway uid=tgw-uid, got %+v", got.OwnerReferences)
+	}
+}
+
+// TestReconcile_DNS01ModeRendersWildcardListener pins the opt-in DNS-01
+// branch: when CertMode=dns01 the rendered Gateway carries the
+// wildcard `https` listener for `*.<apex>` plus the `https-apex`
+// listener for the bare apex domain.
+func TestReconcile_DNS01ModeRendersWildcardListener(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var sawWildcard, sawApex bool
+	for _, l := range got.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "*.foo.example.com" && l.Protocol == gatewayv1.HTTPSProtocolType {
+			sawWildcard = true
+		}
+		if l.Hostname != nil && string(*l.Hostname) == "foo.example.com" && l.Protocol == gatewayv1.HTTPSProtocolType {
+			sawApex = true
+		}
+	}
+	if !sawWildcard {
+		t.Errorf("expected wildcard *.foo.example.com HTTPS listener in DNS-01 mode, got %+v", got.Spec.Listeners)
+	}
+	if !sawApex {
+		t.Errorf("expected apex foo.example.com HTTPS listener in DNS-01 mode, got %+v", got.Spec.Listeners)
+	}
+}
+
+// TestReconcile_HTTP01ModeNoWildcardListener pins the default branch:
+// in HTTP-01 mode the Gateway must NOT have a wildcard `*.<apex>`
+// listener (because HTTP-01 cannot issue wildcard certs). Per-app
+// listeners are added later by route-driven reconciliation.
+func TestReconcile_HTTP01ModeNoWildcardListener(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	for _, l := range got.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "*.foo.example.com" {
+			t.Errorf("HTTP-01 mode must not render wildcard listener, found %+v", l)
+		}
 	}
 }
