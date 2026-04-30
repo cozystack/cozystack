@@ -28,28 +28,9 @@ The `gpu-operator` package exposes two variants:
 
 ## Building the vGPU Manager image
 
-The proprietary vGPU Manager driver must be obtained from NVIDIA and packaged into a container image. The canonical build path is the upstream NVIDIA repository (the older `gitlab.com/nvidia/container-images/driver` is archived):
+The proprietary vGPU Manager driver must be obtained from NVIDIA and packaged into a container image that the gpu-operator chart pulls — it is not installed from a raw `.run` at runtime. NVIDIA owns this build path; their [`gpu-driver-container`](https://github.com/NVIDIA/gpu-driver-container) repository ships per-OS Dockerfiles under `vgpu-manager/<os>/` and is the source of truth for build args, base images, and supported OS releases. Follow the README in that repository.
 
-```bash
-git clone https://github.com/NVIDIA/gpu-driver-container.git
-cd gpu-driver-container/vgpu-manager/ubuntu24.04
-
-# Place the .run alongside the Dockerfile (do not check it in)
-cp /path/to/NVIDIA-Linux-x86_64-595.58.02-vgpu-kvm.run .
-
-# --platform linux/amd64 is mandatory on arm64 build hosts (Apple
-# Silicon): GPU nodes are amd64 and the kubelet pull fails with
-# 'no matching manifest' if the image was built native on arm64.
-docker build \
-  --platform linux/amd64 \
-  --build-arg DRIVER_VERSION=595.58.02 \
-  -t registry.example.com/nvidia/vgpu-manager:595.58.02-ubuntu24.04 .
-
-# docker login first if your registry needs auth.
-docker push registry.example.com/nvidia/vgpu-manager:595.58.02-ubuntu24.04
-```
-
-The container's entrypoint downloads kernel headers at pod start time and compiles `nvidia.ko` against the running kernel, so a single image works across kernel patch versions for the same Ubuntu release. The proprietary `.run` is the **Linux KVM** variant (not the Ubuntu KVM `.deb`, which ships pre-built modules for stock kernels only).
+The proprietary `.run` is the **Linux KVM** variant (not the Ubuntu KVM `.deb`, which ships pre-built modules for stock kernels only). It comes from the [NVIDIA Licensing Portal](https://ui.licensing.nvidia.com) under an NVIDIA AI Enterprise / vGPU subscription.
 
 > **EULA:** never push the resulting image to a publicly readable registry. Use a private registry (in-cluster Harbor works well as a non-proxy project).
 
