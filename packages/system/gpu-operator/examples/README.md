@@ -6,7 +6,7 @@ workloads directly in pods on a Talos-based Cozystack cluster, together
 with the DCGM metrics needed by the `gpu/gpu-performance` Grafana
 dashboard.
 
-The out-of-the-box `values-talos.yaml` for this package targets the
+The out-of-the-box `values-passthrough.yaml` for this package targets the
 sandbox (VFIO passthrough to KubeVirt VMs) scenario. The files here
 illustrate an alternative — running CUDA workloads in regular pods with
 the NVIDIA device plugin — and the workarounds it currently requires on
@@ -40,7 +40,7 @@ assumptions that do not hold for every user:
 - The exact path the installed driver ends up at (depends on the
   extension version and Talos release).
 
-The sandbox-oriented `values-talos.yaml` remains the default. Operators
+The sandbox-oriented `values-passthrough.yaml` remains the default. Operators
 who want native pod GPU workloads can start from this directory and
 adapt as needed.
 

@@ -1,6 +1,6 @@
 # Cozystack Package values for running GPU workloads natively in pods
-# on Talos. This is the counterpart to values-talos.yaml, which targets
-# the sandbox (VFIO passthrough) scenario.
+# on Talos. This is the counterpart to values-passthrough.yaml, which
+# targets the sandbox (VFIO passthrough) scenario.
 #
 # Prerequisites:
 #   - NVIDIA Talos system extension installed on GPU nodes.

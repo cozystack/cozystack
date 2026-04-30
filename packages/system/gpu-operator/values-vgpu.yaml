@@ -33,5 +33,3 @@ gpu-operator:
   # mdev model still applies.
   vgpuDeviceManager:
     enabled: false
-    config:
-      default: default

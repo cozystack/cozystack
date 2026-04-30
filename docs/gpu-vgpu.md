@@ -7,7 +7,7 @@ This document describes how to configure the GPU Operator package with NVIDIA vG
 NVIDIA's vGPU driver uses two different host-side models depending on GPU generation:
 
 - **Mediated devices (mdev)** — Pascal / Volta / Turing / Ampere up to A100 / A30. The driver creates `mdev` parent devices under `/sys/class/mdev_bus/`; KubeVirt advertises them via `permittedHostDevices.mediatedDevices`.
-- **SR-IOV with per-VF sysfs** — Ada Lovelace and newer (L4, L40, L40S, B100, etc.) on the vGPU 17/20 driver branch. The driver creates SR-IOV virtual functions; profile selection happens via `/sys/bus/pci/devices/<VF>/nvidia/current_vgpu_type`. KubeVirt advertises VFs via `permittedHostDevices.pciHostDevices` after [kubevirt/kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890).
+- **SR-IOV with per-VF sysfs** — Ada Lovelace (L4, L40, L40S, …) and Blackwell (B100, …) on the vGPU 17/20 driver branch. The driver creates SR-IOV virtual functions; profile selection happens via `/sys/bus/pci/devices/<VF>/nvidia/current_vgpu_type`. KubeVirt advertises VFs via `permittedHostDevices.pciHostDevices` after [kubevirt/kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890).
 
 This guide focuses on the **SR-IOV path**, which is the only model NVIDIA supports for current data-centre GPUs. Mdev is mentioned for completeness; for Pascal–Ampere refer to the upstream NVIDIA GPU Operator docs.
 

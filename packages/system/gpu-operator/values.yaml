@@ -18,7 +18,8 @@ gpu-operator:
   # does not apply in passthrough mode, so practically the DaemonSet
   # stays at zero pods — but it is still rendered into the cluster.
   # The vGPU variant also walks /sys/class/mdev_bus/, which does not
-  # exist on Ada+ (L4/L40/L40S/B100 with vGPU 17/20). Pin to false by
+  # exist on Ada Lovelace (L4/L40/L40S, …) or Blackwell (B100, …) on
+  # the vGPU 17/20 driver branch. Pin to false by
   # default; the vgpu variant explicitly re-affirms this in
   # values-vgpu.yaml.
   vgpuDeviceManager:
