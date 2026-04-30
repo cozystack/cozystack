@@ -511,8 +511,11 @@ Create a new changelog file in the format matching previous versions:
    
    **Get all previous contributors (to identify new ones):**
    ```bash
-   # Extract GitHub usernames from all previous changelogs (filtering out bot/CI accounts)
-   grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v*.md | \
+   # Extract GitHub usernames from all previous changelogs (filtering out bot/CI accounts).
+   # Exclude the current release file (v<version>.md) — otherwise current contributors
+   # would also appear in the "previous" set, hiding real first-time contributors.
+   find docs/changelogs -maxdepth 1 -name 'v*.md' ! -name 'v<version>.md' -print0 | \
+     xargs -0 grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' | \
      sed -E 's|\[\*\*@||; s|\*\*\]||' | \
      grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/previous_contributors.txt
@@ -526,8 +529,10 @@ Create a new changelog file in the format matching previous versions:
      grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/current_contributors.txt
    
-   # Get all previous contributors (filtering out bot/CI accounts)
-   grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v*.md | \
+   # Get all previous contributors, excluding the current release file
+   # (filtering out bot/CI accounts)
+   find docs/changelogs -maxdepth 1 -name 'v*.md' ! -name 'v<version>.md' -print0 | \
+     xargs -0 grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' | \
      sed -E 's|\[\*\*@||; s|\*\*\]||' | \
      grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/all_previous_contributors.txt
