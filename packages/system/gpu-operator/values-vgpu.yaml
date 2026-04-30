@@ -1,0 +1,29 @@
+# vGPU variant: VM-only GPU workloads. Disables the pod-side driver
+# and device plugin (vfio-pci is not in play here), enables the
+# vGPU Manager DaemonSet. Image coordinates must be supplied by the
+# user via the Package CR — the proprietary .run cannot be
+# redistributed.
+gpu-operator:
+  sandboxWorkloads:
+    enabled: true
+  driver:
+    enabled: false
+  devicePlugin:
+    enabled: false
+  vgpuManager:
+    enabled: true
+    repository: ""
+    image: vgpu-manager
+    version: ""
+  # vGPU Device Manager walks /sys/class/mdev_bus/ to assign profiles.
+  # On Ada Lovelace and newer (L4, L40, L40S, B100) with the vGPU 17/20
+  # driver branch this directory does not exist — the driver uses
+  # per-VF NVIDIA sysfs (current_vgpu_type) instead, and the device
+  # manager errors with «no parent devices found». Default-off keeps
+  # modern hardware working out of the box; flip to true on
+  # Pascal/Volta/Turing/Ampere (V100, T4, A100, A30, etc.) where the
+  # mdev model still applies.
+  vgpuDeviceManager:
+    enabled: false
+    config:
+      default: default

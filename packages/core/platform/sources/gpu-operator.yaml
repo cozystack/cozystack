@@ -31,7 +31,7 @@ spec:
       path: system/gpu-operator
       valuesFiles:
       - values.yaml
-      - values-talos-vgpu.yaml
+      - values-vgpu.yaml
       install:
         privileged: true
         namespace: cozy-gpu-operator
