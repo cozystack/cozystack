@@ -192,6 +192,26 @@ func (r *REST) GroupVersionKind(_ schema.GroupVersion) schema.GroupVersionKind {
 }
 func (*REST) GetSingularName() string { return singularName }
 
+// buildTenantSelector merges the required tenant-resource label with any
+// user-provided requirements from opts.LabelSelector.
+// Returns (selector, true) on success; (nil, false) when the user selector is
+// non-selectable (e.g. labels.Nothing()) — callers should return an empty result.
+func buildTenantSelector(opts *metainternal.ListOptions) (labels.Selector, bool) {
+	ls := labels.NewSelector()
+	req, _ := labels.NewRequirement(tsLabelKey, selection.Equals, []string{tsLabelValue})
+	ls = ls.Add(*req)
+	if opts.LabelSelector != nil {
+		reqs, selectable := opts.LabelSelector.Requirements()
+		if !selectable {
+			return nil, false
+		}
+		if len(reqs) > 0 {
+			ls = ls.Add(reqs...)
+		}
+	}
+	return ls, true
+}
+
 // -----------------------------------------------------------------------------
 // CRUD
 // -----------------------------------------------------------------------------
@@ -241,14 +261,20 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 		return nil, err
 	}
 
-	ls := labels.NewSelector()
-	req, _ := labels.NewRequirement(tsLabelKey, selection.Equals, []string{tsLabelValue})
-	ls = ls.Add(*req)
+	ls, selectable := buildTenantSelector(opts)
 
-	if opts.LabelSelector != nil {
-		if reqs, _ := opts.LabelSelector.Requirements(); len(reqs) > 0 {
-			ls = ls.Add(reqs...)
+	emptyList := func() *corev1alpha1.TenantSecretList {
+		return &corev1alpha1.TenantSecretList{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       kindTenantSecretList,
+			},
 		}
+	}
+
+	if !selectable {
+		// labels.Nothing() and other non-selectable selectors match no objects.
+		return emptyList(), nil
 	}
 
 	// Parse field selector for manual filtering
@@ -261,12 +287,7 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 
 	// If field selector specifies namespace different from context, return empty list
 	if fieldFilter.Namespace != "" && ns != "" && ns != fieldFilter.Namespace {
-		return &corev1alpha1.TenantSecretList{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
-				Kind:       kindTenantSecretList,
-			},
-		}, nil
+		return emptyList(), nil
 	}
 
 	list := &corev1.SecretList{}
@@ -436,8 +457,15 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		return nil, err
 	}
 
+	ls, selectable := buildTenantSelector(opts)
+	if !selectable {
+		// labels.Nothing(): match no objects, return a watcher that closes immediately.
+		ch := make(chan watch.Event)
+		close(ch)
+		return watch.NewProxyWatcher(ch), nil
+	}
+
 	secList := &corev1.SecretList{}
-	ls := labels.Set{tsLabelKey: tsLabelValue}.AsSelector()
 	base, err := r.w.Watch(ctx, secList, &client.ListOptions{
 		Namespace:     ns,
 		LabelSelector: ls,
@@ -484,6 +512,17 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 			sec, ok := ev.Object.(*corev1.Secret)
 			if !ok || sec == nil {
+				continue
+			}
+
+			// Defensive: post-filter against the merged selector. The underlying
+			// watch already filters by label, but this guards against any client
+			// implementation that doesn't honor LabelSelector on Watch.
+			// DELETED events must always pass through: when a Secret's labels mutate
+			// out of the selector, the apiserver synthesizes a DELETED with the new
+			// (non-matching) labels — dropping it would leave cached clients with
+			// stale entries.
+			if ev.Type != watch.Deleted && !ls.Matches(labels.Set(sec.Labels)) {
 				continue
 			}
 
