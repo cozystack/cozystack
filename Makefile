@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -95,6 +95,16 @@ helm-unit-tests:
 # from their generator workflows.
 go-unit-tests:
 	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
+
+# Go tests for controllers shipped in cozystack-controller, the lineage
+# webhook, and the backup controllers. Scoped narrowly: pkg/ and cmd/
+# tests are run separately by go-unit-tests above. A later round in this
+# PR widened the scope to ./internal/... so new controller subpackages
+# get picked up automatically without needing this list edited. Run as
+# its own step in CI alongside helm/bats unit tests; locally invoke
+# directly (`make test-controllers`) or chain (`make unit-tests test-controllers`).
+test-controllers:
+	go test ./internal/... -count=1
 
 # Discover every hack/*.bats file that is NOT an e2e test and run it
 # through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
