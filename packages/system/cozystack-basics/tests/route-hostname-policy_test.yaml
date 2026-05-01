@@ -86,3 +86,31 @@ tests:
         equal:
           path: spec.failurePolicy
           value: Fail
+
+  - it: CEL is fail-closed when namespace has no host label (returns false, not true)
+    # Regression guard: an earlier draft used `... ? true : (...)` which
+    # silently allowed routes in any tenant-* namespace where the layer-5
+    # label was missing or scrubbed. Fixing this is the whole point of the
+    # round-6 hardening pass — pin the false branch in the CEL string so
+    # nobody flips it back without an explicit test failure.
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\)\s*\?\s*false\s*:'
+      - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\)\s*\?\s*false\s*:'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'namespaceObject\s*==\s*null'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(namespaceObject\.metadata\.labels\)'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!\("namespace\.cozystack\.io/host" in namespaceObject\.metadata\.labels\)'

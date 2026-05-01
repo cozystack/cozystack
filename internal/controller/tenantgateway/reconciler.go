@@ -30,10 +30,10 @@ import (
 	"sort"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -698,7 +698,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("tenantgateway-controller").
 		For(&gatewayv1alpha1.TenantGateway{}).
 		Owns(&gatewayv1.Gateway{}).
+		Owns(&gatewayv1.HTTPRoute{}).
 		Owns(&cmv1.Certificate{}).
+		Owns(&cmv1.Issuer{}).
 		Watches(
 			&gatewayv1.HTTPRoute{},
 			r.routeToTenantGateway(),

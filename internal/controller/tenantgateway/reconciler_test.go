@@ -18,6 +18,7 @@ package tenantgateway
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -1751,4 +1753,354 @@ func TestReconcile_HTTP01DoesNotCreateWildcardCertificate(t *testing.T) {
 	if err == nil {
 		t.Errorf("HTTP-01 mode rendered wildcard Certificate; should be absent")
 	}
+}
+
+// TestReconcile_HTTPSListenersRestrictRouteKindsToHTTPRoute pins the
+// round-7 hardening: every HTTPS (TLS-terminate) listener must declare
+// AllowedRoutes.Kinds=[HTTPRoute]. Without that explicit restriction
+// Gateway API's default behaviour permits any route kind whose hostname
+// matches a listener — so a tenant carrying RBAC for GRPCRoute /
+// TCPRoute / UDPRoute could attach by hostname to a TLS-terminate
+// listener, bypassing the route-hostname VAP (which only binds to
+// HTTPRoute and TLSRoute) and serving traffic under the apex cert
+// without admission validation.
+//
+// Both certMode branches are exercised: HTTP-01 (per-app https-<label>
+// listeners) and DNS-01 (the wildcard `https` + apex `https-apex`
+// pair). The TLS-passthrough listener test elsewhere already pins
+// Kinds=[TLSRoute] for that branch; this one covers TLS-terminate.
+func TestReconcile_HTTPSListenersRestrictRouteKindsToHTTPRoute(t *testing.T) {
+	cases := []struct {
+		name string
+		tgw  *gatewayv1alpha1.TenantGateway
+		// extra objects to seed (e.g. HTTPRoute so HTTP-01 mode renders a per-app listener)
+		extra []client.Object
+	}{
+		{
+			name: "DNS-01 mode (wildcard + apex listeners)",
+			tgw: &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:             "foo.example.com",
+					CertMode:         gatewayv1alpha1.CertModeDNS01,
+					GatewayClassName: "cilium",
+					DNS01: &gatewayv1alpha1.DNS01Config{
+						Provider: "cloudflare",
+						Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+							APITokenSecretRef: corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+								Key:                  "api-token",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "HTTP-01 mode (per-app listener from attached HTTPRoute)",
+			tgw: &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:             "foo.example.com",
+					CertMode:         gatewayv1alpha1.CertModeHTTP01,
+					GatewayClassName: "cilium",
+				},
+			},
+			extra: []client.Object{
+				&gatewayv1.HTTPRoute{
+					ObjectMeta: metav1.ObjectMeta{Name: "harbor", Namespace: "tenant-foo"},
+					Spec: gatewayv1.HTTPRouteSpec{
+						Hostnames: []gatewayv1.Hostname{"harbor.foo.example.com"},
+						CommonRouteSpec: gatewayv1.CommonRouteSpec{
+							ParentRefs: []gatewayv1.ParentReference{
+								{
+									Group:     ptrGroup(gatewayv1.GroupName),
+									Kind:      ptrKind("Gateway"),
+									Name:      "cozystack",
+									Namespace: ptrNamespace("tenant-foo"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			builder := fake.NewClientBuilder().WithScheme(s).WithObjects(tc.tgw).WithStatusSubresource(tc.tgw)
+			if len(tc.extra) > 0 {
+				builder = builder.WithObjects(tc.extra...)
+			}
+			c := builder.Build()
+			r := &Reconciler{Client: c, Scheme: s}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+			}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			gw := &gatewayv1.Gateway{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+				t.Fatalf("get Gateway: %v", err)
+			}
+			httpsCount := 0
+			for _, l := range gw.Spec.Listeners {
+				if l.Protocol != gatewayv1.HTTPSProtocolType {
+					continue
+				}
+				httpsCount++
+				if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 1 {
+					t.Fatalf("listener %s: expected exactly one allowed Kind, got %+v", l.Name, l.AllowedRoutes)
+				}
+				gk := l.AllowedRoutes.Kinds[0]
+				if gk.Kind != "HTTPRoute" {
+					t.Errorf("listener %s: AllowedRoutes.Kinds[0]=%q, want HTTPRoute", l.Name, gk.Kind)
+				}
+				if gk.Group == nil || *gk.Group != gatewayv1.Group(gatewayv1.GroupName) {
+					t.Errorf("listener %s: AllowedRoutes.Kinds[0].Group=%v, want %q", l.Name, gk.Group, gatewayv1.GroupName)
+				}
+			}
+			if httpsCount == 0 {
+				t.Fatalf("expected at least one HTTPS listener, listeners=%+v", gw.Spec.Listeners)
+			}
+		})
+	}
+}
+
+// TestReconcile_DNS01IssuerRoute53Solver pins the DNS-01 + route53 path
+// (added in branch-review round 6 alongside cloudflare). The Issuer
+// must carry a dns01.route53 solver block referencing the operator-
+// supplied IAM credentials. Without coverage, a future renderer
+// refactor could regress to the cloudflare-only path the round-1 draft
+// shipped with.
+func TestReconcile_DNS01IssuerRoute53Solver(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "route53",
+				Route53: &gatewayv1alpha1.Route53DNS01{
+					Region:      "us-east-1",
+					AccessKeyID: "AKIAIOSFODNN7EXAMPLE",
+					SecretAccessKeySecretRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "aws-iam-secret"},
+						Key:                  "secret-access-key",
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	iss := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	if iss.Spec.ACME == nil || len(iss.Spec.ACME.Solvers) != 1 {
+		t.Fatalf("expected exactly one ACME solver, got %+v", iss.Spec.ACME)
+	}
+	solver := iss.Spec.ACME.Solvers[0]
+	if solver.DNS01 == nil || solver.DNS01.Route53 == nil {
+		t.Fatalf("expected dns01.route53 solver, got %+v", solver)
+	}
+	r53 := solver.DNS01.Route53
+	if r53.Region != "us-east-1" {
+		t.Errorf("Route53 Region=%q, want us-east-1", r53.Region)
+	}
+	if r53.AccessKeyID != "AKIAIOSFODNN7EXAMPLE" {
+		t.Errorf("Route53 AccessKeyID=%q, want AKIAIOSFODNN7EXAMPLE", r53.AccessKeyID)
+	}
+	if r53.SecretAccessKey.Name != "aws-iam-secret" || r53.SecretAccessKey.Key != "secret-access-key" {
+		t.Errorf("Route53 SecretAccessKey ref=%+v, want name=aws-iam-secret key=secret-access-key", r53.SecretAccessKey)
+	}
+}
+
+// TestReconcile_DNS01IssuerDigitalOceanSolver pins the DNS-01 +
+// digitalocean path. Mirrors the cloudflare/route53 solver tests so
+// every advertised provider has a Go-level pin.
+func TestReconcile_DNS01IssuerDigitalOceanSolver(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "digitalocean",
+				DigitalOcean: &gatewayv1alpha1.DigitalOceanDNS01{
+					TokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "do-api-token"},
+						Key:                  "access-token",
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	iss := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	if iss.Spec.ACME == nil || len(iss.Spec.ACME.Solvers) != 1 {
+		t.Fatalf("expected exactly one ACME solver, got %+v", iss.Spec.ACME)
+	}
+	solver := iss.Spec.ACME.Solvers[0]
+	if solver.DNS01 == nil || solver.DNS01.DigitalOcean == nil {
+		t.Fatalf("expected dns01.digitalocean solver, got %+v", solver)
+	}
+	tok := solver.DNS01.DigitalOcean.Token
+	if tok.Name != "do-api-token" || tok.Key != "access-token" {
+		t.Errorf("DigitalOcean Token ref=%+v, want name=do-api-token key=access-token", tok)
+	}
+}
+
+// TestReconcile_DNS01IssuerRFC2136Solver pins the DNS-01 + rfc2136
+// path (BIND-style dynamic update). The TSIG algorithm default is
+// also exercised — leaving it empty must produce HMACSHA256 in the
+// rendered solver, matching cert-manager's documented default.
+func TestReconcile_DNS01IssuerRFC2136Solver(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "rfc2136",
+				RFC2136: &gatewayv1alpha1.RFC2136DNS01{
+					Nameserver:  "ns1.example.test:53",
+					TSIGKeyName: "letsencrypt.example.test.",
+					// TSIGAlgorithm intentionally empty to pin the default.
+					TSIGSecretSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "tsig-secret"},
+						Key:                  "tsig-secret-key",
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	iss := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	if iss.Spec.ACME == nil || len(iss.Spec.ACME.Solvers) != 1 {
+		t.Fatalf("expected exactly one ACME solver, got %+v", iss.Spec.ACME)
+	}
+	solver := iss.Spec.ACME.Solvers[0]
+	if solver.DNS01 == nil || solver.DNS01.RFC2136 == nil {
+		t.Fatalf("expected dns01.rfc2136 solver, got %+v", solver)
+	}
+	r2136 := solver.DNS01.RFC2136
+	if r2136.Nameserver != "ns1.example.test:53" {
+		t.Errorf("RFC2136 Nameserver=%q, want ns1.example.test:53", r2136.Nameserver)
+	}
+	if r2136.TSIGKeyName != "letsencrypt.example.test." {
+		t.Errorf("RFC2136 TSIGKeyName=%q, want letsencrypt.example.test.", r2136.TSIGKeyName)
+	}
+	if r2136.TSIGAlgorithm != "HMACSHA256" {
+		t.Errorf("RFC2136 TSIGAlgorithm=%q, want HMACSHA256 (default)", r2136.TSIGAlgorithm)
+	}
+	if r2136.TSIGSecret.Name != "tsig-secret" || r2136.TSIGSecret.Key != "tsig-secret-key" {
+		t.Errorf("RFC2136 TSIGSecret ref=%+v, want name=tsig-secret key=tsig-secret-key", r2136.TSIGSecret)
+	}
+}
+
+// TestReconcile_DNS01ProviderMissingConfigErrors pins the input-
+// validation surface added in round 6: each non-cloudflare provider
+// returns a deterministic error if the operator omits the matching
+// config block. Without these guards the controller would crash when
+// dereferencing the nil pointer (panic on a single misconfigured
+// tenant takes the controller down for the whole cluster).
+func TestReconcile_DNS01ProviderMissingConfigErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		dns01    *gatewayv1alpha1.DNS01Config
+		wantSubs string
+	}{
+		{
+			name: "route53 without route53 block",
+			dns01: &gatewayv1alpha1.DNS01Config{
+				Provider: "route53",
+			},
+			wantSubs: "dns01.route53",
+		},
+		{
+			name: "digitalocean without digitalocean block",
+			dns01: &gatewayv1alpha1.DNS01Config{
+				Provider: "digitalocean",
+			},
+			wantSubs: "dns01.digitalocean",
+		},
+		{
+			name: "rfc2136 without rfc2136 block",
+			dns01: &gatewayv1alpha1.DNS01Config{
+				Provider: "rfc2136",
+			},
+			wantSubs: "dns01.rfc2136",
+		},
+		{
+			name: "unknown provider",
+			dns01: &gatewayv1alpha1.DNS01Config{
+				Provider: "linode",
+			},
+			wantSubs: "unsupported dns01.provider",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:             "foo.example.com",
+					CertMode:         gatewayv1alpha1.CertModeDNS01,
+					GatewayClassName: "cilium",
+					DNS01:            tc.dns01,
+				},
+			}
+			_, err := buildSolver(tgw)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantSubs) {
+				t.Errorf("error=%q, want to contain %q", err.Error(), tc.wantSubs)
+			}
+		})
+	}
+}
+
+func ptrNamespace(ns string) *gatewayv1.Namespace {
+	v := gatewayv1.Namespace(ns)
+	return &v
 }
