@@ -1,0 +1,93 @@
+name: PR size label
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-size-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Skip files that should not count as "real diff" — they are produced by tools,
+            // not authored by humans, and including them lies to reviewers about review effort:
+            //   - vendored Go deps,
+            //   - kubebuilder/openapi inline generated files (zz_generated.{deepcopy,conversion,defaults,openapi}.go),
+            //   - whole code-generated trees from client-gen / lister-gen / applyconfiguration-gen
+            //     and protobuf (any path under a `generated/` directory or ending in `.pb.go`),
+            //   - vendored Helm charts,
+            //   - lockfiles.
+            const isIgnored = (path) =>
+              path.startsWith('vendor/') ||
+              /\bzz_generated\.[^/]*\.go$/.test(path) ||
+              /(^|\/)generated\//.test(path) ||
+              path.endsWith('.pb.go') ||
+              /^packages\/system\/[^/]+\/charts\//.test(path) ||
+              path === 'go.sum' || path.endsWith('/go.sum') ||
+              path.endsWith('.lock') || path.endsWith('.lockb');
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+            const lines = files
+              .filter((f) => !isIgnored(f.filename))
+              .reduce((acc, f) => acc + (f.additions || 0) + (f.deletions || 0), 0);
+
+            // Thresholds match the descriptions of size/* labels in .github/labels.yml.
+            const bucket =
+              lines <= 9   ? 'XS' :
+              lines <= 29  ? 'S'  :
+              lines <= 99  ? 'M'  :
+              lines <= 499 ? 'L'  :
+              lines <= 999 ? 'XL' : 'XXL';
+            const target = `size/${bucket}`;
+
+            // Match both legacy "size:" and canonical "size/" during the migration window.
+            const existing = (pr.labels || []).map((l) => l.name);
+            const oldSizes = existing.filter((n) => n.startsWith('size/') || n.startsWith('size:'));
+            const alreadyTarget = oldSizes.includes(target);
+
+            // Remove every size/* label that is not the target. Tolerate 404 — concurrent
+            // runs or manual edits between event payload and execution can race here.
+            for (const name of oldSizes) {
+              if (name === target) continue;
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  name,
+                });
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                core.info(`label ${name} already gone (404)`);
+              }
+            }
+
+            if (alreadyTarget && oldSizes.length === 1) {
+              core.info(`PR #${pr.number}: ${lines} lines, label already ${target}`);
+              return;
+            }
+            if (!alreadyTarget) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: [target],
+              });
+            }
+            core.info(`PR #${pr.number}: ${lines} lines -> ${target}`);
