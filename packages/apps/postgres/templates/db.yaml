@@ -5,6 +5,30 @@ metadata:
   name: {{ .Release.Name }}
 spec:
   instances: {{ .Values.replicas }}
+  {{/*
+    s3Credentials points at the operator-supplied Secret when
+    backup.s3CredentialsSecret.name is set; otherwise it falls back to the
+    chart-managed <release>-s3-creds Secret materialised from s3AccessKey/
+    s3SecretKey. The override path keeps credentials out of the Postgres
+    CR .spec — the CNPG backup driver uses it on restore.
+  */}}
+  {{- $credCfg := default (dict) .Values.backup.s3CredentialsSecret }}
+  {{- $credSecretName := $credCfg.name | default (printf "%s-s3-creds" .Release.Name) }}
+  {{/*
+    accessKeyIDKey/secretAccessKeyKey only apply when an external Secret was
+    supplied via backup.s3CredentialsSecret.name. The chart-managed
+    <release>-s3-creds Secret materialised by backup-secret.yaml hard-codes
+    AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, so applying overrides in
+    that mode would point CNPG at non-existent keys and break credential
+    reads. Default both names unconditionally and let the override take
+    effect only in external-Secret mode.
+  */}}
+  {{- $credAccessKey := "AWS_ACCESS_KEY_ID" }}
+  {{- $credSecretKey := "AWS_SECRET_ACCESS_KEY" }}
+  {{- if $credCfg.name }}
+  {{- $credAccessKey = $credCfg.accessKeyIDKey | default "AWS_ACCESS_KEY_ID" }}
+  {{- $credSecretKey = $credCfg.secretAccessKeyKey | default "AWS_SECRET_ACCESS_KEY" }}
+  {{- end }}
   {{- if .Values.backup.enabled }}
   backup:
     barmanObjectStore:
@@ -12,14 +36,14 @@ spec:
       endpointURL: {{ .Values.backup.endpointURL }}
       s3Credentials:
         accessKeyId:
-          name: {{ .Release.Name }}-s3-creds
-          key: AWS_ACCESS_KEY_ID
+          name: {{ $credSecretName }}
+          key: {{ $credAccessKey }}
         secretAccessKey:
-          name: {{ .Release.Name }}-s3-creds
-          key: AWS_SECRET_ACCESS_KEY
+          name: {{ $credSecretName }}
+          key: {{ $credSecretKey }}
     retentionPolicy: {{ .Values.backup.retentionPolicy }}
   {{- end }}
-  
+
   {{- if .Values.bootstrap.enabled }}
   bootstrap:
     recovery:
@@ -38,11 +62,11 @@ spec:
         endpointURL: {{ .Values.backup.endpointURL }}
         s3Credentials:
           accessKeyId:
-            name: {{ .Release.Name }}-s3-creds
-            key: AWS_ACCESS_KEY_ID
+            name: {{ $credSecretName }}
+            key: {{ $credAccessKey }}
           secretAccessKey:
-            name: {{ .Release.Name }}-s3-creds
-            key: AWS_SECRET_ACCESS_KEY
+            name: {{ $credSecretName }}
+            key: {{ $credSecretKey }}
   {{- end }}
 
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}

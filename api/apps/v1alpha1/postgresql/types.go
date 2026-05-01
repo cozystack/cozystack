@@ -71,10 +71,13 @@ type Backup struct {
 	// Retention policy (e.g. "30d").
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
-	// Access key for S3 authentication.
+	// Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-access-key>"
 	S3AccessKey string `json:"s3AccessKey,omitempty"`
-	// Secret key for S3 authentication.
+	// Pre-existing Secret with S3 credentials. When set, the chart references this Secret directly instead of materialising one from `s3AccessKey`/`s3SecretKey`. The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.
+	// +kubebuilder:default:={}
+	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
+	// Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-secret-key>"
 	S3SecretKey string `json:"s3SecretKey,omitempty"`
 	// Cron schedule for automated backups.
@@ -131,6 +134,18 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type S3CredentialsSecret struct {
+	// Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.
+	// +kubebuilder:default:=""
+	AccessKeyIDKey string `json:"accessKeyIDKey,omitempty"`
+	// Name of the Secret in the application namespace. Empty means the chart materialises `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+	// Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
+	// +kubebuilder:default:=""
+	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
 }
 
 type User struct {

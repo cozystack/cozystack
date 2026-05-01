@@ -1,0 +1,12 @@
+# Cozystack-managed S3 bucket for storing Postgres backups. The Bucket
+# controller provisions a Secret named "<bucket>-<username>" per user; the
+# CNPG strategy below references the "backup" user's Secret.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: pg-backups
+spec:
+  users:
+    backup:
+      readonly: false

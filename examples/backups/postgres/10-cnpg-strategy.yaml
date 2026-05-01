@@ -1,0 +1,27 @@
+# CNPG backup strategy. String fields are go-templated against the live
+# Postgres application object (.Application) and BackupClass parameters
+# (.Parameters), letting one strategy CR serve every Postgres instance in
+# the tenant.
+---
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: CNPG
+metadata:
+  name: cnpg-strategy-default
+spec:
+  template:
+    serverName: "{{ .Application.metadata.name }}"
+    barmanObjectStore:
+      # destinationPath uses the COSI BucketClaim's actual bucket name (look
+      # it up via `kubectl -n <ns> get bucketclaim bucket-<name> -o
+      # jsonpath='{.status.bucketName}'`). The endpointURL is the S3 endpoint
+      # advertised in the BucketInfo Secret.
+      destinationPath: "s3://REPLACE_WITH_COSI_BUCKET_NAME/{{ .Application.metadata.name }}/"
+      endpointURL: "https://REPLACE_WITH_S3_ENDPOINT"
+      retentionPolicy: "30d"
+      s3Credentials:
+        secretRef:
+          name: "{{ .Application.metadata.name }}-cnpg-backup-creds"
+      data:
+        compression: gzip
+      wal:
+        compression: gzip

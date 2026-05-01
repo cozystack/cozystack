@@ -13,7 +13,51 @@ This managed service is controlled by the CloudNativePG operator, ensuring effic
 
 ## Operations
 
-### How to enable backups
+PostgreSQL backups can be configured in two ways. **Pick one - mixing them
+on the same application produces a continuous SSA tug-of-war on the
+underlying cnpg.io Cluster.spec.backup field, since the chart and the CNPG
+backup driver both write to it.**
+
+| Path                                       | When to use                                                                                                             | Configured via                                |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **BackupClass / Plan / BackupJob (preferred)** | Tenant-managed backup schedules, ad-hoc backups, restores, cross-app copy restores                                      | `BackupClass` + `Plan` (or `BackupJob` ad-hoc) |
+| Chart-managed (legacy)                     | Single application, no tenant-level backup orchestration, credentials acceptable in chart values                        | `backup.enabled=true` plus `backup.*` knobs   |
+
+If a `BackupClass` referencing the CNPG strategy applies to this Postgres
+app, **leave `backup.enabled=false`** in the chart values. The CNPG strategy
+controller writes `spec.backup.barmanObjectStore` on the cnpg.io Cluster
+itself; setting `backup.enabled=true` would make the chart emit the same
+field and the two writers would fight on every reconcile.
+
+### How to enable backups (preferred: BackupClass + Plan)
+
+End-to-end manifests live under [`examples/backups/postgres/`](../../../examples/backups/postgres/).
+Briefly, the moving parts are:
+
+1. A `strategy.backups.cozystack.io/CNPG` describing the destination bucket
+   and templating the `barmanObjectStore` (including a Secret reference to
+   S3 credentials - the credentials never appear on the Postgres CR
+   `.spec`; see Security note below).
+2. A `backups.cozystack.io/BackupClass` that names the strategy and is
+   selected by an `applicationRef` matching the Postgres app's `Kind`/`Name`.
+3. A `backups.cozystack.io/Plan` (recurring) or `BackupJob` (ad-hoc) that
+   references the BackupClass. The controller materialises a
+   `Backup` artifact when the cnpg.io Backup completes; restores then
+   reference that Backup via `RestoreJob`.
+
+Both in-place restores (overwrite the source app's data) and to-copy
+restores (restore into a separate target Postgres app in the same
+namespace) are supported via the `RestoreJob.spec.targetApplicationRef`
+field.
+
+> **Security:** With the BackupClass path, S3 credentials live in a
+> tenant-readable Secret referenced from the strategy template. The CNPG
+> driver forwards that Secret reference into the Postgres app's
+> `spec.backup.s3CredentialsSecret` on restore, so access keys never land in
+> the Postgres CR `.spec`, etcd object store, or `kubectl get -o yaml`
+> output. Prefer this over the chart-managed path whenever possible.
+
+### How to enable chart-managed backups (legacy)
 
 To back up a PostgreSQL application, an external S3-compatible storage is required.
 
@@ -37,7 +81,19 @@ backup:
   s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
 ```
 
-### How to recover a backup
+### How to recover a backup (preferred: RestoreJob)
+
+For BackupClass-managed backups, create a `backups.cozystack.io/RestoreJob`
+that references the desired `Backup`. See
+[`examples/backups/postgres/35-restorejob-in-place.yaml`](../../../examples/backups/postgres/35-restorejob-in-place.yaml)
+and
+[`examples/backups/postgres/40-restorejob-to-copy.yaml`](../../../examples/backups/postgres/40-restorejob-to-copy.yaml).
+On a to-copy restore, the controller mirrors the source app's
+`spec.databases` and `spec.users` onto the target so the post-install
+init-job does not drop the recovered data; target-only databases/users that
+predate the restore are preserved.
+
+### How to recover a backup (chart-managed bootstrap)
 
 CloudNativePG supports point-in-time-recovery.
 Recovering a backup is done by creating a new database instance and restoring the data in it.
@@ -118,16 +174,20 @@ See:
 
 ### Backup parameters
 
-| Name                     | Description                                            | Type     | Value                               |
-| ------------------------ | ------------------------------------------------------ | -------- | ----------------------------------- |
-| `backup`                 | Backup configuration.                                  | `object` | `{}`                                |
-| `backup.enabled`         | Enable regular backups.                                | `bool`   | `false`                             |
-| `backup.schedule`        | Cron schedule for automated backups.                   | `string` | `0 2 * * * *`                       |
-| `backup.retentionPolicy` | Retention policy (e.g. "30d").                         | `string` | `30d`                               |
-| `backup.destinationPath` | Destination path for backups (e.g. s3://bucket/path/). | `string` | `s3://bucket/path/to/folder/`       |
-| `backup.endpointURL`     | S3 endpoint URL for uploads.                           | `string` | `http://minio-gateway-service:9000` |
-| `backup.s3AccessKey`     | Access key for S3 authentication.                      | `string` | `<your-access-key>`                 |
-| `backup.s3SecretKey`     | Secret key for S3 authentication.                      | `string` | `<your-secret-key>`                 |
+| Name                                            | Description                                                                                                                                                                                                                                                  | Type     | Value                               |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------- |
+| `backup`                                        | Backup configuration.                                                                                                                                                                                                                                        | `object` | `{}`                                |
+| `backup.enabled`                                | Enable regular backups.                                                                                                                                                                                                                                      | `bool`   | `false`                             |
+| `backup.schedule`                               | Cron schedule for automated backups.                                                                                                                                                                                                                         | `string` | `0 2 * * * *`                       |
+| `backup.retentionPolicy`                        | Retention policy (e.g. "30d").                                                                                                                                                                                                                               | `string` | `30d`                               |
+| `backup.destinationPath`                        | Destination path for backups (e.g. s3://bucket/path/).                                                                                                                                                                                                       | `string` | `s3://bucket/path/to/folder/`       |
+| `backup.endpointURL`                            | S3 endpoint URL for uploads.                                                                                                                                                                                                                                 | `string` | `http://minio-gateway-service:9000` |
+| `backup.s3AccessKey`                            | Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.                                                                                                                                                                            | `string` | `<your-access-key>`                 |
+| `backup.s3SecretKey`                            | Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.                                                                                                                                                                            | `string` | `<your-secret-key>`                 |
+| `backup.s3CredentialsSecret`                    | Pre-existing Secret with S3 credentials. When set, the chart references this Secret directly instead of materialising one from `s3AccessKey`/`s3SecretKey`. The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`. | `object` | `{}`                                |
+| `backup.s3CredentialsSecret.name`               | Name of the Secret in the application namespace. Empty means the chart materialises `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`.                                                                                                                   | `string` | `""`                                |
+| `backup.s3CredentialsSecret.accessKeyIDKey`     | Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.                                                                                                                                                                                | `string` | `""`                                |
+| `backup.s3CredentialsSecret.secretAccessKeyKey` | Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.                                                                                                                                                                        | `string` | `""`                                |
 
 
 ### Bootstrap (recovery) parameters

@@ -1,0 +1,11 @@
+# Empty target Postgres instance for the to-copy restore. Keeping the spec
+# minimal - the CNPG driver overlays bootstrap.* and backup.* values when
+# the RestoreJob fires.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: pg-target
+spec:
+  replicas: 2
+  size: 5Gi

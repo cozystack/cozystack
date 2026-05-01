@@ -1,0 +1,20 @@
+# Source Postgres instance. The chart's built-in backup.enabled flow stays
+# disabled - the CNPG driver injects spec.backup.barmanObjectStore on the
+# live cnpg.io Cluster via its own field manager, so the chart and the
+# driver do not contend for the field.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: pg-src
+spec:
+  replicas: 2
+  size: 5Gi
+  databases:
+    demo:
+      roles:
+        admin:
+          - app
+  users:
+    app:
+      password: REPLACE_WITH_PASSWORD
