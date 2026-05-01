@@ -1,6 +1,7 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- $provider := (index .Values._cluster "dns01-provider") | default "cloudflare" }}
 
 {{- define "cert-manager-issuers.httpSolver" -}}
 {{- $gatewayEnabled := index . "gatewayEnabled" -}}
@@ -21,6 +22,68 @@ http01:
 {{- end }}
 {{- end }}
 
+{{- /*
+  cert-manager-issuers.dns01Solver — renders a per-provider DNS-01
+  solver block. Mirrors what the per-tenant Issuer (rendered by the
+  cozystack-controller TenantGateway reconciler at
+  internal/controller/tenantgateway/renderers.go::buildSolver) emits,
+  so cluster-wide ingress flows and per-tenant Gateway flows agree on
+  which provider is active.
+
+  Without this branching, a `publishing.certificates.solver: dns01` +
+  `provider: route53` operator config would render correct TenantGateway
+  Issuers but a cloudflare-hardcoded ClusterIssuer — every legacy
+  ingress-based service (harbor, dashboard, bucket, keycloak, monitoring)
+  would silently fail cert issuance against a non-existent
+  cloudflare-api-token-secret.
+*/}}
+{{- define "cert-manager-issuers.dns01Solver" -}}
+{{- $provider := index . "provider" -}}
+{{- $values := index . "values" -}}
+{{- if eq $provider "cloudflare" }}
+dns01:
+  cloudflare:
+    apiTokenSecretRef:
+      name: {{ (index $values._cluster "dns01-cloudflare-secret-name") | default "cloudflare-api-token-secret" | quote }}
+      key: {{ (index $values._cluster "dns01-cloudflare-secret-key") | default "api-token" | quote }}
+{{- else if eq $provider "route53" }}
+{{- if not (index $values._cluster "dns01-route53-region") }}
+{{- fail "packages/system/cert-manager-issuers: _cluster.dns01-route53-region is required when dns01-provider=route53. Set publishing.certificates.dns01.route53.region on the platform." }}
+{{- end }}
+dns01:
+  route53:
+    region: {{ (index $values._cluster "dns01-route53-region") | quote }}
+    {{- with (index $values._cluster "dns01-route53-access-key-id") }}
+    accessKeyID: {{ . | quote }}
+    {{- end }}
+    {{- if index $values._cluster "dns01-route53-secret-name" }}
+    secretAccessKeySecretRef:
+      name: {{ (index $values._cluster "dns01-route53-secret-name") | quote }}
+      key: {{ (index $values._cluster "dns01-route53-secret-key") | default "secret-access-key" | quote }}
+    {{- end }}
+{{- else if eq $provider "digitalocean" }}
+dns01:
+  digitalocean:
+    tokenSecretRef:
+      name: {{ (index $values._cluster "dns01-digitalocean-secret-name") | default "digitalocean-api-token-secret" | quote }}
+      key: {{ (index $values._cluster "dns01-digitalocean-secret-key") | default "access-token" | quote }}
+{{- else if eq $provider "rfc2136" }}
+{{- if not (index $values._cluster "dns01-rfc2136-nameserver") }}
+{{- fail "packages/system/cert-manager-issuers: _cluster.dns01-rfc2136-nameserver is required when dns01-provider=rfc2136" }}
+{{- end }}
+dns01:
+  rfc2136:
+    nameserver: {{ (index $values._cluster "dns01-rfc2136-nameserver") | quote }}
+    tsigKeyName: {{ (index $values._cluster "dns01-rfc2136-tsig-key-name") | quote }}
+    tsigAlgorithm: {{ (index $values._cluster "dns01-rfc2136-tsig-algorithm") | default "HMACSHA256" | quote }}
+    tsigSecretSecretRef:
+      name: {{ (index $values._cluster "dns01-rfc2136-secret-name") | quote }}
+      key: {{ (index $values._cluster "dns01-rfc2136-secret-key") | default "tsig-secret-key" | quote }}
+{{- else }}
+{{- fail (printf "packages/system/cert-manager-issuers: unsupported dns01-provider=%q. Supported values: cloudflare, route53, digitalocean, rfc2136." $provider) }}
+{{- end }}
+{{- end }}
+
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -32,11 +95,7 @@ spec:
     server: https://acme-v02.api.letsencrypt.org/directory
     solvers:
     - {{- if eq $solver "dns01" }}
-        dns01:
-          cloudflare:
-            apiTokenSecretRef:
-              name: cloudflare-api-token-secret
-              key: api-token
+        {{- include "cert-manager-issuers.dns01Solver" (dict "provider" $provider "values" .Values) | nindent 8 }}
       {{- else }}
         {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress) | nindent 8 }}
       {{- end }}
@@ -54,11 +113,7 @@ spec:
     server: https://acme-staging-v02.api.letsencrypt.org/directory
     solvers:
     - {{- if eq $solver "dns01" }}
-        dns01:
-          cloudflare:
-            apiTokenSecretRef:
-              name: cloudflare-api-token-secret
-              key: api-token
+        {{- include "cert-manager-issuers.dns01Solver" (dict "provider" $provider "values" .Values) | nindent 8 }}
       {{- else }}
         {{- include "cert-manager-issuers.httpSolver" (dict "gatewayEnabled" $gatewayEnabled "exposeIngress" $exposeIngress) | nindent 8 }}
       {{- end }}

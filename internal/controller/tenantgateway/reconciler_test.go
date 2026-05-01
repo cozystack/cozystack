@@ -2110,6 +2110,133 @@ func ptrSectionName(s string) *gatewayv1.SectionName {
 	return &v
 }
 
+// TestReconcile_RefusesToTakeOverForeignGateway pins the safety
+// guard against silently rewriting a pre-existing Gateway that
+// happens to share the TenantGateway-derived name. Without the
+// ownerRef check, an operator who hand-crafted a Gateway named
+// `cozystack` in the tenant namespace would lose its config (spec
+// rewritten) AND have no cascade-delete chain back to the
+// TenantGateway (no OwnerReference established), leaving an orphan
+// after the TenantGateway is deleted.
+func TestReconcile_RefusesToTakeOverForeignGateway(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	// Foreign Gateway with the same NamespacedName but no OwnerReference.
+	foreign := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				"author":              "operator-by-hand",
+				"some.other/operator": "controlled",
+			},
+		},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: gatewayv1.ObjectName("not-cilium"),
+			Listeners: []gatewayv1.Listener{
+				{Name: "operator-port", Port: 9999, Protocol: gatewayv1.HTTPProtocolType},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, foreign).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	_, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	})
+	if err == nil {
+		t.Fatalf("expected Reconcile to surface a takeover-refusal error, got nil")
+	}
+	if !strings.Contains(err.Error(), "not owned by TenantGateway") {
+		t.Errorf("expected error mentioning ownership refusal, got: %v", err)
+	}
+
+	// The foreign Gateway must NOT be modified.
+	got := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	if string(got.Spec.GatewayClassName) != "not-cilium" {
+		t.Errorf("foreign Gateway.Spec was overwritten: gatewayClassName=%q, want not-cilium", got.Spec.GatewayClassName)
+	}
+	if len(got.Spec.Listeners) != 1 || got.Spec.Listeners[0].Port != 9999 {
+		t.Errorf("foreign Gateway listeners were overwritten: %+v", got.Spec.Listeners)
+	}
+	if got.Labels["author"] != "operator-by-hand" {
+		t.Errorf("foreign label scrubbed: labels=%+v", got.Labels)
+	}
+
+	// Status condition should reflect the failure (Ready=False with
+	// the takeover error captured).
+	updated := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, updated); err != nil {
+		t.Fatalf("get TenantGateway: %v", err)
+	}
+	hasReadyFalse := false
+	for _, cond := range updated.Status.Conditions {
+		if cond.Type == "Ready" && cond.Status == metav1.ConditionFalse && cond.Reason == "ReconcileError" {
+			hasReadyFalse = true
+			break
+		}
+	}
+	if !hasReadyFalse {
+		t.Errorf("expected Ready=False ReconcileError on TenantGateway status, got %+v", updated.Status.Conditions)
+	}
+}
+
+// TestReconcile_RefusesToTakeOverForeignRedirectRoute pins the same
+// guard for the controller-owned http→https redirect HTTPRoute. A
+// pre-existing HTTPRoute named `<tgw>-http-redirect` could otherwise
+// be silently rewritten and orphaned.
+func TestReconcile_RefusesToTakeOverForeignRedirectRoute(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	foreign := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack-http-redirect",
+			Namespace: "tenant-foo",
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"operator.foo.example.com"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, foreign).WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	_, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	})
+	if err == nil {
+		t.Fatalf("expected Reconcile to surface a takeover-refusal error, got nil")
+	}
+	if !strings.Contains(err.Error(), "not owned by TenantGateway") {
+		t.Errorf("expected error mentioning ownership refusal, got: %v", err)
+	}
+
+	// The foreign HTTPRoute hostnames must be preserved.
+	got := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get HTTPRoute: %v", err)
+	}
+	if len(got.Spec.Hostnames) != 1 || got.Spec.Hostnames[0] != "operator.foo.example.com" {
+		t.Errorf("foreign HTTPRoute spec overwritten: %+v", got.Spec)
+	}
+}
+
 // TestReconcile_OwnerReferencesOnDownstream pins the cascade-delete
 // contract for every controller-owned downstream resource: Issuer,
 // wildcard Certificate (DNS-01 mode), per-listener Certificate

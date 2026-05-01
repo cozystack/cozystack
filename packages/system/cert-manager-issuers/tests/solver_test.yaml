@@ -101,3 +101,100 @@ tests:
       - documentIndex: 0
         notExists:
           path: spec.acme.solvers[0].http01.gatewayHTTPRoute
+
+  # The DNS-01 provider matrix below pins the contract introduced by
+  # the platform-level dns01 wiring (publishing.certificates.dns01.*
+  # in packages/core/platform/values.yaml). Without these, a refactor
+  # could regress the ClusterIssuer template back to a cloudflare-
+  # hardcoded path while the per-tenant Issuer renderer (controller)
+  # honored the new provider — every legacy ingress flow would
+  # silently fail cert issuance.
+
+  - it: solver=dns01 + provider=route53 renders Route53 solver
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: route53
+        dns01-route53-region: us-east-1
+        dns01-route53-access-key-id: AKIAIOSFODNN7EXAMPLE
+        dns01-route53-secret-name: aws-iam-secret
+        dns01-route53-secret-key: secret-access-key
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.route53.region
+          value: us-east-1
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.route53.accessKeyID
+          value: AKIAIOSFODNN7EXAMPLE
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.route53.secretAccessKeySecretRef.name
+          value: aws-iam-secret
+      - documentIndex: 0
+        notExists:
+          path: spec.acme.solvers[0].dns01.cloudflare
+
+  - it: solver=dns01 + provider=route53 without region fails render
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: route53
+    asserts:
+      - failedTemplate:
+          errorMessage: "packages/system/cert-manager-issuers: _cluster.dns01-route53-region is required when dns01-provider=route53. Set publishing.certificates.dns01.route53.region on the platform."
+
+  - it: solver=dns01 + provider=digitalocean renders DigitalOcean solver
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: digitalocean
+        dns01-digitalocean-secret-name: do-api-token
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.digitalocean.tokenSecretRef.name
+          value: do-api-token
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.digitalocean.tokenSecretRef.key
+          value: access-token
+      - documentIndex: 0
+        notExists:
+          path: spec.acme.solvers[0].dns01.cloudflare
+
+  - it: solver=dns01 + provider=rfc2136 renders RFC2136 solver
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: rfc2136
+        dns01-rfc2136-nameserver: ns1.example.test:53
+        dns01-rfc2136-tsig-key-name: letsencrypt.example.test.
+        dns01-rfc2136-secret-name: tsig-secret
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.rfc2136.nameserver
+          value: ns1.example.test:53
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.rfc2136.tsigKeyName
+          value: letsencrypt.example.test.
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.rfc2136.tsigAlgorithm
+          value: HMACSHA256
+      - documentIndex: 0
+        equal:
+          path: spec.acme.solvers[0].dns01.rfc2136.tsigSecretSecretRef.name
+          value: tsig-secret
+
+  - it: solver=dns01 + unknown provider fails render with explicit message
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: linode
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/system/cert-manager-issuers: unsupported dns01-provider="linode". Supported values: cloudflare, route53, digitalocean, rfc2136.'

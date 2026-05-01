@@ -59,6 +59,22 @@ stringData:
       extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}
       keycloak-internal-url: {{ .Values.authentication.oidc.keycloakInternalUrl | quote }}
       expose-services: {{ .Values.publishing.exposedServices | join "," | quote }}
+      {{- /*
+        expose-ingress carries two semantically distinct values that
+        happen to coincide in the default cozystack deployment:
+          1. The ingressClassName the per-system app (dashboard,
+             cozystack-api, etc.) sets on its Ingress resource when
+             gateway-enabled=false.
+          2. The namespace of the Gateway that the same per-system
+             app's HTTPRoute / TLSRoute parentRefs target when
+             gateway-enabled=true (publishing tenant namespace).
+        Default `tenant-root` satisfies both because the ingress-nginx
+        controller and the publishing Gateway both live in tenant-root.
+        If a future deployment splits these (e.g. an ingress controller
+        in cozy-ingress vs a publishing Gateway in tenant-root), the
+        per-system templates need a separate _cluster.gateway-namespace
+        key. Documented here as a known limitation.
+      */}}
       expose-ingress: {{ .Values.publishing.ingressName | quote }}
       expose-external-ips: {{ .Values.publishing.externalIPs | join "," | quote }}
       expose-mode: {{ .Values.publishing.exposure | default "externalIPs" | quote }}

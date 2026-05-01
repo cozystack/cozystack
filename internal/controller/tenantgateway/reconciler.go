@@ -201,6 +201,18 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 	case getErr != nil:
 		return fmt.Errorf("get redirect HTTPRoute: %w", getErr)
 	default:
+		// Refuse to silently take over a pre-existing HTTPRoute that
+		// shares our derived name but is not owned by this
+		// TenantGateway. Without this guard, an operator who
+		// hand-crafted a `<tgw>-http-redirect` route loses their
+		// configuration on the first reconcile (we'd overwrite
+		// `existing.Spec` and never set the OwnerReference, so
+		// `kubectl delete tenantgateway` later wouldn't cascade
+		// the route either — leaving it orphaned with mutated
+		// content). Surface the conflict instead.
+		if !ownedByTenantGateway(existing.OwnerReferences, tgw) {
+			return fmt.Errorf("httproute %s/%s exists but is not owned by TenantGateway %s; refusing to take over (delete it manually if you want the controller to manage this route)", desired.Namespace, desired.Name, tgw.Name)
+		}
 		if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 			return nil
 		}
@@ -449,6 +461,17 @@ func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.
 	case getErr != nil:
 		return fmt.Errorf("get Gateway: %w", getErr)
 	default:
+		// Refuse to silently take over a Gateway that shares our
+		// derived name but is not owned by this TenantGateway. An
+		// operator (or another controller) may have created a
+		// Gateway in this namespace with the same name; absent
+		// this guard we'd overwrite its spec on first reconcile
+		// and never establish the OwnerReference, leaving an
+		// orphan that doesn't cascade-delete with the
+		// TenantGateway.
+		if !ownedByTenantGateway(existing.OwnerReferences, tgw) {
+			return fmt.Errorf("gateway %s/%s exists but is not owned by TenantGateway %s; refusing to take over (delete it manually if you want the controller to manage this Gateway)", tgw.Namespace, tgw.Name, tgw.Name)
+		}
 		// Merge labels: keep keys other actors (Cilium operator,
 		// kubectl label, future controllers) wrote, only add /
 		// overwrite the keys this controller owns. Wholesale
