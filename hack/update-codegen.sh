@@ -19,8 +19,12 @@ set -o nounset
 set -o pipefail
 
 SCRIPT_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
+# Pinned at k8s.io/code-generator@v0.34.1 — the codegen-drift workflow's
+# pre-fetch step greps this file for the literal `code-generator@vX.Y.Z`
+# substring, so keep both this comment and the CODEGEN_PKG default below
+# in sync with CODEGEN_VERSION when bumping.
 CODEGEN_VERSION=v0.34.1
-CODEGEN_PKG=${CODEGEN_PKG:-~/go/pkg/mod/k8s.io/code-generator@${CODEGEN_VERSION}}
+CODEGEN_PKG=${CODEGEN_PKG:-~/go/pkg/mod/k8s.io/code-generator@v0.34.1}
 
 # Pre-fetch the code-generator module if it is not yet in the local
 # module cache. We intentionally do not declare k8s.io/code-generator
