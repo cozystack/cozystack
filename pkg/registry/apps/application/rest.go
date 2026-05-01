@@ -181,10 +181,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
-	// Run the genericapiserver-supplied admission chain (mutating + validating
-	// webhooks and ValidatingAdmissionPolicies) before persisting anything.
-	// Custom REST handlers must invoke this hook explicitly — unlike
-	// genericregistry.Store, which wires it automatically.
+	// Run the genericapiserver-supplied validating admission chain
+	// (validating webhooks + ValidatingAdmissionPolicies) before
+	// persisting anything. Mutating webhooks already ran upstream in
+	// genericapiserver/handlers.create before this REST handler was
+	// invoked; createValidation is documented as validate-only (must
+	// not transform the object). Custom REST handlers must invoke
+	// this hook explicitly — unlike genericregistry.Store, which
+	// wires it automatically.
 	if createValidation != nil {
 		if err := createValidation(ctx, obj); err != nil {
 			return nil, err
