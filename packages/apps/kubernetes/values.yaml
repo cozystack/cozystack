@@ -25,6 +25,14 @@ storageClass: replicated
 ## @typedef {struct} GPU - GPU configuration.
 ## @field {string} name - Name of GPU, such as "nvidia.com/AD102GL_L40S".
 
+## @typedef {struct} Kubelet - Kubelet resource reservations for worker nodes.
+## @field {string} [systemReservedMemory] - Memory reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedMemory] - Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [systemReservedCpu] - CPU reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedCpu] - CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [evictionHardMemory]="7%" - Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
+## @field {string} [evictionSoftMemory]="10%" - Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
+
 ## @typedef {struct} NodeGroup - Worker node group configuration.
 ## @field {int} minReplicas=0 - Minimum number of replicas.
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
@@ -34,6 +42,7 @@ storageClass: replicated
 ## @field {[]string} roles - List of node roles.
 ## @field {Resources} resources - CPU and memory resources for each worker node.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
+## @field {Kubelet} [kubelet] - Kubelet resource reservations for this node group.
 
 ## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map.
 nodeGroups:
@@ -47,6 +56,7 @@ nodeGroups:
     - ingress-nginx
     resources: {}
     gpus: []
+    kubelet: {}
 
 ##
 ## @enum {string} Version

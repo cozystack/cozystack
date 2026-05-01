@@ -22,7 +22,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	StorageClass string `json:"storageClass"`
 	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
+	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
@@ -208,6 +208,23 @@ type KonnectivityServer struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
+type Kubelet struct {
+	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
+	// +kubebuilder:default:="7%"
+	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
+	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
+	// +kubebuilder:default:="10%"
+	EvictionSoftMemory string `json:"evictionSoftMemory,omitempty"`
+	// CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
+	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
+	// CPU reserved for host OS. Auto-computed from instanceType if empty.
+	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
+	// Memory reserved for host OS. Auto-computed from instanceType if empty.
+	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
+}
+
 type MonitoringAgentsAddon struct {
 	// Enable monitoring agents.
 	// +kubebuilder:default:=false
@@ -226,6 +243,8 @@ type NodeGroup struct {
 	// Virtual machine instance type.
 	// +kubebuilder:default:="u1.medium"
 	InstanceType string `json:"instanceType"`
+	// Kubelet resource reservations for this node group.
+	Kubelet Kubelet `json:"kubelet,omitempty"`
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`

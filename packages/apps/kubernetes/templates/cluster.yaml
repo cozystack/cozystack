@@ -235,6 +235,173 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 {{- range $groupName, $group := .Values.nodeGroups }}
+{{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
+{{- $instanceType := dict }}
+{{- if $group.instanceType }}
+{{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
+{{-   if not $instanceType }}
+{{-     fail (printf "nodeGroup %s: specified instanceType %q not found in cluster" $groupName $group.instanceType) }}
+{{-   end }}
+{{- end }}
+{{/* Compute kubelet reservations: explicit resources.memory/cpu wins over instanceType spec.
+     Auto-computed system/kube reserved memory = 5% of effective memory, clamped to [256Mi, 1Gi].
+     Auto-computed system/kube reserved CPU = 5% of effective CPU, clamped to [50m, 500m]. */}}
+{{- $effectiveMemory := "" }}
+{{- if and $group.resources $group.resources.memory }}
+{{-   $effectiveMemory = $group.resources.memory | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
+{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
+{{- end }}
+{{- $effectiveCpu := "" }}
+{{- if and $group.resources $group.resources.cpu }}
+{{-   $effectiveCpu = $group.resources.cpu | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
+{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
+{{- end }}
+{{- $autoReservedMi := 256 }}
+{{- if $effectiveMemory }}
+{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
+{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
+{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
+{{- end }}
+{{- $autoReservedMillicores := 50 }}
+{{- if $effectiveCpu }}
+{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
+{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
+{{- end }}
+{{- $kubeletOverride := $group.kubelet | default dict }}
+{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
+{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+{{/* Validate reservation field formats.
+  These guards check the USER-SUPPLIED value (from values.yaml via
+  $kubeletOverride), not the resolved/computed default — the default is
+  always valid by construction.  The eviction threshold validation below
+  differs: it validates the RESOLVED values (user-supplied or default). */}}
+{{- $validations := list
+      (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
+      (dict "key" "kubeReservedMemory"   "value" $kubeletOverride.kubeReservedMemory   "pattern" `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` "hint" "a valid Kubernetes memory quantity (e.g. 128Mi, 1Gi, 1e9, 500e6)")
+      (dict "key" "systemReservedCpu"    "value" $kubeletOverride.systemReservedCpu    "pattern" `^([0-9]+m|[0-9]+(\.[0-9]+)?)$`                                                              "hint" "a valid Kubernetes CPU quantity (integer millicores like 100m, or decimal cores like 0.5, 1)")
+      (dict "key" "kubeReservedCpu"      "value" $kubeletOverride.kubeReservedCpu      "pattern" `^([0-9]+m|[0-9]+(\.[0-9]+)?)$`                                                              "hint" "a valid Kubernetes CPU quantity (integer millicores like 100m, or decimal cores like 0.5, 1)")
+}}
+{{- range $validations }}
+{{-   if and .value (not (regexMatch .pattern (.value | toString))) }}
+{{-     fail (printf "nodeGroup %s: invalid %s value %q — must be %s" $groupName .key (.value | toString) .hint) }}
+{{-   end }}
+{{- end }}
+{{/* Validate that user-supplied reservation values are positive (non-zero) */}}
+{{- range $_, $entry := list (dict "key" "systemReservedMemory" "value" $kubeletOverride.systemReservedMemory) (dict "key" "kubeReservedMemory" "value" $kubeletOverride.kubeReservedMemory) }}
+{{-   if $entry.value }}
+{{-     $bytes := include "cozy-lib.resources.toFloat" ($entry.value | toString) | float64 }}
+{{-     if le $bytes 0.0 }}
+{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key ($entry.value | toString)) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- range $_, $entry := list (dict "key" "systemReservedCpu" "value" $kubeletOverride.systemReservedCpu) (dict "key" "kubeReservedCpu" "value" $kubeletOverride.kubeReservedCpu) }}
+{{-   if $entry.value }}
+{{-     $cpuMillis := include "kubernetes.cpuToMillicores" $entry.value | float64 }}
+{{-     if le $cpuMillis 0.0 }}
+{{-       fail (printf "nodeGroup %s: %s must be a positive value, got %s" $groupName $entry.key ($entry.value | toString)) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{/* Validate absolute eviction threshold formats before converting */}}
+{{- if not (hasSuffix "%" $evictionHardMemory) }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionHardMemory) }}
+{{-     fail (printf "nodeGroup %s: invalid evictionHardMemory value %q — must be a percentage (e.g. 7%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi, 1e9)" $groupName $evictionHardMemory) }}
+{{-   end }}
+{{- end }}
+{{- if not (hasSuffix "%" $evictionSoftMemory) }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$` $evictionSoftMemory) }}
+{{-     fail (printf "nodeGroup %s: invalid evictionSoftMemory value %q — must be a percentage (e.g. 10%%) or a valid Kubernetes memory quantity (e.g. 500Mi, 1Gi, 1e9)" $groupName $evictionSoftMemory) }}
+{{-   end }}
+{{- end }}
+{{- if and (hasSuffix "%" $evictionHardMemory) (hasSuffix "%" $evictionSoftMemory) }}
+{{-   $hardPctStr := trimSuffix "%" $evictionHardMemory }}
+{{-   $softPctStr := trimSuffix "%" $evictionSoftMemory }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?$` $hardPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage value %q is not a valid number" $groupName $hardPctStr) }}
+{{-   end }}
+{{-   if not (regexMatch `^[0-9]+(\.[0-9]+)?$` $softPctStr) }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage value %q is not a valid number" $groupName $softPctStr) }}
+{{-   end }}
+{{-   $hardPct := $hardPctStr | float64 }}
+{{-   $softPct := $softPctStr | float64 }}
+{{-   if le $hardPct 0.0 }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $hardPctStr) }}
+{{-   end }}
+{{-   if gt $hardPct 100.0 }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $hardPctStr) }}
+{{-   end }}
+{{-   if le $softPct 0.0 }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $softPctStr) }}
+{{-   end }}
+{{-   if gt $softPct 100.0 }}
+{{-     fail (printf "nodeGroup %s: evictionSoftMemory percentage must be greater than 0 and at most 100, got %s%%" $groupName $softPctStr) }}
+{{-   end }}
+{{-   if ge $hardPct $softPct }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
+{{-   end }}
+{{- else if and (not (hasSuffix "%" $evictionHardMemory)) (not (hasSuffix "%" $evictionSoftMemory)) }}
+{{-   $hardBytes := include "cozy-lib.resources.toFloat" $evictionHardMemory | float64 }}
+{{-   $softBytes := include "cozy-lib.resources.toFloat" $evictionSoftMemory | float64 }}
+{{-   if ge $hardBytes $softBytes }}
+{{-     fail (printf "nodeGroup %s: evictionHardMemory (%s) must be strictly less than evictionSoftMemory (%s)" $groupName $evictionHardMemory $evictionSoftMemory) }}
+{{-   end }}
+{{- else }}
+{{-   fail (printf "nodeGroup %s: evictionHardMemory (%s) and evictionSoftMemory (%s) must use the same unit type (both percentage or both absolute)" $groupName $evictionHardMemory $evictionSoftMemory) }}
+{{- end }}
+{{/* Resolve eviction hard threshold to bytes for arithmetic.
+     Percentage is relative to effective node memory; absolute values are used as-is. */}}
+{{- $evictionHardBytes := 0.0 }}
+{{- if $effectiveMemory }}
+{{-   if hasSuffix "%" $evictionHardMemory }}
+{{-     $evictionPct := trimSuffix "%" $evictionHardMemory | float64 }}
+{{-     $evictionHardBytes = mulf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) (divf $evictionPct 100.0) }}
+{{-   else }}
+{{-     $evictionHardBytes = include "cozy-lib.resources.toFloat" $evictionHardMemory | float64 }}
+{{-   end }}
+{{- end }}
+{{/* Validate that total reserved memory (system + kube + eviction) does not exceed effective node memory */}}
+{{- if $effectiveMemory }}
+{{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
+{{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
+{{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
+{{-   $effectiveMemBytes := include "cozy-lib.resources.toFloat" $effectiveMemory | float64 }}
+{{-   if ge $totalReservedBytes $effectiveMemBytes }}
+{{-     fail (printf "nodeGroup %s: total reserved memory (systemReservedMemory=%s + kubeReservedMemory=%s + evictionHardMemory=%s) must be less than effective node memory (%s)" $groupName $systemReservedMemory $kubeReservedMemory $evictionHardMemory $effectiveMemory) }}
+{{-   end }}
+{{- end }}
+{{/* Validate that total reserved CPU does not exceed effective node CPU */}}
+{{- if $effectiveCpu }}
+{{-   $sysCpuMillis := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
+{{-   $kubeCpuMillis := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
+{{-   $totalCpuMillis := addf $sysCpuMillis $kubeCpuMillis }}
+{{-   $effectiveCpuMillicoresV := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $effectiveCpuMillis := float64 $effectiveCpuMillicoresV }}
+{{-   if ge $totalCpuMillis $effectiveCpuMillis }}
+{{-     fail (printf "nodeGroup %s: total reserved CPU (systemReservedCpu=%s + kubeReservedCpu=%s) must be less than effective node CPU (%s cores)" $groupName $systemReservedCpu $kubeReservedCpu $effectiveCpu) }}
+{{-   end }}
+{{- end }}
+{{/* Guard: explicit kubelet overrides require effective memory for validation */}}
+{{- if not $effectiveMemory }}
+{{-   $hasOverride := or $kubeletOverride.systemReservedMemory $kubeletOverride.kubeReservedMemory $kubeletOverride.evictionHardMemory $kubeletOverride.evictionSoftMemory }}
+{{-   if $hasOverride }}
+{{-     fail (printf "nodeGroup %s: kubelet memory reservations require effective memory to validate — set resources.memory or instanceType" $groupName) }}
+{{-   end }}
+{{- end }}
+{{/* Guard: explicit kubelet CPU overrides require effective CPU for validation */}}
+{{- if not $effectiveCpu }}
+{{-   $hasCpuOverride := or $kubeletOverride.systemReservedCpu $kubeletOverride.kubeReservedCpu }}
+{{-   if $hasCpuOverride }}
+{{-     fail (printf "nodeGroup %s: cannot validate kubelet CPU reservations without effective CPU — set resources.cpu or a valid instanceType" $groupName) }}
+{{-   end }}
+{{- end }}
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
 kind: KubeadmConfigTemplate
@@ -305,8 +472,16 @@ spec:
       - systemctl start containerd.service
       joinConfiguration:
         nodeRegistration:
-          kubeletExtraArgs: {}
-          # Ignore this for 1.31
+          kubeletExtraArgs:
+            system-reserved: "memory={{ $systemReservedMemory }},cpu={{ $systemReservedCpu }}"
+            kube-reserved: "memory={{ $kubeReservedMemory }},cpu={{ $kubeReservedCpu }}"
+            eviction-hard: "memory.available<{{ $evictionHardMemory }},nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
+            eviction-soft: "memory.available<{{ $evictionSoftMemory }},nodefs.available<15%,imagefs.available<20%"
+            eviction-soft-grace-period: "memory.available=1m30s,nodefs.available=1m30s,imagefs.available=1m30s"
+            # 256Mi ensures meaningful reclamation per eviction cycle while being
+            # proportional to the 256Mi-1Gi auto-computed reservation range.
+            eviction-minimum-reclaim: "memory.available=256Mi"
+            enforce-node-allocatable: "pods"
           ignorePreflightErrors:
           - FileExisting-conntrack
         discovery:
@@ -332,14 +507,6 @@ spec:
   template:
     {{- $kubevirtmachinetemplate | nindent 4 }}
 ---
-{{- $instanceType := dict }}
-{{- if $group.instanceType }}
-{{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
-{{-   if not $instanceType }}
-{{-     fail (printf "Specified instancetype not exists in cluster: %s" $group.instanceType) }}
-{{-   end }}
-{{- end }}
-
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineDeployment
 metadata:
@@ -348,15 +515,22 @@ metadata:
   annotations:
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "{{ $group.minReplicas }}"
     cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "{{ $group.maxReplicas }}"
-    {{- if and $group.resources $group.resources.memory }}
-    capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $group.resources.memory }}"
-    {{- else }}
-    capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $instanceType.spec.memory.guest }}"
+    {{- if $effectiveMemory }}
+    {{-   $sysBytes := include "cozy-lib.resources.toFloat" $systemReservedMemory | float64 }}
+    {{-   $kubeBytes := include "cozy-lib.resources.toFloat" $kubeReservedMemory | float64 }}
+    {{-   $totalReservedBytes := addf (addf $sysBytes $kubeBytes) $evictionHardBytes }}
+    {{-   $allocatableBytes := subf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) $totalReservedBytes }}
+    {{-   $allocatableMi := divf $allocatableBytes 1048576.0 | floor }}
+    capacity.cluster-autoscaler.kubernetes.io/memory: "{{ $allocatableMi }}Mi"
     {{- end }}
-    {{- if and $group.resources $group.resources.cpu }}
-    capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $group.resources.cpu }}"
-    {{- else }}
-    capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $instanceType.spec.cpu.guest }}"
+    {{- if $effectiveCpu }}
+    {{-   $sysCpuMillisA := include "kubernetes.cpuToMillicores" $systemReservedCpu | float64 }}
+    {{-   $kubeCpuMillisA := include "kubernetes.cpuToMillicores" $kubeReservedCpu | float64 }}
+    {{-   $effectiveCpuMillicoresA := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+    {{-   $effectiveCpuMillisA := float64 $effectiveCpuMillicoresA }}
+    {{-   $allocatableCpuMillis := subf $effectiveCpuMillisA (addf $sysCpuMillisA $kubeCpuMillisA) }}
+    {{-   $allocatableCpuMillisInt := $allocatableCpuMillis | ceil | int }}
+    capacity.cluster-autoscaler.kubernetes.io/cpu: "{{ $allocatableCpuMillisInt }}m"
     {{- end }}
 spec:
   clusterName: {{ $.Release.Name }}
