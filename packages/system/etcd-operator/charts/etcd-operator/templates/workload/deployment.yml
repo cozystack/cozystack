@@ -66,6 +66,8 @@ spec:
               fieldRef:
                 apiVersion: v1
                 fieldPath: metadata.namespace
+          - name: OPERATOR_IMAGE
+            value: {{ .Values.etcdOperator.image.repository }}:{{ .Values.etcdOperator.image.tag | default .Chart.AppVersion }}
           volumeMounts:
             - mountPath: /tmp/k8s-webhook-server/serving-certs
               name: cert

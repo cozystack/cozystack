@@ -60,6 +60,63 @@
           "x-kubernetes-int-or-string": true
         }
       }
+    },
+    "backup": {
+      "description": "Backup configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "destinationPath": {
+          "description": "Destination path for backups (e.g. s3://bucket/path/).",
+          "type": "string",
+          "default": ""
+        },
+        "enabled": {
+          "description": "Enable scheduled S3 backups.",
+          "type": "boolean",
+          "default": false
+        },
+        "endpointURL": {
+          "description": "S3 endpoint URL for uploads.",
+          "type": "string",
+          "default": ""
+        },
+        "failedJobsHistoryLimit": {
+          "description": "Number of failed backup jobs to retain.",
+          "type": "integer",
+          "default": 1
+        },
+        "forcePathStyle": {
+          "description": "Use path-style S3 URLs (required for MinIO and most S3-compatible providers).",
+          "type": "boolean",
+          "default": true
+        },
+        "region": {
+          "description": "S3 region.",
+          "type": "string",
+          "default": ""
+        },
+        "s3AccessKey": {
+          "description": "Access key for S3 authentication.",
+          "type": "string",
+          "default": ""
+        },
+        "s3SecretKey": {
+          "description": "Secret key for S3 authentication.",
+          "type": "string",
+          "default": ""
+        },
+        "schedule": {
+          "description": "Cron schedule for automated backups.",
+          "type": "string",
+          "default": "0 2 * * *"
+        },
+        "successfulJobsHistoryLimit": {
+          "description": "Number of successful backup jobs to retain.",
+          "type": "integer",
+          "default": 3
+        }
+      }
     }
   }
 }

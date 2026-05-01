@@ -19,3 +19,32 @@ replicas: 3
 resources:
   cpu: 1000m
   memory: 512Mi
+
+##
+## @section Backup parameters
+##
+
+## @typedef {struct} Backup - Backup configuration.
+## @field {bool} [enabled] - Enable scheduled S3 backups.
+## @field {string} [schedule] - Cron schedule for automated backups.
+## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
+## @field {string} [endpointURL] - S3 endpoint URL for uploads.
+## @field {string} [region] - S3 region.
+## @field {bool} [forcePathStyle] - Use path-style S3 URLs (required for MinIO and most S3-compatible providers).
+## @field {string} [s3AccessKey] - Access key for S3 authentication.
+## @field {string} [s3SecretKey] - Secret key for S3 authentication.
+## @field {int} [successfulJobsHistoryLimit] - Number of successful backup jobs to retain.
+## @field {int} [failedJobsHistoryLimit] - Number of failed backup jobs to retain.
+
+## @param {Backup} backup - Backup configuration.
+backup:
+  enabled: false
+  schedule: "0 2 * * *"
+  destinationPath: ""
+  endpointURL: ""
+  region: ""
+  forcePathStyle: true
+  s3AccessKey: ""
+  s3SecretKey: ""
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
