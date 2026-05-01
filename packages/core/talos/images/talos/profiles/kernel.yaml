@@ -3,24 +3,24 @@
 arch: amd64
 platform: metal
 secureboot: false
-version: v1.12.6
+version: v1.12.7
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
   initramfs:
     path: /usr/install/amd64/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer:v1.12.6"
+    imageRef: "ghcr.io/siderolabs/installer:v1.12.7"
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/amd-ucode:20260309@sha256:716cd5350f77e7b10eebef88d8abdd0c32f2d929acd2bceac7ea33c0aac3b1a7
-    - imageRef: ghcr.io/siderolabs/amdgpu:20260309-v1.12.6@sha256:64c7cbcde57a69742c76e3899385f5cd6af1238b0aba094962197fd4098838bd
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20260309@sha256:b17b87d9a20c806cf186e95ab351b771ffd622a35afcbd41eb07d4642680a231
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20260309@sha256:eee55c66cb23fe93380b83909af2cd4ede970205b861c0aa147404c88e8c7f65
-    - imageRef: ghcr.io/siderolabs/i915:20260309-v1.12.6@sha256:6d150e23b2ca98ed34fca2b0510bc97e912f95839926bf6e02c55952e15387c2
+    - imageRef: ghcr.io/siderolabs/amd-ucode:20260410@sha256:d5a0256846700ebb4fd2dba0107cfd944f6689d9bf96f47ab9dc35ef1e225179
+    - imageRef: ghcr.io/siderolabs/amdgpu:20260410-v1.12.7@sha256:56f15250504024879b7088902c18682332ad90ba1572473e62524f4e79e85684
+    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20260410@sha256:5a481b38c305d2292e7b6e06750ec704ac1229602c75cf80535ff3561f0b29c3
+    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20260410@sha256:ef1cbec222fb2d2ae0db9c025e4b9b6b875d965d49ebb71d7ad9f0713133c299
+    - imageRef: ghcr.io/siderolabs/i915:20260410-v1.12.7@sha256:d7b5fe4ee60a3afbb4e858b49956d9559c1f7a38d42e1df63e847189b149c6da
     - imageRef: ghcr.io/siderolabs/intel-ucode:20260227@sha256:6112f6426a7081727545f7c33dcf2a89ff672494847b180380b4c58f3544a7b2
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20260309@sha256:b97cfde1e252412ba594a16302a3505f80aee1f105e2aa76b3bdf3b9dcc56cab
-    - imageRef: ghcr.io/siderolabs/drbd:9.2.16-v1.12.6@sha256:f524139c5be4626d7f2b6bd47745ce93648f3f1ab2b681fb00f8ab97ec2c19a3
-    - imageRef: ghcr.io/siderolabs/zfs:2.4.1-v1.12.6@sha256:059d39f1d2d6dde263dbd8062207d0aa68805bb0748c087494791c7f985b87d1
+    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20260410@sha256:83593864ae91b16e9962258b5f0bd777d4c81846ece206bb84e9c37be023715c
+    - imageRef: ghcr.io/siderolabs/drbd:9.2.16-v1.12.7@sha256:be407c20d509a1a445310636b0508008a8e5cd8e1532fbd11e5d131ae2fe9dca
+    - imageRef: ghcr.io/siderolabs/zfs:2.4.1-v1.12.7@sha256:1d98138c6422e52b850da99a68e918b721b4358eed8c4daa1c9059222175127c
 output:
   kind: kernel
   imageOptions: {}
