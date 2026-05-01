@@ -565,6 +565,16 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		},
 	}
 
+	// HTTPS listeners restrict route attachment to HTTPRoute only —
+	// Layer 7 (cozystack-route-hostname-policy VAP) currently gates
+	// HTTPRoute and TLSRoute. With Gateway API v1.5.1 experimental
+	// CRDs in scope, GRPCRoute / TCPRoute / UDPRoute could otherwise
+	// attach by hostname and bypass the apex hostname check.
+	httpsAllowedRoutes := allowedRoutes.DeepCopy()
+	httpsAllowedRoutes.Kinds = []gatewayv1.RouteGroupKind{
+		{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
+	}
+
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 {
 		certName := gatewayCertificateName(tgw)
 		wildcardHost := gatewayv1.Hostname("*." + tgw.Spec.Apex)
@@ -581,7 +591,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: allowedRoutes,
+				AllowedRoutes: httpsAllowedRoutes,
 			},
 			gatewayv1.Listener{
 				Name:     "https-apex",
@@ -594,7 +604,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: allowedRoutes,
+				AllowedRoutes: httpsAllowedRoutes,
 			},
 		)
 	} else {
@@ -616,7 +626,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: allowedRoutes,
+				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
 			})
 		}
 	}
