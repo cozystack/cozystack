@@ -21,14 +21,16 @@ Adding a new published app is purely a matter of deploying its HTTPRoute — no 
 
 ### Opt-in — DNS-01
 
-Set `publishing.certificates.solver: dns01` and pick a provider:
+Set `publishing.certificates.solver: dns01` and configure the provider under `publishing.certificates.dns01.*` in the platform chart values. Each provider reads its own sub-block; others are ignored.
 
-| Provider     | `_cluster.dns01-provider` | Required keys                                                                  |
-| ------------ | ------------------------- | ------------------------------------------------------------------------------ |
-| Cloudflare   | `cloudflare` (default)    | `dns01-cloudflare-secret-name`, `dns01-cloudflare-secret-key`                  |
-| AWS Route53  | `route53`                 | `dns01-route53-region`, `dns01-route53-secret-name`                            |
-| DigitalOcean | `digitalocean`            | `dns01-digitalocean-secret-name`                                               |
-| RFC 2136     | `rfc2136`                 | `dns01-rfc2136-nameserver`, `dns01-rfc2136-tsig-key-name`, `dns01-rfc2136-secret-name` |
+| Provider     | `publishing.certificates.dns01.provider` | Required `publishing.certificates.dns01.<provider>` keys                                  |
+| ------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Cloudflare   | `cloudflare` (default)                   | `cloudflare.secretName`, `cloudflare.secretKey`                                           |
+| AWS Route53  | `route53`                                | `route53.region`, `route53.secretName` (and `route53.accessKeyID` if not using IRSA)      |
+| DigitalOcean | `digitalocean`                           | `digitalocean.secretName`                                                                 |
+| RFC 2136     | `rfc2136`                                | `rfc2136.nameserver`, `rfc2136.tsigKeyName`, `rfc2136.secretName`                         |
+
+The platform chart writes those values into `_cluster.dns01-*` keys consumed by the per-tenant gateway chart, which renders them onto the `TenantGateway` CR. Each provider sub-block carries safe defaults for secret-key field names (`api-token`, `secret-access-key`, `access-token`, `tsig-secret-key`) so the typical opt-in path is `solver: dns01` plus the provider-specific `secretName` (and `region` for route53 / `nameserver`+`tsigKeyName` for rfc2136).
 
 DNS-01 mode renders a single wildcard `Certificate` covering `<apex>` and `*.<apex>`, plus the corresponding `https` (`*.<apex>`) and `https-apex` (`<apex>`) listeners. New apps published under the apex pick up the existing wildcard cert without per-listener provisioning.
 

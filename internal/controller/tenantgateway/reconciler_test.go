@@ -2104,3 +2104,280 @@ func ptrNamespace(ns string) *gatewayv1.Namespace {
 	v := gatewayv1.Namespace(ns)
 	return &v
 }
+
+func ptrSectionName(s string) *gatewayv1.SectionName {
+	v := gatewayv1.SectionName(s)
+	return &v
+}
+
+// TestReconcile_OwnerReferencesOnDownstream pins the cascade-delete
+// contract for every controller-owned downstream resource: Issuer,
+// wildcard Certificate (DNS-01 mode), per-listener Certificate
+// (HTTP-01 mode), and the http→https redirect HTTPRoute. Without an
+// OwnerReference back to the TenantGateway, kubectl delete on the CR
+// leaves orphans behind that keep eating cert-manager rate limits and
+// stale Gateway listener references.
+func TestReconcile_OwnerReferencesOnDownstream(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "harbor", Namespace: "tenant-foo"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"harbor.foo.example.com"},
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{
+						Group:     ptrGroup(gatewayv1.GroupName),
+						Kind:      ptrKind("Gateway"),
+						Name:      "cozystack",
+						Namespace: ptrNamespace("tenant-foo"),
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, route).WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	hasOwnerRef := func(refs []metav1.OwnerReference, ownerName string) bool {
+		for _, ref := range refs {
+			if ref.Kind == "TenantGateway" && ref.Name == ownerName && ref.Controller != nil && *ref.Controller {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Issuer
+	iss := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	if !hasOwnerRef(iss.OwnerReferences, "cozystack") {
+		t.Errorf("Issuer missing controller OwnerReference back to TenantGateway, got %+v", iss.OwnerReferences)
+	}
+
+	// Per-listener Certificate (HTTP-01 mode renders one per hostname).
+	certList := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certList); err != nil {
+		t.Fatalf("list Certificates: %v", err)
+	}
+	if len(certList.Items) == 0 {
+		t.Fatalf("expected at least one per-listener Certificate, got 0")
+	}
+	for _, cert := range certList.Items {
+		if !hasOwnerRef(cert.OwnerReferences, "cozystack") {
+			t.Errorf("Certificate %s missing controller OwnerReference, got %+v", cert.Name, cert.OwnerReferences)
+		}
+	}
+
+	// HTTP→HTTPS redirect HTTPRoute (controller-owned).
+	redirect := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, redirect); err != nil {
+		t.Fatalf("get redirect HTTPRoute: %v", err)
+	}
+	if !hasOwnerRef(redirect.OwnerReferences, "cozystack") {
+		t.Errorf("redirect HTTPRoute missing controller OwnerReference, got %+v", redirect.OwnerReferences)
+	}
+}
+
+// TestReconcile_DNS01WildcardCertOwnerReference pins the wildcard
+// Certificate's OwnerReference contract, since it's only rendered in
+// DNS-01 mode and the previous test exercises HTTP-01.
+func TestReconcile_DNS01WildcardCertOwnerReference(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cert := &cmv1.Certificate{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-foo"}, cert); err != nil {
+		t.Fatalf("get wildcard Certificate: %v", err)
+	}
+	hasOwner := false
+	for _, ref := range cert.OwnerReferences {
+		if ref.Kind == "TenantGateway" && ref.Name == "cozystack" && ref.Controller != nil && *ref.Controller {
+			hasOwner = true
+			break
+		}
+	}
+	if !hasOwner {
+		t.Errorf("wildcard Certificate missing controller OwnerReference, got %+v", cert.OwnerReferences)
+	}
+}
+
+// TestReconcile_GatewayUpdateRestoresControllerLabel pins the inverse
+// of TestReconcile_GatewayUpdatePreservesForeignLabels: a foreign
+// actor that scrubs a controller-owned label must see it restored on
+// the next reconcile. Without this, an out-of-band tool (or a buggy
+// admission policy) could permanently strip cozystack.io/managed-by
+// and break label-based selectors that depend on it.
+func TestReconcile_GatewayUpdateRestoresControllerLabel(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	// Foreign actor strips the controller-owned managed-by label.
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	delete(gw.Labels, "cozystack.io/managed-by")
+	if err := c.Update(context.TODO(), gw); err != nil {
+		t.Fatalf("update Gateway: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	got := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Gateway after second reconcile: %v", err)
+	}
+	if got.Labels["cozystack.io/managed-by"] != "cozystack-controller" {
+		t.Errorf("controller label not restored after foreign delete: labels=%+v", got.Labels)
+	}
+}
+
+// TestRender_HTTPListener_PinsACMEChallengeNamespace pins the literal
+// const value `acmeChallengeNamespace = "cozy-cert-manager"`. If the
+// platform ever moves cert-manager to a different namespace, this
+// test fails loudly — and it's expected to be updated together with
+// the namespace change so HTTP-01 challenge HTTPRoutes still bind.
+// Without this pin, a refactor could change the string in one place
+// (the cert-manager helm release) without updating the tenant
+// Gateway's http-listener allowedRoutes.
+func TestRender_HTTPListener_PinsACMEChallengeNamespace(t *testing.T) {
+	if acmeChallengeNamespace != "cozy-cert-manager" {
+		t.Errorf("acmeChallengeNamespace=%q, want cozy-cert-manager — if cert-manager moves, update the cozy-cert-manager helm release namespace AND this constant in lockstep, then update this test", acmeChallengeNamespace)
+	}
+}
+
+// TestReconcile_MultiParentRefRouteWritesPerRefStatus pins the
+// per-(ParentRef, ControllerName) status contract: when a single
+// HTTPRoute carries two parentRefs to the same TenantGateway Gateway
+// (different sectionNames), the controller writes one
+// RouteParentStatus entry per parentRef under its ControllerName
+// instead of overwriting one entry on each iteration. Prior behavior
+// kept only whichever parentRef came first in pickAttachingParentRef,
+// silently dropping per-section conflict signals — a regression that
+// would only surface for tenants stitching multiple sectionNames into
+// one HTTPRoute.
+func TestReconcile_MultiParentRefRouteWritesPerRefStatus(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "harbor", Namespace: "tenant-foo"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"harbor.foo.example.com"},
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{
+						Group:       ptrGroup(gatewayv1.GroupName),
+						Kind:        ptrKind("Gateway"),
+						Name:        "cozystack",
+						Namespace:   ptrNamespace("tenant-foo"),
+						SectionName: ptrSectionName("https-harbor-deadbeef"),
+					},
+					{
+						Group:       ptrGroup(gatewayv1.GroupName),
+						Kind:        ptrKind("Gateway"),
+						Name:        "cozystack",
+						Namespace:   ptrNamespace("tenant-foo"),
+						SectionName: ptrSectionName("http"),
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "harbor", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get HTTPRoute: %v", err)
+	}
+	ours := 0
+	sections := map[string]bool{}
+	for _, ps := range got.Status.Parents {
+		if ps.ControllerName != "gateway.cozystack.io/tenantgateway-controller" {
+			continue
+		}
+		ours++
+		if ps.ParentRef.SectionName != nil {
+			sections[string(*ps.ParentRef.SectionName)] = true
+		}
+	}
+	if ours != 2 {
+		t.Errorf("expected 2 RouteParentStatus entries under our ControllerName, got %d (full status=%+v)", ours, got.Status.Parents)
+	}
+	if !sections["https-harbor-deadbeef"] || !sections["http"] {
+		t.Errorf("expected status entries for both sectionNames, got %+v", sections)
+	}
+}

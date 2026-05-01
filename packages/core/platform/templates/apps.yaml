@@ -23,6 +23,37 @@ stringData:
       bundle-name: {{ .Values.bundles.system.variant | quote }}
       solver: {{ .Values.publishing.certificates.solver | quote }}
       issuer-name: {{ .Values.publishing.certificates.issuerName | quote }}
+      {{- /*
+        DNS-01 solver wiring. Read only when solver=dns01, but the
+        keys are written unconditionally so a render-time switch from
+        http01 to dns01 doesn't require chart redeploy of every
+        consumer. Each consumer (extra/gateway, ingress flow) reads
+        the keys it needs and validates per-provider requirements.
+      */}}
+      {{- with .Values.publishing.certificates.dns01 }}
+      dns01-provider: {{ .provider | default "cloudflare" | quote }}
+      {{- with .cloudflare }}
+      dns01-cloudflare-secret-name: {{ .secretName | default "cloudflare-api-token-secret" | quote }}
+      dns01-cloudflare-secret-key: {{ .secretKey | default "api-token" | quote }}
+      {{- end }}
+      {{- with .route53 }}
+      dns01-route53-region: {{ .region | default "" | quote }}
+      dns01-route53-access-key-id: {{ .accessKeyID | default "" | quote }}
+      dns01-route53-secret-name: {{ .secretName | default "" | quote }}
+      dns01-route53-secret-key: {{ .secretKey | default "secret-access-key" | quote }}
+      {{- end }}
+      {{- with .digitalocean }}
+      dns01-digitalocean-secret-name: {{ .secretName | default "digitalocean-api-token-secret" | quote }}
+      dns01-digitalocean-secret-key: {{ .secretKey | default "access-token" | quote }}
+      {{- end }}
+      {{- with .rfc2136 }}
+      dns01-rfc2136-nameserver: {{ .nameserver | default "" | quote }}
+      dns01-rfc2136-tsig-key-name: {{ .tsigKeyName | default "" | quote }}
+      dns01-rfc2136-tsig-algorithm: {{ .tsigAlgorithm | default "HMACSHA256" | quote }}
+      dns01-rfc2136-secret-name: {{ .secretName | default "" | quote }}
+      dns01-rfc2136-secret-key: {{ .secretKey | default "tsig-secret-key" | quote }}
+      {{- end }}
+      {{- end }}
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
       oidc-insecure-skip-verify: {{ .Values.authentication.oidc.insecureSkipVerify | quote }}
       extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}

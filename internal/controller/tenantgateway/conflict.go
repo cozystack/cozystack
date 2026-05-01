@@ -103,32 +103,43 @@ func resolveHostnameOwners(claims map[string][]routeRef) (map[string]routeRef, m
 	return winners, losers
 }
 
-// updateRouteStatuses writes HTTPRoute.Status.Parents entries under
-// our ControllerName: Accepted=True for winners, Accepted=False with
-// Reason=HostnameConflict for losers. Status.Parents entries written by
-// other controllers (Cilium etc.) are left untouched.
+// updateRouteStatuses writes RouteParentStatus entries under our
+// ControllerName, one per (route, parentRef) tuple that attached to
+// this TenantGateway. Accepted=True for tuples not in losers,
+// Accepted=False with Reason=HostnameConflict for tuples that lost
+// at least one hostname race. Other controllers' entries (Cilium
+// etc.) are untouched.
+//
+// allRefs is the full set of (route, parentRef) tuples observed by
+// collectHostnameClaims — without it, multi-parentRef routes would
+// only get a status entry for whichever ref happened to win the
+// per-hostname race, dropping per-section visibility for the others.
 func (r *Reconciler) updateRouteStatuses(
 	ctx context.Context,
 	tgw *gatewayv1alpha1.TenantGateway,
-	winners map[string]routeRef,
+	allRefs map[routeRef]struct{},
 	losers map[routeRef][]string,
 ) error {
 	logger := log.FromContext(ctx)
-
-	winnerRefs := map[routeRef]struct{}{}
-	for _, ref := range winners {
-		winnerRefs[ref] = struct{}{}
-	}
 
 	// LastTransitionTime is set by apimeta.SetStatusCondition inside
 	// mergeRouteParentStatus only when the condition actually
 	// transitions; building Conditions here without it keeps the
 	// no-op reconcile no-op.
-	for ref := range winnerRefs {
-		if _, isLoser := losers[ref]; isLoser {
-			// A route can be a winner for one hostname and a loser
-			// for another; conflict status takes priority over the
-			// happy path.
+	for ref := range allRefs {
+		if hostnames, isLoser := losers[ref]; isLoser {
+			// A route can claim multiple hostnames; conflict status
+			// takes priority over the happy path.
+			if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
+				{
+					Type:    "Accepted",
+					Status:  metav1.ConditionFalse,
+					Reason:  "HostnameConflict",
+					Message: fmt.Sprintf("Hostname(s) %s already claimed by another route on TenantGateway %s/%s", strings.Join(hostnames, ", "), tgw.Namespace, tgw.Name),
+				},
+			}); err != nil {
+				logger.Error(err, "update loser route status", "route", ref.namespace+"/"+ref.name)
+			}
 			continue
 		}
 		if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
@@ -140,19 +151,6 @@ func (r *Reconciler) updateRouteStatuses(
 			},
 		}); err != nil {
 			logger.Error(err, "update winner route status", "route", ref.namespace+"/"+ref.name)
-		}
-	}
-
-	for ref, hostnames := range losers {
-		if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
-			{
-				Type:    "Accepted",
-				Status:  metav1.ConditionFalse,
-				Reason:  "HostnameConflict",
-				Message: fmt.Sprintf("Hostname(s) %s already claimed by another route on TenantGateway %s/%s", strings.Join(hostnames, ", "), tgw.Namespace, tgw.Name),
-			},
-		}); err != nil {
-			logger.Error(err, "update loser route status", "route", ref.namespace+"/"+ref.name)
 		}
 	}
 	return nil
@@ -198,24 +196,35 @@ func (r *Reconciler) updateRouteParentStatus(ctx context.Context, ref routeRef, 
 }
 
 // mergeRouteParentStatus updates or appends the RouteParentStatus
-// entry tagged with our ControllerName, using apimeta.SetStatusCondition
-// to preserve LastTransitionTime across no-op reconciles. Other
-// controllers' entries (Cilium, etc.) are left alone.
+// entry tagged with (ControllerName, ParentRef), using
+// apimeta.SetStatusCondition to preserve LastTransitionTime across
+// no-op reconciles. Other controllers' entries (Cilium, etc.) are
+// left alone.
+//
+// Per Gateway API, RouteParentStatus is keyed by (ParentRef,
+// ControllerName) — a single route may attach via multiple parentRefs
+// (e.g. one per sectionName) and each attachment owns its own status
+// entry. Keying only on ControllerName would let a multi-ref route's
+// later reconcile overwrite the earlier ref's status, hiding
+// per-section conflicts.
 func mergeRouteParentStatus(parents *[]gatewayv1.RouteParentStatus, ref gatewayv1.ParentReference, conds []metav1.Condition) {
 	for i := range *parents {
 		ps := &(*parents)[i]
 		if ps.ControllerName != ControllerName {
 			continue
 		}
-		ps.ParentRef = ref
+		if !parentRefEqual(ps.ParentRef, ref) {
+			continue
+		}
 		for _, c := range conds {
 			apimeta.SetStatusCondition(&ps.Conditions, c)
 		}
 		return
 	}
-	// First-time stamp: build the slice via SetStatusCondition so the
-	// transition timestamps are populated by the helper rather than
-	// hand-stamped time.Now() at construction.
+	// First-time stamp for this (ControllerName, ParentRef) pair:
+	// build the slice via SetStatusCondition so transition timestamps
+	// are populated by the helper rather than hand-stamped time.Now()
+	// at construction.
 	newPS := gatewayv1.RouteParentStatus{
 		ControllerName: ControllerName,
 		ParentRef:      ref,

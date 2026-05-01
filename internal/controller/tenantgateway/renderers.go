@@ -182,7 +182,7 @@ func (r *Reconciler) renderIssuer(tgw *gatewayv1alpha1.TenantGateway) (*cmv1.Iss
 			Name:      gatewayIssuerName(tgw),
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
-				"cozystack.io/managed-by": "cozystack-controller",
+				cozystackManagedByLabel: cozystackManagedByValue,
 			},
 		},
 		Spec: cmv1.IssuerSpec{
@@ -323,7 +323,7 @@ func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGatewa
 			Name:      gatewayCertificateName(tgw),
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
-				"cozystack.io/managed-by": "cozystack-controller",
+				cozystackManagedByLabel: cozystackManagedByValue,
 			},
 		},
 		Spec: cmv1.CertificateSpec{
@@ -418,9 +418,9 @@ func (r *Reconciler) renderPerListenerCertificate(tgw *gatewayv1alpha1.TenantGat
 			Name:      name,
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
-				"cozystack.io/managed-by":        "cozystack-controller",
-				"cozystack.io/tenantgateway":     tgw.Name,
-				"cozystack.io/per-listener-cert": "true",
+				cozystackManagedByLabel:   cozystackManagedByValue,
+				cozystackTenantGatewayKey: tgw.Name,
+				cozystackPerListenerCert:  "true",
 			},
 		},
 		Spec: cmv1.CertificateSpec{

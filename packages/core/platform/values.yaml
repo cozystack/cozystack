@@ -92,6 +92,31 @@ publishing:
     # number of certificates per tenant via tenant.spec.resourceQuotas
     # with count/certificates.cert-manager.io. See
     # https://letsencrypt.org/docs/rate-limits/.
+    #
+    # DNS-01 solver configuration. Read only when solver=dns01. The
+    # provider key selects which sub-block is consumed; others are
+    # ignored. Cloudflare keeps backwards-compatible defaults so the
+    # most common opt-in path (cloudflare token + dns01) needs only
+    # solver=dns01 + dns01.cloudflare.secretName.
+    dns01:
+      provider: cloudflare # cloudflare | route53 | digitalocean | rfc2136
+      cloudflare:
+        secretName: cloudflare-api-token-secret
+        secretKey: api-token
+      route53:
+        region: ""
+        accessKeyID: ""
+        secretName: ""
+        secretKey: secret-access-key
+      digitalocean:
+        secretName: digitalocean-api-token-secret
+        secretKey: access-token
+      rfc2136:
+        nameserver: ""
+        tsigKeyName: ""
+        tsigAlgorithm: HMACSHA256
+        secretName: ""
+        secretKey: tsig-secret-key
 # Authentication configuration
 authentication:
   oidc:

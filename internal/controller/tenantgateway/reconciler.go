@@ -120,6 +120,18 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	}
 	sort.Strings(dynHostnames)
 
+	// allRefs is the full set of (route, parentRef) tuples that
+	// attached to this Gateway, including duplicate parentRefs from
+	// the same route. Each tuple owns its own RouteParentStatus
+	// entry per Gateway API's per-(parentRef, controllerName)
+	// status contract.
+	allRefs := map[routeRef]struct{}{}
+	for _, refs := range claims {
+		for _, ref := range refs {
+			allRefs[ref] = struct{}{}
+		}
+	}
+
 	if err := r.reconcileGateway(ctx, tgw, dynHostnames); err != nil {
 		return err
 	}
@@ -132,7 +144,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	if err := r.reconcilePerListenerCertificates(ctx, tgw, dynHostnames); err != nil {
 		return err
 	}
-	if err := r.updateRouteStatuses(ctx, tgw, winners, losers); err != nil {
+	if err := r.updateRouteStatuses(ctx, tgw, allRefs, losers); err != nil {
 		return err
 	}
 	if err := r.reconcileHTTPToHTTPSRedirect(ctx, tgw); err != nil {
@@ -234,18 +246,25 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 		if _, ok := allowed[route.Namespace]; !ok {
 			continue
 		}
-		matchingRef, ok := pickAttachingParentRef(route.Spec.ParentRefs, route.Namespace, tgw)
-		if !ok {
+		matchingRefs := allAttachingParentRefs(route.Spec.ParentRefs, route.Namespace, tgw)
+		if len(matchingRefs) == 0 {
 			continue
 		}
-		ref := routeRef{
-			kind:      routeKindHTTP,
-			namespace: route.Namespace,
-			name:      route.Name,
-			parentRef: matchingRef,
-		}
-		for _, h := range route.Spec.Hostnames {
-			out[string(h)] = append(out[string(h)], ref)
+		// One routeRef per matching parentRef so each attachment point
+		// owns its own RouteParentStatus entry (Gateway API's
+		// per-(parentRef, controllerName) status contract). Hostname
+		// claims accumulate across refs — the same hostname declared
+		// once on the route claims via every matching parent.
+		for _, matchingRef := range matchingRefs {
+			ref := routeRef{
+				kind:      routeKindHTTP,
+				namespace: route.Namespace,
+				name:      route.Name,
+				parentRef: matchingRef,
+			}
+			for _, h := range route.Spec.Hostnames {
+				out[string(h)] = append(out[string(h)], ref)
+			}
 		}
 	}
 
@@ -258,49 +277,73 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 		if _, ok := allowed[route.Namespace]; !ok {
 			continue
 		}
-		matchingRef, ok := pickAttachingParentRef(route.Spec.ParentRefs, route.Namespace, tgw)
-		if !ok {
+		matchingRefs := allAttachingParentRefs(route.Spec.ParentRefs, route.Namespace, tgw)
+		if len(matchingRefs) == 0 {
 			continue
 		}
-		ref := routeRef{
-			kind:      routeKindTLS,
-			namespace: route.Namespace,
-			name:      route.Name,
-			parentRef: matchingRef,
-		}
-		for _, h := range route.Spec.Hostnames {
-			out[string(h)] = append(out[string(h)], ref)
+		for _, matchingRef := range matchingRefs {
+			ref := routeRef{
+				kind:      routeKindTLS,
+				namespace: route.Namespace,
+				name:      route.Name,
+				parentRef: matchingRef,
+			}
+			for _, h := range route.Spec.Hostnames {
+				out[string(h)] = append(out[string(h)], ref)
+			}
 		}
 	}
 	return out, nil
 }
 
 // pickAttachingParentRef returns the first ParentRef in refs that
-// attaches to tgw's Gateway, plus a boolean ok. Used both to decide
-// whether to read hostnames from the route and to record the exact
-// ref that gets stamped back into RouteParentStatus.
+// attaches to tgw's Gateway, plus a boolean ok. Used by the mapper
+// for cheap "does this route attach at all?" queries; for hostname
+// collection and status updates, callers should use
+// allAttachingParentRefs to handle multi-parentRef routes correctly.
 func pickAttachingParentRef(refs []gatewayv1.ParentReference, routeNs string, tgw *gatewayv1alpha1.TenantGateway) (gatewayv1.ParentReference, bool) {
 	for _, ref := range refs {
-		group := ""
-		if ref.Group != nil {
-			group = string(*ref.Group)
-		}
-		kind := "Gateway"
-		if ref.Kind != nil {
-			kind = string(*ref.Kind)
-		}
-		ns := routeNs
-		if ref.Namespace != nil {
-			ns = string(*ref.Namespace)
-		}
-		if (group == gatewayv1.GroupName || group == "") &&
-			kind == "Gateway" &&
-			ns == tgw.Namespace &&
-			string(ref.Name) == tgw.Name {
+		if parentRefAttachesTo(ref, routeNs, tgw) {
 			return ref, true
 		}
 	}
 	return gatewayv1.ParentReference{}, false
+}
+
+// allAttachingParentRefs returns every ParentRef in refs that attaches
+// to tgw's Gateway. Per Gateway API, a route may carry multiple
+// parentRefs to the same Gateway (e.g. one per sectionName) and each
+// (parentRef, controllerName) pair owns its own RouteParentStatus
+// entry. Returning the full set lets the reconciler write per-ref
+// status and aggregate hostname claims correctly across all
+// attachment points instead of arbitrarily picking the first.
+func allAttachingParentRefs(refs []gatewayv1.ParentReference, routeNs string, tgw *gatewayv1alpha1.TenantGateway) []gatewayv1.ParentReference {
+	var out []gatewayv1.ParentReference
+	for _, ref := range refs {
+		if parentRefAttachesTo(ref, routeNs, tgw) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+func parentRefAttachesTo(ref gatewayv1.ParentReference, routeNs string, tgw *gatewayv1alpha1.TenantGateway) bool {
+	group := ""
+	if ref.Group != nil {
+		group = string(*ref.Group)
+	}
+	kind := "Gateway"
+	if ref.Kind != nil {
+		kind = string(*ref.Kind)
+	}
+	ns := routeNs
+	if ref.Namespace != nil {
+		ns = string(*ref.Namespace)
+	}
+	return (group == gatewayv1.GroupName || group == "") &&
+		kind == "Gateway" &&
+		ns == tgw.Namespace &&
+		string(ref.Name) == tgw.Name
 }
 
 // reconcilePerListenerCertificates creates a Certificate for each
@@ -669,8 +712,8 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			Name:      tgw.Name,
 			Namespace: tgw.Namespace,
 			Labels: map[string]string{
-				"cozystack.io/gateway":    tgw.Namespace,
-				"cozystack.io/managed-by": "cozystack-controller",
+				"cozystack.io/gateway":  tgw.Namespace,
+				cozystackManagedByLabel: cozystackManagedByValue,
 			},
 		},
 		Spec: gatewayv1.GatewaySpec{

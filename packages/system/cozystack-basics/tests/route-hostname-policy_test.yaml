@@ -7,13 +7,16 @@ release:
   namespace: cozy-system
 
 tests:
-  - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute
+  - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute and TLSRoute (Layer 7)
+    # Layer 7 (route-hostname VAP) is the only VAP rendered by THIS
+    # template: 2 docs (VAP + Binding) × 2 route kinds (HTTPRoute,
+    # TLSRoute) = 4 docs total. Layers 2-5 live in
+    # gateway-hostname-policy.yaml. Pin both counts so the 7-layer
+    # security model documented in README.md is enforced at render
+    # time — a maintainer dropping one of the VAPs without updating
+    # the docs trips one of these counts.
     asserts:
       - hasDocuments:
-          # Two docs per route kind (HTTPRoute, TLSRoute) =
-          # 4 docs total (VAP + Binding × 2). Plus a parent
-          # ConfigMap for parameters? No — the policy is
-          # parameterless, so just 4.
           count: 4
       - documentIndex: 0
         equal:

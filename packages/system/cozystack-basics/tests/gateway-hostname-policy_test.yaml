@@ -186,3 +186,16 @@ tests:
     asserts:
       - hasDocuments:
           count: 8
+
+  - it: pins layer count — Layers 2-5 are exactly 4 VAP+Binding pairs
+    # The gateway README documents a 7-layer security model:
+    #   - Layer 1 (listener allowedRoutes selector) — controller-owned
+    #   - Layers 2-5 — VAPs on Gateway / Package / Tenant / Namespace
+    #     rendered by THIS template (4 VAPs × 2 documents = 8 docs)
+    #   - Layer 6 (render-time fail) — also in this template (no extra docs)
+    #   - Layer 7 (route-hostname VAP) — separate template
+    # If a maintainer trims one of the layer-2-5 VAPs without updating
+    # README.md, this assertion fires before the change merges.
+    asserts:
+      - hasDocuments:
+          count: 8
