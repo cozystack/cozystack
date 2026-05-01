@@ -105,6 +105,111 @@ func TestCreate_AdmissionChain_RejectsViaCreateValidation(t *testing.T) {
 	}
 }
 
+// TestUpdate_AdmissionChain_RejectsViaUpdateValidation pins the
+// admission-chain wiring on the Update path. Update was already
+// invoking updateValidation correctly before this PR, but a future
+// refactor that breaks it would silently bypass every VAP targeting
+// Application on Update — same regression risk Create and Delete
+// just had. Keeping all three verbs pinned uniformly keeps the
+// admission-chain contract explicit.
+func TestUpdate_AdmissionChain_RejectsViaUpdateValidation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("register helmv2 scheme: %v", err)
+	}
+	resourceCfg := &config.ResourceConfig{
+		Resources: []config.Resource{
+			{Application: config.ApplicationConfig{Kind: "MySQL"}},
+		},
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, resourceCfg); err != nil {
+		t.Fatalf("register dynamic types: %v", err)
+	}
+
+	// Pre-populate a HelmRelease so Update finds an existing object
+	// (otherwise Update routes to Create via forceAllowCreate, hitting
+	// createValidation instead of updateValidation).
+	existing := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mysql-good-name",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				ApplicationKindLabel:  "MySQL",
+				ApplicationGroupLabel: appsv1alpha1.GroupName,
+				ApplicationNameLabel:  "good-name",
+			},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
+	r := &REST{
+		c: fakeClient,
+		gvr: schema.GroupVersionResource{
+			Group:    appsv1alpha1.GroupName,
+			Version:  "v1alpha1",
+			Resource: "mysqls",
+		},
+		gvk: schema.GroupVersionKind{
+			Group:   appsv1alpha1.GroupName,
+			Version: "v1alpha1",
+			Kind:    "MySQL",
+		},
+		kindName: "MySQL",
+		releaseConfig: config.ReleaseConfig{
+			Prefix: "mysql-",
+		},
+	}
+
+	app := &appsv1alpha1.Application{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps.cozystack.io/v1alpha1",
+			Kind:       "MySQL",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "good-name",
+			Namespace: "tenant-foo",
+		},
+	}
+
+	sentinel := errors.New("simulated update VAP rejection")
+	updateValidation := func(_ context.Context, _ runtime.Object, _ runtime.Object) error {
+		return sentinel
+	}
+
+	ctx := request.WithNamespace(context.Background(), "tenant-foo")
+	_, _, err := r.Update(
+		ctx,
+		"good-name",
+		// rest.DefaultUpdatedObjectInfo wraps the new object so the
+		// REST handler can compute the patch and feed it to
+		// updateValidation. Same shape as the existing
+		// rest_validation_test.go::TestUpdate_ForceAllowCreate test.
+		newDefaultUpdatedObjectInfo(app),
+		nil,              // createValidation (we want updateValidation path)
+		updateValidation, // <-- the hook under test
+		false,            // forceAllowCreate=false: Update path, not upsert
+		&metav1.UpdateOptions{},
+	)
+	if err == nil {
+		t.Fatalf("expected Update to surface admission error, got nil")
+	}
+	if !errors.Is(err, sentinel) && !strings.Contains(err.Error(), sentinel.Error()) {
+		t.Errorf("expected sentinel admission error to propagate, got %v", err)
+	}
+}
+
+func newDefaultUpdatedObjectInfo(obj runtime.Object) restUpdatedObjectInfo {
+	return restUpdatedObjectInfo{obj: obj}
+}
+
+type restUpdatedObjectInfo struct {
+	obj runtime.Object
+}
+
+func (r restUpdatedObjectInfo) Preconditions() *metav1.Preconditions { return nil }
+func (r restUpdatedObjectInfo) UpdatedObject(_ context.Context, _ runtime.Object) (runtime.Object, error) {
+	return r.obj, nil
+}
+
 // TestDelete_AdmissionChain_RejectsViaDeleteValidation pins the same
 // contract on the Delete path. The deleteValidation fn is the hook
 // genericapiserver supplies for VAP Deletion-time enforcement; without

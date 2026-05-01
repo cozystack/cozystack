@@ -125,9 +125,16 @@ func allowedRoutesFromValues(values []string) *gatewayv1.AllowedRoutes {
 }
 
 // hostnameFirstLabel returns the first DNS label of a hostname (the
-// part before the first '.'). Used as a human-friendly prefix in
-// derived names.
+// part before the first '.'), normalised to lowercase. The lowercase
+// pass is defensive: Gateway listener names and Certificate object
+// names both must satisfy RFC 1123 (lowercase), so an upper-case
+// input hostname like `HARBOR.foo.example.com` would otherwise
+// produce an invalid listener name `https-HARBOR-...`. The upstream
+// Gateway API admission webhook normalises hostnames already, but
+// running ToLower here matches what hostnameSuffix does and keeps
+// the contract local.
 func hostnameFirstLabel(hostname string) string {
+	hostname = strings.ToLower(hostname)
 	if i := strings.Index(hostname, "."); i >= 0 {
 		return hostname[:i]
 	}

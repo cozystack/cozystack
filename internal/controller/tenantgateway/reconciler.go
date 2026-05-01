@@ -392,6 +392,17 @@ func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *
 			case getErr != nil:
 				return fmt.Errorf("get per-listener Certificate %s: %w", desired.Name, getErr)
 			default:
+				// Same takeover-guard contract as elsewhere in
+				// this file: an operator-pinned Certificate whose
+				// name happens to collide with our derived
+				// per-listener cert name must not be silently
+				// rewritten and re-issued. The garbage-collect
+				// loop below already gates Delete on ownership;
+				// the create-or-update path here would otherwise
+				// be the only asymmetric case.
+				if !ownedByTenantGateway(existing.OwnerReferences, tgw) {
+					return fmt.Errorf("certificate %s/%s exists but is not owned by TenantGateway %s; refusing to take over (delete it manually if you want the controller to manage this per-listener Certificate)", tgw.Namespace, desired.Name, tgw.Name)
+				}
 				if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 					continue
 				}
@@ -539,6 +550,16 @@ func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.T
 	case getErr != nil:
 		return fmt.Errorf("get Issuer: %w", getErr)
 	default:
+		// Same takeover-guard contract as reconcileGateway /
+		// reconcileHTTPToHTTPSRedirect: refuse to mutate a
+		// pre-existing Issuer that shares our derived name but
+		// carries no OwnerReference back to this TenantGateway.
+		// Without this, an operator-pinned Issuer (e.g. for a
+		// private CA) gets silently re-issued from our ACME
+		// account on the next reconcile.
+		if !ownedByTenantGateway(existing.OwnerReferences, tgw) {
+			return fmt.Errorf("issuer %s/%s exists but is not owned by TenantGateway %s; refusing to take over (delete it manually if you want the controller to manage this Issuer)", tgw.Namespace, desired.Name, tgw.Name)
+		}
 		if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 			return nil
 		}
@@ -591,6 +612,14 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 	case getErr != nil:
 		return fmt.Errorf("get Certificate: %w", getErr)
 	default:
+		// Same takeover-guard as reconcileIssuer: refuse to mutate
+		// a pre-existing wildcard Certificate that shares our
+		// derived name but is not owned. Operator-pinned certs
+		// (e.g. wildcards from an internal CA) would otherwise get
+		// silently re-issued from our Issuer on the next reconcile.
+		if !ownedByTenantGateway(existing.OwnerReferences, tgw) {
+			return fmt.Errorf("certificate %s/%s exists but is not owned by TenantGateway %s; refusing to take over (delete it manually if you want the controller to manage this Certificate)", tgw.Namespace, desired.Name, tgw.Name)
+		}
 		if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
 			return nil
 		}

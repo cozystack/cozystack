@@ -2237,6 +2237,169 @@ func TestReconcile_RefusesToTakeOverForeignRedirectRoute(t *testing.T) {
 	}
 }
 
+// TestReconcile_RefusesToTakeOverForeignIssuer pins the takeover-
+// guard symmetry across reconcileIssuer. Same shape as the Gateway
+// and HTTPRoute guards: a foreign Issuer with the controller-derived
+// name must not have its spec silently rewritten.
+func TestReconcile_RefusesToTakeOverForeignIssuer(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	foreign := &cmv1.Issuer{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack-gateway",
+			Namespace: "tenant-foo",
+		},
+		Spec: cmv1.IssuerSpec{
+			IssuerConfig: cmv1.IssuerConfig{SelfSigned: &cmv1.SelfSignedIssuer{}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, foreign).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	_, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	})
+	if err == nil {
+		t.Fatalf("expected takeover refusal, got nil")
+	}
+	if !strings.Contains(err.Error(), "not owned by TenantGateway") {
+		t.Errorf("expected ownership-refusal error, got %v", err)
+	}
+
+	got := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	if got.Spec.SelfSigned == nil {
+		t.Errorf("foreign SelfSigned Issuer was rewritten to ACME, spec=%+v", got.Spec)
+	}
+}
+
+// TestReconcile_RefusesToTakeOverForeignWildcardCertificate pins the
+// takeover-guard for the DNS-01 wildcard Certificate path.
+func TestReconcile_RefusesToTakeOverForeignWildcardCertificate(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	foreign := &cmv1.Certificate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack-gateway-tls",
+			Namespace: "tenant-foo",
+		},
+		Spec: cmv1.CertificateSpec{
+			SecretName: "operator-pinned-secret",
+			DNSNames:   []string{"operator.foo.example.com"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, foreign).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	_, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	})
+	if err == nil {
+		t.Fatalf("expected takeover refusal, got nil")
+	}
+	if !strings.Contains(err.Error(), "not owned by TenantGateway") {
+		t.Errorf("expected ownership-refusal error, got %v", err)
+	}
+
+	got := &cmv1.Certificate{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Certificate: %v", err)
+	}
+	if got.Spec.SecretName != "operator-pinned-secret" {
+		t.Errorf("foreign Certificate.Spec.SecretName overwritten: %q", got.Spec.SecretName)
+	}
+}
+
+// TestReconcile_RefusesToTakeOverForeignPerListenerCertificate pins
+// the takeover-guard for the HTTP-01 per-listener Certificate path.
+// A pre-existing Certificate whose derived name matches our
+// hostname-keyed naming scheme must not be silently rewritten.
+func TestReconcile_RefusesToTakeOverForeignPerListenerCertificate(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "harbor", Namespace: "tenant-foo"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"harbor.foo.example.com"},
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{
+						Group:     ptrGroup(gatewayv1.GroupName),
+						Kind:      ptrKind("Gateway"),
+						Name:      "cozystack",
+						Namespace: ptrNamespace("tenant-foo"),
+					},
+				},
+			},
+		},
+	}
+	// Build the expected derived per-listener cert name and pre-create
+	// a foreign Certificate at it.
+	expectedCertName := perListenerCertName(tgw, "harbor.foo.example.com")
+	foreign := &cmv1.Certificate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      expectedCertName,
+			Namespace: "tenant-foo",
+		},
+		Spec: cmv1.CertificateSpec{
+			SecretName: "operator-pinned-cert",
+			DNSNames:   []string{"operator-version.foo.example.com"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, route, foreign).WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	_, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	})
+	if err == nil {
+		t.Fatalf("expected takeover refusal, got nil")
+	}
+	if !strings.Contains(err.Error(), "not owned by TenantGateway") {
+		t.Errorf("expected ownership-refusal error, got %v", err)
+	}
+
+	got := &cmv1.Certificate{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: expectedCertName, Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Certificate: %v", err)
+	}
+	if got.Spec.SecretName != "operator-pinned-cert" {
+		t.Errorf("foreign per-listener Certificate.Spec.SecretName overwritten: %q", got.Spec.SecretName)
+	}
+}
+
 // TestReconcile_OwnerReferencesOnDownstream pins the cascade-delete
 // contract for every controller-owned downstream resource: Issuer,
 // wildcard Certificate (DNS-01 mode), per-listener Certificate
