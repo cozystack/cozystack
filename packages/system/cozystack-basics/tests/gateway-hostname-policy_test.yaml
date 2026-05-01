@@ -1,4 +1,4 @@
-suite: gateway-hostname-policy security stack (4 VAPs)
+suite: gateway-hostname-policy security stack (Layers 2-5 of 7-layer model)
 templates:
   - templates/gateway-hostname-policy.yaml
 

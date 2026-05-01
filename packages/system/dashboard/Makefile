@@ -4,6 +4,9 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update: update-crd update-dockerfiles
 image: image-openapi-ui image-openapi-ui-k8s-bff image-token-proxy update-tenant-text
 
