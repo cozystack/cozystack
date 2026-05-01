@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -20,4 +20,5 @@ FROM scratch
 COPY --from=builder /flux-plunger /flux-plunger
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
+USER 65532:65532
 ENTRYPOINT ["/flux-plunger"]

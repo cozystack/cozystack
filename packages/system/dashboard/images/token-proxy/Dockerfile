@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine as builder
+FROM golang:1.26-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -12,4 +12,5 @@ FROM scratch
 
 COPY --from=builder /token-proxy /token-proxy
 
+USER 65532:65532
 ENTRYPOINT ["/token-proxy"]
