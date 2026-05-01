@@ -25,11 +25,17 @@
   CEL safety note: has() only works on field access expressions, not
   on top-level variables. namespaceObject is a top-level var supplied
   by the apiserver, so the nil check uses `!= null` first; the
-  nested has() then walks into metadata.labels safely. The
-  companion gateway-hostname-policy uses the same pattern. See the
+  nested has() then walks into metadata.labels safely. See the
   feedback memory cel-has-field-only.md.
+
+  Defense-in-depth contract: this VAP is fail-closed. A tenant-*
+  namespace without `namespace.cozystack.io/host` is rejected (not
+  silently allowed) so a missing or scrubbed Layer-5 label cannot
+  open Layer 7 by itself. The only legitimate state where the
+  label is absent is an in-flight namespace creation that hasn't
+  finished labelling yet — in which case the caller should retry.
 */}}
-{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels) || !has(object.spec.hostnames)) ? true : object.spec.hostnames.all(h, h == namespaceObject.metadata.labels["namespace.cozystack.io/host"] || h.endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"]))` -}}
+{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.hostnames) || object.spec.hostnames.all(h, h == namespaceObject.metadata.labels["namespace.cozystack.io/host"] || h.endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"])))` -}}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy

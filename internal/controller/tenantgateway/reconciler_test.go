@@ -129,6 +129,79 @@ func TestReconcile_TenantGatewayProducesGateway(t *testing.T) {
 	}
 }
 
+// TestReconcile_IsIdempotent pins the no-op reconcile contract: a
+// second Reconcile pass over the same TenantGateway with no spec
+// change must not bump ResourceVersion on any owned resource. Without
+// this guarantee, every reconcile triggers the Owns/Watches and the
+// controller hot-loops indefinitely (continuous cluster writes,
+// rate-limited only by the workqueue). Confirmed manually that the
+// pre-fix code bumped Gateway / Issuer RV on every pass.
+func TestReconcile_IsIdempotent(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	for i := 0; i < 2; i++ {
+		if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+		}); err != nil {
+			t.Fatalf("reconcile pass %d: %v", i+1, err)
+		}
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	rvAfterFirst := gw.ResourceVersion
+
+	// Third pass: still no diff, RV must not move.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("third reconcile: %v", err)
+	}
+	gw2 := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw2); err != nil {
+		t.Fatalf("get Gateway after pass 3: %v", err)
+	}
+	if gw2.ResourceVersion != rvAfterFirst {
+		t.Errorf("Gateway ResourceVersion bumped on no-op reconcile: %s → %s", rvAfterFirst, gw2.ResourceVersion)
+	}
+
+	iss := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss); err != nil {
+		t.Fatalf("get Issuer: %v", err)
+	}
+	rvIssuer := iss.ResourceVersion
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("fourth reconcile: %v", err)
+	}
+	iss2 := &cmv1.Issuer{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, iss2); err != nil {
+		t.Fatalf("get Issuer after pass 4: %v", err)
+	}
+	if iss2.ResourceVersion != rvIssuer {
+		t.Errorf("Issuer ResourceVersion bumped on no-op reconcile: %s → %s", rvIssuer, iss2.ResourceVersion)
+	}
+}
+
 // TestReconcile_HTTPListenerExcludesAppNamespaces pins the
 // security contract: the HTTP listener (port 80) accepts routes
 // only from the tenant namespace (controller's redirect HTTPRoute)

@@ -251,8 +251,62 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 					},
 				},
 			}, nil
+		case "route53":
+			if tgw.Spec.DNS01.Route53 == nil {
+				return nil, fmt.Errorf("dns01.provider=route53 requires dns01.route53 to be set")
+			}
+			cfg := tgw.Spec.DNS01.Route53
+			r53 := &cmacmev1.ACMEIssuerDNS01ProviderRoute53{
+				Region:      cfg.Region,
+				AccessKeyID: cfg.AccessKeyID,
+			}
+			if cfg.SecretAccessKeySecretRef != nil {
+				r53.SecretAccessKey = cmmetav1.SecretKeySelector{
+					LocalObjectReference: cmmetav1.LocalObjectReference{Name: cfg.SecretAccessKeySecretRef.Name},
+					Key:                  cfg.SecretAccessKeySecretRef.Key,
+				}
+			}
+			return &cmacmev1.ACMEChallengeSolver{
+				DNS01: &cmacmev1.ACMEChallengeSolverDNS01{Route53: r53},
+			}, nil
+		case "digitalocean":
+			if tgw.Spec.DNS01.DigitalOcean == nil {
+				return nil, fmt.Errorf("dns01.provider=digitalocean requires dns01.digitalocean to be set")
+			}
+			return &cmacmev1.ACMEChallengeSolver{
+				DNS01: &cmacmev1.ACMEChallengeSolverDNS01{
+					DigitalOcean: &cmacmev1.ACMEIssuerDNS01ProviderDigitalOcean{
+						Token: cmmetav1.SecretKeySelector{
+							LocalObjectReference: cmmetav1.LocalObjectReference{Name: tgw.Spec.DNS01.DigitalOcean.TokenSecretRef.Name},
+							Key:                  tgw.Spec.DNS01.DigitalOcean.TokenSecretRef.Key,
+						},
+					},
+				},
+			}, nil
+		case "rfc2136":
+			if tgw.Spec.DNS01.RFC2136 == nil {
+				return nil, fmt.Errorf("dns01.provider=rfc2136 requires dns01.rfc2136 to be set")
+			}
+			cfg := tgw.Spec.DNS01.RFC2136
+			alg := cfg.TSIGAlgorithm
+			if alg == "" {
+				alg = "HMACSHA256"
+			}
+			return &cmacmev1.ACMEChallengeSolver{
+				DNS01: &cmacmev1.ACMEChallengeSolverDNS01{
+					RFC2136: &cmacmev1.ACMEIssuerDNS01ProviderRFC2136{
+						Nameserver:    cfg.Nameserver,
+						TSIGKeyName:   cfg.TSIGKeyName,
+						TSIGAlgorithm: alg,
+						TSIGSecret: cmmetav1.SecretKeySelector{
+							LocalObjectReference: cmmetav1.LocalObjectReference{Name: cfg.TSIGSecretSecretRef.Name},
+							Key:                  cfg.TSIGSecretSecretRef.Key,
+						},
+					},
+				},
+			}, nil
 		default:
-			return nil, fmt.Errorf("unsupported dns01.provider=%q (this commit covers cloudflare; route53/digitalocean/rfc2136 land in a follow-up)", tgw.Spec.DNS01.Provider)
+			return nil, fmt.Errorf("unsupported dns01.provider=%q (supported: cloudflare, route53, digitalocean, rfc2136)", tgw.Spec.DNS01.Provider)
 		}
 
 	default:

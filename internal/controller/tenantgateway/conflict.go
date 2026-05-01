@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -118,8 +119,11 @@ func (r *Reconciler) updateRouteStatuses(
 	for _, ref := range winners {
 		winnerRefs[ref] = struct{}{}
 	}
-	now := metav1.Now()
 
+	// LastTransitionTime is set by apimeta.SetStatusCondition inside
+	// mergeRouteParentStatus only when the condition actually
+	// transitions; building Conditions here without it keeps the
+	// no-op reconcile no-op.
 	for ref := range winnerRefs {
 		if _, isLoser := losers[ref]; isLoser {
 			// A route can be a winner for one hostname and a loser
@@ -129,11 +133,10 @@ func (r *Reconciler) updateRouteStatuses(
 		}
 		if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
 			{
-				Type:               "Accepted",
-				Status:             metav1.ConditionTrue,
-				Reason:             "Accepted",
-				Message:            fmt.Sprintf("Route attached to TenantGateway %s/%s", tgw.Namespace, tgw.Name),
-				LastTransitionTime: now,
+				Type:    "Accepted",
+				Status:  metav1.ConditionTrue,
+				Reason:  "Accepted",
+				Message: fmt.Sprintf("Route attached to TenantGateway %s/%s", tgw.Namespace, tgw.Name),
 			},
 		}); err != nil {
 			logger.Error(err, "update winner route status", "route", ref.namespace+"/"+ref.name)
@@ -143,11 +146,10 @@ func (r *Reconciler) updateRouteStatuses(
 	for ref, hostnames := range losers {
 		if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
 			{
-				Type:               "Accepted",
-				Status:             metav1.ConditionFalse,
-				Reason:             "HostnameConflict",
-				Message:            fmt.Sprintf("Hostname(s) %s already claimed by another route on TenantGateway %s/%s", strings.Join(hostnames, ", "), tgw.Namespace, tgw.Name),
-				LastTransitionTime: now,
+				Type:    "Accepted",
+				Status:  metav1.ConditionFalse,
+				Reason:  "HostnameConflict",
+				Message: fmt.Sprintf("Hostname(s) %s already claimed by another route on TenantGateway %s/%s", strings.Join(hostnames, ", "), tgw.Namespace, tgw.Name),
 			},
 		}); err != nil {
 			logger.Error(err, "update loser route status", "route", ref.namespace+"/"+ref.name)
@@ -158,8 +160,14 @@ func (r *Reconciler) updateRouteStatuses(
 
 // updateRouteParentStatus locates or creates the RouteParentStatus
 // entry for our ControllerName on the given route (HTTPRoute or
-// TLSRoute, by ref.kind) and overwrites its Conditions with the
-// supplied set.
+// TLSRoute, by ref.kind) and merges Conditions in.
+//
+// Idempotency contract: Status().Update() is only issued when the
+// merge actually changes something. apimeta.SetStatusCondition
+// preserves LastTransitionTime when Type/Status/Reason/Message all
+// match the existing entry, so a quiescent reconcile produces no
+// resource-version bump and the Owns/Watches re-trigger storm
+// short-circuits at the controller-runtime workqueue level.
 func (r *Reconciler) updateRouteParentStatus(ctx context.Context, ref routeRef, conds []metav1.Condition) error {
 	switch ref.kind {
 	case routeKindHTTP:
@@ -167,14 +175,22 @@ func (r *Reconciler) updateRouteParentStatus(ctx context.Context, ref routeRef, 
 		if err := r.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, route); err != nil {
 			return fmt.Errorf("get HTTPRoute: %w", err)
 		}
+		before := route.DeepCopy()
 		mergeRouteParentStatus(&route.Status.Parents, ref.parentRef, conds)
+		if routeParentStatusEqual(before.Status.Parents, route.Status.Parents) {
+			return nil
+		}
 		return r.Status().Update(ctx, route)
 	case routeKindTLS:
 		route := &gatewayv1alpha2.TLSRoute{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, route); err != nil {
 			return fmt.Errorf("get TLSRoute: %w", err)
 		}
+		before := route.DeepCopy()
 		mergeRouteParentStatus(&route.Status.Parents, ref.parentRef, conds)
+		if routeParentStatusEqual(before.Status.Parents, route.Status.Parents) {
+			return nil
+		}
 		return r.Status().Update(ctx, route)
 	default:
 		return fmt.Errorf("unknown route kind %d for %s/%s", ref.kind, ref.namespace, ref.name)
@@ -182,20 +198,100 @@ func (r *Reconciler) updateRouteParentStatus(ctx context.Context, ref routeRef, 
 }
 
 // mergeRouteParentStatus updates or appends the RouteParentStatus
-// entry tagged with our ControllerName. Other entries (Cilium,
-// other controllers) are left alone.
+// entry tagged with our ControllerName, using apimeta.SetStatusCondition
+// to preserve LastTransitionTime across no-op reconciles. Other
+// controllers' entries (Cilium, etc.) are left alone.
 func mergeRouteParentStatus(parents *[]gatewayv1.RouteParentStatus, ref gatewayv1.ParentReference, conds []metav1.Condition) {
 	for i := range *parents {
 		ps := &(*parents)[i]
-		if ps.ControllerName == ControllerName {
-			ps.ParentRef = ref
-			ps.Conditions = conds
-			return
+		if ps.ControllerName != ControllerName {
+			continue
 		}
+		ps.ParentRef = ref
+		for _, c := range conds {
+			apimeta.SetStatusCondition(&ps.Conditions, c)
+		}
+		return
 	}
-	*parents = append(*parents, gatewayv1.RouteParentStatus{
+	// First-time stamp: build the slice via SetStatusCondition so the
+	// transition timestamps are populated by the helper rather than
+	// hand-stamped time.Now() at construction.
+	newPS := gatewayv1.RouteParentStatus{
 		ControllerName: ControllerName,
 		ParentRef:      ref,
-		Conditions:     conds,
-	})
+	}
+	for _, c := range conds {
+		apimeta.SetStatusCondition(&newPS.Conditions, c)
+	}
+	*parents = append(*parents, newPS)
+}
+
+// routeParentStatusEqual compares two RouteParentStatus slices
+// ignoring observation-only fields that legitimately differ across
+// reconciles (LastTransitionTime is preserved by SetStatusCondition
+// when nothing else changed, but explicit comparison guards against
+// drift).
+func routeParentStatusEqual(a, b []gatewayv1.RouteParentStatus) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ap, bp := a[i], b[i]
+		if ap.ControllerName != bp.ControllerName {
+			return false
+		}
+		if !parentRefEqual(ap.ParentRef, bp.ParentRef) {
+			return false
+		}
+		if !routeConditionsEqual(ap.Conditions, bp.Conditions) {
+			return false
+		}
+	}
+	return true
+}
+
+func parentRefEqual(a, b gatewayv1.ParentReference) bool {
+	return strDerefEqual(a.Group, b.Group) &&
+		strDerefEqual(a.Kind, b.Kind) &&
+		strDerefEqual(a.Namespace, b.Namespace) &&
+		a.Name == b.Name &&
+		strDerefEqual(a.SectionName, b.SectionName) &&
+		port32DerefEqual(a.Port, b.Port)
+}
+
+func strDerefEqual[T ~string](a, b *T) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func port32DerefEqual(a, b *gatewayv1.PortNumber) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func routeConditionsEqual(a, b []metav1.Condition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ac, bc := a[i], b[i]
+		if ac.Type != bc.Type ||
+			ac.Status != bc.Status ||
+			ac.Reason != bc.Reason ||
+			ac.Message != bc.Message ||
+			ac.ObservedGeneration != bc.ObservedGeneration {
+			return false
+		}
+	}
+	return true
 }

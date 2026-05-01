@@ -33,6 +33,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -188,6 +189,9 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 	case getErr != nil:
 		return fmt.Errorf("get redirect HTTPRoute: %w", getErr)
 	default:
+		if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+			return nil
+		}
 		existing.Spec = desired.Spec
 		if err := r.Update(ctx, existing); err != nil {
 			return fmt.Errorf("update redirect HTTPRoute: %w", err)
@@ -333,6 +337,9 @@ func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *
 			case getErr != nil:
 				return fmt.Errorf("get per-listener Certificate %s: %w", desired.Name, getErr)
 			default:
+				if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+					continue
+				}
 				existing.Spec = desired.Spec
 				if err := r.Update(ctx, existing); err != nil {
 					return fmt.Errorf("update per-listener Certificate %s: %w", desired.Name, err)
@@ -399,24 +406,53 @@ func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.
 	case getErr != nil:
 		return fmt.Errorf("get Gateway: %w", getErr)
 	default:
-		existing.Spec = desired.Spec
 		// Merge labels: keep keys other actors (Cilium operator,
 		// kubectl label, future controllers) wrote, only add /
 		// overwrite the keys this controller owns. Wholesale
 		// replacement would clobber a Gateway's accumulated label
 		// set on every reconcile.
-		if existing.Labels == nil {
-			existing.Labels = make(map[string]string, len(desired.Labels))
+		mergedLabels := mergeLabels(existing.Labels, desired.Labels)
+		// Idempotency guard: skip Update when nothing changed.
+		// Without this, every reconcile bumps ResourceVersion,
+		// the Owns(Gateway) watch fires, the parent re-enqueues,
+		// and the controller hot-loops indefinitely.
+		if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) &&
+			labelsEqual(existing.Labels, mergedLabels) {
+			return nil
 		}
-		for k, v := range desired.Labels {
-			existing.Labels[k] = v
-		}
+		existing.Spec = desired.Spec
+		existing.Labels = mergedLabels
 		if err := r.Update(ctx, existing); err != nil {
 			return fmt.Errorf("update Gateway: %w", err)
 		}
 		logger.V(1).Info("updated Gateway", "namespace", tgw.Namespace, "name", tgw.Name)
 	}
 	return nil
+}
+
+// mergeLabels overlays controller-owned labels onto the existing set,
+// preserving foreign keys.
+func mergeLabels(existing, desired map[string]string) map[string]string {
+	out := make(map[string]string, len(existing)+len(desired))
+	for k, v := range existing {
+		out[k] = v
+	}
+	for k, v := range desired {
+		out[k] = v
+	}
+	return out
+}
+
+func labelsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, va := range a {
+		if vb, ok := b[k]; !ok || va != vb {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
@@ -437,6 +473,9 @@ func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.T
 	case getErr != nil:
 		return fmt.Errorf("get Issuer: %w", getErr)
 	default:
+		if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+			return nil
+		}
 		existing.Spec = desired.Spec
 		if err := r.Update(ctx, existing); err != nil {
 			return fmt.Errorf("update Issuer: %w", err)
@@ -486,6 +525,9 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 	case getErr != nil:
 		return fmt.Errorf("get Certificate: %w", getErr)
 	default:
+		if equality.Semantic.DeepEqual(existing.Spec, desired.Spec) {
+			return nil
+		}
 		existing.Spec = desired.Spec
 		if err := r.Update(ctx, existing); err != nil {
 			return fmt.Errorf("update Certificate: %w", err)
