@@ -19,7 +19,25 @@ set -o nounset
 set -o pipefail
 
 SCRIPT_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
-CODEGEN_PKG=${CODEGEN_PKG:-~/go/pkg/mod/k8s.io/code-generator@v0.34.1}
+CODEGEN_VERSION=v0.34.1
+CODEGEN_PKG=${CODEGEN_PKG:-~/go/pkg/mod/k8s.io/code-generator@${CODEGEN_VERSION}}
+
+# Pre-fetch the code-generator module if it is not yet in the local
+# module cache. We intentionally do not declare k8s.io/code-generator
+# in go.mod — the project does not import any of its packages from Go
+# code; only this shell script consumes its kube_codegen.sh. On a
+# clean CI runner the cache is empty, so the sourced script below
+# would fail with "No such file or directory". Fetch it explicitly
+# from a temporary module to keep the project's go.mod clean.
+if [ ! -f "${CODEGEN_PKG}/kube_codegen.sh" ]; then
+    codegen_tmp=$(mktemp -d)
+    (
+        cd "${codegen_tmp}"
+        go mod init codegen-fetch >/dev/null
+        go get "k8s.io/code-generator@${CODEGEN_VERSION}" >/dev/null
+    )
+    rm -rf "${codegen_tmp}"
+fi
 API_KNOWN_VIOLATIONS_DIR="${API_KNOWN_VIOLATIONS_DIR:-"${SCRIPT_ROOT}/api/api-rules"}"
 UPDATE_API_KNOWN_VIOLATIONS="${UPDATE_API_KNOWN_VIOLATIONS:-true}"
 CONTROLLER_GEN="go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4"
