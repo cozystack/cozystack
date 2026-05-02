@@ -22,28 +22,39 @@
 
   Rules:
     1. If tenant.spec.gateway is set explicitly (true|false) → use it.
-    2. Otherwise infer from tenant.spec.host:
-       - host empty → tenant inherits a derived subdomain apex from the
-         parent (`<name>.<parent apex>`); the operator implicitly
-         expects routability under that apex, so default ON.
-       - host set explicitly to a non-derived value (independent apex
-         like `customer1.io`) → operator made a deliberate apex choice;
-         keep explicit opt-in, default OFF.
+       Operator's explicit choice always wins, regardless of platform
+       state — the helmrelease for `gateway` will fail upstream if the
+       platform doesn't have gateway.enabled, but that's a user-visible
+       error which is the right outcome for explicit opt-in.
+    2. Otherwise (gateway unset) → consult both:
+       a. `_cluster.gateway-enabled` — the platform-level flag. If the
+          platform has not opted in to Gateway API, no auto-default
+          fires. Auto-on a Gateway when the cluster doesn't ship the
+          gateway-application chart only produces broken HelmReleases.
+       b. `tenant.spec.host` — when the platform IS Gateway-enabled,
+          a tenant with derived apex (`host` empty, computed as
+          `<name>.<parent apex>`) gets auto-on; a tenant with a
+          custom non-derived apex requires explicit opt-in, since
+          a custom apex is a deliberate operator choice and they may
+          not have intended public exposure.
 
   Escape hatch: an operator who wants a derived-apex tenant without a
   Gateway sets `gateway: false` explicitly on the tenant CR.
 
-  Implementation note: values.yaml defaults `gateway: ~` (null) so the
-  "unset" case is distinguishable from explicit `gateway: false`. Helm
-  treats null as `kindIs "invalid"` here.
+  Implementation note: values.yaml leaves `gateway` absent (no key) so
+  Helm reads it as missing → `kindIs "invalid"`. cozyvalues-gen's
+  `[gateway]` (optional) marker syntax does not allow nullable schema
+  typing, so the "key absent" form is what distinguishes "unset" from
+  explicit `false`.
 
-  The helper renders the literal string "true" or "false" (Sprig style)
-  — callers must compare with `eq ... "true"` rather than relying on
-  bool coercion.
+  The helper renders the literal string "true" or "false" — callers
+  must compare with `eq ... "true"` rather than rely on bool coercion.
 */}}
 {{- define "tenant.gatewayEffective" -}}
 {{- if kindIs "invalid" .Values.gateway -}}
-{{- if eq (.Values.host | default "") "" -}}true{{- else -}}false{{- end -}}
+{{- $platformOn := eq ((index .Values "_cluster" "gateway-enabled") | default "false") "true" -}}
+{{- $derivedApex := eq (.Values.host | default "") "" -}}
+{{- if and $platformOn $derivedApex -}}true{{- else -}}false{{- end -}}
 {{- else -}}
 {{- if .Values.gateway -}}true{{- else -}}false{{- end -}}
 {{- end -}}

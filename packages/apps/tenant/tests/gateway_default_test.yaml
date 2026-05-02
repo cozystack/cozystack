@@ -8,13 +8,22 @@ templates:
 # empty) implicitly expects routability under that apex — forcing
 # operators to also set `tenant.spec.gateway: true` is a UX bug.
 #
+# The auto-default fires only when the platform itself is gateway-
+# enabled (`_cluster.gateway-enabled=true`). Auto-on a Gateway when
+# the cluster doesn't ship the gateway-application chart only produces
+# broken HelmReleases — explicit opt-in still works in that case so
+# operators can preview the wiring on a non-Gateway cluster.
+#
 # Rules under test (see _helpers.tpl::tenant.gatewayEffective):
-#   - host="" (derived apex)  + gateway unset   → ON  (auto-default)
-#   - host="custom.example"   + gateway unset   → OFF (custom apex
-#                                                    needs explicit opt-in)
-#   - gateway=true  explicit                    → ON
-#   - gateway=false explicit                    → OFF (escape hatch for
-#                                                     derived-apex tenants)
+#   - platform off + any host + gateway unset    → OFF (auto-default
+#                                                       waits for the
+#                                                       platform flag)
+#   - platform on  + host=""  + gateway unset    → ON  (auto-default)
+#   - platform on  + host=custom + gateway unset → OFF (custom apex
+#                                                       needs explicit
+#                                                       opt-in)
+#   - gateway=true  explicit                     → ON  (regardless)
+#   - gateway=false explicit                     → OFF (escape hatch)
 
 release:
   name: tenant-alice
@@ -24,6 +33,7 @@ set:
   _cluster:
     expose-ingress: tenant-root
     expose-external-ips: "192.0.2.10"
+    gateway-enabled: "true"
 
 tests:
   - it: derived apex + gateway unset → renders HelmRelease (auto-on)
@@ -128,3 +138,63 @@ tests:
       - template: templates/gateway.yaml
         hasDocuments:
           count: 0
+
+  # The platform-off cases below pin a critical regression-guard: a
+  # tenant on a cluster where `gateway.enabled=false` at the platform
+  # level must NOT silently auto-Gateway. The gateway-application
+  # chart isn't installed on such clusters, so an auto-on would
+  # produce a broken HelmRelease. The e2e install bats lives in this
+  # mode (gateway not enabled in the bundle), and a regression here
+  # broke `Create tenant with isolated mode enabled` until the
+  # platform-flag gate landed.
+
+  - it: platform off + derived apex + gateway unset → no HelmRelease
+    set:
+      host: ""
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        gateway-enabled: "false"
+    asserts:
+      - template: templates/gateway.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/cilium-lb-pool.yaml
+        hasDocuments:
+          count: 0
+
+  - it: platform unset + derived apex + gateway unset → no HelmRelease
+    # gateway-enabled empty string — what cozystack-values renders
+    # when an operator hasn't flipped gateway.enabled in the platform
+    # chart. The helper treats anything other than the literal
+    # "true" as off. This is what an upgraded existing cluster looks
+    # like before the operator opts in.
+    set:
+      host: ""
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        gateway-enabled: ""
+    asserts:
+      - template: templates/gateway.yaml
+        hasDocuments:
+          count: 0
+
+  - it: platform off + gateway=true explicit → renders (operator override wins)
+    # Explicit operator opt-in always wins, even when the platform
+    # hasn't flipped gateway.enabled. The gateway HelmRelease will
+    # fail at runtime (no chart), but that's a user-visible error
+    # which is the right outcome — the operator deliberately asked
+    # for it.
+    set:
+      gateway: true
+      host: ""
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        gateway-enabled: "false"
+    asserts:
+      - template: templates/gateway.yaml
+        equal:
+          path: kind
+          value: HelmRelease
