@@ -8,13 +8,12 @@ spec:
     rules:
     - alert: VMNotRunningFor10Minutes
       expr: |
-        max_over_time(
-          kubevirt_vm_info{
-            status!="running",
-            exported_namespace=~".+",
-            name=~".+"
-          }[10m]
-        ) == 1
+        kubevirt_vm_info{
+          status!="running",
+          exported_namespace=~".+",
+          name=~".+"
+        } == 1
+      for: 10m
       labels:
         severity: critical
         namespace: '{{ "{{" }} $labels.exported_namespace {{ "}}" }}'
@@ -23,13 +22,12 @@ spec:
         description: 'The VM {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} has been in a non-Running state for more than 10 minutes. Please investigate the issue.'
     - alert: VMINotRunningFor10Minutes
       expr: |
-        max_over_time(
-          kubevirt_vmi_info{
-            phase!="running",
-            exported_namespace=~".+",
-            name=~".+"
-          }[10m]
-        ) == 1
+        kubevirt_vmi_info{
+          phase!="running",
+          exported_namespace=~".+",
+          name=~".+"
+        } == 1
+      for: 10m
       labels:
         severity: critical
         namespace: '{{ "{{" }} $labels.exported_namespace {{ "}}" }}'
