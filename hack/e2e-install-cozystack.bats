@@ -53,6 +53,11 @@ EOF
 
   # Wait until HelmReleases appear & reconcile them
   timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
+  # TODO(e2e-replace-fixed-timeouts): genuine sleep. The threshold of 10 is a
+  # heuristic for "enough HRs visible to start waiting"; the snapshot below
+  # uses whatever HRs have appeared by then. There is no objective k8s API
+  # signal for "all platform HRs have been emitted" without hard-coding the
+  # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
   sleep 5
   kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
 
@@ -143,6 +148,7 @@ EOF
 }
 
 @test "Check Cozystack API service" {
+  timeout 60 sh -ec 'until kubectl get apiservices/v1alpha1.apps.cozystack.io apiservices/v1alpha1.core.cozystack.io >/dev/null 2>&1; do sleep 2; done'
   kubectl wait --for=condition=Available apiservices/v1alpha1.apps.cozystack.io apiservices/v1alpha1.core.cozystack.io --timeout=2m
 }
 
@@ -174,15 +180,22 @@ EOF
   kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=5m --for=condition=available
 
   # etcd statefulset
+  timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=5m
 
   # VictoriaMetrics components
+  timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
+  timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m
+  timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
 
   # Grafana
+  timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=5m
+  timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=5m
 
   # Verify Grafana via ingress
@@ -273,6 +286,7 @@ spec:
   seaweedfs: false
 EOF
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
+  timeout 60 sh -ec 'until kubectl get namespace tenant-test >/dev/null 2>&1; do sleep 2; done'
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
   # Wait for ResourceQuota to appear and assert values
   timeout 60 sh -ec 'until [ "$(kubectl get quota -n tenant-test --no-headers 2>/dev/null | wc -l)" -ge 1 ]; do sleep 1; done'
