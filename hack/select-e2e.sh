@@ -39,22 +39,12 @@ app_to_bats() {
 
 # yq: path -> PackageSource name
 build_owners_index() {
-  for f in "$SOURCES_DIR"/*.yaml; do
-    src=$(yq -r '.metadata.name' "$f")
-    yq -r '.spec.variants[]?.components[]?.path // ""' "$f" | while read -r path; do
-      if [ -n "$path" ]; then echo "$path	$src"; fi
-    done
-  done
+  yq -rN '.metadata.name as $n | .spec.variants[]?.components[]?.path | select(. != null and . != "") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
 
 # yq: PackageSource name -> sources that depend on it (reverse of dependsOn)
 build_reverse_deps() {
-  for f in "$SOURCES_DIR"/*.yaml; do
-    src=$(yq -r '.metadata.name' "$f")
-    yq -r '.spec.variants[]?.dependsOn[]? // ""' "$f" | while read -r dep; do
-      if [ -n "$dep" ]; then echo "$dep	$src"; fi
-    done
-  done
+  yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
 
 OWNERS=$(build_owners_index | sort -u)
@@ -104,7 +94,7 @@ while IFS= read -r file; do
 done < "$CHANGED"
 
 if [ "$trigger_full" = 1 ]; then
-  echo "$all_apps" | tr '\n' ' '
+  echo "$all_apps" | paste -sd ' ' -
   exit 0
 fi
 
@@ -141,7 +131,7 @@ final="$final $selected_apps"
 
 # Deduplicate; intersect with available bats files.
 final_apps=$(echo "$final" | tr ' ' '\n' | sort -u | grep -v '^$' | while read -r app; do
-  if echo "$all_apps" | grep -qw "$app"; then
+  if echo "$all_apps" | grep -Fxq "$app"; then
     echo "$app"
   fi
 done | paste -sd ' ' -)
@@ -150,7 +140,7 @@ done | paste -sd ' ' -)
 # silently skip E2E. Fall back to full suite so a path inside the graph is
 # never silently dropped.
 if [ -z "$final_apps" ]; then
-  echo "$all_apps" | tr '\n' ' '
+  echo "$all_apps" | paste -sd ' ' -
   exit 0
 fi
 
