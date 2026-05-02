@@ -28,7 +28,6 @@ set:
 tests:
   - it: derived apex + gateway unset → renders HelmRelease (auto-on)
     set:
-      gateway: ~
       host: ""
     asserts:
       - template: templates/gateway.yaml
@@ -42,7 +41,6 @@ tests:
 
   - it: derived apex + gateway unset → renders LB pool (auto-on)
     set:
-      gateway: ~
       host: ""
     asserts:
       - template: templates/cilium-lb-pool.yaml
@@ -52,7 +50,6 @@ tests:
 
   - it: custom apex + gateway unset → no HelmRelease (explicit opt-in)
     set:
-      gateway: ~
       host: customer1.io
     asserts:
       - template: templates/gateway.yaml
@@ -61,7 +58,6 @@ tests:
 
   - it: custom apex + gateway unset → no LB pool (no Gateway, no pool)
     set:
-      gateway: ~
       host: customer1.io
     asserts:
       - template: templates/cilium-lb-pool.yaml
@@ -127,7 +123,6 @@ tests:
       name: tenant-root
       namespace: tenant-root
     set:
-      gateway: ~
       host: example.org
     asserts:
       - template: templates/gateway.yaml
