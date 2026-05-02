@@ -12,7 +12,7 @@
       (eq $exposeMode "loadBalancer")
       (eq $exposeIngress .Release.Namespace)
       .Values.ingress }}
-{{- $hasOwnGateway := .Values.gateway | default false }}
+{{- $hasOwnGateway := eq (include "tenant.gatewayEffective" .) "true" }}
 {{- /*
   Empty-IPs guard for tenant Gateway. The chart can render its own
   CiliumLoadBalancerIPPool only if publishing.externalIPs is non-empty.

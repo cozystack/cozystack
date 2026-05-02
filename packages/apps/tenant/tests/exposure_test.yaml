@@ -10,6 +10,11 @@ tests:
   - it: default exposure (externalIPs) renders no pool
     set:
       ingress: true
+      # Variant B auto-enables Gateway for derived-apex tenants, which
+      # would trigger the gateway-driven pool render. This case
+      # specifically exercises the externalIPs ingress flow, so
+      # opt-out the gateway path explicitly to keep the assert focused.
+      gateway: false
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10,192.0.2.11"
@@ -107,6 +112,10 @@ tests:
   - it: loadBalancer mode with ingress=false in publishing tenant renders no pool
     set:
       ingress: false
+      # Same as above — Variant B would auto-enable Gateway for the
+      # derived-apex case; explicitly opt out to isolate the no-ingress
+      # path under test.
+      gateway: false
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
@@ -118,6 +127,10 @@ tests:
   - it: loadBalancer mode in a non-publishing tenant renders no pool
     set:
       ingress: true
+      # Variant B would auto-enable Gateway for tenant-u1 (derived
+      # apex). This test covers the cross-tenant ingress-LB case —
+      # opt-out gateway to keep the assertion focused.
+      gateway: false
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"

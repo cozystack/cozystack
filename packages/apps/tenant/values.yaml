@@ -14,8 +14,8 @@ monitoring: false
 ## @param {bool} ingress - Deploy own Ingress Controller.
 ingress: false
 
-## @param {bool} gateway - Deploy own Gateway API Gateway (backed by Cilium Gateway API controller).
-gateway: false
+## @param {bool} [gateway] - Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When unset (the default), the chart auto-enables the Gateway for tenants whose apex is derived from the parent (i.e. `host` is empty), and leaves it off for tenants with a custom non-derived apex. Set to `true` or `false` explicitly to override that auto-behaviour.
+gateway: ~
 
 ## @param {bool} seaweedfs - Deploy own SeaweedFS.
 seaweedfs: false
