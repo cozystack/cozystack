@@ -1,0 +1,80 @@
+suite: cozy-ouroboros controller defaults
+templates:
+  - charts/ouroboros/templates/controller-deployment.yaml
+  - charts/ouroboros/templates/_helpers.tpl
+release:
+  name: ouroboros
+  namespace: cozy-ouroboros
+tests:
+  - it: defaults to coredns mode (host scenario; tenant overrides via apps/kubernetes)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mode=coredns
+
+  - it: emits runtime-composition flags (no chart-baked --proxy-fqdn) — chart is platform-agnostic and lets controller compose the rewrite-target FQDN at startup from the auto-detected cluster-domain
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-name=ouroboros-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-namespace=cozy-ouroboros
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-fqdn=ouroboros-proxy.cozy-ouroboros.svc.cluster.local.
+
+  - it: leaves Gateway-API watching off at the parent default (consumer enables)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --gateway-api
+
+  - it: writes into the kube-system/coredns Corefile by default (host mode)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-namespace=kube-system
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-configmap=coredns
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-key=Corefile
+
+  - it: tenant valuesOverride flips into coredns-import mode (and runtime-composition flags carry over — tenants are the actual consumers of this mode, the host stays on coredns)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: coredns-import
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mode=coredns-import
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-import-configmap=coredns-custom
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-import-key=ouroboros.override
+      # Runtime-composition flags MUST be emitted in coredns-import mode
+      # too — this is the mode tenants actually run, so a future refactor
+      # in the upstream controller-deployment template that drops the
+      # composition block from this branch only would break tenants
+      # silently. The negative-assert pins that --proxy-fqdn does NOT
+      # bake the cluster-domain at render time when no clusterDomain is
+      # configured (the platform-agnostic default).
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-name=ouroboros-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-namespace=cozy-ouroboros
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-fqdn=ouroboros-proxy.cozy-ouroboros.svc.cluster.local.
