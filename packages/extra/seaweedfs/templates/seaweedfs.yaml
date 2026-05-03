@@ -104,6 +104,11 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
 spec:
+  {{- if $ingress }}
+  # Ensure the ingress-nginx admission webhook is ready before creating Ingress resources.
+  dependsOn:
+  - name: ingress-nginx-system
+  {{- end }}
   chartRef:
     kind: ExternalArtifact
     name: cozystack-seaweedfs-application-default-seaweedfs-system
