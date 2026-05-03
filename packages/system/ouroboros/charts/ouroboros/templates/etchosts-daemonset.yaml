@@ -1,0 +1,59 @@
+{{- if .Values.etcHosts.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "ouroboros.etcHostsFullname" . }}
+  labels:
+    {{- include "ouroboros.etcHostsLabels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ouroboros.etcHostsSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ouroboros.etcHostsSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ouroboros.serviceAccountName" . }}
+      hostNetwork: true
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      tolerations:
+        {{- toYaml .Values.etcHosts.tolerations | nindent 8 }}
+      containers:
+        - name: controller
+          image: {{ include "ouroboros.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - controller
+            - --mode=etc-hosts
+            - --etc-hosts=/host/hosts
+            - --proxy-ip={{ required "etcHosts.proxyIP is required when etcHosts.enabled=true. Install once with etcHosts.enabled=false, look up the proxy Service ClusterIP, then upgrade with --set etcHosts.proxyIP=<that-IP>." .Values.etcHosts.proxyIP }}
+            {{- if .Values.controller.gatewayApi.enabled }}
+            - --gateway-api
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: false
+            runAsUser: 0
+          resources:
+            {{- toYaml .Values.etcHosts.resources | nindent 12 }}
+          volumeMounts:
+            # Bind-mount the single hosts file; never the whole /etc directory.
+            # Mounting /etc would expose /etc/shadow, kubeconfigs, etc. to a
+            # path-traversal bug or operator misconfiguration.
+            - name: hosts
+              mountPath: /host/hosts
+      volumes:
+        - name: hosts
+          hostPath:
+            path: {{ .Values.etcHosts.hostsPath }}
+            type: File
+{{- end }}

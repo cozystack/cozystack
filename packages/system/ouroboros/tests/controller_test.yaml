@@ -1,0 +1,58 @@
+suite: cozy-ouroboros controller defaults
+templates:
+  - charts/ouroboros/templates/controller-deployment.yaml
+  - charts/ouroboros/templates/_helpers.tpl
+release:
+  name: ouroboros
+  namespace: cozy-ouroboros
+tests:
+  - it: defaults to coredns mode (host scenario; tenant overrides via apps/kubernetes)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mode=coredns
+
+  - it: targets the in-cluster ingress-nginx Service hosted by cozystack
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-fqdn=ouroboros-proxy.cozy-ouroboros.svc.cluster.local.
+
+  - it: leaves Gateway-API watching off at the parent default (consumer enables)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --gateway-api
+
+  - it: writes into the kube-system/coredns Corefile by default (host mode)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-namespace=kube-system
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-configmap=coredns
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-key=Corefile
+
+  - it: tenant valuesOverride flips into coredns-import mode
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: coredns-import
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mode=coredns-import
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-import-configmap=coredns-custom
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-import-key=ouroboros.override

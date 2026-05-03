@@ -1,0 +1,34 @@
+suite: cozy-ouroboros cozystack-side overrides
+templates:
+  - charts/ouroboros/templates/proxy-deployment.yaml
+  - charts/ouroboros/templates/controller-deployment.yaml
+  - charts/ouroboros/templates/_helpers.tpl
+release:
+  name: ouroboros
+  namespace: cozy-ouroboros
+tests:
+  - it: proxy dials the cozy-ingress-nginx Service that cozystack actually deploys
+    template: charts/ouroboros/templates/proxy-deployment.yaml
+    asserts:
+      # The chart-default proxy.target.host points at the vanilla
+      # `ingress-nginx` namespace which exists nowhere in cozystack.
+      # Without this override the proxy Deployment dials a non-existent
+      # Service and silently drops hairpin traffic — the entire reason
+      # this package exists. A `helm pull` that bumps the upstream chart
+      # and shifts the values key (e.g. proxy.target.host →
+      # proxy.upstream.host) would silently skip the cozystack override
+      # and the fix this package exists for would stop working.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --target-host=ingress-nginx-controller.cozy-ingress-nginx.svc.cluster.local
+
+  - it: controller image is pinned to the digest the values.yaml ships
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      # Image-pin drift is the supply-chain anchor for this package; the
+      # values.yaml comment requires bumping the tag here together with
+      # OUROBOROS_CHART_VERSION in the Makefile. This assertion catches
+      # a Makefile bump that forgets to bump the tag (or vice versa).
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/lexfrei/ouroboros:0.6.0@sha256:b33c415cd2edf231eb62076297fee1b75657bef2bfcc0be916b84088aa49479d

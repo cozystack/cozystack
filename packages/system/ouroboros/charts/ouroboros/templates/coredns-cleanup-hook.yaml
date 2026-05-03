@@ -1,0 +1,331 @@
+{{- $mode := include "ouroboros.mode" . }}
+{{- $isCoredns := and (eq $mode "coredns") .Values.controller.coredns.cleanupOnUninstall }}
+{{- $isCorednsImport := and (eq $mode "coredns-import") .Values.controller.corednsImport.cleanupOnUninstall }}
+{{- if or $isCoredns $isCorednsImport }}
+{{- /*
+  hookName must fit in 63 chars (DNS-1123 label). ouroboros.fullname
+  already truncates to 63; appending "-coredns-cleanup" (16 chars)
+  would push past the limit on long release names. Trim the base to
+  47 first so the suffixed name always fits.
+*/}}
+{{- $base := include "ouroboros.fullname" . | trunc 47 | trimSuffix "-" }}
+{{- $hookName := printf "%s-coredns-cleanup" $base }}
+{{- $controllerName := include "ouroboros.fullname" . }}
+{{- $namespace := ternary .Values.controller.coredns.namespace .Values.controller.corednsImport.namespace $isCoredns }}
+{{- $configmap := ternary .Values.controller.coredns.configmap .Values.controller.corednsImport.configmap $isCoredns }}
+{{- $key := ternary .Values.controller.coredns.key .Values.controller.corednsImport.key $isCoredns }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+---
+{{- /*
+  Local Role in $namespace: the actual ConfigMap edit. coredns mode uses
+  `kubectl replace`, which RBAC maps to the `update` verb; coredns-import
+  mode uses JSON merge-patch (`patch`). Verbs are narrowed strictly per
+  mode — no speculative permissions kept around for "alternative recipes".
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  {{- if $isCoredns }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ $configmap | quote }}]
+    # `update` for `kubectl replace -f -` (the `replace` step is a PUT
+    # against the resource; the ResourceVersion in the YAML is verified
+    # server-side, so a stale read fails 409 and the retry loop reads
+    # again). `get` for the read step that produces the YAML the sed
+    # pipe operates on.
+    verbs: ["get", "update"]
+  {{- else }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ $configmap | quote }}]
+    # coredns-import mode nulls one data key with a JSON merge-patch.
+    # `get` is required for the precheck `kubectl get configmap` call
+    # at the top of the Job script — without it the call returns 403,
+    # `2>/dev/null` swallows the diagnostic, the `if !` interprets the
+    # failure as "not found", and the script exits 0 without ever
+    # running the patch. The cleanup hook would silently no-op.
+    # `patch` is the actual write verb.
+    verbs: ["get", "patch"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $hookName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hookName }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- /*
+  Release-namespace Role: the Job needs to scale the controller
+  Deployment to 0 BEFORE editing the CoreDNS ConfigMap, otherwise the
+  controller's informers can fire on any Ingress/Gateway event during
+  the hook → Deployment-deletion window and re-add the rewrite block
+  the hook just stripped. RBAC narrowed to `patch` on the controller's
+  scale subresource by name — no broader Deployment access.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $hookName }}-quiesce
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: [{{ $controllerName | quote }}]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ $controllerName | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $hookName }}-quiesce
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $hookName }}-quiesce
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hookName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "0"
+    # Deliberately omitting 'hook-failed' here so a failed Job's Pod
+    # sticks around long enough for `kubectl logs` to surface the cause.
+    # The Job is still cleaned up on success (hook-succeeded).
+    # before-hook-creation guarantees the previous run's Job is removed
+    # before the new one fires, so an upgrade does not stack stale Jobs.
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  # activeDeadlineSeconds bounds the Job at the Helm-uninstall scale so a
+  # stuck finalizer or a wedged kubectl call does not block helm uninstall
+  # forever. 120s mirrors the Helm-default --timeout for hooks.
+  activeDeadlineSeconds: 120
+  backoffLimit: 1
+  # 10-minute TTL (well past helm/e2e timeouts) so failed Job pods stay
+  # around long enough for kubectl logs after the fact. The hook-succeeded
+  # delete-policy still reaps the whole hook bundle on success during the
+  # same helm operation, so this only widens the diagnostic window for
+  # failures.
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "ouroboros.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $hookName }}
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # writable /tmp + HOME=/tmp so kubectl can create its discovery
+      # cache (~/.kube/cache) under readOnlyRootFilesystem=true. Without
+      # this, kubectl 1.30+ aborts with "MkdirAll ... permission denied"
+      # before any subcommand runs.
+      volumes:
+        - name: kube-cache
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: "{{ .Values.controller.cleanupHookImage.repository }}:{{ .Values.controller.cleanupHookImage.tag }}"
+          imagePullPolicy: {{ .Values.controller.cleanupHookImage.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: kube-cache
+              mountPath: /tmp
+          command:
+            - sh
+            - -c
+            - |
+              # set -x for command tracing — diagnostic harness reads
+              # these from kubectl logs when the Job's outcome is unclear.
+              set -eux
+
+              # Quiesce the controller first. Otherwise its informers can
+              # fire on any Ingress/Gateway event during the hook window
+              # and re-add the rewrite block we are about to strip. Scale
+              # to 0, then poll status.replicas via `get` until the
+              # Deployment reports zero ready/updated replicas (or the
+              # 60-second timeout fires). The polling form keeps RBAC
+              # narrow to `get` on the named Deployment — `kubectl
+              # rollout status` would need `list` and `watch` cluster-
+              # wide on the resource type, which is wider than the hook
+              # actually requires.
+              echo "[cleanup-hook] quiescing controller {{ .Release.Namespace }}/{{ $controllerName }} (scale to 0)"
+              kubectl --namespace='{{ .Release.Namespace }}' scale deployment '{{ $controllerName }}' --replicas=0 \
+                || echo "[cleanup-hook] controller Deployment not found (already removed?), continuing"
+              quiesced=0
+              for attempt in $(seq 1 60); do
+                replicas=$(kubectl --namespace='{{ .Release.Namespace }}' get deployment '{{ $controllerName }}' \
+                  --output='jsonpath={.status.replicas}' 2>/dev/null || true)
+                # status.replicas is empty when the Deployment is gone
+                # (Helm raced us by deleting it first) or when it has
+                # been scaled to 0 and the pod terminated. Either is a
+                # valid quiesced state.
+                if [ -z "$replicas" ] || [ "$replicas" = "0" ]; then
+                  echo "[cleanup-hook] controller quiesced after ${attempt}s (status.replicas=${replicas:-<empty>})"
+                  quiesced=1
+                  break
+                fi
+                sleep 1
+              done
+              if [ "$quiesced" -ne 1 ]; then
+                echo "[cleanup-hook] WARNING: controller did not quiesce within 60s — proceeding anyway, the rewrite block may be re-added during the cleanup window"
+              fi
+
+              {{- if $isCoredns }}
+              # coredns mode: strip the BEGIN/END marker block from the
+              # live Corefile. Pipe through `kubectl get -oyaml | sed |
+              # kubectl replace -f -` so labels, annotations, and other
+              # data keys on the ConfigMap (including any external
+              # config-management metadata) are preserved verbatim. The
+              # marker pair lives only inside Corefile, so a substring
+              # `sed` range cannot collide with YAML metadata at the
+              # same indentation level. Retried up to 5 times because
+              # `kubectl replace` is a PUT and a 409 conflict happens if
+              # the ConfigMap is touched between get and replace.
+              echo "[cleanup-hook] coredns mode: stripping ouroboros block from {{ $namespace }}/{{ $configmap }}"
+              # Per-attempt re-validation: each iteration re-reads the
+              # ConfigMap and re-checks the BEGIN-count + END-marker
+              # invariants before running sed. The validation must NOT
+              # live above the loop — between attempts the ConfigMap can
+              # be mutated (the controller didn't quiesce, an external
+              # config-management writer ran a partial update, etc.) and
+              # acting on stale validation would defeat the guard. Each
+              # `kubectl replace` is a PUT carrying the resourceVersion
+              # from the just-read body; a mid-flight write returns 409
+              # and we retry the whole read+validate+sed+replace cycle.
+              attempt=0
+              while [ $attempt -lt 5 ]; do
+                attempt=$((attempt + 1))
+                # `--ignore-not-found` returns empty + exit 0 when the
+                # ConfigMap does not exist (404), but propagates any
+                # OTHER failure (RBAC drift, apiserver transient,
+                # network blip) as non-zero. Plain `2>/dev/null` would
+                # silently misclassify those as "not found" and exit
+                # 0, leaving the rewrite block in place — the exact
+                # silent-leakage failure mode this hook exists to
+                # prevent.
+                : > /tmp/cm.yaml
+                kubectl --namespace='{{ $namespace }}' get configmap '{{ $configmap }}' --ignore-not-found --output=yaml > /tmp/cm.yaml
+                if [ ! -s /tmp/cm.yaml ]; then
+                  echo "[cleanup-hook] ConfigMap {{ $namespace }}/{{ $configmap }} not found, nothing to clean"
+                  exit 0
+                fi
+                begin_count=$(grep -c '# === BEGIN ouroboros' /tmp/cm.yaml || true)
+                if [ "${begin_count:-0}" = "0" ]; then
+                  echo "[cleanup-hook] no ouroboros BEGIN marker in Corefile (attempt $attempt), nothing to clean"
+                  exit 0
+                fi
+                # Defence against in-band markers: if the YAML output
+                # contains the BEGIN marker more than once (e.g. somebody
+                # added an annotation whose value documents the marker
+                # syntax, or another data key got the marker copied into
+                # it), the sed range would delete the wrong span. Refuse
+                # to act in that case.
+                if [ "$begin_count" != "1" ]; then
+                  echo "[cleanup-hook] FATAL: '# === BEGIN ouroboros' marker found ${begin_count} times in {{ $namespace }}/{{ $configmap }} (expected exactly 1). The sed range would delete the wrong span. Reconcile the ConfigMap by hand and re-run helm uninstall."
+                  exit 1
+                fi
+                # Both markers must be present. If BEGIN exists but END
+                # is missing (corruption / partial manual edit / the
+                # controller is mid-write), sed '/BEGIN/,/END/d' would
+                # delete from BEGIN to EOF and truncate the Corefile.
+                # Bail with a clear diagnostic instead of mangling.
+                if ! grep -q '# === END ouroboros' /tmp/cm.yaml; then
+                  echo "[cleanup-hook] FATAL: BEGIN marker found but END marker missing in Corefile of {{ $namespace }}/{{ $configmap }}. Refusing to run sed (would truncate the Corefile to EOF). Run \`kubectl edit configmap -n {{ $namespace }} {{ $configmap }}\` and reconcile the markers by hand, then re-run helm uninstall."
+                  exit 1
+                fi
+                sed '/# === BEGIN ouroboros/,/# === END ouroboros/d' /tmp/cm.yaml > /tmp/cm-cleaned.yaml
+                if kubectl --namespace='{{ $namespace }}' replace --filename=/tmp/cm-cleaned.yaml; then
+                  echo "[cleanup-hook] coredns Corefile cleaned (attempt $attempt)"
+                  exit 0
+                fi
+                echo "[cleanup-hook] replace failed on attempt $attempt (likely 409 conflict), retrying"
+                sleep 1
+              done
+              echo "[cleanup-hook] FATAL: kubectl replace failed 5 times, giving up"
+              exit 1
+              {{- else }}
+              # coredns-import mode: null the configured data key on the
+              # import ConfigMap. JSON merge-patch is conflict-free (no
+              # ResourceVersion gating), so a single attempt is enough.
+              # Other data keys (operator-owned *.override snippets,
+              # future additions) are kept intact.
+              echo "[cleanup-hook] coredns-import mode: nulling {{ $key }} key on {{ $namespace }}/{{ $configmap }}"
+              # `--ignore-not-found` distinguishes 404 (empty output,
+              # exit 0) from any other failure mode (RBAC drift,
+              # apiserver transient, network blip → non-zero). Plain
+              # `2>&1 >/dev/null` would misclassify the latter as
+              # "not found" and exit 0 leaving the dangling rewrite.
+              probe=$(kubectl --namespace='{{ $namespace }}' get configmap '{{ $configmap }}' --ignore-not-found --output=name)
+              if [ -z "$probe" ]; then
+                echo "[cleanup-hook] ConfigMap {{ $namespace }}/{{ $configmap }} not found, nothing to clean"
+                exit 0
+              fi
+              kubectl --namespace='{{ $namespace }}' patch configmap '{{ $configmap }}' \
+                --type=merge \
+                --patch='{"data":{"{{ $key }}":null}}'
+              echo "[cleanup-hook] coredns-import key cleaned"
+              {{- end }}
+{{- end }}

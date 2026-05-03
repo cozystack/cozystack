@@ -1,0 +1,25 @@
+annotations:
+  artifacthub.io/category: networking
+  artifacthub.io/license: BSD-3-Clause
+apiVersion: v2
+appVersion: 0.6.0
+description: In-cluster controller + TCP proxy that fixes hairpin-NAT for Ingress
+  controllers behind PROXY-protocol
+home: https://github.com/lexfrei/ouroboros
+icon: https://avatars.githubusercontent.com/u/4998147
+keywords:
+- networking
+- ingress
+- coredns
+- hairpin-nat
+- proxy-protocol
+kubeVersion: '>=1.28.0-0'
+maintainers:
+- email: f@lex.la
+  name: lexfrei
+  url: https://github.com/lexfrei
+name: ouroboros
+sources:
+- https://github.com/lexfrei/ouroboros
+type: application
+version: 0.6.0

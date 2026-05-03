@@ -1,0 +1,40 @@
+ouroboros:
+  image:
+    repository: ghcr.io/lexfrei/ouroboros
+    # Pulled directly from the upstream lexfrei/ouroboros registry; this
+    # package is intentionally not mirrored under ghcr.io/cozystack/*.
+    # Air-gapped operators must mirror both this image and the OCI chart
+    # at oci://ghcr.io/lexfrei/charts/ouroboros separately. Bump the tag
+    # here together with OUROBOROS_CHART_VERSION in the Makefile.
+    tag: 0.6.0@sha256:b33c415cd2edf231eb62076297fee1b75657bef2bfcc0be916b84088aa49479d
+  controller:
+    # Host scenario default: mutate the live kube-system/coredns Corefile
+    # directly. The host CoreDNS on cozystack is Talos-managed and its
+    # Corefile does not include an `import /etc/coredns/custom/*.override`
+    # directive, so the alternative coredns-import mode (which writes into
+    # a separate ConfigMap that nothing reads) silently no-ops on the
+    # host. Tenant deployments override this back to coredns-import via
+    # the cozystack.defaultOuroborosValues helper in apps/kubernetes —
+    # tenants do run cozystack-coredns, which DOES include the import
+    # directive, so the import-CM mode works there.
+    mode: coredns
+    # gatewayApi watching is left at the upstream default (false). The
+    # host bundle template emits cozystack.ouroboros without injecting
+    # any controller.gatewayApi override because cozystack does NOT
+    # install Gateway-API CRDs cluster-wide on the host (system/
+    # gateway-api-crds is only registered in the kubernetes-application
+    # PackageSource — tenant scope). Forcing --gateway-api on a host
+    # without the CRDs would CrashLoopBackOff the controller on
+    # WaitForCacheSync against missing GVRs. The apps/kubernetes
+    # wrapper mirrors the per-tenant addons.gatewayAPI.enabled into
+    # this field for tenants that DO install Gateway-API.
+  proxy:
+    target:
+      # cozystack deploys ingress-nginx into cozy-ingress-nginx in both
+      # the host control plane and every tenant control plane (the tenant
+      # HelmRelease sets fullnameOverride: ingress-nginx + targetNamespace:
+      # cozy-ingress-nginx). The chart's upstream default points at the
+      # vanilla `ingress-nginx` namespace, which does not exist anywhere
+      # in cozystack — without this override the proxy Deployment would
+      # dial a non-existent Service and silently drop hairpin traffic.
+      host: ingress-nginx-controller.cozy-ingress-nginx.svc.cluster.local

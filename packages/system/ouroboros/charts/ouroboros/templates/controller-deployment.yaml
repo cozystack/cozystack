@@ -1,0 +1,122 @@
+{{- if and .Values.controller.enabled (not .Values.etcHosts.enabled) }}
+{{- $mode := include "ouroboros.mode" . }}
+{{- if and (eq $mode "external-dns") (gt (int .Values.controller.replicaCount) 1) }}
+{{- fail (printf "controller.replicaCount=%d is unsafe in external-dns mode: ouroboros has no leader-election, two reconcilers would race on Get->Update against the same DNSEndpoints. Set controller.replicaCount=1 or pick a different mode." (int .Values.controller.replicaCount)) }}
+{{- end }}
+{{- $proxyService := default (include "ouroboros.proxyFullname" .) .Values.externalDns.proxyService }}
+{{- $namespace := include "ouroboros.externalDnsNamespace" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ouroboros.fullname" . }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controller.replicaCount }}
+  {{- if eq $mode "external-dns" }}
+  # Recreate strategy: external-dns mode has no leader-election, so the
+  # default RollingUpdate (maxSurge=25% rounds to 1 with replicaCount=1)
+  # would briefly run two reconcilers during chart upgrades and produce
+  # the exact Get-Update race the replicaCount > 1 chart-fail prevents.
+  strategy:
+    type: Recreate
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "ouroboros.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ouroboros.selectorLabels" . | nindent 8 }}
+        {{- with .Values.controller.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.controller.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ouroboros.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: controller
+          image: {{ include "ouroboros.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - controller
+            - --mode={{ $mode }}
+            - --resync={{ .Values.controller.resync }}
+            {{- if .Values.controller.gatewayApi.enabled }}
+            - --gateway-api
+            {{- end }}
+            {{- if .Values.controller.ingressClass }}
+            - --ingress-class={{ .Values.controller.ingressClass }}
+            {{- end }}
+            {{- if .Values.controller.gatewayClass }}
+            - --gateway-class={{ .Values.controller.gatewayClass }}
+            {{- end }}
+            {{- if .Values.controller.clusterDomain }}
+            - --cluster-domain={{ .Values.controller.clusterDomain }}
+            {{- end }}
+            {{- if eq $mode "coredns" }}
+            - --coredns-namespace={{ .Values.controller.coredns.namespace }}
+            - --coredns-configmap={{ .Values.controller.coredns.configmap }}
+            - --coredns-key={{ .Values.controller.coredns.key }}
+            - --proxy-fqdn={{ include "ouroboros.proxyFqdn" . }}
+            {{- end }}
+            {{- if eq $mode "coredns-import" }}
+            - --coredns-import-namespace={{ .Values.controller.corednsImport.namespace }}
+            - --coredns-import-configmap={{ .Values.controller.corednsImport.configmap }}
+            - --coredns-import-key={{ .Values.controller.corednsImport.key }}
+            - --proxy-fqdn={{ include "ouroboros.proxyFqdn" . }}
+            {{- end }}
+            {{- if eq $mode "external-dns" }}
+            - --external-dns-namespace={{ $namespace }}
+            - --external-dns-record-ttl={{ .Values.externalDns.recordTTL }}
+            - --external-dns-proxy-service={{ $proxyService }}
+            - --external-dns-output={{ default "crd" .Values.externalDns.output }}
+            {{- /* `default` keeps helm upgrade --reuse-values safe: stored
+                   values from a pre-PR release won't carry annotationPrefix,
+                   so an empty render would crash the controller in
+                   output=service mode (validation requires non-empty + '/' suffix). */}}
+            - --external-dns-annotation-prefix={{ default "external-dns.alpha.kubernetes.io/" .Values.externalDns.annotationPrefix }}
+            {{- if .Values.externalDns.proxyIP }}
+            - --external-dns-proxy-ip={{ .Values.externalDns.proxyIP }}
+            {{- end }}
+            {{- range $key, $value := .Values.externalDns.annotations }}
+            - --external-dns-annotation={{ $key }}={{ $value }}
+            {{- end }}
+            {{- range $key, $value := .Values.externalDns.labels }}
+            - --external-dns-label={{ $key }}={{ $value }}
+            {{- end }}
+            {{- end }}
+          env:
+            - name: OUROBOROS_INSTANCE
+              value: {{ .Release.Name | quote }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,259 @@
+# -- Container image (single image, dispatched via subcommand).
+image:
+  repository: ghcr.io/lexfrei/ouroboros
+  pullPolicy: IfNotPresent
+  # @default -- chart appVersion
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Controller deployment (watches Ingress / Gateway, mutates CoreDNS).
+controller:
+  enabled: true
+  replicaCount: 1
+  # -- Kubernetes cluster DNS domain. Empty leaves auto-detection to
+  # the controller binary at startup (parses the search list in
+  # /etc/resolv.conf). Set explicitly when:
+  #   - kubelet --cluster-domain has been customised on this cluster
+  #     (cozystack tenants default to "cozy.local"; RKE2/k3s sometimes
+  #     set their own; federations use "k8s.example.com");
+  #   - air-gapped / custom DNS where /etc/resolv.conf does not contain
+  #     a kubelet-style search line and auto-detect would fall back
+  #     to the conventional "cluster.local" — wrong for the cluster.
+  # The chart-derived ProxyFQDN suffix uses this value (or
+  # "cluster.local" fallback) to ensure rewrite targets match what
+  # kube-dns serves, otherwise in-cluster DNS for hairpinned
+  # hostnames resolves to NXDOMAIN.
+  clusterDomain: ""
+  # -- Reconciler mode:
+  # "coredns" (mutates kube-system/coredns ConfigMap directly),
+  # "coredns-import" (writes a plugin-only snippet into a separate
+  # ConfigMap that the main Corefile pulls in via `import`; useful when
+  # the main Corefile is owned by Helm/Flux and re-rendered),
+  # "external-dns" (emits externaldns.k8s.io/v1alpha1.DNSEndpoint CRs).
+  # The "etc-hosts" mode is selected by setting etcHosts.enabled=true.
+  mode: coredns
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  # -- Watch Gateway API resources in addition to Ingress.
+  gatewayApi:
+    enabled: false
+  # -- Restrict hostname extraction to Ingresses with this spec.ingressClassName.
+  # Empty = all classes. Use this on clusters that run multiple ingress
+  # controllers (e.g. one with PROXY-protocol, one without) to avoid
+  # hairpinning hostnames whose serving controller does not need it.
+  ingressClass: ""
+  # -- Restrict hostname extraction to Gateways with this spec.gatewayClassName
+  # and to HTTPRoutes attached to them via parentRefs. Empty = all classes.
+  gatewayClass: ""
+  # -- CoreDNS ConfigMap to mutate (coredns mode).
+  coredns:
+    namespace: kube-system
+    configmap: coredns
+    key: Corefile
+    # -- On `helm uninstall`, run a pre-delete Job that strips ouroboros's
+    # `# === BEGIN ouroboros (do not edit by hand) ===` ... `# === END
+    # ouroboros ===` block from the live Corefile. Without this, the
+    # rewrite block stays in the ConfigMap pointing at a Service that
+    # is about to disappear — in-cluster DNS for hairpinned hostnames
+    # returns connection-refused until an operator runs the manual
+    # cleanup recipe by hand. The Job uses `kubectl get -oyaml | sed |
+    # kubectl replace -f -` so labels, annotations, and other data
+    # keys on the ConfigMap (including any external-config-management
+    # metadata) are preserved verbatim.
+    cleanupOnUninstall: true
+  # -- Separate ConfigMap that the main Corefile imports via
+  # `import /etc/coredns/custom/*.override` (coredns-import mode). The
+  # ConfigMap must exist before install — typically created by the same
+  # chart that deploys CoreDNS so the volume mount lines up. Empty data
+  # is fine; ouroboros writes the snippet under the configured key.
+  corednsImport:
+    namespace: kube-system
+    configmap: coredns-custom
+    key: ouroboros.override
+    # -- On `helm uninstall`, run a pre-delete Job that nulls the
+    # `key` data entry of the configured ConfigMap. Without this, the
+    # rewrite snippet stays in the import ConfigMap pointing at a
+    # Service that is about to disappear — in-cluster DNS for
+    # hairpinned hostnames returns connection-refused until an
+    # operator runs `kubectl patch ... '{"data":{"<key>":null}}'` by
+    # hand. The Job nulls only the configured key, leaving any other
+    # data keys (operator-owned `*.override` snippets, future
+    # additions) intact.
+    cleanupOnUninstall: true
+  # -- Image used by the coredns / coredns-import cleanup-on-uninstall
+  # hooks. Same defaults as externalDns.cleanupHookImage — kept separate
+  # so the two output paths can pin independently if needed (an air-gap
+  # mirror that only carries one of them, for example). Must include
+  # /bin/sh, kubectl, and sed (the coredns-mode hook pipes
+  # `kubectl get -oyaml | sed | kubectl replace`); coredns-import-mode
+  # only needs kubectl.
+  cleanupHookImage:
+    # alpine-based kubectl: needs a shell so the wrapper script can run.
+    # rancher/kubectl is FROM scratch and StartErrors without /bin/sh.
+    # alpine/kubectl is multi-arch and busybox-derived (sh + sed + kubectl).
+    repository: alpine/kubectl
+    # renovate: datasource=docker depName=alpine/kubectl
+    tag: "1.36.0"
+    pullPolicy: IfNotPresent
+  # -- Informer resync period.
+  resync: 10m
+
+# -- Proxy deployment (TCP relay that injects PROXY-protocol v1 header).
+proxy:
+  enabled: true
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  service:
+    type: ClusterIP
+    annotations: {}
+  # -- Backend ingress controller behind the proxy.
+  target:
+    host: ingress-nginx-controller.ingress-nginx.svc.cluster.local
+    httpPort: 80
+    httpsPort: 443
+  dialTimeout: 5s
+  readyTimeout: 2s
+  shutdownGrace: 30s
+
+# -- external-dns mode: emit DNSEndpoint CRs that an external-dns
+# deployment in the cluster picks up via --source=crd. Activated by
+# controller.mode=external-dns.
+externalDns:
+  # -- Namespace where DNSEndpoint CRs are written. Empty = release namespace.
+  namespace: ""
+  # -- Record TTL on each emitted DNSEndpoint, in seconds. Range [1, 86400].
+  recordTTL: 60
+  # -- Output kind: "crd" (default; emits externaldns.k8s.io DNSEndpoint
+  # CRs that an external-dns instance with --source=crd consumes) or
+  # "service" (emits annotated headless Services for instances with
+  # --source=service + --annotation-prefix; matches the homelab
+  # internal-dns split-horizon pattern).
+  output: crd
+  # -- Annotation prefix used when output=service. Must end in '/'.
+  # Default reads on every external-dns instance; override with your
+  # internal-zone instance's --annotation-prefix to opt that instance
+  # into picking up ouroboros records (and not the default one).
+  annotationPrefix: external-dns.alpha.kubernetes.io/
+  # -- Override target IP. Empty = discover via the named Service below.
+  proxyIP: ""
+  # -- Service name from which the controller resolves the proxy ClusterIP
+  # at startup. The chart-rendered proxy Service is the default, so most
+  # operators do not need to change this.
+  proxyService: ""
+  # -- Annotations to copy verbatim onto every emitted DNSEndpoint
+  # (e.g. external-dns.alpha.kubernetes.io/cloudflare-proxied: "false").
+  # Reserved keys (ouroboros.lexfrei.tech/source) are rejected at runtime.
+  annotations: {}
+  # -- Labels to copy verbatim onto every emitted DNSEndpoint. The use case
+  # is multi-instance external-dns deployments that filter their CRD source
+  # via --label-filter, e.g. one external-dns for public DNS and another
+  # for internal DNS:
+  #   externalDns:
+  #     labels:
+  #       external-dns-instance: internal-dns
+  # Reserved keys (app.kubernetes.io/managed-by, ouroboros.lexfrei.tech/instance)
+  # are rejected at runtime — those are owned by ouroboros for ownership and
+  # prune scoping.
+  labels: {}
+  # -- Post-delete Helm hook that deletes ouroboros-owned records
+  # (DNSEndpoint CRs in output=crd, headless Services in output=service)
+  # after `helm uninstall`, so external-dns drops the upstream records
+  # without waiting for its TXT-registry sweep. Runs post-delete (not
+  # pre-delete) on purpose: at post-delete time the controller
+  # Deployment is already gone and cannot race-recreate anything we
+  # delete.
+  cleanupOnUninstall: true
+  # -- Image used by the cleanup-on-uninstall hook. Kept separate from the
+  # main image because all it needs is kubectl.
+  cleanupHookImage:
+    # alpine-based kubectl: needs a shell so the CRD-presence probe works.
+    # rancher/kubectl is FROM scratch with no /bin/sh — the wrapper script
+    # would StartError immediately. alpine/kubectl is multi-arch and has
+    # /bin/sh + kubectl + grep, which is everything the hook needs.
+    repository: alpine/kubectl
+    # renovate: datasource=docker depName=alpine/kubectl
+    tag: "1.36.0"
+    pullPolicy: IfNotPresent
+
+# -- Optional /etc/hosts DaemonSet (alt to CoreDNS).
+etcHosts:
+  enabled: false
+  hostsPath: /etc/hosts
+  # -- ClusterIP of ouroboros-proxy. Required when etcHosts.enabled=true.
+  # Discover after a first install (with etcHosts disabled) via:
+  #   kubectl --namespace <release-namespace> get svc <release>-ouroboros-proxy \
+  #     --output jsonpath='{.spec.clusterIP}'
+  # Helm cannot derive this at template time because the Service ClusterIP is
+  # allocated at apply time.
+  proxyIP: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+  tolerations:
+    - operator: Exists
+
+# -- ServiceAccount overrides.
+serviceAccount:
+  annotations: {}
+  name: ""
+
+# -- Pod-level security context (applied to controller and proxy pods).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level security context.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# -- PodDisruptionBudget for the proxy (ignored when proxy.replicaCount < 2).
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: null
+
+# -- NetworkPolicy gates (off by default).
+networkPolicy:
+  enabled: false
+  # -- Sources that may reach the proxy. Default: all pods in the cluster.
+  ingress:
+    from: []
+
+# -- terminationGracePeriodSeconds for all pods.
+terminationGracePeriodSeconds: 30

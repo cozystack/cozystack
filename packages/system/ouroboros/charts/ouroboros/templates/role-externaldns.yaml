@@ -1,0 +1,77 @@
+{{- if eq (include "ouroboros.mode" .) "external-dns" }}
+{{- $proxyService := default (include "ouroboros.proxyFullname" .) .Values.externalDns.proxyService }}
+{{- $recordsNs := include "ouroboros.externalDnsNamespace" . }}
+{{- $output := default "crd" .Values.externalDns.output }}
+# Role and RoleBinding for the records namespace. The verbs differ by
+# output type: dnsendpoints CRUD for output=crd (default), services CRUD
+# for output=service. RoleBinding subject and namespace stay the same.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ouroboros.fullname" . }}-externaldns
+  namespace: {{ $recordsNs }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+rules:
+  {{- if eq $output "service" }}
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- else }}
+  - apiGroups: ["externaldns.k8s.io"]
+    resources: ["dnsendpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ouroboros.fullname" . }}-externaldns
+  namespace: {{ $recordsNs }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "ouroboros.fullname" . }}-externaldns
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ouroboros.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if not .Values.externalDns.proxyIP }}
+---
+# Auto-discovery wants the proxy Service ClusterIP. The Service ALWAYS lives
+# in the release namespace (the chart renders it as a release-scoped
+# resource), so this Role is rendered there even when the records namespace
+# differs. resourceNames pins the rule to exactly the proxy Service so it
+# does not become a generic "list all Services in this namespace" hole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "ouroboros.fullname" . }}-externaldns-discover
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["{{ $proxyService }}"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "ouroboros.fullname" . }}-externaldns-discover
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "ouroboros.fullname" . }}-externaldns-discover
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "ouroboros.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}
