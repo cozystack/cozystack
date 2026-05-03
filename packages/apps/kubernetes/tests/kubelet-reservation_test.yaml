@@ -1530,14 +1530,14 @@ tests:
 
   # NOTE: The instanceType-based auto-computation path (where resources.memory is
   # absent and instanceType points to a VirtualMachineClusterInstancetype CR whose
-  # .spec.memory.guest is used as $effectiveMemory) cannot be tested here.
+  # .spec.memory.guest is used as $effectiveMemory) is not exercised here.
   #
   # The template uses Helm's `lookup` function to fetch the instancetype CR
-  # (cluster.yaml line ~187). `lookup` requires a live Kubernetes API server and
-  # always returns empty in helm-unittest (v1.0.3 provides no lookup mocking).
-  # When lookup returns empty, the template calls `fail`, so the positive path
-  # (successful lookup -> reservation derived from spec.memory.guest) is
-  # unreachable in unit tests.
+  # (cluster.yaml line ~187). helm-unittest v1.0.3+ does support `lookup` via the
+  # top-level `kubernetesProvider` field (see ouroboros_lookup_test.yaml in this
+  # directory for an example), but the assertions for the auto-computation
+  # arithmetic are simpler to express with explicit resources.memory values, so
+  # all reservation tests above use that path.
   #
   # All reservation auto-computation tests above use resources.memory directly,
   # which exercises the same 5%-clamp logic that the instanceType path uses.

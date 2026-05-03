@@ -78,6 +78,9 @@ type Addons struct {
 	// Monitoring agents.
 	// +kubebuilder:default:={}
 	MonitoringAgents MonitoringAgentsAddon `json:"monitoringAgents"`
+	// Hairpin-NAT fix for ingress-nginx with PROXY-protocol.
+	// +kubebuilder:default:={}
+	Ouroboros OuroborosAddon `json:"ouroboros"`
 	// Velero backup/restore addon.
 	// +kubebuilder:default:={}
 	Velero VeleroAddon `json:"velero"`
@@ -257,6 +260,18 @@ type NodeGroup struct {
 	Roles []string `json:"roles,omitempty"`
 	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
 	StorageClass string `json:"storageClass,omitempty"`
+}
+
+type OuroborosAddon struct {
+	// Defence-in-depth gate for the rare case where the chart's pre-delete cleanup hook did not land (tenant unreachable, hook timed out, manual `kubectl delete hr` bypassed helm). Set true after manually verifying the tenant kube-system/coredns-custom ConfigMap is clean (see docs). The normal disable path is fully automatic.
+	// +kubebuilder:default:=false
+	AcknowledgeUncleanRemoval bool `json:"acknowledgeUncleanRemoval"`
+	// Enable ouroboros. Requires addons.ingressNginx.enabled (chart-render fail otherwise). Only useful when PROXY-protocol is wired on the tenant ingress-nginx via valuesOverride.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Custom Helm values overrides. Operator-key wins over cozystack defaults.
+	// +kubebuilder:default:={}
+	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
 type Resources struct {

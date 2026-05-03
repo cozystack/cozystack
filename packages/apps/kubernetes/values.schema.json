@@ -190,6 +190,7 @@
         "hami",
         "ingressNginx",
         "monitoringAgents",
+        "ouroboros",
         "velero",
         "verticalPodAutoscaler"
       ],
@@ -385,6 +386,34 @@
             },
             "valuesOverride": {
               "description": "Custom Helm values overrides.",
+              "type": "object",
+              "default": {},
+              "x-kubernetes-preserve-unknown-fields": true
+            }
+          }
+        },
+        "ouroboros": {
+          "description": "Hairpin-NAT fix for ingress-nginx with PROXY-protocol.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "acknowledgeUncleanRemoval",
+            "enabled",
+            "valuesOverride"
+          ],
+          "properties": {
+            "acknowledgeUncleanRemoval": {
+              "description": "Defence-in-depth gate for the rare case where the chart's pre-delete cleanup hook did not land (tenant unreachable, hook timed out, manual `kubectl delete hr` bypassed helm). Set true after manually verifying the tenant kube-system/coredns-custom ConfigMap is clean (see docs). The normal disable path is fully automatic.",
+              "type": "boolean",
+              "default": false
+            },
+            "enabled": {
+              "description": "Enable ouroboros. Requires addons.ingressNginx.enabled (chart-render fail otherwise). Only useful when PROXY-protocol is wired on the tenant ingress-nginx via valuesOverride.",
+              "type": "boolean",
+              "default": false
+            },
+            "valuesOverride": {
+              "description": "Custom Helm values overrides. Operator-key wins over cozystack defaults.",
               "type": "object",
               "default": {},
               "x-kubernetes-preserve-unknown-fields": true
