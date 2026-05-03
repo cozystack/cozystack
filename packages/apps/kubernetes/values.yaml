@@ -124,6 +124,10 @@ host: ""
 ## @typedef {struct} CoreDNSAddon - CoreDNS addon.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
+## @typedef {struct} OuroborosAddon - Hairpin-NAT fix for ingress-nginx with PROXY-protocol. See cozystack/website docs/networking/hairpin-proxy-protocol for the operator guide.
+## @field {bool} enabled - Enable ouroboros. Requires addons.ingressNginx.enabled (chart-render fail otherwise). Only useful when PROXY-protocol is wired on the tenant ingress-nginx via valuesOverride.
+## @field {object} valuesOverride - Custom Helm values overrides. Operator-key wins over cozystack defaults.
+
 ## @typedef {struct} Addons - Cluster addons configuration.
 ## @field {CertManagerAddon} certManager - Cert-manager addon.
 ## @field {CiliumAddon} cilium - Cilium CNI plugin.
@@ -136,6 +140,7 @@ host: ""
 ## @field {VerticalPodAutoscalerAddon} verticalPodAutoscaler - Vertical Pod Autoscaler.
 ## @field {VeleroAddon} velero - Velero backup/restore addon.
 ## @field {CoreDNSAddon} coredns - CoreDNS addon.
+## @field {OuroborosAddon} ouroboros - Hairpin-NAT fix for ingress-nginx with PROXY-protocol.
 
 ## @param {Addons} addons - Cluster addons configuration.
 addons:
@@ -169,6 +174,9 @@ addons:
     enabled: false
     valuesOverride: {}
   coredns:
+    valuesOverride: {}
+  ouroboros:
+    enabled: false
     valuesOverride: {}
 
 ##
