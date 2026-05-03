@@ -224,3 +224,16 @@ controlPlane:
 ## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
 images:
   waitForKubeconfig: ""
+
+## @typedef {struct} Networking - Cluster pod and service network configuration.
+## @field {string} podCIDR - CIDR block for pod IPs. WARNING: immutable in practice — changing post-create breaks the cluster (no automatic re-IP). Must not overlap with the management cluster pod CIDR or other tenant clusters that this cluster will mesh with (Cilium ClusterMesh, Submariner, etc).
+## @field {string} serviceCIDR - CIDR block for service IPs. Same immutability and uniqueness rules as podCIDR.
+## @field {string} [coreDnsClusterIP] - Optional explicit CoreDNS ClusterIP. When empty, defaults to the .10 host of serviceCIDR — only safe when the serviceCIDR's last octet is 0 (e.g. /16 or /24 aligned). Set explicitly when using non-aligned CIDRs.
+## @field {string} [clusterDomain] - Cluster DNS domain (CAPI clusterNetwork.serviceDomain + CoreDNS clusterDomain). WARNING: immutable in practice. Defaults to "cluster.local".
+
+## @param {Networking} networking - Cluster network configuration. Defaults preserve historical behaviour (every tenant cluster shares the same CIDRs); override per-cluster when planning cross-cluster service mesh.
+networking:
+  podCIDR: "10.243.0.0/16"
+  serviceCIDR: "10.95.0.0/16"
+  coreDnsClusterIP: ""
+  clusterDomain: "cluster.local"
