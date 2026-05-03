@@ -177,8 +177,12 @@ jobs:
           owner: cozystack
 
       # ▸ Checkout and prepare the codebase
+      # fetch-depth: 0 is required by the "Select E2E tests" step so that
+      # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # ▸ Regular PR path – download artefacts produced by the *build* job
       - name: "Download Talos image (regular PR)"
