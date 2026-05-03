@@ -1,90 +1,121 @@
 #!/usr/bin/env bats
-
-setup() {
-  TMPDIR=$(mktemp -d)
-  cp -r packages/core/platform/sources $TMPDIR/sources
-}
+# -----------------------------------------------------------------------------
+# Unit tests for hack/select-e2e.sh
+#
+# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
+# own line; there is no bats `run` or `$status`. Each test runs as a shell
+# function under `set -eu -x`, so assertions are direct shell tests that exit
+# non-zero on failure. setup()/teardown() are not honored — each test creates
+# and cleans its own scratch dir.
+#
+# Run with: hack/cozytest.sh hack/select-e2e_test.bats
+# -----------------------------------------------------------------------------
 
 @test "single app diff selects only that bats" {
-  echo "packages/apps/postgres/values.yaml" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$status" -eq 0 ]
-  [ "$output" = "postgres" ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/apps/postgres/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
 }
 
 @test "operator diff selects all dependent app bats" {
-  # postgres-operator is depended on by postgres-application, harbor-application
-  # (Harbor uses postgres as its backing DB), and monitoring-application (Grafana
-  # DB). monitoring isn't in hack/e2e-apps/ so it's filtered out by the selector.
-  echo "packages/system/postgres-operator/values.yaml" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -wq postgres
-  echo "$output" | grep -wq harbor
-  # Must NOT trigger full suite — confirm an unrelated bats is absent
-  ! echo "$output" | grep -wq kafka
+    # postgres-operator is depended on by postgres-application, harbor-application
+    # (Harbor uses postgres as its backing DB), and monitoring-application (Grafana
+    # DB). monitoring isn't in hack/e2e-apps/ so it's filtered out by the selector.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/postgres-operator/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    echo "$output" | grep -wq postgres
+    echo "$output" | grep -wq harbor
+    if echo "$output" | grep -wq kafka; then
+        echo "operator diff must not trigger full suite; got: $output" >&2
+        exit 1
+    fi
 }
 
 @test "networking change triggers full suite" {
-  echo "packages/system/cilium/values.yaml" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$status" -eq 0 ]
-  # Full suite means more than 5 bats files
-  [ "$(echo $output | wc -w)" -gt 5 ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/cilium/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    # Full suite means more than 5 bats files
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
 @test "library change triggers full suite" {
-  echo "packages/library/cozy-lib/templates/_helpers.tpl" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$(echo $output | wc -w)" -gt 5 ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
 @test "docs-only diff selects nothing" {
-  echo "docs/README.md" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "docs/README.md" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
 }
 
 @test "kubernetes-application maps to two bats files" {
-  echo "packages/apps/kubernetes/values.yaml" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  echo $output | grep -q "kubernetes-latest"
-  echo $output | grep -q "kubernetes-previous"
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/apps/kubernetes/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    echo "$output" | grep -q "kubernetes-latest"
+    echo "$output" | grep -q "kubernetes-previous"
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {
-  echo "dashboards/gpu/gpu-fleet.json" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$status" -eq 0 ]
-  [ -z "$output" ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "dashboards/gpu/gpu-fleet.json" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
 }
 
 @test "shared E2E helper script triggers full suite" {
-  echo "hack/e2e-apps/run-kubernetes.sh" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$(echo $output | wc -w)" -gt 5 ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-apps/run-kubernetes.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
 @test "install bats triggers full suite" {
-  echo "hack/e2e-install-cozystack.bats" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$(echo $output | wc -w)" -gt 5 ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-install-cozystack.bats" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
 @test "per-app bats edit selects only that app, never escalates" {
-  echo "hack/e2e-apps/redis.bats" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$status" -eq 0 ]
-  [ "$output" = "redis" ]
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-apps/redis.bats" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "redis" ]
 }
 
 @test "release-e2e workflow change triggers full suite" {
-  echo ".github/workflows/release-e2e.yaml" > $TMPDIR/diff
-  run hack/select-e2e.sh $TMPDIR/diff $TMPDIR/sources
-  [ "$(echo $output | wc -w)" -gt 5 ]
-}
-
-teardown() {
-  rm -rf $TMPDIR
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo ".github/workflows/release-e2e.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
