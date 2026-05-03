@@ -238,14 +238,129 @@ jobs:
               console.log(`PR already exists from ${head} to ${base}`);
             }
 
+  upgrade-test:
+    name: Upgrade Test
+    runs-on: [oracle-vm-24cpu-96gb-x86-64]
+    timeout-minutes: 150
+    needs: [prepare-release]
+    if: needs.prepare-release.outputs.skip != 'true'
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
+      - name: Parse tag
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # Checkout the release branch which has built image digests
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          ref: release-${{ steps.tag.outputs.version }}
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Download the Talos nocloud image from the draft release
+      - name: Download Talos image from draft release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          mkdir -p _out/assets
+          # Find draft release and its nocloud asset
+          ASSET_URL=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate -q \
+            ".[] | select(.tag_name==\"${RELEASE_TAG}\" and .draft) | .assets[] | select(.name==\"nocloud-amd64.raw.xz\") | .url")
+          if [ -z "$ASSET_URL" ]; then
+            echo "nocloud-amd64.raw.xz not found in draft release for ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          curl -sSL \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o _out/assets/nocloud-amd64.raw.xz \
+            "$ASSET_URL"
+          ls -lh _out/assets/nocloud-amd64.raw.xz
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-upgrade-sandbox-$(echo "${GITHUB_REPOSITORY}:upgrade:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      # Prepare environment (create sandbox container, provision Talos cluster)
+      - name: Prepare workspace
+        run: |
+          rm -rf /tmp/$SANDBOX_NAME
+          cp -r "${GITHUB_WORKSPACE}" /tmp/$SANDBOX_NAME
+
+      - name: Prepare environment
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+
+      # Run the upgrade test: install previous version -> upgrade -> validate.
+      # STRICT_BASELINE=1 makes Phase 1 fail fast on reconcile errors — the CI
+      # sandbox is always pristine, so any baseline failure is a real bug.
+      - name: Run upgrade test
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing \
+            SANDBOX_NAME=$SANDBOX_NAME \
+            UPGRADE_TARGET_TAG="${RELEASE_TAG}" \
+            STRICT_BASELINE=1 \
+            upgrade-cozystack
+
+      # Collect debug information (always runs)
+      - name: Collect report
+        if: always()
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      - name: Upload upgrade test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-test-report
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+      - name: Remove workspace
+        if: always()
+        run: rm -rf /tmp/$SANDBOX_NAME
+
   generate-changelog:
     name: Generate Changelog
     runs-on: [self-hosted]
-    needs: [prepare-release]
+    needs: [prepare-release, upgrade-test]
     permissions:
       contents: write
       pull-requests: write
-    if: needs.prepare-release.result == 'success'
+    if: needs.prepare-release.result == 'success' && needs.upgrade-test.result == 'success'
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -444,8 +559,8 @@ jobs:
   update-website-docs:
     name: Update Website Docs
     runs-on: [self-hosted]
-    needs: [generate-changelog, prepare-release]
-    if: needs.generate-changelog.result == 'success' && needs.prepare-release.outputs.skip != 'true'
+    needs: [generate-changelog, prepare-release, upgrade-test]
+    if: needs.generate-changelog.result == 'success' && needs.prepare-release.outputs.skip != 'true' && needs.upgrade-test.result == 'success'
     permissions:
       contents: read
     steps:
