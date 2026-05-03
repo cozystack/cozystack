@@ -1,0 +1,4 @@
+providers:
+  kubevirt: false
+  proxmox: true
+  hetzner: false
