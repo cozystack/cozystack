@@ -116,13 +116,77 @@
 
 # Common Packages
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.6.0+)
+       ships a pre-delete Helm hook that sed-strips the BEGIN/END
+       block from kube-system/coredns Corefile when the chart is
+       actually uninstalled — so the cleanup is automatic in the
+       happy path. The danger this guard catches is upstream of that:
+       the cozystack.ouroboros Package CR carries
+       helm.sh/resource-policy: keep, which means flipping
+       publishing.proxyProtocol back to false stops emitting the
+       Package CR but Helm does NOT trigger uninstall on the still-
+       present-on-cluster Package. ouroboros keeps running, the
+       cleanup hook never fires, the rewrite block stays live. The
+       operator must `kubectl delete package.cozystack.io
+       cozystack.ouroboros` (or add the package to
+       bundles.disabledPackages) for the chart to actually uninstall
+       and the hook to actually clean up. This guard fails the render
+       on the dangerous transition path so the operator confirms
+       they understand the asymmetry by setting
+       publishing.proxyProtocolAcknowledgeUnclean: true.
+       Known hole: an operator who manually `kubectl delete package
+       cozystack.ouroboros` before flipping the flag back bypasses the
+       check entirely (lookup returns nil, render proceeds; in that
+       path the chart's pre-delete hook would have done the cleanup
+       on its way out, so silent passage is the right behaviour). The
+       guard is defence-in-depth for the resource-policy: keep
+       asymmetry, not an airtight lock. */ -}}
+{{- if and (not .Values.publishing.proxyProtocol) (not .Values.publishing.proxyProtocolAcknowledgeUnclean) -}}
+{{- $existingOuroboros := lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.ouroboros" -}}
+{{- if $existingOuroboros -}}
+{{- fail "publishing.proxyProtocol was previously enabled (the cozystack.ouroboros Package CR exists on the cluster). Flipping it back to false stops emitting the Package, BUT helm.sh/resource-policy: keep leaves the existing Package on the cluster — ouroboros stays installed and keeps re-applying its rewrite block to kube-system/coredns. Meanwhile the host ingress-nginx config reverts to no-PROXY-protocol while the upstream LB may still be injecting PROXY frames, breaking external traffic. Either: (a) restore publishing.proxyProtocol to true, or (b) flip the upstream LB off PROXY-protocol injection FIRST, then `kubectl delete package.cozystack.io cozystack.ouroboros` (the vendored chart's pre-delete hook then sed-strips the BEGIN/END block from kube-system/coredns automatically — manual sed is not needed in the happy path; the values.yaml comment ships a manual fallback recipe only for the rare case where the hook itself fails to land), then set publishing.proxyProtocolAcknowledgeUnclean: true to confirm." -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.publishing.proxyProtocol }}
+{{- /* Gateway-API watching is left at the upstream chart's default of
+       false on the host. Cozystack does not install Gateway-API CRDs
+       cluster-wide on the host — system/gateway-api-crds is referenced
+       only from packages/core/platform/sources/kubernetes-application.yaml
+       (tenant scope). Forcing --gateway-api on without CRDs would
+       CrashLoop the controller on WaitForCacheSync against missing
+       GVRs. Operators on hosts that do install Gateway-API CRDs out
+       of band can enable it via the standard Package values override. */ -}}
+{{include "cozystack.platform.package.default" (list "cozystack.ouroboros" $) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.flux-plunger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}
 {{- $tenantComponents := dict -}}
 {{- $tenantClusterValues := dict "_cluster" (dict "oidc-enabled" (ternary "true" "false" .Values.authentication.oidc.enabled)) -}}
 {{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
 {{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
-{{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
+{{- $ingressComponents := dict -}}
+{{- if .Values.publishing.proxyProtocol }}
+{{- /* PROXY-protocol carries the real client IP at L4 before HTTP
+       parsing — `real-ip-header: proxy_protocol` + `enable-real-ip:
+       true` are the source of truth for $remote_addr.
+       use-forwarded-headers / compute-full-forwarded-for are
+       deliberately NOT injected here: with PROXY-protocol providing
+       the source IP, X-Forwarded-For from the LB-to-ingress hop is
+       redundant, AND turning on use-forwarded-headers without a
+       paired proxy-real-ip-cidr makes nginx trust X-Forwarded-For
+       from any source, letting clients spoof their own source IP.
+       Operators with a Cloudflare/CloudFront-style proxy in front
+       of the L4 LB that does carry X-Forwarded-* legitimately can
+       layer that in via Package values override (with the matching
+       proxy-real-ip-cidr range). */ -}}
+{{- $proxyProtoConfig := dict
+  "use-proxy-protocol" "true"
+  "real-ip-header" "proxy_protocol"
+  "enable-real-ip" "true" -}}
+{{- $ingressNginxValues := dict "ingress-nginx" (dict "controller" (dict "config" $proxyProtoConfig)) -}}
+{{- $_ := set $ingressComponents "ingress-system" (dict "values" $ingressNginxValues) -}}
+{{- end }}
+{{include "cozystack.platform.package" (list "cozystack.ingress-application" "default" $ $ingressComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}

@@ -80,6 +80,139 @@ publishing:
   # migrated by flipping this value and must be addressed separately before
   # the AllowServiceExternalIPs feature gate flips to off in ~v1.40.
   exposure: externalIPs # "externalIPs" or "loadBalancer"
+  # Enable PROXY-protocol on the host ingress-nginx and auto-deploy
+  # ouroboros (system/ouroboros) to fix the resulting hairpin-NAT
+  # problem (intra-cluster traffic to the cluster's own public hostnames
+  # arrives at ingress-nginx without the PROXY header it now requires).
+  # Single cozystack-side switch: flipping this to true configures both
+  # pieces in one go — ingress-nginx use-proxy-protocol and the
+  # cozystack.ouroboros Package CR.
+  #
+  # TALOS RE-RENDER NOTE (host scope only): the host CoreDNS is a
+  # Talos-managed Deployment; ouroboros mutates its live Corefile in
+  # place between BEGIN/END markers. A Talos machine-config push or
+  # upgrade re-renders the Corefile and overwrites the markers — there
+  # is a flap window of up to one ouroboros reconcile loop (bounded
+  # by `controller.resync`, default 10 minutes) until the controller
+  # re-applies the block. The reconcile loop is ALSO event-driven on
+  # Ingress/Gateway watches, so on a busy cluster the window often
+  # closes much sooner — but on a stable production cluster with no
+  # incidental Ingress/Gateway churn, the upper bound is the resync
+  # interval. In-cluster DNS for hairpinned hostnames briefly returns
+  # the upstream LB IP instead of the proxy ClusterIP during that
+  # window, which fails the same way pre-PR behaviour fails.
+  # Acceptable, but worth knowing during a Talos roll.
+  #
+  # PRECONDITION: the upstream L4 load balancer / WAN edge in front of
+  # ingress-nginx MUST already be injecting PROXY-protocol v1 headers
+  # before flipping this flag. Without that, every external request
+  # arrives at ingress-nginx without the PROXY header, ingress-nginx
+  # closes the connection, and ALL ingress traffic breaks. cozystack
+  # cannot configure that upstream LB for you — it lives outside the
+  # cluster (cloud LB, F5, MetalLB+haproxy, hcloud-cloud-controller,
+  # etc.). PROXY-protocol frames travel from the upstream LB to
+  # ingress-nginx (the LB opens a fresh TCP connection to the backend
+  # and prepends the frame on that connection), not back to the
+  # client — `nc` from a laptop will never see one. Pick one of:
+  #
+  #   * tcpdump --interface any 'port 80 or port 443' -A on the node
+  #     hosting ingress-nginx and watch for a leading "PROXY TCP4 ..."
+  #     frame on inbound TCP from the LB BEFORE flipping this flag.
+  #   * make any external HTTP request after the LB-side change but
+  #     before flipping this flag, and watch
+  #     `kubectl --namespace cozy-ingress-nginx logs deploy/ingress-nginx-controller`
+  #     for "client sent invalid proxy protocol header" — that error
+  #     means the LB started injecting PROXY frames but ingress-nginx
+  #     is not yet configured to accept them, which is the transition
+  #     state this flag is meant to resolve.
+  #
+  # If neither check shows PROXY frames, fix the upstream LB before
+  # touching this flag. Leave it false on clusters where PROXY-protocol
+  # is not yet wired at the upstream LB; ouroboros wastes resources
+  # when the bug it fixes does not exist.
+  #
+  # FAN-OUT NOTE: this flag affects ONLY the host control plane. To
+  # turn the same hairpin fix on inside a tenant cluster, also set
+  # `addons.ouroboros.enabled: true` in the per-tenant Kubernetes CR
+  # (and `addons.ingressNginx.enabled: true` is a hard precondition
+  # there). The flag does not cascade into tenants on its own.
+  #
+  # DISABLE PATH: flipping this back from true to false has TWO
+  # asymmetric effects. ingress-nginx side: the next reconcile re-emits
+  # cozystack.ingress-application without the use-proxy-protocol /
+  # use-forwarded-headers / real-ip-header overrides, so ingress-nginx
+  # stops accepting PROXY-protocol headers. If the upstream L4 LB is
+  # still prepending PROXY frames at that moment, every external
+  # request to ingress-nginx breaks until the LB is also reconfigured
+  # — flip the LB OFF FIRST, then flip this flag. ouroboros side:
+  # stops emitting the cozystack.ouroboros Package CR, but every Package
+  # CR carries `helm.sh/resource-policy: keep`, so Helm leaves the
+  # existing Package on the cluster, ouroboros stays installed, and
+  # the live Corefile rewrite block keeps pointing at the still-running
+  # ouroboros-proxy Service. Flag-flip alone leaves ouroboros idempotent.
+  #
+  # To actually uninstall ouroboros, the operator removes the Package
+  # CR explicitly:
+  #
+  #   kubectl delete package.cozystack.io cozystack.ouroboros
+  #
+  # or adds the package name to bundles.disabledPackages. THAT is the
+  # path that triggers the chart's pre-delete Helm hook
+  # (charts/ouroboros/templates/coredns-cleanup-hook.yaml, vendored at
+  # 0.6.0+) — the hook quiesces the controller, sed-strips the
+  # BEGIN/END block from the live kube-system/coredns Corefile, and
+  # restores the cleaned ConfigMap via kubectl replace. The hook is
+  # automatic; operators do NOT need to run a manual sed recipe in
+  # the normal disable path. Documentation of the hook's exact
+  # behaviour lives in the upstream chart's README.
+  #
+  # Manual cleanup recipe (only if the chart's pre-delete hook fails
+  # to land — controller pod stuck in CrashLoop blocking the quiesce
+  # step, ConfigMap RBAC drift on the namespace, helm uninstall
+  # interrupted before the hook ran). Uses a JSON merge-patch so
+  # labels, annotations, and other data keys on the ConfigMap —
+  # including any Talos-managed metadata — are preserved:
+  #
+  #   # === BEGIN cleanup-recipe ===
+  #   existing=$(kubectl --namespace kube-system get configmap coredns \
+  #     --output jsonpath='{.data.Corefile}')
+  #   cleaned=$(printf '%s\n' "$existing" \
+  #     | sed '/# === BEGIN ouroboros/,/# === END ouroboros ===/d')
+  #   kubectl --namespace kube-system patch configmap coredns \
+  #     --type merge \
+  #     --patch "$(jq --null-input --arg c "$cleaned" \
+  #         '{data: {Corefile: $c}}')"
+  #   kubectl --namespace kube-system rollout restart deployment/coredns
+  #   # === END cleanup-recipe ===
+  proxyProtocol: false
+  # Acknowledgement gate for the helm.sh/resource-policy: keep
+  # asymmetry (NOT a substitute for the chart's pre-delete cleanup
+  # hook — the hook handles the Corefile patch automatically when
+  # the chart actually uninstalls). The hazard this gate catches:
+  # flipping publishing.proxyProtocol from true to false stops
+  # emitting the cozystack.ouroboros Package CR, but resource-policy:
+  # keep means Helm leaves the existing Package on the cluster.
+  # ouroboros keeps running, the cleanup hook never fires, the
+  # rewrite block stays live. The platform render fails until the
+  # operator either restores proxyProtocol: true OR runs `kubectl
+  # delete package.cozystack.io cozystack.ouroboros` (which lets
+  # the chart actually uninstall and the hook run) and sets this
+  # flag to true to confirm. Once the cluster has been clean for
+  # one reconcile cycle, flip back to false.
+  #
+  # KNOWN HOLE: the guard keys off a `lookup` for the cozystack.ouroboros
+  # Package CR on the cluster. An operator who manually
+  # `kubectl delete package cozystack.ouroboros` before flipping the
+  # flag back bypasses the check entirely (the lookup returns nil, the
+  # render proceeds). In the chart 0.6.0+ that path is mostly safe —
+  # `kubectl delete package` triggers helm uninstall and the chart's
+  # pre-delete hook patches the Corefile automatically. The hole is
+  # the rare case where the hook itself fails (controller pod stuck,
+  # ConfigMap RBAC drift, hook timeout) and the operator never
+  # noticed. The values comment + the acknowledge gate are
+  # defence-in-depth, not an airtight lock; an operator deliberately
+  # working around them gets to keep the broken pieces.
+  proxyProtocolAcknowledgeUnclean: false
   certificates:
     solver: http01 # "http01" or "dns01"
     issuerName: letsencrypt-prod

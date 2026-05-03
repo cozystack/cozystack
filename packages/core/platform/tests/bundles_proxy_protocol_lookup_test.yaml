@@ -1,0 +1,80 @@
+suite: publishing.proxyProtocol disable hazard guard (lookup-driven failure path)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+kubernetesProvider:
+  scheme:
+    "cozystack.io/v1alpha1/Package":
+      gvr:
+        group: "cozystack.io"
+        version: "v1alpha1"
+        resource: "packages"
+      namespaced: false
+  objects:
+    - kind: Package
+      apiVersion: cozystack.io/v1alpha1
+      metadata:
+        name: cozystack.ouroboros
+tests:
+  - it: fails the platform render when proxyProtocol is false but the cozystack.ouroboros Package CR still exists and acknowledge is false
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: false
+        proxyProtocolAcknowledgeUnclean: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "publishing.proxyProtocol was previously enabled.*helm.sh/resource-policy: keep leaves the existing Package.*Either:.*set publishing.proxyProtocolAcknowledgeUnclean: true to confirm"
+      # Tightening: the message must point operators at the
+      # `kubectl delete package` path which triggers the chart's
+      # pre-delete hook for automatic Corefile cleanup. Earlier wording
+      # asked the operator to run the manual sed recipe in the happy
+      # path — that contradicted values.yaml ("the hook is automatic")
+      # and either wasted the operator's time or led them to run sed
+      # before the package delete (no-op while the controller is alive).
+      # If the message ever drifts back to mandating the manual recipe
+      # in the normal path, this assertion catches the regression.
+      - failedTemplate:
+          errorPattern: "kubectl delete package\\.cozystack\\.io cozystack\\.ouroboros.*pre-delete hook then sed-strips"
+
+  - it: renders cleanly with proxyProtocol false when acknowledge is true even with a leftover Package CR (operator confirmed cleanup)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: false
+        proxyProtocolAcknowledgeUnclean: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ouroboros
+        not: true
+        documentIndex: -1
+
+  - it: renders cleanly with proxyProtocol true when the Package CR exists (steady state)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.ouroboros
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+

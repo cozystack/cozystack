@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.ouroboros
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.ingress-application
+    components:
+    - name: ouroboros
+      path: system/ouroboros
+      install:
+        namespace: cozy-ouroboros
+        releaseName: ouroboros

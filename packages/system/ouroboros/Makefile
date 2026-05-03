@@ -34,7 +34,15 @@ test:
 
 update:
 	rm -rf charts
+	# Pull by digest, then verify Chart.yaml records the expected
+	# version. A digest mismatch (someone bumped DIGEST without
+	# bumping VERSION, or vice versa) trips the assert and aborts.
 	helm pull oci://ghcr.io/lexfrei/charts/ouroboros@$(OUROBOROS_CHART_DIGEST) --untar --untardir charts
+	@actual_version=$$(awk '/^version:/ {print $$2}' charts/ouroboros/Chart.yaml | tr -d '"'); \
+	if [ "$$actual_version" != "$(OUROBOROS_CHART_VERSION)" ]; then \
+	  echo "ERROR: pulled chart Chart.yaml version=$$actual_version but Makefile OUROBOROS_CHART_VERSION=$(OUROBOROS_CHART_VERSION). Bump both in lockstep."; \
+	  exit 1; \
+	fi
 	# Drop vendored upstream helm-unittest fixtures: the upstream
 	# fixtures hard-code upstream defaults that conflict with the
 	# cozystack values.yaml overrides (target Service FQDN, mode,
