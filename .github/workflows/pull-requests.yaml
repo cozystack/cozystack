@@ -177,8 +177,12 @@ jobs:
           owner: cozystack
 
       # ▸ Checkout and prepare the codebase
+      # fetch-depth: 0 is required by the "Select E2E tests" step so that
+      # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # ▸ Regular PR path – download artefacts produced by the *build* job
       - name: "Download Talos image (regular PR)"
@@ -249,18 +253,51 @@ jobs:
           done
           echo "✅ The task completed successfully after $attempt attempts"
 
+      # Test Impact Analysis (TIA): walk the PackageSource graph for the PR
+      # diff and select only the bats files affected. Runs by default; opt
+      # out via the `full-e2e` label to run the full suite.
+      # `skip=true` means nothing to test (docs-only PR).
+      - name: Select E2E tests
+        id: select
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
+          apps=$(./hack/select-e2e.sh /tmp/changed.txt)
+          echo "Selected apps: ${apps:-<none>}"
+          echo "apps=${apps}" >> $GITHUB_OUTPUT
+          if [ -z "${apps}" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Run OpenAPI tests
         run: |
           cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
-      # ▸ Run E2E tests
+      # Run E2E tests. With `full-e2e` label the selector is skipped, its
+      # outputs are empty, the != 'true' guard lets this step run, and the
+      # full bats list is used. Without the label, the selector decides;
+      # an empty selection (docs-only) skips this step entirely.
       - name: Run E2E tests
         id: e2e_tests
+        if: ${{ steps.select.outputs.skip != 'true' }}
+        env:
+          SELECTED_APPS: ${{ steps.select.outputs.apps }}
+          FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
         run: |
           cd /tmp/$SANDBOX_NAME
+          if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
+            apps_list=$(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1)
+          else
+            apps_list="$SELECTED_APPS"
+          fi
           failed_tests=""
-          for app in $(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1); do
+          for app in $apps_list; do
             echo "::group::Testing $app"
             attempt=0
             success=false
