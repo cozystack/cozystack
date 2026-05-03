@@ -1,0 +1,67 @@
+suite: cozystack-managed coredns-custom + Corefile import wiring
+release:
+  name: coredns
+  namespace: kube-system
+tests:
+  - it: renders an empty coredns-custom ConfigMap with a resource-policy keep annotation
+    template: templates/coredns-custom.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: coredns-custom
+      - equal:
+          path: metadata.namespace
+          value: kube-system
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      # No `data:` field at all is deliberate: it makes Helm's three-way
+      # merge leave the live `data.ouroboros.override` key (written by
+      # the ouroboros controller) intact across `helm upgrade`. Adding
+      # `data: {}` here would explicitly drive the ConfigMap to empty
+      # on every reconcile and wipe the controller's writes.
+      - notExists:
+          path: data
+
+  - it: renders the upstream Corefile with an import directive
+    template: charts/coredns/templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data.Corefile
+          pattern: import /etc/coredns/custom/\*\.override
+      - matchRegex:
+          path: data.Corefile
+          pattern: reload
+
+  - it: pins the cozystack Corefile against drift in the upstream chart
+    template: charts/coredns/templates/configmap.yaml
+    asserts:
+      # The cozystack values.yaml overrides the entire `servers:` plugin
+      # chain because the upstream chart only exposes `extraConfig` at
+      # file scope, and the `import` plugin must live inside the .:53
+      # server block to inject CoreDNS plugin lines (rewrite name X Y).
+      # Snapshot the rendered Corefile so that any future `make update`
+      # that brings new upstream defaults (a new plugin, a tweaked
+      # cache/forward block) forces a visible test failure rather than
+      # silently dropping the upstream change.
+      - matchSnapshot:
+          path: data.Corefile
+
+  - it: mounts the coredns-custom ConfigMap into the CoreDNS Deployment as optional
+    template: charts/coredns/templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: coredns-custom
+            configMap:
+              name: coredns-custom
+              optional: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: coredns-custom
+            mountPath: /etc/coredns/custom
+            readOnly: true

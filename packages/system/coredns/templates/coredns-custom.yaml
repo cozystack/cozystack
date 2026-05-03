@@ -1,0 +1,27 @@
+{{- /*
+The empty coredns-custom ConfigMap is the prerequisite for the
+`import /etc/coredns/custom/*.override` directive baked into the
+Corefile by this package's values.yaml. We render it here (as opposed
+to letting some other chart own it) because the CoreDNS Deployment
+mounts it as an `optional: true` volume — without the ConfigMap it
+silently mounts nothing, the import directive matches no files, and
+hairpin (in coredns-import mode) silently breaks.
+
+ouroboros's coredns-import-mode reconciler writes plugin-only snippets
+into the `ouroboros.override` data key on this ConfigMap. Other
+operators may add additional `*.override` keys for their own custom
+rewrites — that is the entire point of CoreDNS's import plugin.
+*/ -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/component: coredns-custom-import
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+  annotations:
+    helm.sh/resource-policy: keep
