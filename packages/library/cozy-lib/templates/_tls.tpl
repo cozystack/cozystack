@@ -25,6 +25,8 @@ Parameters:
   - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset. Non-empty values are passed through without validation.
   - renewBefore (optional) - renewal window, defaults to 720h (30 days)
   - usages     (optional) - list of key usages, defaults to ["server auth"] (not cert-manager's default of "digital signature, key encipherment"; this is a deliberate choice for TLS server certificates). An empty list also falls back to the default.
+  Private key is hardcoded to RSA-2048 with rotationPolicy: Always; these are not configurable via this helper.
+  extraDnsNames: nil is treated as an empty list (zero extra names appended).
 */}}
 {{- define "cozy-lib.tls.certificate" -}}
 {{- if not .Release -}}
@@ -54,13 +56,13 @@ Parameters:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ .name }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ .name | quote }}
+  namespace: {{ .Release.Namespace | quote }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
-  secretName: {{ .secretName }}
+  secretName: {{ .secretName | quote }}
   duration: {{ ternary "8760h" .duration (empty .duration) }}
   renewBefore: {{ ternary "720h" .renewBefore (empty .renewBefore) }}
   privateKey:
@@ -83,8 +85,8 @@ spec:
     - {{ . | quote }}
     {{- end }}
   issuerRef:
-    name: {{ .issuerRef.name }}
-    kind: {{ .issuerRef.kind }}
+    name: {{ .issuerRef.name | quote }}
+    kind: {{ .issuerRef.kind | quote }}
     group: cert-manager.io
 {{- end }}
 
