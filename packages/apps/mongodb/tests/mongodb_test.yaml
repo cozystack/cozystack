@@ -39,6 +39,70 @@ tests:
         documentIndex: 0
 
   ##################
+  # Finalizers     #
+  ##################
+
+  - it: renders Percona finalizers on PSMDB CR
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pvc
+        documentIndex: 0
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pods-in-order
+        documentIndex: 0
+
+  - it: renders Percona finalizers in sharded mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    asserts:
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pvc
+        documentIndex: 0
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pods-in-order
+        documentIndex: 0
+
+  ##################
+  # Secrets        #
+  ##################
+
+  - it: scopes users secret name to the release for namespace isolation
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.secrets.users
+          value: test-mongodb-percona-server-mongodb-users
+        documentIndex: 0
+
+  ##################
   # CR Version     #
   ##################
 

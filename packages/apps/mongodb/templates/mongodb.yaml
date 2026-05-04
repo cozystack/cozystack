@@ -4,9 +4,14 @@ apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
 metadata:
   name: {{ .Release.Name }}
+  finalizers:
+    - percona.com/delete-psmdb-pods-in-order
+    - percona.com/delete-psmdb-pvc
 spec:
   crVersion: 1.21.1
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
+  secrets:
+    users: {{ .Release.Name }}-percona-server-mongodb-users
   pause: false
   unmanaged: false
   image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
