@@ -30,6 +30,12 @@ tests:
       - equal:
           path: spec.privateKey.size
           value: 2048
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
 
   # dnsNames are correctly set and quoted
   - it: sets dnsNames correctly

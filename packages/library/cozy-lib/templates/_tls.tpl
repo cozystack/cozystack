@@ -55,6 +55,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: {{ .name }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
@@ -65,6 +66,7 @@ spec:
   privateKey:
     algorithm: RSA
     size: 2048
+    rotationPolicy: Always
   usages:
     {{- if .usages }}
     {{- range .usages }}
