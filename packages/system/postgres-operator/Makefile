@@ -13,11 +13,9 @@ update:
 update-image-catalogs:
 	@echo "Downloading PostgreSQL image catalogs from CNPG artifacts..."
 	@curl -sSL https://raw.githubusercontent.com/cloudnative-pg/artifacts/main/image-catalogs/catalog-standard-bookworm.yaml \
-		| sed 's/postgresql-standard-bookworm/postgresql-bookworm/' \
-		| awk '/major: 18/,/image:/ {next} {print}' \
+		| yq '.metadata.name = "postgresql-bookworm" | del(.spec.images[] | select(.major == 13 or .major == 18))' \
 		> templates/image-catalog-bookworm.yaml
 	@curl -sSL https://raw.githubusercontent.com/cloudnative-pg/artifacts/main/image-catalogs/catalog-standard-trixie.yaml \
-		| sed 's/postgresql-standard-trixie/postgresql-trixie/' \
-		| awk '/major: 18/,/image:/ {next} {print}' \
+		| yq '.metadata.name = "postgresql-trixie" | del(.spec.images[] | select(.major == 13 or .major == 18))' \
 		> templates/image-catalog-trixie.yaml
-	@echo "Updated image catalogs (PostgreSQL 13-17, excluded v18)"
+	@echo "Updated image catalogs (PostgreSQL 14-17, excluded v13 EOL and v18)"
