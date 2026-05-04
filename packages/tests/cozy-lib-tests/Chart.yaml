@@ -1,5 +1,5 @@
 apiVersion: v2
-name: quota
+name: cozy-lib-tests
 description: Testing chart for cozy-lib
 
 # A chart can be either an 'application' or a 'library' chart.
