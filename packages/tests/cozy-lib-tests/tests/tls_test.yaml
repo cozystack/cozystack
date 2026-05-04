@@ -398,3 +398,37 @@ tests:
       - equal:
           path: spec.renewBefore
           value: 720h
+
+  # Missing name triggers a validation error
+  - it: errors when name is not provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ERROR: "name" is required for cozy-lib.tls.certificate. It sets the Certificate CR metadata.name.'
+
+  # Missing issuerRef entirely triggers a validation error
+  - it: errors when issuerRef is not provided
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: missing-issuerref-tls
+        dnsNames:
+          - svc.example
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ERROR: "issuerRef" is required for cozy-lib.tls.certificate. Provide a dict with "name" and "kind".'

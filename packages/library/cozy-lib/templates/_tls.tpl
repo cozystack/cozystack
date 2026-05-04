@@ -18,7 +18,7 @@ Usage:
 Parameters:
   - Release    (required) - Helm release object, used for labels
   - name       (required) - Certificate CR metadata.name
-  - secretName (required) - TLS secret name to create (can be same as name). Required when calling directly. When using through tls.yaml, defaults to name.
+  - secretName (required) - TLS secret name to create (can be same as name). A caller-level wrapper can default this to name.
   - dnsNames   (required) - list of DNS SANs
   - extraDnsNames (optional) - additional DNS SANs to append (e.g. user-supplied custom domains)
   - issuerRef  (required) - dict with "name" and "kind" (e.g. ClusterIssuer, Issuer)
@@ -68,7 +68,7 @@ spec:
   usages:
     {{- if .usages }}
     {{- range .usages }}
-    - {{ . }}
+    - {{ . | quote }}
     {{- end }}
     {{- else }}
     - server auth
