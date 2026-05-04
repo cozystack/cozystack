@@ -1,0 +1,140 @@
+cluster-autoscaler:
+  cloudProvider: externalgrpc
+  extraArgs:
+    # gRPC address of the switchcloud-provider sidecar
+    cloud-config: "localhost:8086"
+
+  rbac:
+    additionalRules:
+      - apiGroups: [""]
+        resources: [secrets]
+        verbs: [get]
+      - apiGroups: [coordination.k8s.io]
+        resources: [leases]
+        verbs: [create, get, update]
+
+  extraContainers:
+    - name: switchcloud-provider
+      image: ghcr.io/aenix-org/cluster-autoscaler-switchcloud:latest
+      args:
+        - --config=/etc/switchcloud/config.yaml
+        - --address=:8086
+        - --secret-namespace=kube-system
+      volumeMounts:
+        - name: switchcloud-config
+          mountPath: /etc/switchcloud
+          readOnly: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+      securityContext:
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+
+  extraVolumes:
+    - name: switchcloud-config
+      secret:
+        secretName: switchcloud-provider-config
+        items:
+          - key: config.yaml
+            path: config.yaml
+
+  extraObjects:
+    - apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: switchcloud-provider-id-setter
+        namespace: kube-system
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: switchcloud-provider-id-setter
+      rules:
+        - apiGroups: [""]
+          resources: [nodes]
+          verbs: [get, patch]
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: switchcloud-provider-id-setter
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: switchcloud-provider-id-setter
+      subjects:
+        - kind: ServiceAccount
+          name: switchcloud-provider-id-setter
+          namespace: kube-system
+    - apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: switchcloud-provider-id-setter
+        namespace: kube-system
+      spec:
+        selector:
+          matchLabels:
+            app: switchcloud-provider-id-setter
+        updateStrategy:
+          type: RollingUpdate
+        template:
+          metadata:
+            labels:
+              app: switchcloud-provider-id-setter
+          spec:
+            serviceAccountName: switchcloud-provider-id-setter
+            hostNetwork: true
+            tolerations:
+              - operator: Exists
+            priorityClassName: system-node-critical
+            initContainers:
+              - name: set-provider-id
+                image: alpine:3.21
+                command:
+                  - /bin/sh
+                  - -ec
+                  - |
+                    apk add --no-cache curl jq >/dev/null 2>&1
+                    IMDS_URL="http://169.254.169.254/openstack/latest/meta_data.json"
+                    UUID=$(curl -sf "$IMDS_URL" | jq -r '.uuid')
+                    if [ -z "$UUID" ] || [ "$UUID" = "null" ]; then
+                      echo "ERROR: could not retrieve Nova UUID from IMDS" >&2
+                      exit 1
+                    fi
+                    PROVIDER_ID="openstack:///$UUID"
+                    K8S_API="https://kubernetes.default.svc"
+                    SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                    CA_CERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+                    CURRENT=$(curl -sf \
+                      --cacert "$CA_CERT" \
+                      --header "Authorization: Bearer $SA_TOKEN" \
+                      "$K8S_API/api/v1/nodes/$NODE_NAME" | jq -r '.spec.providerID // ""')
+                    if [ "$CURRENT" = "$PROVIDER_ID" ]; then
+                      echo "providerID already set to $PROVIDER_ID, nothing to do"
+                      exit 0
+                    fi
+                    echo "Patching node $NODE_NAME providerID=$PROVIDER_ID"
+                    curl -sf \
+                      --cacert "$CA_CERT" \
+                      --header "Authorization: Bearer $SA_TOKEN" \
+                      --header "Content-Type: application/merge-patch+json" \
+                      --request PATCH \
+                      --data "{\"spec\":{\"providerID\":\"$PROVIDER_ID\"}}" \
+                      "$K8S_API/api/v1/nodes/$NODE_NAME"
+                env:
+                  - name: NODE_NAME
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: spec.nodeName
+            containers:
+              - name: pause
+                image: registry.k8s.io/pause:3.10
+                resources:
+                  requests:
+                    cpu: 1m
+                    memory: 4Mi
