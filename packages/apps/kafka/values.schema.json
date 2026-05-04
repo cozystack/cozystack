@@ -92,7 +92,7 @@
         "resourcesPreset": {
           "description": "Default sizing preset used when `resources` is omitted.",
           "type": "string",
-          "default": "small",
+          "default": "medium",
           "enum": [
             "nano",
             "micro",
@@ -176,7 +176,7 @@
         "resourcesPreset": {
           "description": "Default sizing preset used when `resources` is omitted.",
           "type": "string",
-          "default": "small",
+          "default": "medium",
           "enum": [
             "nano",
             "micro",
