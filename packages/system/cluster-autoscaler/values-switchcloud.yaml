@@ -15,7 +15,7 @@ cluster-autoscaler:
 
   extraContainers:
     - name: switchcloud-provider
-      image: ghcr.io/ivanhunters/cluster-autoscaler-switchcloud:latest
+      image: ghcr.io/aenix-org/cluster-autoscaler-switchcloud:latest
       args:
         - --config=/etc/switchcloud/config.yaml
         - --address=:8086
