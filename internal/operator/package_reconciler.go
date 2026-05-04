@@ -71,9 +71,10 @@ type PackageReconciler struct {
 // HelmRelease. RetryInterval drives recovery from failed install/upgrade
 // attempts; Interval polls healthy releases.
 func (r *PackageReconciler) buildHelmReleaseSpec(componentInstall *cozyv1alpha1.ComponentInstall, artifactName string) helmv2.HelmReleaseSpec {
+	maxHistory := r.HelmReleaseMaxHistory
 	return helmv2.HelmReleaseSpec{
 		Interval:   metav1.Duration{Duration: r.HelmReleaseInterval},
-		MaxHistory: &r.HelmReleaseMaxHistory,
+		MaxHistory: &maxHistory,
 		ChartRef: &helmv2.CrossNamespaceSourceReference{
 			Kind:      "ExternalArtifact",
 			Name:      artifactName,
