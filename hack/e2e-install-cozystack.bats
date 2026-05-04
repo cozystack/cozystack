@@ -7,6 +7,30 @@
   fi
 }
 
+@test "Pre-pull platform images" {
+  # Cluster-member workloads (OVN raft, LINSTOR) fail if replicas start at
+  # different times due to image-pull stagger across nodes. Pre-pull these
+  # images to every node so all replicas start with images already cached.
+  #
+  # Source images directly from the rendered charts so version bumps stay in
+  # sync automatically. yq walks every PodSpec-shaped object and emits the
+  # images of each container — this scopes the result to images the kubelet
+  # actually pulls (skips configmap fields and CRD examples that happen to
+  # contain an `image:` key). Add a chart here when a new peer-sensitive
+  # workload is found.
+  # Capture each render into a variable first: bats does not enable
+  # `pipefail`, so a `helm template` failure inside a brace-grouped pipe
+  # would be silently masked by yq's exit code, the script would receive
+  # empty stdin, and the test would pass while pre-pull was skipped.
+  # Assigning to a variable lets `set -e` trigger on a render failure.
+  kubeovn_manifests=$(helm template packages/system/kubeovn)
+  linstor_manifests=$(helm template packages/system/linstor)
+  printf '%s\n%s\n' "$kubeovn_manifests" "$linstor_manifests" | yq -N '
+      (..|select(has("containers"))|.containers[]|.image),
+      (..|select(has("initContainers"))|.initContainers[]|.image)
+    ' | hack/e2e-prepull-images.sh
+}
+
 @test "Install Cozystack" {
   # Install cozy-installer chart (operator installs CRDs on startup via --install-crds)
   helm upgrade installer packages/core/installer \
