@@ -4,16 +4,6 @@
 {{- end -}}
 ---
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: cozy-system
-  labels:
-    cozystack.io/system: "true"
-    pod-security.kubernetes.io/enforce: privileged
-  annotations:
-    helm.sh/resource-policy: keep
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: cozystack
@@ -67,6 +57,21 @@ spec:
         - --health-probe-bind-address=0
         {{- if .Values.cozystackOperator.disableTelemetry }}
         - --disable-telemetry
+        {{- end }}
+        {{- if .Values.cozystackOperator.helmReleaseInterval }}
+        - --helmrelease-interval={{ .Values.cozystackOperator.helmReleaseInterval }}
+        {{- end }}
+        {{- if .Values.cozystackOperator.helmReleaseRetryInterval }}
+        - --helmrelease-retry-interval={{ .Values.cozystackOperator.helmReleaseRetryInterval }}
+        {{- end }}
+        {{- if .Values.cozystackOperator.helmReleaseInstallTimeout }}
+        - --helmrelease-install-timeout={{ .Values.cozystackOperator.helmReleaseInstallTimeout }}
+        {{- end }}
+        {{- if .Values.cozystackOperator.helmReleaseUpgradeTimeout }}
+        - --helmrelease-upgrade-timeout={{ .Values.cozystackOperator.helmReleaseUpgradeTimeout }}
+        {{- end }}
+        {{- if .Values.cozystackOperator.helmReleaseMaxHistory }}
+        - --helmrelease-max-history={{ .Values.cozystackOperator.helmReleaseMaxHistory }}
         {{- end }}
         - --platform-source-name=cozystack-platform
         - --platform-source-url={{ .Values.cozystackOperator.platformSourceUrl }}
