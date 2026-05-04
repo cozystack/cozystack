@@ -138,6 +138,27 @@ data:
     to reconcile - this HelmRelease will pick up the DataStore on its next
     5m reconcile loop and provision the cluster.
 {{- else }}
+
+{{/*
+  Validate tenant pod/service CIDRs do not overlap the management cluster's
+  CIDRs. Reads the platform's `cozystack` ConfigMap (cozy-system) where the
+  parent's networking lives. Helm `lookup` only resolves at install/upgrade,
+  so `helm template` users won't see this fail — that's intentional, the
+  check is meant for actual cluster operations.
+*/}}
+{{- $podCIDR := .Values.networking.podCIDR -}}
+{{- $svcCIDR := .Values.networking.serviceCIDR -}}
+{{- $cm := lookup "v1" "ConfigMap" "cozy-system" "cozystack" -}}
+{{- if and $cm $cm.data -}}
+{{-   $mgmtPodCIDR := index $cm.data "ipv4-pod-cidr" -}}
+{{-   $mgmtSvcCIDR := index $cm.data "ipv4-svc-cidr" -}}
+{{-   if and $mgmtPodCIDR (eq $podCIDR $mgmtPodCIDR) -}}
+{{-     fail (printf "networking.podCIDR (%s) collides with the management cluster pod CIDR (%s) — pick a different range." $podCIDR $mgmtPodCIDR) -}}
+{{-   end -}}
+{{-   if and $mgmtSvcCIDR (eq $svcCIDR $mgmtSvcCIDR) -}}
+{{-     fail (printf "networking.serviceCIDR (%s) collides with the management cluster service CIDR (%s) — pick a different range." $svcCIDR $mgmtSvcCIDR) -}}
+{{-   end -}}
+{{- end }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -146,12 +167,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   clusterNetwork:
+    serviceDomain: {{ .Values.networking.clusterDomain | quote }}
     pods:
       cidrBlocks:
-      - 10.243.0.0/16
+      - {{ $podCIDR | quote }}
     services:
       cidrBlocks:
-      - 10.95.0.0/16
+      - {{ $svcCIDR | quote }}
   controlPlaneRef:
     namespace: {{ .Release.Namespace }}
     apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
