@@ -149,26 +149,18 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// time.ParseDuration accepts "0s" and negative values, but Flux HelmRelease
-	// fields (Interval, Timeout, RetryInterval) require strictly positive
-	// durations to function. Reject non-positive values at startup so a
-	// misconfigured flag fails fast instead of propagating into every HR.
-	parsePositiveDuration := func(flagName, raw string) time.Duration {
-		d, err := time.ParseDuration(raw)
+	parseFlag := func(flagName, raw string) time.Duration {
+		d, err := parsePositiveDuration(flagName, raw)
 		if err != nil {
-			setupLog.Error(err, "invalid duration flag", "flag", flagName, "value", raw)
-			os.Exit(1)
-		}
-		if d <= 0 {
-			setupLog.Error(fmt.Errorf("%s must be > 0", flagName), "invalid duration flag", "flag", flagName, "value", raw)
+			setupLog.Error(err, "invalid duration flag")
 			os.Exit(1)
 		}
 		return d
 	}
-	hrIntervalDuration := parsePositiveDuration("--helmrelease-interval", helmReleaseInterval)
-	hrRetryIntervalDuration := parsePositiveDuration("--helmrelease-retry-interval", helmReleaseRetryInterval)
-	hrInstallTimeoutDuration := parsePositiveDuration("--helmrelease-install-timeout", helmReleaseInstallTimeout)
-	hrUpgradeTimeoutDuration := parsePositiveDuration("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
+	hrIntervalDuration := parseFlag("--helmrelease-interval", helmReleaseInterval)
+	hrRetryIntervalDuration := parseFlag("--helmrelease-retry-interval", helmReleaseRetryInterval)
+	hrInstallTimeoutDuration := parseFlag("--helmrelease-install-timeout", helmReleaseInstallTimeout)
+	hrUpgradeTimeoutDuration := parseFlag("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
 	if helmReleaseMaxHistory < 0 {
 		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
 		os.Exit(1)
@@ -445,6 +437,21 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	}
 
 	return nil
+}
+
+// parsePositiveDuration parses raw as a time.Duration and rejects malformed
+// or non-positive values. Flux HelmRelease fields (Interval, Timeout,
+// RetryInterval) require strictly positive durations, so a misconfigured
+// flag must fail fast at startup rather than propagating into every HR.
+func parsePositiveDuration(flagName, raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration for %s=%q: %w", flagName, raw, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be > 0 (got %q)", flagName, raw)
+	}
+	return d, nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.
