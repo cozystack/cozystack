@@ -81,6 +81,38 @@ spec:
                           "s3://my-bucket/path/". Templating is supported.
                         minLength: 1
                         type: string
+                      endpointCA:
+                        description: |-
+                          EndpointCA references a Secret/ConfigMap key carrying a CA bundle the
+                          Barman client should trust when reaching a self-signed S3 endpoint
+                          (e.g. cozystack's seaweedfs-s3, which is TLS-only with a per-cluster
+                          internal CA). Templating is supported on Name and Key. When omitted,
+                          Barman uses the system trust store.
+                        properties:
+                          key:
+                            description: |-
+                              Key is the key within the Secret containing the PEM-encoded CA bundle.
+                              Defaults to "ca.crt".
+                            type: string
+                          secretRef:
+                            description: |-
+                              SecretRef is a reference to the Secret in the application's namespace.
+                              Templating is supported on the Name field.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        required:
+                        - secretRef
+                        type: object
                       endpointURL:
                         description: EndpointURL is the S3 endpoint URL. Templating
                           is supported.

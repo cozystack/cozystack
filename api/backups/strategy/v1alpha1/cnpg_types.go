@@ -89,6 +89,14 @@ type BarmanObjectStoreTemplate struct {
 	// +optional
 	EndpointURL string `json:"endpointURL,omitempty"`
 
+	// EndpointCA references a Secret/ConfigMap key carrying a CA bundle the
+	// Barman client should trust when reaching a self-signed S3 endpoint
+	// (e.g. cozystack's seaweedfs-s3, which is TLS-only with a per-cluster
+	// internal CA). Templating is supported on Name and Key. When omitted,
+	// Barman uses the system trust store.
+	// +optional
+	EndpointCA *EndpointCARef `json:"endpointCA,omitempty"`
+
 	// S3Credentials references a Secret that holds the S3 access keys. The
 	// Secret must live in the application's namespace. Templating is
 	// supported on Name and key fields.
@@ -106,6 +114,21 @@ type BarmanObjectStoreTemplate struct {
 	// Data carries optional Barman base-backup settings.
 	// +optional
 	Data *BarmanDataTemplate `json:"data,omitempty"`
+}
+
+// EndpointCARef references a Secret in the application's namespace that
+// carries a CA bundle (e.g. ca.crt) the Barman client should trust when
+// reaching a self-signed S3 endpoint. Mirrors the postgresql.cnpg.io
+// barmanObjectStore.endpointCA shape.
+type EndpointCARef struct {
+	// SecretRef is a reference to the Secret in the application's namespace.
+	// Templating is supported on the Name field.
+	SecretRef corev1.LocalObjectReference `json:"secretRef"`
+
+	// Key is the key within the Secret containing the PEM-encoded CA bundle.
+	// Defaults to "ca.crt".
+	// +optional
+	Key string `json:"key,omitempty"`
 }
 
 // S3CredentialsTemplate references a Secret with S3 credentials. Default

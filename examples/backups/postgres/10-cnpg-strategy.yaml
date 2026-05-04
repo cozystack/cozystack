@@ -18,6 +18,16 @@ spec:
       destinationPath: "s3://REPLACE_WITH_COSI_BUCKET_NAME/{{ .Application.metadata.name }}/"
       endpointURL: "https://REPLACE_WITH_S3_ENDPOINT"
       retentionPolicy: "30d"
+      # endpointCA is required when the S3 endpoint serves a self-signed
+      # certificate (the cozystack default seaweedfs-s3 ingress qualifies).
+      # Point this Secret at a key holding the PEM-encoded CA bundle - for
+      # cozystack's seaweedfs you can copy `seaweedfs-ca-cert.ca.crt` from
+      # the parent tenant. Drop the block entirely when the endpoint's
+      # certificate is signed by a publicly-trusted CA.
+      endpointCA:
+        secretRef:
+          name: "{{ .Application.metadata.name }}-cnpg-backup-ca"
+        key: "ca.crt"
       s3Credentials:
         secretRef:
           name: "{{ .Application.metadata.name }}-cnpg-backup-creds"

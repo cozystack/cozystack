@@ -66,12 +66,17 @@ type BackupConfiguration struct {
 }
 
 type BarmanObjectStoreConfiguration struct {
-	DestinationPath string                       `json:"destinationPath,omitempty"`
-	EndpointURL     string                       `json:"endpointURL,omitempty"`
-	ServerName      string                       `json:"serverName,omitempty"`
-	S3Credentials   *S3Credentials               `json:"s3Credentials,omitempty"`
-	Wal             *WalBackupConfiguration      `json:"wal,omitempty"`
-	Data            *DataBackupConfiguration     `json:"data,omitempty"`
+	DestinationPath string                          `json:"destinationPath,omitempty"`
+	EndpointURL     string                          `json:"endpointURL,omitempty"`
+	// EndpointCA references a Secret/ConfigMap key carrying a CA bundle the
+	// Barman client should trust when reaching a self-signed S3 endpoint
+	// (e.g. cozystack's seaweedfs-s3, which is TLS-only with a per-cluster
+	// internal CA). When nil, Barman falls back to system trust store.
+	EndpointCA      *SecretKeySelector              `json:"endpointCA,omitempty"`
+	ServerName      string                          `json:"serverName,omitempty"`
+	S3Credentials   *S3Credentials                  `json:"s3Credentials,omitempty"`
+	Wal             *WalBackupConfiguration         `json:"wal,omitempty"`
+	Data            *DataBackupConfiguration        `json:"data,omitempty"`
 }
 
 type S3Credentials struct {

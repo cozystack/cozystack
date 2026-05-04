@@ -40,6 +40,9 @@ const (
 
 	defaultS3AccessKeyIDKey     = "AWS_ACCESS_KEY_ID"
 	defaultS3SecretAccessKeyKey = "AWS_SECRET_ACCESS_KEY"
+	// defaultEndpointCAKey mirrors the convention every Kubernetes-issued
+	// CA Secret follows (cert-manager, kube-system, COSI providers, etc.).
+	defaultEndpointCAKey = "ca.crt"
 
 	// Driver metadata keys persisted on Cozystack Backup artifacts.
 	cnpgBackupNameKey      = "cnpg.io/backup-name"
@@ -938,6 +941,16 @@ func buildBarmanObjectStore(t strategyv1alpha1.BarmanObjectStoreTemplate, server
 		DestinationPath: t.DestinationPath,
 		ServerName:      serverName,
 		EndpointURL:     t.EndpointURL,
+	}
+	if t.EndpointCA != nil && t.EndpointCA.SecretRef.Name != "" {
+		caKey := t.EndpointCA.Key
+		if caKey == "" {
+			caKey = defaultEndpointCAKey
+		}
+		out.EndpointCA = &cnpgtypes.SecretKeySelector{
+			Name: t.EndpointCA.SecretRef.Name,
+			Key:  caKey,
+		}
 	}
 	if t.S3Credentials != nil {
 		accessKeyKey := t.S3Credentials.AccessKeyIDKey

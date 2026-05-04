@@ -94,6 +94,55 @@ func TestBuildBarmanObjectStore_CustomCredentialKeys(t *testing.T) {
 	}
 }
 
+// TestBuildBarmanObjectStore_EndpointCA covers the TLS-with-self-signed-CA
+// path: a strategy that names a Secret holding the CA bundle gets translated
+// into the matching cnpgtypes.SecretKeySelector on the live Cluster, defaulting
+// the key name to "ca.crt" when not specified.
+func TestBuildBarmanObjectStore_EndpointCA(t *testing.T) {
+	t.Run("default key", func(t *testing.T) {
+		tmpl := strategyv1alpha1.BarmanObjectStoreTemplate{
+			DestinationPath: "s3://b/",
+			EndpointCA: &strategyv1alpha1.EndpointCARef{
+				SecretRef: corev1.LocalObjectReference{Name: "trust-bundle"},
+			},
+		}
+		got := buildBarmanObjectStore(tmpl, "s")
+		if got.EndpointCA == nil || got.EndpointCA.Name != "trust-bundle" || got.EndpointCA.Key != "ca.crt" {
+			t.Fatalf("EndpointCA mismatch: %#v", got.EndpointCA)
+		}
+	})
+	t.Run("custom key", func(t *testing.T) {
+		tmpl := strategyv1alpha1.BarmanObjectStoreTemplate{
+			DestinationPath: "s3://b/",
+			EndpointCA: &strategyv1alpha1.EndpointCARef{
+				SecretRef: corev1.LocalObjectReference{Name: "trust-bundle"},
+				Key:       "tls.crt",
+			},
+		}
+		got := buildBarmanObjectStore(tmpl, "s")
+		if got.EndpointCA == nil || got.EndpointCA.Key != "tls.crt" {
+			t.Fatalf("EndpointCA key not honored: %#v", got.EndpointCA)
+		}
+	})
+	t.Run("nil block stays nil", func(t *testing.T) {
+		tmpl := strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"}
+		got := buildBarmanObjectStore(tmpl, "s")
+		if got.EndpointCA != nil {
+			t.Fatalf("EndpointCA must be nil when not configured; got %#v", got.EndpointCA)
+		}
+	})
+	t.Run("empty SecretRef.Name treated as not configured", func(t *testing.T) {
+		tmpl := strategyv1alpha1.BarmanObjectStoreTemplate{
+			DestinationPath: "s3://b/",
+			EndpointCA:      &strategyv1alpha1.EndpointCARef{Key: "ca.crt"},
+		}
+		got := buildBarmanObjectStore(tmpl, "s")
+		if got.EndpointCA != nil {
+			t.Fatalf("expected nil EndpointCA when SecretRef.Name is empty; got %#v", got.EndpointCA)
+		}
+	})
+}
+
 func TestRenderCNPGTemplate_TemplatingApplicationName(t *testing.T) {
 	tmpl := strategyv1alpha1.CNPGTemplate{
 		ServerName: "{{ .Application.metadata.name }}",

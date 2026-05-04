@@ -69,15 +69,25 @@ primary_pod() {
   ACCESS=$(jq -r '.spec.secretS3.accessKeyID' /tmp/cnpg-bucket-info.json)
   SECRETKEY=$(jq -r '.spec.secretS3.accessSecretKey' /tmp/cnpg-bucket-info.json)
   COSI_BUCKET=$(jq -r '.spec.bucketName' /tmp/cnpg-bucket-info.json)
-  # BucketInfo's .spec.secretS3.endpoint is the *external* ingress URL
-  # (e.g. https://s3.example.org). In a CI sandbox that DNS name does not
-  # resolve from inside the cluster, so CNPG cannot reach it. seaweedfs-s3
-  # lives in tenant-root, the same namespace this test runs in, so the
-  # short Service name is enough.
-  S3_ENDPOINT="http://seaweedfs-s3:8333"
+  # BucketInfo's .spec.secretS3.endpoint is the *external* ingress URL.
+  # Inside the cluster we hit seaweedfs-s3 directly. The Service is TLS-only
+  # (cozystack overrides readiness/liveness probes to scheme=HTTPS, see
+  # packages/system/seaweedfs/values.yaml), so plain http://seaweedfs-s3 just
+  # gets the connection closed by the server. Use https + endpointCA.
+  S3_ENDPOINT="https://seaweedfs-s3:8333"
   kubectl -n "${NAMESPACE}" create secret generic "${SRC}-cnpg-backup-creds" \
     --from-literal=AWS_ACCESS_KEY_ID="${ACCESS}" \
     --from-literal=AWS_SECRET_ACCESS_KEY="${SECRETKEY}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  # Copy seaweedfs's internal CA into a per-app Secret so the strategy
+  # template's endpointCA reference resolves. The original lives in
+  # tenant-root; even when this test runs in tenant-root we still mirror
+  # it under a stable name so the strategy YAML doesn't have to know the
+  # platform Secret name.
+  CA_BUNDLE=$(kubectl -n tenant-root get secret seaweedfs-ca-cert -o jsonpath='{.data.ca\.crt}' | base64 -d)
+  kubectl -n "${NAMESPACE}" create secret generic "${SRC}-cnpg-backup-ca" \
+    --from-literal=ca.crt="${CA_BUNDLE}" \
     --dry-run=client -o yaml | kubectl apply -f -
 
   print_log "Step 1: source Postgres"
