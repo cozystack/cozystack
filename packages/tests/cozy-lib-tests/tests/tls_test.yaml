@@ -478,3 +478,23 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'ERROR: "dnsNames" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list.'
+
+  # String extraDnsNames triggers a type error
+  - it: errors when extraDnsNames is a string instead of a list
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: string-extra-dns-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+        extraDnsNames: extra.example.com
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ERROR: "extraDnsNames" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list.'

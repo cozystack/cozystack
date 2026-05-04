@@ -44,6 +44,9 @@ Parameters:
 {{- if not (kindIs "slice" .dnsNames) -}}
 {{-   fail "ERROR: \"dnsNames\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
 {{- end -}}
+{{- if and .extraDnsNames (not (kindIs "slice" .extraDnsNames)) -}}
+{{-   fail "ERROR: \"extraDnsNames\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
+{{- end -}}
 {{- if not .issuerRef -}}
 {{-   fail "ERROR: \"issuerRef\" is required for cozy-lib.tls.certificate. Provide a dict with \"name\" and \"kind\"." -}}
 {{- end -}}
@@ -90,7 +93,7 @@ spec:
   issuerRef:
     name: {{ .issuerRef.name | quote }}
     kind: {{ .issuerRef.kind | quote }}
-    group: cert-manager.io
+    group: {{ "cert-manager.io" | quote }}
 {{- end }}
 
 {{/*
