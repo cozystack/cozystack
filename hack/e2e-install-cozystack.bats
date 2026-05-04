@@ -37,6 +37,7 @@
     --install \
     --namespace cozy-system \
     --create-namespace \
+    --set cozystackOperator.helmReleaseInterval=30s \
     --wait \
     --timeout 2m
 
@@ -178,16 +179,7 @@ EOF
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   kubectl wait hr/etcd hr/ingress hr/tenant-root hr/seaweedfs -n tenant-root --timeout=4m --for=condition=ready
 
-  # TODO: Workaround ingress unvailability issue
-  if ! kubectl wait hr/monitoring -n tenant-root --timeout=2m --for=condition=ready; then
-    flux reconcile hr monitoring -n tenant-root --force
-    kubectl wait hr/monitoring -n tenant-root --timeout=2m --for=condition=ready
-  fi
-
-  if ! kubectl wait hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready; then
-    flux reconcile hr seaweedfs-system -n tenant-root --force
-    kubectl wait hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready
-  fi
+  kubectl wait hr/monitoring hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready
 
 
   # Expose Cozystack services through ingress

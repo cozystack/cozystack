@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -58,7 +59,43 @@ func parseCRDPolicy(install *cozyv1alpha1.ComponentInstall) helmv2.CRDsPolicy {
 // PackageReconciler reconciles Package resources
 type PackageReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme                    *runtime.Scheme
+	HelmReleaseInterval       time.Duration
+	HelmReleaseRetryInterval  time.Duration
+	HelmReleaseInstallTimeout time.Duration
+	HelmReleaseUpgradeTimeout time.Duration
+	HelmReleaseMaxHistory     int
+}
+
+// buildHelmReleaseSpec assembles the Spec applied to every generated
+// HelmRelease. RetryInterval drives recovery from failed install/upgrade
+// attempts; Interval polls healthy releases.
+func (r *PackageReconciler) buildHelmReleaseSpec(componentInstall *cozyv1alpha1.ComponentInstall, artifactName string) helmv2.HelmReleaseSpec {
+	maxHistory := r.HelmReleaseMaxHistory
+	return helmv2.HelmReleaseSpec{
+		Interval:   metav1.Duration{Duration: r.HelmReleaseInterval},
+		MaxHistory: &maxHistory,
+		ChartRef: &helmv2.CrossNamespaceSourceReference{
+			Kind:      "ExternalArtifact",
+			Name:      artifactName,
+			Namespace: "cozy-system",
+		},
+		Install: &helmv2.Install{
+			Timeout: &metav1.Duration{Duration: r.HelmReleaseInstallTimeout},
+			Strategy: &helmv2.InstallStrategy{
+				Name:          string(helmv2.ActionStrategyRetryOnFailure),
+				RetryInterval: &metav1.Duration{Duration: r.HelmReleaseRetryInterval},
+			},
+		},
+		Upgrade: &helmv2.Upgrade{
+			Timeout: &metav1.Duration{Duration: r.HelmReleaseUpgradeTimeout},
+			Strategy: &helmv2.UpgradeStrategy{
+				Name:          string(helmv2.ActionStrategyRetryOnFailure),
+				RetryInterval: &metav1.Duration{Duration: r.HelmReleaseRetryInterval},
+			},
+			CRDs: parseCRDPolicy(componentInstall),
+		},
+	}
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=packages,verbs=get;list;watch;create;update;patch;delete
@@ -213,27 +250,7 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				Namespace: namespace,
 				Labels:    labels,
 			},
-			Spec: helmv2.HelmReleaseSpec{
-				Interval: metav1.Duration{Duration: 5 * 60 * 1000000000}, // 5m
-				ChartRef: &helmv2.CrossNamespaceSourceReference{
-					Kind:      "ExternalArtifact",
-					Name:      artifactName,
-					Namespace: "cozy-system",
-				},
-				Install: &helmv2.Install{
-					Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
-					Remediation: &helmv2.InstallRemediation{
-						Retries: -1,
-					},
-				},
-				Upgrade: &helmv2.Upgrade{
-					Timeout: &metav1.Duration{Duration: 10 * 60 * 1000000000}, // 10m
-					Remediation: &helmv2.UpgradeRemediation{
-						Retries: -1,
-					},
-					CRDs: parseCRDPolicy(component.Install),
-				},
-			},
+			Spec: r.buildHelmReleaseSpec(component.Install, artifactName),
 		}
 
 		// Add valuesFrom for cozystack-values secret unless disabled by annotation on PackageSource

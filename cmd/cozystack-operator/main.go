@@ -83,6 +83,11 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
+	var helmReleaseInterval string
+	var helmReleaseRetryInterval string
+	var helmReleaseInstallTimeout string
+	var helmReleaseUpgradeTimeout string
+	var helmReleaseMaxHistory int
 	var cozyValuesSecretName string
 	var cozyValuesSecretNamespace string
 	var cozyValuesNamespaceSelector string
@@ -107,6 +112,28 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.StringVar(&helmReleaseInterval, "helmrelease-interval", "5m",
+		"Reconcile interval applied to HelmReleases created by the Package reconciler. "+
+			"Lower values speed up dependency-blocked retries (e.g. during E2E install) at the cost of "+
+			"controller load. Production default 5m matches existing behaviour.")
+	flag.StringVar(&helmReleaseRetryInterval, "helmrelease-retry-interval", "30s",
+		"Retry interval applied to Install.Strategy and Upgrade.Strategy of HelmReleases created "+
+			"by the Package reconciler. With Strategy.Name=RetryOnFailure, this controls how long the "+
+			"controller waits between failed install/upgrade attempts. Decoupled from --helmrelease-interval "+
+			"(which is the healthy reconcile cadence) so failures recover fast without polling healthy "+
+			"releases at the same fast cadence.")
+	flag.StringVar(&helmReleaseInstallTimeout, "helmrelease-install-timeout", "10m",
+		"Timeout for the Helm install action of HelmReleases created by the Package reconciler "+
+			"(Spec.Install.Timeout). Bounds how long an individual Kubernetes operation (Job/hook/wait) "+
+			"may take during install.")
+	flag.StringVar(&helmReleaseUpgradeTimeout, "helmrelease-upgrade-timeout", "10m",
+		"Timeout for the Helm upgrade action of HelmReleases created by the Package reconciler "+
+			"(Spec.Upgrade.Timeout). Bounds how long an individual Kubernetes operation (Job/hook/wait) "+
+			"may take during upgrade.")
+	flag.IntVar(&helmReleaseMaxHistory, "helmrelease-max-history", 5,
+		"Number of release revisions Helm keeps for HelmReleases created by the Package reconciler "+
+			"(Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default. Lower values reduce "+
+			"per-release Secret accumulation in clusters that bounce HRs frequently (e.g. E2E sandboxes).")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
@@ -121,6 +148,23 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	parseFlag := func(flagName, raw string) time.Duration {
+		d, err := parsePositiveDuration(flagName, raw)
+		if err != nil {
+			setupLog.Error(err, "invalid duration flag")
+			os.Exit(1)
+		}
+		return d
+	}
+	hrIntervalDuration := parseFlag("--helmrelease-interval", helmReleaseInterval)
+	hrRetryIntervalDuration := parseFlag("--helmrelease-retry-interval", helmReleaseRetryInterval)
+	hrInstallTimeoutDuration := parseFlag("--helmrelease-install-timeout", helmReleaseInstallTimeout)
+	hrUpgradeTimeoutDuration := parseFlag("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
+	if helmReleaseMaxHistory < 0 {
+		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
+		os.Exit(1)
+	}
 
 	config := ctrl.GetConfigOrDie()
 
@@ -258,8 +302,13 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:                    mgr.GetClient(),
+		Scheme:                    mgr.GetScheme(),
+		HelmReleaseInterval:       hrIntervalDuration,
+		HelmReleaseRetryInterval:  hrRetryIntervalDuration,
+		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
+		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
+		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
@@ -388,6 +437,21 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	}
 
 	return nil
+}
+
+// parsePositiveDuration parses raw as a time.Duration and rejects malformed
+// or non-positive values. Flux HelmRelease fields (Interval, Timeout,
+// RetryInterval) require strictly positive durations, so a misconfigured
+// flag must fail fast at startup rather than propagating into every HR.
+func parsePositiveDuration(flagName, raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration for %s=%q: %w", flagName, raw, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be > 0 (got %q)", flagName, raw)
+	}
+	return d, nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.
