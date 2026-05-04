@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -68,6 +69,91 @@ func TestParseCRDPolicy(t *testing.T) {
 				t.Errorf("parseCRDPolicy() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuildHelmReleaseSpec(t *testing.T) {
+	r := &PackageReconciler{
+		HelmReleaseInterval:       42 * time.Second,
+		HelmReleaseRetryInterval:  17 * time.Second,
+		HelmReleaseInstallTimeout: 11 * time.Minute,
+		HelmReleaseUpgradeTimeout: 13 * time.Minute,
+		HelmReleaseMaxHistory:     7,
+	}
+	componentInstall := &cozyv1alpha1.ComponentInstall{UpgradeCRDs: "Skip"}
+
+	spec := r.buildHelmReleaseSpec(componentInstall, "ps-variant-component")
+
+	if spec.Interval.Duration != 42*time.Second {
+		t.Errorf("Interval = %v, want 42s", spec.Interval.Duration)
+	}
+	if spec.MaxHistory == nil {
+		t.Fatal("MaxHistory is nil, want pointer to 7")
+	}
+	if *spec.MaxHistory != 7 {
+		t.Errorf("MaxHistory = %d, want 7", *spec.MaxHistory)
+	}
+
+	if spec.ChartRef == nil {
+		t.Fatal("ChartRef is nil")
+	}
+	if spec.ChartRef.Kind != "ExternalArtifact" {
+		t.Errorf("ChartRef.Kind = %q, want ExternalArtifact", spec.ChartRef.Kind)
+	}
+	if spec.ChartRef.Name != "ps-variant-component" {
+		t.Errorf("ChartRef.Name = %q, want ps-variant-component", spec.ChartRef.Name)
+	}
+	if spec.ChartRef.Namespace != "cozy-system" {
+		t.Errorf("ChartRef.Namespace = %q, want cozy-system", spec.ChartRef.Namespace)
+	}
+
+	if spec.Install == nil {
+		t.Fatal("Install is nil")
+	}
+	if spec.Install.Timeout == nil || spec.Install.Timeout.Duration != 11*time.Minute {
+		t.Errorf("Install.Timeout = %v, want 11m", spec.Install.Timeout)
+	}
+	if spec.Install.Strategy == nil {
+		t.Fatal("Install.Strategy is nil")
+	}
+	if spec.Install.Strategy.Name != string(helmv2.ActionStrategyRetryOnFailure) {
+		t.Errorf("Install.Strategy.Name = %q, want %q", spec.Install.Strategy.Name, helmv2.ActionStrategyRetryOnFailure)
+	}
+	if spec.Install.Strategy.RetryInterval == nil || spec.Install.Strategy.RetryInterval.Duration != 17*time.Second {
+		t.Errorf("Install.Strategy.RetryInterval = %v, want 17s", spec.Install.Strategy.RetryInterval)
+	}
+
+	if spec.Upgrade == nil {
+		t.Fatal("Upgrade is nil")
+	}
+	if spec.Upgrade.Timeout == nil || spec.Upgrade.Timeout.Duration != 13*time.Minute {
+		t.Errorf("Upgrade.Timeout = %v, want 13m", spec.Upgrade.Timeout)
+	}
+	if spec.Upgrade.Strategy == nil {
+		t.Fatal("Upgrade.Strategy is nil")
+	}
+	if spec.Upgrade.Strategy.Name != string(helmv2.ActionStrategyRetryOnFailure) {
+		t.Errorf("Upgrade.Strategy.Name = %q, want %q", spec.Upgrade.Strategy.Name, helmv2.ActionStrategyRetryOnFailure)
+	}
+	if spec.Upgrade.Strategy.RetryInterval == nil || spec.Upgrade.Strategy.RetryInterval.Duration != 17*time.Second {
+		t.Errorf("Upgrade.Strategy.RetryInterval = %v, want 17s", spec.Upgrade.Strategy.RetryInterval)
+	}
+	if spec.Upgrade.CRDs != helmv2.Skip {
+		t.Errorf("Upgrade.CRDs = %q, want Skip", spec.Upgrade.CRDs)
+	}
+}
+
+// TestBuildHelmReleaseSpecZeroMaxHistory pins that MaxHistory=0 (unlimited
+// history per Helm semantics) survives the spec build — i.e. is set as a
+// non-nil pointer to 0 rather than dropped or replaced with a default.
+func TestBuildHelmReleaseSpecZeroMaxHistory(t *testing.T) {
+	r := &PackageReconciler{HelmReleaseMaxHistory: 0}
+	spec := r.buildHelmReleaseSpec(nil, "x")
+	if spec.MaxHistory == nil {
+		t.Fatal("MaxHistory is nil for HelmReleaseMaxHistory=0; want pointer to 0")
+	}
+	if *spec.MaxHistory != 0 {
+		t.Errorf("MaxHistory = %d, want 0", *spec.MaxHistory)
 	}
 }
 
