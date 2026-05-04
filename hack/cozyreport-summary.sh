@@ -10,9 +10,11 @@ echo
 
 echo "## HelmReleases not Ready"
 echo
-kubectl get hr -A --no-headers 2>/dev/null \
-  | awk '$4 != "True" {printf "  %s/%s — %s\n", $1, $2, $5}' \
-  | head -40
+if kubectl get crd helmreleases.helm.toolkit.fluxcd.io >/dev/null 2>&1; then
+  kubectl get hr -A --no-headers 2>/dev/null \
+    | awk '$4 != "True" {printf "  %s/%s — %s\n", $1, $2, $5}' \
+    | head -40
+fi
 echo
 
 echo "## Pods not Running/Succeeded"
@@ -28,7 +30,7 @@ kubectl get pod -A --no-headers 2>/dev/null \
   | awk '$4 ~ /ImagePullBackOff|ErrImagePull/ {printf "  %s/%s — %s\n", $1, $2, $4}'
 echo
 
-echo "## OOMKilled in last 30 min"
+echo "## Recent OOMKilled events (last 20)"
 echo
 kubectl get events -A --field-selector reason=OOMKilling --sort-by=.lastTimestamp 2>/dev/null \
   | tail -20
@@ -50,9 +52,10 @@ echo
 
 echo "## Flux Sources not Ready"
 echo
-for kind in helmrepositories.source.toolkit.fluxcd.io ocirepositories.source.toolkit.fluxcd.io gitrepositories.source.toolkit.fluxcd.io; do
-  kubectl get $kind -A --no-headers 2>/dev/null \
-    | awk -v k="${kind%%.*}" '$4 != "True" {printf "  %s %s/%s — Ready=%s\n", k, $1, $2, $4}'
+for kind in helmrepositories.source.toolkit.fluxcd.io ocirepositories.source.toolkit.fluxcd.io gitrepositories.source.toolkit.fluxcd.io externalartifacts.source.toolkit.fluxcd.io; do
+  kubectl get crd "$kind" >/dev/null 2>&1 || continue
+  short=${kind%%.*}
+  kubectl get "$kind" -A -o jsonpath='{range .items[?(@.status.conditions[?(@.type=="Ready")].status!="True")]}  '"$short"' {.metadata.namespace}/{.metadata.name} — Ready={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null
 done
 echo
 

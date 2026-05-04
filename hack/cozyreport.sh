@@ -1,4 +1,5 @@
 #!/bin/sh
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPORT_DATE=$(date +%Y-%m-%d_%H-%M-%S)
 REPORT_NAME=${1:-cozyreport-$REPORT_DATE}
 REPORT_PDIR=$(mktemp -d)
@@ -140,8 +141,9 @@ for kind in applications.apps.cozystack.io applicationdefinitions.apps.cozystack
   short=${kind%%.*}
   if kubectl get crd $kind >/dev/null 2>&1; then
     kubectl get $kind -A > $DIR/$short.txt 2>&1
-    kubectl get $kind -A --no-headers 2>/dev/null | awk 'NF >= 3 && $NF != "True" && $NF != "Ready"' | \
-      while read NAMESPACE NAME _; do
+    kubectl get $kind -A -o jsonpath='{range .items[?(@.status.conditions[?(@.type=="Ready")].status!="True")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null | \
+      while read NAMESPACE NAME; do
+        [ -z "$NAMESPACE" ] && continue
         d=$DIR/$short/$NAMESPACE/$NAME
         mkdir -p $d
         kubectl get $kind -n $NAMESPACE $NAME -o yaml > $d/$short.yaml 2>&1
@@ -241,17 +243,19 @@ free -m > $DIR/free.txt 2>&1
 ps auxww > $DIR/ps.txt 2>&1
 dmesg | tail -200 > $DIR/dmesg.txt 2>&1 || true
 if [ -f /workspace/talosconfig ]; then
-  for node in 192.168.123.11 192.168.123.12 192.168.123.13; do
-    talosctl --talosconfig /workspace/talosconfig -n $node dmesg --tail=200 > $DIR/talos-$node-dmesg.txt 2>&1 || true
-    talosctl --talosconfig /workspace/talosconfig -n $node logs kubelet --tail=500 > $DIR/talos-$node-kubelet.log 2>&1 || true
-    talosctl --talosconfig /workspace/talosconfig -n $node logs containerd --tail=500 > $DIR/talos-$node-containerd.log 2>&1 || true
+  NODES=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null)
+  for node in ${NODES:-192.168.123.11 192.168.123.12 192.168.123.13}; do
+    [ -z "$node" ] && continue
+    talosctl --talosconfig /workspace/talosconfig -n "$node" dmesg --tail=200 > "$DIR/talos-$node-dmesg.txt" 2>&1 || true
+    talosctl --talosconfig /workspace/talosconfig -n "$node" logs kubelet --tail=500 > "$DIR/talos-$node-kubelet.log" 2>&1 || true
+    talosctl --talosconfig /workspace/talosconfig -n "$node" logs containerd --tail=500 > "$DIR/talos-$node-containerd.log" 2>&1 || true
   done
 fi
 
 # -- finalization
 
 echo "Generating summary..."
-hack/cozyreport-summary.sh > $REPORT_DIR/summary.txt 2>&1 || true
+"$SCRIPT_DIR/cozyreport-summary.sh" > "$REPORT_DIR/summary.txt" 2>&1 || true
 
 echo "Creating archive..."
 tar -czf $REPORT_NAME.tgz -C $REPORT_PDIR .
