@@ -21,10 +21,10 @@ Parameters:
   - secretName (required) - TLS secret name to create (can be same as name). A caller-level wrapper can default this to name.
   - dnsNames   (required) - list of DNS SANs
   - extraDnsNames (optional) - additional DNS SANs to append (e.g. user-supplied custom domains)
-  - issuerRef  (required) - dict with "name" and "kind" (e.g. ClusterIssuer, Issuer)
-  - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset
+  - issuerRef  (required) - dict with "name" and "kind" (e.g. ClusterIssuer, Issuer). The "group" field is always hardcoded to "cert-manager.io".
+  - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset. Non-empty values are passed through without validation.
   - renewBefore (optional) - renewal window, defaults to 720h (30 days)
-  - usages     (optional) - list of key usages, defaults to ["server auth"] (not cert-manager's default of "digital signature, key encipherment"; this is a deliberate choice for TLS server certificates)
+  - usages     (optional) - list of key usages, defaults to ["server auth"] (not cert-manager's default of "digital signature, key encipherment"; this is a deliberate choice for TLS server certificates). An empty list also falls back to the default.
 */}}
 {{- define "cozy-lib.tls.certificate" -}}
 {{- if not .Release -}}

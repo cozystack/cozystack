@@ -438,3 +438,25 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'ERROR: "issuerRef" is required for cozy-lib.tls.certificate. Provide a dict with "name" and "kind".'
+
+  # Empty usages list falls back to default server auth
+  - it: falls back to default usages when usages is an empty list
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: empty-usages-tls
+        dnsNames:
+          - svc.example
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+        usages: []
+    asserts:
+      - equal:
+          path: spec.usages
+          value:
+            - "server auth"
