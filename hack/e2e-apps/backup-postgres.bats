@@ -137,8 +137,27 @@ primary_pod() {
 
   print_log "Step 5: in-place RestoreJob (destructive)"
   apply_in_ns "${EX_DIR}/35-restorejob-in-place.yaml"
-  kubectl -n "${NAMESPACE}" wait restorejob.backups.cozystack.io/pg-src-in-place \
-    --for=jsonpath='{.status.phase}'=Succeeded --timeout=900s
+  if ! kubectl -n "${NAMESPACE}" wait restorejob.backups.cozystack.io/pg-src-in-place \
+       --for=jsonpath='{.status.phase}'=Succeeded --timeout=900s; then
+    echo "----- RestoreJob status after timeout -----"
+    kubectl -n "${NAMESPACE}" get restorejob.backups.cozystack.io/pg-src-in-place -o yaml || true
+    echo "----- Postgres app spec (verify our restore patch landed) -----"
+    kubectl -n "${NAMESPACE}" get postgres.apps.cozystack.io "${SRC}" -o yaml | sed -n '/^spec:/,/^status:/p' || true
+    echo "----- HelmRelease status (look for UpgradeFailed / RollbackSucceeded) -----"
+    kubectl -n "${NAMESPACE}" get hr "postgres-${SRC}" -o yaml | sed -n '/^status:/,$p' | head -40 || true
+    echo "----- cnpg.io/Cluster spec (bootstrap, externalClusters, backup) -----"
+    kubectl -n "${NAMESPACE}" get clusters.postgresql.cnpg.io "postgres-${SRC}" -o jsonpath='{"bootstrap: "}{.spec.bootstrap}{"\nexternalClusters: "}{.spec.externalClusters}{"\nbackup: "}{.spec.backup}{"\nphase: "}{.status.phase}{"\n"}' || true
+    echo "----- recovery pods -----"
+    kubectl -n "${NAMESPACE}" get pods -l "cnpg.io/cluster=postgres-${SRC}" || true
+    echo "----- most recent recovery pod log -----"
+    LAST=$(kubectl -n "${NAMESPACE}" get pods -l "cnpg.io/cluster=postgres-${SRC},job-name" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null)
+    [ -n "$LAST" ] && kubectl -n "${NAMESPACE}" logs "$LAST" --all-containers --tail=80 || true
+    echo "----- backup-controller log -----"
+    kubectl -n cozy-backup-controller logs -l app.kubernetes.io/name=backup-controller --tail=80 || true
+    echo "----- backupstrategy-controller log -----"
+    kubectl -n cozy-backup-controller logs -l app.kubernetes.io/name=backupstrategy-controller --tail=80 || true
+    return 1
+  fi
   PRIMARY=$(primary_pod "${SRC}")
   ROW=$(kubectl -n "${NAMESPACE}" exec "${PRIMARY}" -c postgres -- \
     psql -d demo -tAc "SELECT v FROM marker;")
