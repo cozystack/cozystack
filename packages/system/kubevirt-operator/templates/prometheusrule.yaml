@@ -1,0 +1,36 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vm-not-running-alert
+spec:
+  groups:
+  - name: kubevirt-alerts
+    rules:
+    - alert: VMNotRunningFor10Minutes
+      expr: |
+        kubevirt_vm_info{
+          status!="running",
+          exported_namespace=~".+",
+          name=~".+"
+        } == 1
+      for: 10m
+      labels:
+        severity: critical
+        namespace: '{{ "{{" }} $labels.exported_namespace {{ "}}" }}'
+      annotations:
+        summary: 'VM {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} is not Running for more than 10 minutes'
+        description: 'The VM {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} has been in a non-Running state for more than 10 minutes. Please investigate the issue.'
+    - alert: VMINotRunningFor10Minutes
+      expr: |
+        kubevirt_vmi_info{
+          phase!="running",
+          exported_namespace=~".+",
+          name=~".+"
+        } == 1
+      for: 10m
+      labels:
+        severity: critical
+        namespace: '{{ "{{" }} $labels.exported_namespace {{ "}}" }}'
+      annotations:
+        summary: 'VMI {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} is not Running for more than 10 minutes'
+        description: 'The VMI {{ "{{" }} $labels.name {{ "}}" }} in namespace {{ "{{" }} $labels.exported_namespace {{ "}}" }} has been in a non-Running state for more than 10 minutes. Please investigate the issue.'
