@@ -28,7 +28,7 @@ image-matchbox:
 		> ../../extra/bootbox/images/matchbox.tag
 	rm -f images/matchbox.json
 
-assets: talos-iso talos-nocloud talos-metal talos-kernel talos-initramfs
+assets: talos-iso talos-nocloud talos-metal talos-openstack talos-kernel talos-initramfs
 
 talos-initramfs:
 	test -f ../../../_out/assets/initramfs-metal-amd64.xz || $(MAKE) build-talos-initramfs
@@ -48,7 +48,10 @@ talos-nocloud:
 talos-metal:
 	test -f ../../../_out/assets/metal-amd64.raw.xz || $(MAKE) build-talos-metal
 
-build-talos-initramfs build-talos-kernel build-talos-installer build-talos-iso build-talos-nocloud build-talos-metal:
+talos-openstack:
+	test -f ../../../_out/assets/openstack-amd64.raw.xz || $(MAKE) build-talos-openstack
+
+build-talos-initramfs build-talos-kernel build-talos-installer build-talos-iso build-talos-nocloud build-talos-metal build-talos-openstack:
 	mkdir -p ../../../_out/assets
 	cat images/talos/profiles/$(subst build-talos-,,$@).yaml | \
 		docker run --rm -i -v /dev:/dev --privileged "ghcr.io/siderolabs/imager:$(TALOS_VERSION)" --tar-to-stdout - | \
