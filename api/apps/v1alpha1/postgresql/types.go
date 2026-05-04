@@ -65,6 +65,9 @@ type Backup struct {
 	// Enable regular backups.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+	// Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery. The CNPG backup driver writes this field on restore.
+	// +kubebuilder:default:={}
+	EndpointCA EndpointCA `json:"endpointCA,omitempty"`
 	// S3 endpoint URL for uploads.
 	// +kubebuilder:default:="http://minio-gateway-service:9000"
 	EndpointURL string `json:"endpointURL,omitempty"`
@@ -112,6 +115,15 @@ type DatabaseRoles struct {
 	Admin []string `json:"admin,omitempty"`
 	// List of users with read-only privileges.
 	Readonly []string `json:"readonly,omitempty"`
+}
+
+type EndpointCA struct {
+	// Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
+	// +kubebuilder:default:=""
+	Key string `json:"key,omitempty"`
+	// Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
 }
 
 type PostgreSQL struct {

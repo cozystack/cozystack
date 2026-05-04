@@ -83,12 +83,21 @@ type Backup struct {
 	S3AccessKey         string              `json:"s3AccessKey,omitempty"`
 	S3SecretKey         string              `json:"s3SecretKey,omitempty"`
 	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
+	EndpointCA          EndpointCA          `json:"endpointCA,omitempty"`
 }
 
 type S3CredentialsSecret struct {
 	Name               string `json:"name,omitempty"`
 	AccessKeyIDKey     string `json:"accessKeyIDKey,omitempty"`
 	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
+}
+
+// EndpointCA references a Secret holding the CA bundle Barman should trust
+// when the S3 endpoint presents a self-signed certificate. Mirrors the
+// chart's backup.endpointCA value.
+type EndpointCA struct {
+	Name string `json:"name,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
 
 type Database struct {

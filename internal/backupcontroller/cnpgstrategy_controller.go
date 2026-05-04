@@ -553,7 +553,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			backup.Namespace, backup.Name, err))
 	}
 
-	if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, rendered.BarmanObjectStore.S3Credentials, sourceDatabases, sourceUsers); err != nil {
+	if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to patch Postgres app spec: %v", err))
 	}
 
@@ -690,10 +690,11 @@ func (r *RestoreJobReconciler) patchPostgresAppForRestore(
 	app *postgresapp.Postgres,
 	sourceServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
+	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
 ) error {
-	patched := buildPostgresAppRestorePatch(app, sourceServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, credsRef, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, sourceServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime, credsRef, caRef, sourceDatabases, sourceUsers)
 	return r.Patch(ctx, patched, client.MergeFrom(app), client.FieldOwner(cnpgFieldManager))
 }
 
@@ -713,6 +714,7 @@ func buildPostgresAppRestorePatch(
 	app *postgresapp.Postgres,
 	sourceServerName, sourceDestinationPath, sourceEndpointURL, recoveryTime string,
 	credsRef *strategyv1alpha1.S3CredentialsTemplate,
+	caRef *strategyv1alpha1.EndpointCARef,
 	sourceDatabases map[string]postgresapp.Database,
 	sourceUsers map[string]postgresapp.User,
 ) *postgresapp.Postgres {
@@ -735,6 +737,17 @@ func buildPostgresAppRestorePatch(
 			Name:               credsRef.SecretRef.Name,
 			AccessKeyIDKey:     credsRef.AccessKeyIDKey,
 			SecretAccessKeyKey: credsRef.SecretAccessKeyKey,
+		}
+	}
+	// endpointCA flows into both the chart's spec.backup.barmanObjectStore
+	// and externalClusters[].barmanObjectStore. The recovery path
+	// specifically needs it - without a trusted CA the cnpg-instance-manager
+	// panics in InitInfo.loadBackup when it can't verify the seaweedfs cert.
+	patched.Spec.Backup.EndpointCA = postgresapp.EndpointCA{}
+	if caRef != nil && caRef.SecretRef.Name != "" {
+		patched.Spec.Backup.EndpointCA = postgresapp.EndpointCA{
+			Name: caRef.SecretRef.Name,
+			Key:  caRef.Key,
 		}
 	}
 	// Replace, do not merge: the recovered cluster's data and role catalog

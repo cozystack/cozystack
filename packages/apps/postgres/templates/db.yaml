@@ -29,11 +29,27 @@ spec:
   {{- $credAccessKey = $credCfg.accessKeyIDKey | default "AWS_ACCESS_KEY_ID" }}
   {{- $credSecretKey = $credCfg.secretAccessKeyKey | default "AWS_SECRET_ACCESS_KEY" }}
   {{- end }}
+  {{/*
+    endpointCA references a Secret carrying the CA bundle Barman should
+    trust. Required when the S3 endpoint serves a self-signed certificate
+    (the cozystack default seaweedfs-s3 ingress qualifies). The same
+    reference flows into both spec.backup.barmanObjectStore.endpointCA and
+    spec.externalClusters[].barmanObjectStore.endpointCA so backup *and*
+    recovery can verify TLS - missing it on the externalClusters side made
+    bootstrap.recovery panic in CNPG's instance-manager.
+  */}}
+  {{- $caCfg := default (dict) .Values.backup.endpointCA }}
+  {{- $caKey := $caCfg.key | default "ca.crt" }}
   {{- if .Values.backup.enabled }}
   backup:
     barmanObjectStore:
       destinationPath: {{ .Values.backup.destinationPath }}
       endpointURL: {{ .Values.backup.endpointURL }}
+      {{- if $caCfg.name }}
+      endpointCA:
+        name: {{ $caCfg.name }}
+        key: {{ $caKey }}
+      {{- end }}
       s3Credentials:
         accessKeyId:
           name: {{ $credSecretName }}
@@ -60,6 +76,11 @@ spec:
         serverName: {{ .Values.bootstrap.serverName }}
         {{- end }}
         endpointURL: {{ .Values.backup.endpointURL }}
+        {{- if $caCfg.name }}
+        endpointCA:
+          name: {{ $caCfg.name }}
+          key: {{ $caKey }}
+        {{- end }}
         s3Credentials:
           accessKeyId:
             name: {{ $credSecretName }}

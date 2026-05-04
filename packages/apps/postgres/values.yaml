@@ -148,6 +148,10 @@ databases: {}
 ## @field {string} [accessKeyIDKey] - Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.
 ## @field {string} [secretAccessKeyKey] - Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
 
+## @typedef {struct} EndpointCA - Reference to a Secret holding a PEM-encoded CA bundle the Barman client should trust when reaching a self-signed S3 endpoint. Required when the cluster's S3 (e.g. cozystack's seaweedfs-s3) presents a certificate not signed by a publicly-trusted CA. Used by both spec.backup.barmanObjectStore.endpointCA and the bootstrap-time externalClusters[].barmanObjectStore.endpointCA so backup *and* recovery can verify TLS.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).
+## @field {string} [key] - Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
+
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable regular backups.
 ## @field {string} [schedule] - Cron schedule for automated backups.
@@ -157,6 +161,7 @@ databases: {}
 ## @field {string} [s3AccessKey] - Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 ## @field {string} [s3SecretKey] - Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 ## @field {S3CredentialsSecret} [s3CredentialsSecret] - Pre-existing Secret with S3 credentials. When set, the chart references this Secret directly instead of materialising one from `s3AccessKey`/`s3SecretKey`. The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.
+## @field {EndpointCA} [endpointCA] - Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery. The CNPG backup driver writes this field on restore.
 
 ## @param {Backup} backup - Backup configuration.
 backup:
@@ -171,6 +176,9 @@ backup:
     name: ""
     accessKeyIDKey: ""
     secretAccessKeyKey: ""
+  endpointCA:
+    name: ""
+    key: ""
 
 ##
 ## @section Bootstrap (recovery) parameters

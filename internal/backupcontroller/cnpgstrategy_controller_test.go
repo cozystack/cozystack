@@ -383,6 +383,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsSecretRef_NotCleartext(t *testing.
 		"https://s3.example",
 		"",
 		creds,
+		nil,
 		nil, nil,
 	)
 
@@ -411,7 +412,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 		SecretAccessKeyKey: "SECRET_KEY",
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", creds, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", creds, nil, nil, nil)
 
 	want := postgresapp.S3CredentialsSecret{
 		Name:               "creds",
@@ -429,7 +430,7 @@ func TestBuildPostgresAppRestorePatch_ForwardsCustomKeyOverrides(t *testing.T) {
 // Secret name and helm install would fail.
 func TestBuildPostgresAppRestorePatch_NoSecretRefIsSkipped(t *testing.T) {
 	app := newPostgresApp("pg", "tenant")
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, nil)
+	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, nil, nil)
 	if got := patched.Spec.Backup.S3CredentialsSecret; got != (postgresapp.S3CredentialsSecret{}) {
 		t.Errorf("spec.backup.s3CredentialsSecret must be zero when credsRef is nil; got %#v", got)
 	}
@@ -508,7 +509,7 @@ func TestBuildPostgresAppRestorePatch_ReplacesTargetUsersAndDatabases(t *testing
 		"appdb": {Extensions: []string{"hstore"}},
 	}
 
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, sourceDatabases, sourceUsers)
+	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, sourceDatabases, sourceUsers)
 
 	if _, ok := patched.Spec.Users["stale-target-user"]; ok {
 		t.Errorf("stale target user survived restore; replace semantics regressed")
@@ -540,10 +541,11 @@ func TestBuildPostgresAppRestorePatch_ScrubsStaleBackupSettings(t *testing.T) {
 	app.Spec.Backup.S3CredentialsSecret = postgresapp.S3CredentialsSecret{
 		Name: "stale-creds", AccessKeyIDKey: "OLD_ID", SecretAccessKeyKey: "OLD_KEY",
 	}
+	app.Spec.Backup.EndpointCA = postgresapp.EndpointCA{Name: "stale-ca", Key: "stale.crt"}
 
-	// Restore with no recoveryTime, no endpointURL, no creds - everything
-	// stale on the target must be wiped.
-	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, nil)
+	// Restore with no recoveryTime, no endpointURL, no creds, no CA -
+	// everything stale on the target must be wiped.
+	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, nil, nil, nil)
 
 	if got := patched.Spec.Bootstrap.RecoveryTime; got != "" {
 		t.Errorf("stale recoveryTime survived; got %q", got)
@@ -559,6 +561,29 @@ func TestBuildPostgresAppRestorePatch_ScrubsStaleBackupSettings(t *testing.T) {
 	}
 	if patched.Spec.Backup.S3CredentialsSecret != (postgresapp.S3CredentialsSecret{}) {
 		t.Errorf("stale s3CredentialsSecret survived; got %+v", patched.Spec.Backup.S3CredentialsSecret)
+	}
+	if patched.Spec.Backup.EndpointCA != (postgresapp.EndpointCA{}) {
+		t.Errorf("stale endpointCA survived; got %+v", patched.Spec.Backup.EndpointCA)
+	}
+}
+
+// TestBuildPostgresAppRestorePatch_ForwardsEndpointCA verifies that a
+// strategy template with an EndpointCA reference flows through to the
+// target app's spec.backup.endpointCA. Without this the chart's
+// externalClusters[].barmanObjectStore.endpointCA stays empty and the
+// recovery init job panics in CNPG's instance-manager when the S3
+// endpoint serves a self-signed certificate (cozystack seaweedfs-s3 does).
+func TestBuildPostgresAppRestorePatch_ForwardsEndpointCA(t *testing.T) {
+	app := newPostgresApp("pg", "tenant")
+	caRef := &strategyv1alpha1.EndpointCARef{
+		SecretRef: corev1.LocalObjectReference{Name: "pg-cnpg-backup-ca"},
+		Key:       "ca.crt",
+	}
+	patched := buildPostgresAppRestorePatch(app, "src", "s3://b/", "", "", nil, caRef, nil, nil)
+
+	want := postgresapp.EndpointCA{Name: "pg-cnpg-backup-ca", Key: "ca.crt"}
+	if got := patched.Spec.Backup.EndpointCA; got != want {
+		t.Fatalf("endpointCA mismatch\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

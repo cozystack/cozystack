@@ -73,8 +73,11 @@ primary_pod() {
   # Inside the cluster we hit seaweedfs-s3 directly. The Service is TLS-only
   # (cozystack overrides readiness/liveness probes to scheme=HTTPS, see
   # packages/system/seaweedfs/values.yaml), so plain http://seaweedfs-s3 just
-  # gets the connection closed by the server. Use https + endpointCA.
-  S3_ENDPOINT="https://seaweedfs-s3:8333"
+  # gets the connection closed by the server. The seaweedfs server cert is
+  # signed by an internal CA whose SAN list contains '*.tenant-root', not
+  # bare 'seaweedfs-s3', so we have to address the Service with its
+  # namespace suffix or TLS hostname validation fails.
+  S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333"
   kubectl -n "${NAMESPACE}" create secret generic "${SRC}-cnpg-backup-creds" \
     --from-literal=AWS_ACCESS_KEY_ID="${ACCESS}" \
     --from-literal=AWS_SECRET_ACCESS_KEY="${SECRETKEY}" \
