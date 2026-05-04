@@ -149,26 +149,26 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	hrIntervalDuration, err := time.ParseDuration(helmReleaseInterval)
-	if err != nil {
-		setupLog.Error(err, "invalid --helmrelease-interval value", "value", helmReleaseInterval)
-		os.Exit(1)
+	// time.ParseDuration accepts "0s" and negative values, but Flux HelmRelease
+	// fields (Interval, Timeout, RetryInterval) require strictly positive
+	// durations to function. Reject non-positive values at startup so a
+	// misconfigured flag fails fast instead of propagating into every HR.
+	parsePositiveDuration := func(flagName, raw string) time.Duration {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			setupLog.Error(err, "invalid duration flag", "flag", flagName, "value", raw)
+			os.Exit(1)
+		}
+		if d <= 0 {
+			setupLog.Error(fmt.Errorf("%s must be > 0", flagName), "invalid duration flag", "flag", flagName, "value", raw)
+			os.Exit(1)
+		}
+		return d
 	}
-	hrRetryIntervalDuration, err := time.ParseDuration(helmReleaseRetryInterval)
-	if err != nil {
-		setupLog.Error(err, "invalid --helmrelease-retry-interval value", "value", helmReleaseRetryInterval)
-		os.Exit(1)
-	}
-	hrInstallTimeoutDuration, err := time.ParseDuration(helmReleaseInstallTimeout)
-	if err != nil {
-		setupLog.Error(err, "invalid --helmrelease-install-timeout value", "value", helmReleaseInstallTimeout)
-		os.Exit(1)
-	}
-	hrUpgradeTimeoutDuration, err := time.ParseDuration(helmReleaseUpgradeTimeout)
-	if err != nil {
-		setupLog.Error(err, "invalid --helmrelease-upgrade-timeout value", "value", helmReleaseUpgradeTimeout)
-		os.Exit(1)
-	}
+	hrIntervalDuration := parsePositiveDuration("--helmrelease-interval", helmReleaseInterval)
+	hrRetryIntervalDuration := parsePositiveDuration("--helmrelease-retry-interval", helmReleaseRetryInterval)
+	hrInstallTimeoutDuration := parsePositiveDuration("--helmrelease-install-timeout", helmReleaseInstallTimeout)
+	hrUpgradeTimeoutDuration := parsePositiveDuration("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
 	if helmReleaseMaxHistory < 0 {
 		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
 		os.Exit(1)
