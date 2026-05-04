@@ -44,6 +44,12 @@ primary_pod() {
 @test "CNPG Postgres backup + in-place restore + to-copy restore" {
   print_log "Step 0: Bucket + S3 credentials"
   apply_in_ns "${EX_DIR}/00-bucket.yaml"
+  # The Bucket HR materialises the BucketClaim/BucketAccess asynchronously
+  # via COSI. kubectl wait fails immediately with NotFound when the object
+  # does not yet exist, so wait for the HR to settle and the BucketAccess
+  # CR to appear before waiting on its accessGranted condition.
+  kubectl -n "${NAMESPACE}" wait "hr/bucket-${BUCKET}" --for=condition=ready --timeout=300s
+  timeout 300 sh -ec "until kubectl -n ${NAMESPACE} get bucketaccesses.objectstorage.k8s.io ${BUCKET_ACCESS} >/dev/null 2>&1; do sleep 2; done"
   kubectl -n "${NAMESPACE}" wait "bucketaccesses.objectstorage.k8s.io/${BUCKET_ACCESS}" \
     --for=jsonpath='{.status.accessGranted}'=true --timeout=300s
 
@@ -51,6 +57,13 @@ primary_pod() {
     -o jsonpath='{.data.BucketInfo}' | base64 -d > /tmp/cnpg-bucket-info.json
   ACCESS=$(jq -r '.spec.secretS3.accessKeyID' /tmp/cnpg-bucket-info.json)
   SECRETKEY=$(jq -r '.spec.secretS3.accessSecretKey' /tmp/cnpg-bucket-info.json)
+  COSI_BUCKET=$(jq -r '.spec.bucketName' /tmp/cnpg-bucket-info.json)
+  # BucketInfo's .spec.secretS3.endpoint is the *external* ingress URL
+  # (e.g. https://s3.example.org). In a CI sandbox that DNS name does not
+  # resolve from inside the cluster, so CNPG cannot reach it. Use the
+  # in-cluster Service URL instead - same target sibling tests reach via
+  # 'kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333'.
+  S3_ENDPOINT="http://seaweedfs-s3.tenant-root:8333"
   for app in "${SRC}" "${TGT}"; do
     kubectl -n "${NAMESPACE}" create secret generic "${app}-cnpg-backup-creds" \
       --from-literal=AWS_ACCESS_KEY_ID="${ACCESS}" \
@@ -64,7 +77,14 @@ primary_pod() {
   timeout 600 sh -ec "until kubectl -n ${NAMESPACE} get clusters.postgresql.cnpg.io postgres-${SRC} -o jsonpath='{.status.phase}' | grep -q 'Cluster in healthy state'; do sleep 5; done"
 
   print_log "Step 2: CNPG strategy + BackupClass"
-  apply_in_ns "${EX_DIR}/10-cnpg-strategy.yaml"
+  # The example strategy YAML carries REPLACE_WITH_* placeholders so a
+  # human reader knows where the real bucket / endpoint go. The e2e harness
+  # has both values from the BucketInfo Secret already; substitute before
+  # apply so CNPG actually writes WAL to a real S3 endpoint instead of
+  # https://REPLACE_WITH_S3_ENDPOINT.
+  sed -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${COSI_BUCKET}|g" \
+      -e "s|https://REPLACE_WITH_S3_ENDPOINT|${S3_ENDPOINT}|g" \
+      "${EX_DIR}/10-cnpg-strategy.yaml" | kubectl apply -n "${NAMESPACE}" -f -
   apply_in_ns "${EX_DIR}/15-backupclass.yaml"
 
   print_log "Step 3: write a marker row before backup"
@@ -74,8 +94,23 @@ primary_pod() {
 
   print_log "Step 4: ad-hoc BackupJob"
   apply_in_ns "${EX_DIR}/25-backupjob-adhoc.yaml"
-  kubectl -n "${NAMESPACE}" wait backupjob.backups.cozystack.io/pg-src-adhoc \
-    --for=jsonpath='{.status.phase}'=Succeeded --timeout=600s
+  if ! kubectl -n "${NAMESPACE}" wait backupjob.backups.cozystack.io/pg-src-adhoc \
+       --for=jsonpath='{.status.phase}'=Succeeded --timeout=600s; then
+    echo "----- BackupJob status after timeout -----"
+    kubectl -n "${NAMESPACE}" get backupjob.backups.cozystack.io/pg-src-adhoc -o yaml || true
+    echo "----- cnpg.io/Backup objects -----"
+    kubectl -n "${NAMESPACE}" get backups.postgresql.cnpg.io -o wide || true
+    echo "----- cnpg.io/Cluster spec.backup -----"
+    kubectl -n "${NAMESPACE}" get clusters.postgresql.cnpg.io "postgres-${SRC}" -o jsonpath='{.spec.backup}' || true
+    echo
+    echo "----- Postgres primary pod recent log -----"
+    kubectl -n "${NAMESPACE}" logs "$(primary_pod "${SRC}")" -c postgres --tail=80 || true
+    echo "----- backup-controller log -----"
+    kubectl -n cozy-backup-controller logs -l app.kubernetes.io/name=backup-controller --tail=80 || true
+    echo "----- backupstrategy-controller log -----"
+    kubectl -n cozy-backup-controller logs -l app.kubernetes.io/name=backupstrategy-controller --tail=80 || true
+    return 1
+  fi
   kubectl -n "${NAMESPACE}" get backup.backups.cozystack.io/pg-src-adhoc
 
   print_log "Step 5: in-place RestoreJob (destructive)"
