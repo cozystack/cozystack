@@ -233,28 +233,10 @@ func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions)
 
 	klog.V(6).Infof("Attempting to retrieve resource %s of type %s in namespace %s", name, r.gvr.Resource, namespace)
 
-	// Get the corresponding HelmRelease using the new prefix
-	helmReleaseName := r.releaseConfig.Prefix + name
-	helmRelease := &helmv2.HelmRelease{}
-	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: options})
+	helmRelease, err := r.getHelmReleaseByAppName(ctx, namespace, name)
 	if err != nil {
 		klog.Errorf("Error retrieving HelmRelease for resource %s: %v", name, err)
-
-		// Check if the error is a NotFound error
-		if apierrors.IsNotFound(err) {
-			// Return a NotFound error for the Application resource instead of HelmRelease
-			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-		}
-
-		// For other errors, return them as-is
 		return nil, err
-	}
-
-	// Check if HelmRelease has required labels
-	if !r.hasRequiredApplicationLabels(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
-		// Return a NotFound error for the Application resource
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
 	// Convert HelmRelease to Application
@@ -510,14 +492,14 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Ensure ResourceVersion
+	// Resolve the actual HelmRelease name (prefix may differ from when instance was created)
+	actualHR, err := r.getHelmReleaseByAppName(ctx, helmRelease.Namespace, name)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+	}
+	helmRelease.Name = actualHR.Name
 	if helmRelease.ResourceVersion == "" {
-		cur := &helmv2.HelmRelease{}
-		err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}})
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
-		}
-		helmRelease.SetResourceVersion(cur.GetResourceVersion())
+		helmRelease.SetResourceVersion(actualHR.GetResourceVersion())
 	}
 
 	// Merge system labels (from config) directly
@@ -566,40 +548,25 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 
 	klog.V(6).Infof("Attempting to delete HelmRelease %s in namespace %s", name, namespace)
 
-	// Construct HelmRelease name with the configured prefix
-	helmReleaseName := r.releaseConfig.Prefix + name
-
-	// Retrieve the HelmRelease before attempting to delete
-	helmRelease := &helmv2.HelmRelease{}
-	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: &metav1.GetOptions{}})
+	helmRelease, err := r.getHelmReleaseByAppName(ctx, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// If HelmRelease does not exist, return NotFound error for Application
-			klog.Errorf("HelmRelease %s not found in namespace %s", helmReleaseName, namespace)
-			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+			return nil, false, err
 		}
-		// For other errors, log and return
-		klog.Errorf("Error retrieving HelmRelease %s: %v", helmReleaseName, err)
+		klog.Errorf("Error retrieving HelmRelease %s: %v", name, err)
 		return nil, false, err
 	}
 
-	// Validate that the HelmRelease has required labels
-	if !r.hasRequiredApplicationLabelsWithName(helmRelease, name) {
-		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
-		// Return NotFound error for Application resource
-		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-	}
-
-	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
+	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmRelease.Name, namespace)
 
 	// Delete the HelmRelease corresponding to the Application
 	err = r.c.Delete(ctx, helmRelease, &client.DeleteOptions{Raw: options})
 	if err != nil {
-		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
+		klog.Errorf("Failed to delete HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, fmt.Errorf("failed to delete HelmRelease: %v", err)
 	}
 
-	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
+	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmRelease.Name)
 	return nil, true, nil
 }
 
@@ -1110,6 +1077,41 @@ func (r *REST) hasRequiredApplicationLabelsWithName(hr *helmv2.HelmRelease, appN
 		hr.Labels[ApplicationNameLabel] == appName
 }
 
+// getHelmReleaseByAppName finds the HelmRelease for a given application name via label selector.
+// This handles cases where the release prefix changed after the instance was created.
+func (r *REST) getHelmReleaseByAppName(ctx context.Context, namespace, name string) (*helmv2.HelmRelease, error) {
+	nameReq, err := labels.NewRequirement(ApplicationNameLabel, selection.Equals, []string{name})
+	if err != nil {
+		return nil, err
+	}
+	kindReq, err := labels.NewRequirement(ApplicationKindLabel, selection.Equals, []string{r.kindName})
+	if err != nil {
+		return nil, err
+	}
+	groupReq, err := labels.NewRequirement(ApplicationGroupLabel, selection.Equals, []string{r.gvk.Group})
+	if err != nil {
+		return nil, err
+	}
+	sel := labels.NewSelector().Add(*nameReq, *kindReq, *groupReq)
+	hrList := &helmv2.HelmReleaseList{}
+	if err := r.c.List(ctx, hrList, &client.ListOptions{Namespace: namespace, LabelSelector: sel}); err != nil {
+		return nil, err
+	}
+	if len(hrList.Items) == 0 {
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+	return &hrList.Items[0], nil
+}
+
+// appNameFromHelmRelease returns the application name for a HelmRelease,
+// preferring the stable label over prefix-stripping.
+func (r *REST) appNameFromHelmRelease(hr *helmv2.HelmRelease) string {
+	if n := hr.Labels[ApplicationNameLabel]; n != "" {
+		return n
+	}
+	return strings.TrimPrefix(hr.Name, r.releaseConfig.Prefix)
+}
+
 // mergeMaps combines two maps of labels or annotations
 func mergeMaps(a, b map[string]string) map[string]string {
 	if a == nil && b == nil {
@@ -1299,7 +1301,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			Kind:       r.kindName,
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              strings.TrimPrefix(hr.Name, r.releaseConfig.Prefix),
+			Name:              r.appNameFromHelmRelease(hr),
 			Namespace:         hr.Namespace,
 			UID:               hr.GetUID(),
 			ResourceVersion:   hr.GetResourceVersion(),
