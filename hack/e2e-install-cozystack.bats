@@ -40,6 +40,13 @@
     --wait \
     --timeout 2m
 
+  # The pre-install hook (cozy-system-labeler) must have stamped the PSA and
+  # cozystack identity labels onto cozy-system. Operator pods need
+  # enforce=privileged for hostNetwork=true; a silent regression in the hook
+  # would let helm install succeed but break operator admission downstream.
+  kubectl get ns cozy-system -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' | grep -qx privileged
+  kubectl get ns cozy-system -o jsonpath='{.metadata.labels.cozystack\.io/system}' | grep -qx true
+
   # Verify the operator deployment is available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
 
