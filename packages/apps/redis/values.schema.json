@@ -127,7 +127,11 @@
             "kind": {
               "description": "Either \"Issuer\" or \"ClusterIssuer\".",
               "type": "string",
-              "default": "ClusterIssuer"
+              "default": "ClusterIssuer",
+              "enum": [
+                "Issuer",
+                "ClusterIssuer"
+              ]
             },
             "name": {
               "description": "Issuer/ClusterIssuer resource name.",

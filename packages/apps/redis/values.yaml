@@ -47,9 +47,13 @@ version: v8
 ## @param {bool} authEnabled - Enable password generation.
 authEnabled: true
 
+## @enum {string} IssuerKind - cert-manager Issuer kind.
+## @value Issuer
+## @value ClusterIssuer
+
 ## @typedef {struct} TLSIssuerRef - cert-manager Issuer reference.
 ## @field {string} name - Issuer/ClusterIssuer resource name.
-## @field {string} kind - Either "Issuer" or "ClusterIssuer".
+## @field {IssuerKind} kind - Either "Issuer" or "ClusterIssuer".
 
 ## @typedef {struct} TLS - TLS configuration for client-facing connections.
 ## @field {bool} enabled - Enable TLS termination via nginx stream sidecar.

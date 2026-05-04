@@ -71,11 +71,14 @@ type TLS struct {
 type TLSIssuerRef struct {
 	// Either "Issuer" or "ClusterIssuer".
 	// +kubebuilder:default:="ClusterIssuer"
-	Kind string `json:"kind"`
+	Kind IssuerKind `json:"kind"`
 	// Issuer/ClusterIssuer resource name.
 	// +kubebuilder:default:="selfsigned-cluster-issuer"
 	Name string `json:"name"`
 }
+
+// +kubebuilder:validation:Enum="Issuer";"ClusterIssuer"
+type IssuerKind string
 
 // +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
