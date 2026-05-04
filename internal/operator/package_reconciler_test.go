@@ -122,6 +122,13 @@ func TestBuildHelmReleaseSpec(t *testing.T) {
 	if spec.Install.Strategy.RetryInterval == nil || spec.Install.Strategy.RetryInterval.Duration != 17*time.Second {
 		t.Errorf("Install.Strategy.RetryInterval = %v, want 17s", spec.Install.Strategy.RetryInterval)
 	}
+	// Remediation must remain nil: helm-controller's XValidation rule rejects
+	// Strategy.Name=RetryOnFailure with RetryInterval set alongside a
+	// Remediation entry, so a future "for safety" re-introduction of
+	// Remediation{Retries: -1} would silently break every HR.
+	if spec.Install.Remediation != nil {
+		t.Errorf("Install.Remediation = %+v, want nil", spec.Install.Remediation)
+	}
 
 	if spec.Upgrade == nil {
 		t.Fatal("Upgrade is nil")
@@ -137,6 +144,9 @@ func TestBuildHelmReleaseSpec(t *testing.T) {
 	}
 	if spec.Upgrade.Strategy.RetryInterval == nil || spec.Upgrade.Strategy.RetryInterval.Duration != 17*time.Second {
 		t.Errorf("Upgrade.Strategy.RetryInterval = %v, want 17s", spec.Upgrade.Strategy.RetryInterval)
+	}
+	if spec.Upgrade.Remediation != nil {
+		t.Errorf("Upgrade.Remediation = %+v, want nil", spec.Upgrade.Remediation)
 	}
 	if spec.Upgrade.CRDs != helmv2.Skip {
 		t.Errorf("Upgrade.CRDs = %q, want Skip", spec.Upgrade.CRDs)
