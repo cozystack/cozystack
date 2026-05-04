@@ -1,0 +1,179 @@
+suite: TLS service architecture
+templates:
+  - templates/service.yaml
+tests:
+  ###################################################################
+  # External LoadBalancer service (existing behavior, port switches) #
+  ###################################################################
+
+  - it: no service when external is false and TLS is false
+    set:
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: external true and TLS false renders LB on port 6379 plaintext
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-external-lb
+      - documentIndex: 0
+        equal:
+          path: spec.type
+          value: LoadBalancer
+      - documentIndex: 0
+        equal:
+          path: spec.ports[0].port
+          value: 6379
+      - documentIndex: 0
+        equal:
+          path: spec.ports[0].name
+          value: redis
+      - documentIndex: 0
+        equal:
+          path: spec.ports[0].targetPort
+          value: redis
+
+  - it: external true and TLS true renders LB on port 6380 TLS
+    set:
+      external: true
+      tls:
+        enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-external-lb
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.ports[0].port
+          value: 6380
+      - equal:
+          path: spec.ports[0].name
+          value: redis-tls
+      - equal:
+          path: spec.ports[0].targetPort
+          value: redis-tls
+
+  ###################################################################
+  # Internal ClusterIP services (only when TLS enabled)              #
+  ###################################################################
+
+  - it: no master or replicas service when TLS disabled (external true)
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: RELEASE-NAME-external-lb
+
+  - it: no services when TLS disabled and external false
+    set:
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: TLS enabled external false renders two ClusterIP services and no LB
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: TLS enabled external true renders three services (master + replicas + LB)
+    set:
+      external: true
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  ###################
+  # Master service  #
+  ###################
+
+  - it: master service is a TLS ClusterIP on port 6380 targeting redis-tls
+    set:
+      external: false
+      tls:
+        enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-master
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 6380
+      - equal:
+          path: spec.ports[0].name
+          value: redis-tls
+      - equal:
+          path: spec.ports[0].targetPort
+          value: redis-tls
+      - equal:
+          path: spec.selector["redisfailovers-role"]
+          value: master
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: redis
+
+  ####################
+  # Replicas service #
+  ####################
+
+  - it: replicas service is a TLS ClusterIP on port 6380 selecting slave role
+    set:
+      external: false
+      tls:
+        enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-replicas
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 6380
+      - equal:
+          path: spec.ports[0].name
+          value: redis-tls
+      - equal:
+          path: spec.ports[0].targetPort
+          value: redis-tls
+      - equal:
+          path: spec.selector["redisfailovers-role"]
+          value: slave
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: redis

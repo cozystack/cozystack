@@ -1,0 +1,89 @@
+suite: TLS Certificate
+templates:
+  - templates/tls-certificate.yaml
+tests:
+  - it: does not render when tls.enabled is false
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments: { count: 0 }
+
+  - it: does not render when tls.secretName is provided (user owns secret)
+    set:
+      tls:
+        enabled: true
+        secretName: my-existing-secret
+    asserts:
+      - hasDocuments: { count: 0 }
+
+  - it: renders Certificate when tls.enabled and secretName empty
+    set:
+      tls:
+        enabled: true
+        secretName: ""
+    asserts:
+      - hasDocuments: { count: 1 }
+      - isKind: { of: Certificate }
+      - equal: { path: apiVersion, value: cert-manager.io/v1 }
+      - equal: { path: spec.secretName, value: RELEASE-NAME-redis-tls }
+
+  - it: uses default issuerRef
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal: { path: spec.issuerRef.name, value: selfsigned-cluster-issuer }
+      - equal: { path: spec.issuerRef.kind, value: ClusterIssuer }
+
+  - it: respects custom issuerRef
+    set:
+      tls:
+        enabled: true
+        issuerRef:
+          name: letsencrypt-prod
+          kind: Issuer
+    asserts:
+      - equal: { path: spec.issuerRef.name, value: letsencrypt-prod }
+      - equal: { path: spec.issuerRef.kind, value: Issuer }
+
+  - it: dnsNames include master, replicas and external-lb service variants
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-master }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-master.NAMESPACE.svc.cluster.local }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-replicas }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-replicas.NAMESPACE.svc.cluster.local }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb.NAMESPACE.svc.cluster.local }
+
+  - it: dnsNames do not contain rfs- operator plaintext service
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notContains: { path: spec.dnsNames, content: rfs-RELEASE-NAME }
+      - notContains: { path: spec.dnsNames, content: rfs-RELEASE-NAME.NAMESPACE.svc.cluster.local }
+
+  - it: dnsNames include external-lb variants even when external is false
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-external-lb.NAMESPACE.svc.cluster.local }
+
+  - it: extraDnsNames are appended to dnsNames
+    set:
+      tls:
+        enabled: true
+        extraDnsNames:
+          - redis.custom.example.com
+          - "*.redis.example.com"
+    asserts:
+      - contains: { path: spec.dnsNames, content: redis.custom.example.com }
+      - contains: { path: spec.dnsNames, content: "*.redis.example.com" }
+      - contains: { path: spec.dnsNames, content: RELEASE-NAME-master }

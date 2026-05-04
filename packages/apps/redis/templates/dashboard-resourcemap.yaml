@@ -12,6 +12,10 @@ rules:
   - rfrm-{{ .Release.Name }}
   - rfrs-{{ .Release.Name }}
   - "{{ .Release.Name }}-external-lb"
+  {{- if .Values.tls.enabled }}
+  - "{{ .Release.Name }}-master"
+  - "{{ .Release.Name }}-replicas"
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
@@ -19,6 +23,9 @@ rules:
   - secrets
   resourceNames:
   - "{{ .Release.Name }}-auth"
+  {{- if .Values.tls.enabled }}
+  - "{{ include "redis.tls.secretName" . }}"
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io

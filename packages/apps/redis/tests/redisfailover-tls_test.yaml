@@ -1,0 +1,84 @@
+suite: RedisFailover TLS sidecar injection
+templates:
+  - templates/redisfailover.yaml
+tests:
+  - it: does not inject extraContainers when tls.enabled is false
+    set:
+      tls:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: spec.redis.extraContainers
+      - notExists:
+          path: spec.redis.extraVolumes
+
+  - it: injects nginx tls-proxy sidecar when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.redis.extraContainers[0].name
+          value: tls-proxy
+      - matchRegex:
+          path: spec.redis.extraContainers[0].image
+          pattern: "nginx"
+      - equal:
+          path: spec.redis.extraContainers[0].ports[0].containerPort
+          value: 6380
+      - equal:
+          path: spec.redis.extraContainers[0].ports[0].name
+          value: redis-tls
+
+  - it: extraVolumes reference auto-generated TLS secret when secretName empty
+    set:
+      tls:
+        enabled: true
+        secretName: ""
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.extraVolumes
+          content:
+            name: tls-certs
+            secret:
+              secretName: RELEASE-NAME-redis-tls
+
+  - it: extraVolumes reference user-provided secret when secretName is set
+    set:
+      tls:
+        enabled: true
+        secretName: my-custom-secret
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.extraVolumes
+          content:
+            name: tls-certs
+            secret:
+              secretName: my-custom-secret
+
+  - it: extraVolumes include nginx config ConfigMap
+    set:
+      tls:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.extraVolumes
+          content:
+            name: nginx-tls-config
+            configMap:
+              name: RELEASE-NAME-redis-tls-nginx

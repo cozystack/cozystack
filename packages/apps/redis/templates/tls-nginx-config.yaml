@@ -1,0 +1,34 @@
+{{- if .Values.tls.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-redis-tls-nginx
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/component: redis-tls-proxy
+data:
+  nginx.conf: |
+    worker_processes 1;
+    error_log /dev/stderr notice;
+    pid /tmp/nginx.pid;
+    events {
+      worker_connections 1024;
+    }
+    stream {
+      upstream redis_backend {
+        server 127.0.0.1:6379;
+      }
+      server {
+        listen 6380 ssl;
+        ssl_certificate /etc/nginx/tls/tls.crt;
+        ssl_certificate_key /etc/nginx/tls/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers off;
+        proxy_pass redis_backend;
+        proxy_timeout 1h;
+        proxy_connect_timeout 5s;
+      }
+    }
+{{- end }}
