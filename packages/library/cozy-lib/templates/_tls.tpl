@@ -71,7 +71,7 @@ spec:
     - {{ . | quote }}
     {{- end }}
     {{- else }}
-    - server auth
+    - "server auth"
     {{- end }}
   dnsNames:
     {{- range .dnsNames }}
