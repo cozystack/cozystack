@@ -31,7 +31,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-200"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -40,7 +40,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-180"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 rules:
 - apiGroups: [""]
   resources: ["namespaces"]
@@ -54,7 +54,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-160"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 subjects:
 - kind: ServiceAccount
   name: cozy-system-labeler
@@ -72,7 +72,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-100"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 spec:
   backoffLimit: 6
   template:
@@ -93,10 +93,24 @@ spec:
         operator: "Exists"
       - key: "node.cloudprovider.kubernetes.io/uninitialized"
         operator: "Exists"
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: kubectl
-        image: alpine/k8s:1.32.0
+        image: alpine/k8s:1.32.0@sha256:4c28b0f0c6accfa07fa449493ea936291e4ff1270500571d73f75bb406676c3b
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
         {{- if eq .Values.cozystackOperator.variant "talos" }}
         env:
         # Talos KubePrism endpoint — same as cozystack-operator uses to reach
@@ -111,6 +125,9 @@ spec:
           value: {{ required "cozystack.apiServerHost is required in generic mode" .Values.cozystack.apiServerHost | quote }}
         - name: KUBERNETES_SERVICE_PORT
           value: {{ .Values.cozystack.apiServerPort | quote }}
+        {{- else if eq .Values.cozystackOperator.variant "hosted" }}
+        # Hosted: use in-cluster service account, no env override needed.
+        env: []
         {{- end }}
         command:
         - kubectl
