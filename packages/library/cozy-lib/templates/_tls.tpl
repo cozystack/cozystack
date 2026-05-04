@@ -47,6 +47,9 @@ Parameters:
 {{- if and .extraDnsNames (not (kindIs "slice" .extraDnsNames)) -}}
 {{-   fail "ERROR: \"extraDnsNames\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
 {{- end -}}
+{{- if and .usages (not (kindIs "slice" .usages)) -}}
+{{-   fail "ERROR: \"usages\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
+{{- end -}}
 {{- if not .issuerRef -}}
 {{-   fail "ERROR: \"issuerRef\" is required for cozy-lib.tls.certificate. Provide a dict with \"name\" and \"kind\"." -}}
 {{- end -}}
