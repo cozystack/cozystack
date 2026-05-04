@@ -278,6 +278,51 @@ tests:
         documentIndex: 0
 
   ###########################
+  # Replica set expose      #
+  ###########################
+
+  - it: disables replset expose by default
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      external: false
+    asserts:
+      - equal:
+          path: spec.replsets[0].expose.enabled
+          value: false
+        documentIndex: 0
+      - notExists:
+          path: spec.replsets[0].expose.type
+        documentIndex: 0
+
+  - it: enables per-pod LoadBalancer when external is true (issue 2514)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      external: true
+    asserts:
+      - equal:
+          path: spec.replsets[0].expose.enabled
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].expose.type
+          value: LoadBalancer
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].expose.externalTrafficPolicy
+          value: Local
+        documentIndex: 0
+
+  ###########################
   # Sharded Cluster Mode    #
   ###########################
 
