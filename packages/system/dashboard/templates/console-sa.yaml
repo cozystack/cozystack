@@ -1,4 +1,4 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: incloud-web-web
+  name: cozy-dashboard-console
