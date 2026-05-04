@@ -96,19 +96,19 @@ Usage:
 
 Parameters:
   - Release    (required) - Helm release object
-  - suffix     (required) - suffix for generated name (e.g. "tls", "server-tls")
+  - suffix     (required when secretName is not provided) - suffix for generated name (e.g. "tls", "server-tls")
   - secretName (optional) - user-provided secret name; if set, returned as-is
 */}}
 {{- define "cozy-lib.tls.secretName" -}}
 {{- if not .Release -}}
 {{-   fail "ERROR: \"Release\" is required for cozy-lib.tls.secretName. Pass the Helm release object via the context dict." -}}
 {{- end -}}
-{{- if not .suffix -}}
-{{-   fail "ERROR: \"suffix\" is required for cozy-lib.tls.secretName. Provide a suffix for the generated secret name (e.g. \"tls\", \"server-tls\")." -}}
-{{- end -}}
 {{- if not (empty .secretName) -}}
 {{-   .secretName -}}
 {{- else -}}
+{{-   if not .suffix -}}
+{{-     fail "ERROR: \"suffix\" is required for cozy-lib.tls.secretName when secretName is not provided. Provide a suffix for the generated secret name (e.g. \"tls\", \"server-tls\")." -}}
+{{-   end -}}
 {{-   printf "%s-%s" .Release.Name .suffix -}}
 {{- end -}}
 {{- end }}
