@@ -9,3 +9,53 @@ coredns:
   serviceAccount:
     create: true
     name: kube-dns
+  # Mirrors the upstream chart's default .:53 server-block plus an `import`
+  # directive that picks up plugin-only snippets written to the
+  # coredns-custom ConfigMap. ouroboros's coredns-import mode targets that
+  # ConfigMap, so its rewrite directives flow into CoreDNS without ever
+  # touching this Corefile (no Flux-vs-controller flap).
+  servers:
+    - zones:
+        - zone: .
+          use_tcp: true
+      port: 53
+      plugins:
+        - name: errors
+        - name: health
+          configBlock: |-
+            lameduck 10s
+        - name: ready
+        - name: kubernetes
+          parameters: cluster.local in-addr.arpa ip6.arpa
+          configBlock: |-
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+            ttl 30
+        - name: prometheus
+          parameters: 0.0.0.0:9153
+        - name: forward
+          parameters: . /etc/resolv.conf
+        - name: cache
+          parameters: 30
+        - name: loop
+        - name: reload
+        - name: import
+          parameters: /etc/coredns/custom/*.override
+        - name: loadbalance
+  # ConfigMap mount so CoreDNS finds the snippet files imported above.
+  # The cozystack coredns chart owns creation of an empty coredns-custom
+  # ConfigMap (see templates/coredns-custom.yaml, with helm.sh/resource-policy:
+  # keep so the chart-managed empty value cannot strip what ouroboros writes
+  # into the ouroboros.override data key). `optional: true` is defensive —
+  # if a future chart upgrade ever drops the templates/coredns-custom.yaml
+  # render, the CoreDNS Deployment still stays healthy with no override
+  # snippets in play.
+  extraVolumes:
+    - name: coredns-custom
+      configMap:
+        name: coredns-custom
+        optional: true
+  extraVolumeMounts:
+    - name: coredns-custom
+      mountPath: /etc/coredns/custom
+      readOnly: true

@@ -1,0 +1,482 @@
+suite: Ouroboros HelmRelease tests
+templates:
+  - templates/helmreleases/ouroboros.yaml
+values:
+  - values-ci.yaml
+tests:
+  - it: should not render when ouroboros is disabled
+    set:
+      addons:
+        ouroboros:
+          enabled: false
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render HelmRelease when ouroboros and ingressNginx are enabled
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: passes the tenant _cluster.cluster-domain into ouroboros.controller.clusterDomain (so proxyFqdn matches what tenant kube-dns serves)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.clusterDomain
+          value: cozy.local
+      - isKind:
+          of: HelmRelease
+
+  - it: defaults clusterDomain to cozy.local when _cluster.cluster-domain is missing (registration-shape regression / manual CR edit)
+    set:
+      _cluster:
+        cluster-domain: ""
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.clusterDomain
+          value: cozy.local
+
+  - it: lets a tenant-supplied valuesOverride override clusterDomain (operator-key wins over default fallback)
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                clusterDomain: tenant-custom.local
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.clusterDomain
+          value: tenant-custom.local
+
+  - it: should fail render when ouroboros is enabled but ingressNginx is not
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: false
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: "addons.ouroboros.enabled requires addons.ingressNginx.enabled — ouroboros is a hairpin-NAT fix for tenant ingress-nginx and has nothing to fix against without it."
+
+  - it: should not render when ouroboros is disabled and acknowledgeUncleanRemoval defaults to false (no prior install)
+    set:
+      addons:
+        ouroboros:
+          enabled: false
+          acknowledgeUncleanRemoval: false
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should not render when ouroboros is disabled with acknowledgeUncleanRemoval true (cleanup acknowledged)
+    set:
+      addons:
+        ouroboros:
+          enabled: false
+          acknowledgeUncleanRemoval: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should have correct metadata labels
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: metadata.labels["cozystack.io/repository"]
+          value: system
+      - equal:
+          path: metadata.labels["sharding.fluxcd.io/key"]
+          value: tenants
+
+  - it: should target cozy-ouroboros namespace
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.targetNamespace
+          value: cozy-ouroboros
+      - equal:
+          path: spec.storageNamespace
+          value: cozy-ouroboros
+
+  - it: should reference the kubernetes-application ExternalArtifact
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.chartRef.kind
+          value: ExternalArtifact
+      - equal:
+          path: spec.chartRef.name
+          value: cozystack-kubernetes-application-kubevirt-kubernetes-ouroboros
+      - equal:
+          path: spec.chartRef.namespace
+          value: cozy-system
+
+  - it: should depend on cilium, coredns and ingress-nginx
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: RELEASE-NAME-cilium
+            namespace: NAMESPACE
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: RELEASE-NAME-coredns
+            namespace: NAMESPACE
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: RELEASE-NAME-ingress-nginx
+            namespace: NAMESPACE
+
+  - it: should default to coredns-import mode for tenants
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.mode
+          value: coredns-import
+
+  - it: should let valuesOverride win over the default for controller.mode
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                mode: coredns
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.mode
+          value: coredns
+
+  - it: should fail render when valuesOverride enables gatewayApi without addons.gatewayAPI
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                gatewayApi:
+                  enabled: true
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: "addons.ouroboros.valuesOverride.ouroboros.controller.gatewayApi.enabled=true requires addons.gatewayAPI.enabled=true on the same tenant — Gateway-API CRDs would otherwise be missing and the controller would CrashLoopBackOff on WaitForCacheSync. Either enable addons.gatewayAPI for the tenant, or drop the override and let the wrapper mirror the tenant value."
+
+  - it: should fail render when valuesOverride enables gatewayApi as string "true" without addons.gatewayAPI (Helm --set string-truthy form)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                gatewayApi:
+                  enabled: "true"
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "valuesOverride.*gatewayApi\\.enabled=true requires addons\\.gatewayAPI\\.enabled=true"
+
+  - it: should fail render when valuesOverride enables gatewayApi as numeric 1 without addons.gatewayAPI (YAML truthy form)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                gatewayApi:
+                  enabled: 1
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "valuesOverride.*gatewayApi\\.enabled=true requires addons\\.gatewayAPI\\.enabled=true"
+
+  - it: should fail render when valuesOverride enables gatewayApi as YAML "on" without addons.gatewayAPI (--set string truthy form)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                gatewayApi:
+                  enabled: "on"
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "valuesOverride.*gatewayApi\\.enabled=true requires addons\\.gatewayAPI\\.enabled=true"
+
+  - it: should fail render when valuesOverride enables gatewayApi as YAML "True" without addons.gatewayAPI (case-insensitive truthy form)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                gatewayApi:
+                  enabled: "True"
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "valuesOverride.*gatewayApi\\.enabled=true requires addons\\.gatewayAPI\\.enabled=true"
+
+  - it: should fail render when valuesOverride enables gatewayApi as YAML "TRUE" without addons.gatewayAPI (uppercase truthy form)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                gatewayApi:
+                  enabled: "TRUE"
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "valuesOverride.*gatewayApi\\.enabled=true requires addons\\.gatewayAPI\\.enabled=true"
+
+  - it: should let valuesOverride enable gatewayApi when addons.gatewayAPI is also true
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                gatewayApi:
+                  enabled: true
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.gatewayApi.enabled
+          value: true
+
+  - it: should NOT enable --gateway-api when tenant addons.gatewayAPI.enabled is false (default)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.gatewayApi.enabled
+          value: false
+
+  - it: should mirror tenant addons.gatewayAPI.enabled into ouroboros gatewayApi
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.gatewayApi.enabled
+          value: true
+
+  - it: should add gateway-api-crds dependency when addons.gatewayAPI.enabled is true
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: true
+    asserts:
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: RELEASE-NAME-gateway-api-crds
+            namespace: NAMESPACE
+
+  - it: should NOT add gateway-api-crds dependency when addons.gatewayAPI.enabled is false
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+        gatewayAPI:
+          enabled: false
+    asserts:
+      - notContains:
+          path: spec.dependsOn
+          content:
+            name: RELEASE-NAME-gateway-api-crds
+            namespace: NAMESPACE
+
+  - it: should not render when _namespace.etcd is empty (addon HelmReleases gate on the tenant root namespace presence)
+    set:
+      _namespace:
+        etcd: ""
+        ingress: ""
+        seaweedfs: ""
+        host: ""
+        monitoring: ""
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+

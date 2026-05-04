@@ -1,0 +1,48 @@
+suite: Ouroboros tenant disable hazard guard (lookup returns nil — CI/dry-run/fresh-install)
+templates:
+  - templates/helmreleases/ouroboros.yaml
+values:
+  - values-ci.yaml
+release:
+  name: tenant-acme
+  namespace: tenant-acme
+# Deliberately no `kubernetesProvider:` — helm-unittest's mock then
+# resolves `lookup` calls to nil, the same shape Helm itself returns
+# during `helm template`, dry-run, and CI render checks. The
+# acknowledge guard is documented as defence-in-depth precisely
+# because of this: it MUST let render proceed when lookup returns nil
+# so that fresh installs and CI pipelines are not blocked by the gate.
+# If a future change tightens the guard into a static check (e.g. a
+# `fail` that fires regardless of lookup), this test fails first.
+tests:
+  - it: renders nothing (no HelmRelease) when ouroboros is disabled and lookup is nil — bare flag flip on a fresh install path
+    set:
+      addons:
+        ouroboros:
+          enabled: false
+          acknowledgeUncleanRemoval: false
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the HelmRelease when ouroboros is enabled even when lookup is nil (steady-state CI/dry-run path)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          acknowledgeUncleanRemoval: false
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease

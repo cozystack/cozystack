@@ -1,0 +1,69 @@
+suite: cozy-ouroboros RBAC narrowing
+templates:
+  - charts/ouroboros/templates/role-coredns-import.yaml
+  - charts/ouroboros/templates/role-coredns.yaml
+  - charts/ouroboros/templates/role-externaldns.yaml
+  - charts/ouroboros/templates/_helpers.tpl
+release:
+  name: ouroboros
+  namespace: cozy-ouroboros
+tests:
+  - it: inline kube-system Role grants get/update/patch on the live Corefile (host default)
+    template: charts/ouroboros/templates/role-coredns.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: kube-system
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            resourceNames: ["coredns"]
+            verbs: ["get", "update", "patch"]
+
+  - it: import Role is NOT rendered in the host default (mode=coredns)
+    template: charts/ouroboros/templates/role-coredns-import.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: external-dns Role is NOT rendered in cozystack defaults
+    template: charts/ouroboros/templates/role-externaldns.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: tenant valuesOverride flips RBAC to the coredns-import Role
+    template: charts/ouroboros/templates/role-coredns-import.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: coredns-import
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: kube-system
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            resourceNames: ["coredns-custom"]
+            verbs: ["get", "update", "patch"]
+
+  - it: tenant valuesOverride suppresses the inline coredns Role
+    template: charts/ouroboros/templates/role-coredns.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: coredns-import
+    asserts:
+      - hasDocuments:
+          count: 0

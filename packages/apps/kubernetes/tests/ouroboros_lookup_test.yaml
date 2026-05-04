@@ -1,0 +1,73 @@
+suite: Ouroboros tenant disable hazard guard (lookup-driven failure path)
+templates:
+  - templates/helmreleases/ouroboros.yaml
+values:
+  - values-ci.yaml
+release:
+  name: tenant-acme
+  namespace: tenant-acme
+kubernetesProvider:
+  scheme:
+    "helm.toolkit.fluxcd.io/v2/HelmRelease":
+      gvr:
+        group: "helm.toolkit.fluxcd.io"
+        version: "v2"
+        resource: "helmreleases"
+      namespaced: true
+  objects:
+    - kind: HelmRelease
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      metadata:
+        name: tenant-acme-ouroboros
+        namespace: tenant-acme
+tests:
+  - it: fails the tenant render when ouroboros is disabled but the HelmRelease still exists and acknowledgeUncleanRemoval is false
+    set:
+      addons:
+        ouroboros:
+          enabled: false
+          acknowledgeUncleanRemoval: false
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "addons.ouroboros was previously enabled.*HelmRelease tenant-acme-ouroboros lingers.*set addons.ouroboros.acknowledgeUncleanRemoval: true"
+
+  - it: renders cleanly when ouroboros is disabled and acknowledgeUncleanRemoval is true even with a leftover HelmRelease (operator confirmed cleanup)
+    set:
+      addons:
+        ouroboros:
+          enabled: false
+          acknowledgeUncleanRemoval: true
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the HelmRelease when ouroboros is enabled and the HelmRelease exists (steady state)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          acknowledgeUncleanRemoval: false
+          valuesOverride: {}
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+      - equal:
+          path: metadata.name
+          value: tenant-acme-ouroboros
+
