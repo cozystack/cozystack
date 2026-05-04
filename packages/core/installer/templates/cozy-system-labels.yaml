@@ -11,16 +11,22 @@
      resource; callers run helm with --create-namespace and the namespace
      is born bare (no labels).
 
-  2. The operator pod needs hostNetwork=true (no CNI yet at install time),
-     which violates PodSecurity baseline. So cozy-system needs
-     enforce=privileged before the operator pod is admitted. But a labeler
-     pod inside cozy-system would itself need hostNetwork=true and hit
-     the same admission denial. The hook therefore lives in kube-system,
-     which is PSA-exempt on Talos (defaults.exemptions.namespaces in the
-     apiserver PodSecurityConfiguration) and unlabeled on vanilla
-     kubeadm/kind/k3s. The Job's SA is bound to a ClusterRole scoped via
-     resourceNames to "cozy-system" only, so the cluster permission grant
-     is minimal.
+  2. On talos / generic, the operator pod needs hostNetwork=true (no CNI
+     yet at install time), which violates PodSecurity baseline. So
+     cozy-system needs enforce=privileged before the operator pod is
+     admitted. But a labeler pod inside cozy-system would itself need
+     hostNetwork=true and hit the same admission denial. The hook
+     therefore lives in kube-system, which is PSA-exempt on Talos
+     (defaults.exemptions.namespaces in the apiserver
+     PodSecurityConfiguration) and unlabeled on vanilla kubeadm/kind/k3s.
+     The Job's SA is bound to a ClusterRole scoped via resourceNames to
+     "cozy-system" only, so the cluster permission grant is minimal.
+
+  Hosted variant: the platform CNI is already up, so the labeler runs
+  without hostNetwork and without the not-ready/CNI-not-ready tolerations.
+  This also keeps the pod admissible on managed clusters
+  (EKS/GKE/AKS/OpenShift) where kube-system may carry strict PSA labels
+  (enforce=baseline or stricter) that would reject hostNetwork pods.
 */}}
 ---
 apiVersion: v1
@@ -79,10 +85,16 @@ spec:
     spec:
       serviceAccountName: cozy-system-labeler
       restartPolicy: OnFailure
+      {{- if ne .Values.cozystackOperator.variant "hosted" }}
       # The hook runs BEFORE Cilium / kube-ovn / any CNI is installed, so the
       # cluster's nodes are NotReady-NoSchedule and have no pod network. Mirror
       # the cozystack-operator deployment's scheduling: hostNetwork=true so the
       # pod doesn't need CNI, plus the same tolerations the operator uses.
+      # dnsPolicy left at the default (ClusterFirst). With hostNetwork=true that
+      # downgrades to "node DNS only", which is fine: kubectl talks to the
+      # apiserver via KubePrism / explicit IP / kubelet-injected env, no DNS
+      # lookups happen. ClusterFirstWithHostNet would not help anyway because
+      # cluster DNS is not yet up at install time.
       hostNetwork: true
       tolerations:
       - key: "node.kubernetes.io/not-ready"
@@ -93,12 +105,13 @@ spec:
         operator: "Exists"
       - key: "node.cloudprovider.kubernetes.io/uninitialized"
         operator: "Exists"
+      {{- end }}
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       containers:
       - name: kubectl
-        image: alpine/k8s:1.32.0@sha256:4c28b0f0c6accfa07fa449493ea936291e4ff1270500571d73f75bb406676c3b
+        image: docker.io/alpine/k8s:1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false

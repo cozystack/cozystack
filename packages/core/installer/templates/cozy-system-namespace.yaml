@@ -1,0 +1,25 @@
+{{/*
+  Bare Namespace resource for the kubectl-apply install path only
+  (the rendered _out/assets/cozystack-operator-*.yaml release artifacts).
+
+  Helm install/upgrade callers must NOT render this — it conflicts with
+  `helm --create-namespace`, which is the chicken-and-egg this PR fixes.
+  Helm callers leave `bareNamespace` at its default (false) and let the
+  pre-install labeler hook (cozy-system-labels.yaml) stamp the namespace
+  after `--create-namespace` has created it bare.
+
+  Top-level Makefile passes `--set bareNamespace=true` together with
+  `--show-only` for the manifest render only.
+*/}}
+{{- if .Values.bareNamespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cozy-system
+  labels:
+    cozystack.io/system: "true"
+    pod-security.kubernetes.io/enforce: privileged
+  annotations:
+    helm.sh/resource-policy: keep
+{{- end }}
