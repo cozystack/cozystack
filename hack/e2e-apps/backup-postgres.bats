@@ -1,18 +1,29 @@
 #!/usr/bin/env bats
 
-# End-to-end backup + restore (in-place + to-copy) for the CNPG strategy.
+# End-to-end backup + in-place restore for the CNPG strategy.
 # Drives the manifests from examples/backups/postgres/ which are numbered so
 # `kubectl apply -f <dir>/` order matches the dependency graph.
 #
+# Scope: this e2e runs entirely inside `tenant-root` so the postgres pods can
+# reach `seaweedfs-s3` in the same namespace via the permissive
+# `allow-internal-communication` CiliumNetworkPolicy. The cross-tenant case
+# (postgres in tenant-test → seaweedfs in tenant-root) is blocked by the
+# `${tenant}-egress` CiliumClusterwideNetworkPolicy, so the to-copy restore
+# scenario stays in examples/ as a manual flow only and is not exercised here.
+# That code path is covered by unit tests in
+# internal/backupcontroller/cnpgstrategy_controller_test.go
+# (TestBuildPostgresAppRestorePatch_*, TestMarshalUnmarshalCNPGBackupSnapshot,
+# TestResolveCNPGRestoreTarget).
+#
 # Prereqs in the cluster:
 #   - cozystack apps: Postgres + Bucket
-#   - postgres-operator (CloudNativePG) reachable from tenant-test
+#   - postgres-operator (CloudNativePG) reachable from tenant-root
+#   - seaweedfs deployed in tenant-root (cozystack default)
 #   - backup-controller and backupstrategy-controller running with the CNPG
 #     dispatch case wired (see internal/backupcontroller/cnpgstrategy_controller.go)
 
-NAMESPACE='tenant-test'
+NAMESPACE='tenant-root'
 SRC='pg-src'
-TGT='pg-target'
 BUCKET='pg-backups'
 # Bucket user name from examples/backups/postgres/00-bucket.yaml. The COSI
 # bucket chart materialises a per-user BucketAccess + credentials Secret
@@ -41,7 +52,7 @@ primary_pod() {
     -o jsonpath='{.items[0].metadata.name}'
 }
 
-@test "CNPG Postgres backup + in-place restore + to-copy restore" {
+@test "CNPG Postgres backup + in-place restore" {
   print_log "Step 0: Bucket + S3 credentials"
   apply_in_ns "${EX_DIR}/00-bucket.yaml"
   # The Bucket HR materialises the BucketClaim/BucketAccess asynchronously
@@ -60,16 +71,14 @@ primary_pod() {
   COSI_BUCKET=$(jq -r '.spec.bucketName' /tmp/cnpg-bucket-info.json)
   # BucketInfo's .spec.secretS3.endpoint is the *external* ingress URL
   # (e.g. https://s3.example.org). In a CI sandbox that DNS name does not
-  # resolve from inside the cluster, so CNPG cannot reach it. Use the
-  # in-cluster Service URL instead - same target sibling tests reach via
-  # 'kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333'.
-  S3_ENDPOINT="http://seaweedfs-s3.tenant-root:8333"
-  for app in "${SRC}" "${TGT}"; do
-    kubectl -n "${NAMESPACE}" create secret generic "${app}-cnpg-backup-creds" \
-      --from-literal=AWS_ACCESS_KEY_ID="${ACCESS}" \
-      --from-literal=AWS_SECRET_ACCESS_KEY="${SECRETKEY}" \
-      --dry-run=client -o yaml | kubectl apply -f -
-  done
+  # resolve from inside the cluster, so CNPG cannot reach it. seaweedfs-s3
+  # lives in tenant-root, the same namespace this test runs in, so the
+  # short Service name is enough.
+  S3_ENDPOINT="http://seaweedfs-s3:8333"
+  kubectl -n "${NAMESPACE}" create secret generic "${SRC}-cnpg-backup-creds" \
+    --from-literal=AWS_ACCESS_KEY_ID="${ACCESS}" \
+    --from-literal=AWS_SECRET_ACCESS_KEY="${SECRETKEY}" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
   print_log "Step 1: source Postgres"
   apply_in_ns "${EX_DIR}/05-postgres-src.yaml"
@@ -118,17 +127,6 @@ primary_pod() {
   kubectl -n "${NAMESPACE}" wait restorejob.backups.cozystack.io/pg-src-in-place \
     --for=jsonpath='{.status.phase}'=Succeeded --timeout=900s
   PRIMARY=$(primary_pod "${SRC}")
-  ROW=$(kubectl -n "${NAMESPACE}" exec "${PRIMARY}" -c postgres -- \
-    psql -d demo -tAc "SELECT v FROM marker;")
-  [ "$ROW" = "round-trip" ]
-
-  print_log "Step 6: deploy empty target + to-copy RestoreJob"
-  apply_in_ns "${EX_DIR}/30-postgres-target.yaml"
-  kubectl -n "${NAMESPACE}" wait "hr/postgres-${TGT}" --for=condition=ready --timeout=300s
-  apply_in_ns "${EX_DIR}/40-restorejob-to-copy.yaml"
-  kubectl -n "${NAMESPACE}" wait restorejob.backups.cozystack.io/pg-src-to-pg-target \
-    --for=jsonpath='{.status.phase}'=Succeeded --timeout=900s
-  PRIMARY=$(primary_pod "${TGT}")
   ROW=$(kubectl -n "${NAMESPACE}" exec "${PRIMARY}" -c postgres -- \
     psql -d demo -tAc "SELECT v FROM marker;")
   [ "$ROW" = "round-trip" ]

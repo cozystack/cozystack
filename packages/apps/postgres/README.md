@@ -88,10 +88,18 @@ that references the desired `Backup`. See
 [`examples/backups/postgres/35-restorejob-in-place.yaml`](../../../examples/backups/postgres/35-restorejob-in-place.yaml)
 and
 [`examples/backups/postgres/40-restorejob-to-copy.yaml`](../../../examples/backups/postgres/40-restorejob-to-copy.yaml).
-On a to-copy restore, the controller mirrors the source app's
-`spec.databases` and `spec.users` onto the target so the post-install
-init-job does not drop the recovered data; target-only databases/users that
-predate the restore are preserved.
+On a to-copy restore the controller replaces the target app's
+`spec.databases` and `spec.users` with the source-spec snapshot persisted
+in `Backup.status.underlyingResources`, so the chart's post-install
+init-job does not drop the recovered roles or databases.
+
+> **e2e coverage:** the CI e2e (`hack/e2e-apps/backup-postgres.bats`) only
+> exercises the in-place restore (Steps 0-5). The to-copy flow stays as a
+> manual / dev-cluster exercise — it requires the source's seaweedfs to be
+> reachable from the target's tenant namespace, which is blocked by
+> default by the cozystack tenant Cilium policy. The to-copy controller
+> logic itself is covered by unit tests in
+> `internal/backupcontroller/cnpgstrategy_controller_test.go`.
 
 ### How to recover a backup (chart-managed bootstrap)
 

@@ -1,6 +1,13 @@
 # Empty target Postgres instance for the to-copy restore. Keeping the spec
 # minimal - the CNPG driver overlays bootstrap.* and backup.* values when
 # the RestoreJob fires.
+#
+# NOTE: this manifest and 40-restorejob-to-copy.yaml document the to-copy
+# flow for human/operator use on a real cozystack cluster. The CI e2e
+# (hack/e2e-apps/backup-postgres.bats) does NOT apply them - the cross-
+# tenant network path needed for that case is not open in the CI sandbox.
+# The to-copy controller logic itself is covered by unit tests in
+# internal/backupcontroller/cnpgstrategy_controller_test.go.
 ---
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Postgres
