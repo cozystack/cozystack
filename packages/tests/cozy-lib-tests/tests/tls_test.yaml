@@ -460,3 +460,21 @@ tests:
           path: spec.usages
           value:
             - "server auth"
+
+  # String dnsNames triggers a type error
+  - it: errors when dnsNames is a string instead of a list
+    release:
+      name: test-release
+      namespace: tenant-test
+    set:
+      _cluster: {}
+      _namespace: {}
+      tls:
+        name: string-dns-tls
+        dnsNames: redis-svc
+        issuerRef:
+          name: selfsigned-cluster-issuer
+          kind: ClusterIssuer
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ERROR: "dnsNames" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list.'

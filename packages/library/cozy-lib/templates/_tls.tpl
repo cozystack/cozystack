@@ -41,6 +41,9 @@ Parameters:
 {{- if not .dnsNames -}}
 {{-   fail "ERROR: \"dnsNames\" is required for cozy-lib.tls.certificate. Provide at least one DNS name as a list." -}}
 {{- end -}}
+{{- if not (kindIs "slice" .dnsNames) -}}
+{{-   fail "ERROR: \"dnsNames\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
+{{- end -}}
 {{- if not .issuerRef -}}
 {{-   fail "ERROR: \"issuerRef\" is required for cozy-lib.tls.certificate. Provide a dict with \"name\" and \"kind\"." -}}
 {{- end -}}
@@ -59,12 +62,12 @@ metadata:
   name: {{ .name | quote }}
   namespace: {{ .Release.Namespace | quote }}
   labels:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
 spec:
   secretName: {{ .secretName | quote }}
-  duration: {{ ternary "8760h" .duration (empty .duration) }}
-  renewBefore: {{ ternary "720h" .renewBefore (empty .renewBefore) }}
+  duration: {{ ternary "8760h" .duration (empty .duration) | quote }}
+  renewBefore: {{ ternary "720h" .renewBefore (empty .renewBefore) | quote }}
   privateKey:
     algorithm: RSA
     size: 2048
