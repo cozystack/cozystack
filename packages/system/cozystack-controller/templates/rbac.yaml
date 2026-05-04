@@ -3,9 +3,22 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: cozystack-controller
 rules:
-- apiGroups: ['cozystack.io', 'dashboard.cozystack.io']
+- apiGroups: ['cozystack.io', 'dashboard.cozystack.io', 'gateway.cozystack.io']
   resources: ['*']
   verbs: ['*']
+# TenantGatewayReconciler renders Gateway / HTTPRoute / TLSRoute and
+# reads back their status to populate TenantGateway.Status.
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways", "httproutes", "tlsroutes"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways/status", "httproutes/status", "tlsroutes/status"]
+  verbs: ["get", "update", "patch"]
+# TenantGatewayReconciler renders the per-tenant Issuer and the
+# wildcard / per-listener Certificates the Gateway listeners reference.
+- apiGroups: ["cert-manager.io"]
+  resources: ["issuers", "certificates"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch", "update"]

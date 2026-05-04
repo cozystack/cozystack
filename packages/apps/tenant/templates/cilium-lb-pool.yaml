@@ -12,7 +12,24 @@
       (eq $exposeMode "loadBalancer")
       (eq $exposeIngress .Release.Namespace)
       .Values.ingress }}
-{{- if and $isPublishingIngressLB $ipsList }}
+{{- $hasOwnGateway := eq (include "tenant.gatewayEffective" .) "true" }}
+{{- /*
+  Empty-IPs guard for tenant Gateway. The chart can render its own
+  CiliumLoadBalancerIPPool only if publishing.externalIPs is non-empty.
+  Without IPs the LoadBalancer Service stays in <pending> with no
+  address — that's an outright misconfig in externalIPs mode (no LB
+  IPAM source) and must fail render. In loadBalancer mode it's a
+  legitimate operator pattern: cluster-wide BGP / L2-announce pools
+  managed outside this chart provide the IP. Skip the per-tenant pool
+  in that case so cilium IPAM picks up the operator's pool by service
+  selector.
+*/}}
+{{- if and $hasOwnGateway (not $ipsList) }}
+  {{- if eq $exposeMode "externalIPs" }}
+    {{- fail "publishing.externalIPs is empty — a tenant Gateway has no source of LoadBalancer IPs in publishing.exposure=externalIPs mode. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform, or switch to publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately, before enabling tenant.spec.gateway=true." }}
+  {{- end }}
+{{- end }}
+{{- if and (or $isPublishingIngressLB $hasOwnGateway) $ipsList }}
 apiVersion: cilium.io/v2
 kind: CiliumLoadBalancerIPPool
 metadata:

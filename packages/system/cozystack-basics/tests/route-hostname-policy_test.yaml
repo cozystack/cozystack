@@ -1,0 +1,119 @@
+suite: cozystack-route-hostname-policy VAP
+templates:
+  - templates/route-hostname-policy.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+tests:
+  - it: renders ValidatingAdmissionPolicy + Binding for HTTPRoute and TLSRoute (Layer 7)
+    # Layer 7 (route-hostname VAP) is the only VAP rendered by THIS
+    # template: 2 docs (VAP + Binding) × 2 route kinds (HTTPRoute,
+    # TLSRoute) = 4 docs total. Layers 2-5 live in
+    # gateway-hostname-policy.yaml. Pin both counts so the 7-layer
+    # security model documented in README.md is enforced at render
+    # time — a maintainer dropping one of the VAPs without updating
+    # the docs trips one of these counts.
+    asserts:
+      - hasDocuments:
+          count: 4
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: cozystack-route-hostname-policy
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+
+  - it: gates on tenant-* namespace prefix via matchConditions
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.matchConditions[0].name
+          value: tenant-namespace
+      - documentIndex: 0
+        equal:
+          path: spec.matchConditions[0].expression
+          value: object.metadata.namespace.startsWith("tenant-")
+
+  - it: validates HTTPRoute hostnames against namespace.cozystack.io/host label
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'object\.spec\.hostnames\.all\(h,'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'namespace\.cozystack\.io/host'
+
+  - it: validation actions are Deny so requests fail closed
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+
+  - it: targets gateway.networking.k8s.io v1 HTTPRoute and v1alpha2 TLSRoute
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["gateway.networking.k8s.io"]
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["httproutes"]
+      - documentIndex: 2
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["tlsroutes"]
+      - documentIndex: 2
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1alpha2"]
+
+  - it: failurePolicy is Fail so admission errors deny instead of allow
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.failurePolicy
+          value: Fail
+      - documentIndex: 2
+        equal:
+          path: spec.failurePolicy
+          value: Fail
+
+  - it: CEL is fail-closed when namespace has no host label (returns false, not true)
+    # Regression guard: an earlier draft used `... ? true : (...)` which
+    # silently allowed routes in any tenant-* namespace where the layer-5
+    # label was missing or scrubbed. Fixing this is the whole point of the
+    # round-6 hardening pass — pin the false branch in the CEL string so
+    # nobody flips it back without an explicit test failure.
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\)\s*\?\s*false\s*:'
+      - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\)\s*\?\s*false\s*:'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'namespaceObject\s*==\s*null'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(namespaceObject\.metadata\.labels\)'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!\("namespace\.cozystack\.io/host" in namespaceObject\.metadata\.labels\)'

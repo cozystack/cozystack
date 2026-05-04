@@ -1,0 +1,201 @@
+suite: gateway-hostname-policy security stack (Layers 2-5 of 7-layer model)
+templates:
+  - templates/gateway-hostname-policy.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+tests:
+  - it: renders 4 VAPs + 4 Bindings (8 documents total)
+    asserts:
+      - hasDocuments:
+          count: 8
+
+  - it: cozystack-gateway-hostname-policy targets gateway resources
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: cozystack-gateway-hostname-policy
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["gateway.networking.k8s.io"]
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["gateways"]
+      - documentIndex: 0
+        equal:
+          path: spec.failurePolicy
+          value: Fail
+
+  - it: cozystack-gateway-hostname-policy gates on tenant-* namespace prefix
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.matchConditions[0].name
+          value: tenant-namespace
+      - documentIndex: 0
+        matchRegex:
+          path: spec.matchConditions[0].expression
+          pattern: 'object\.metadata\.namespace\.startsWith\("tenant-"\)'
+
+  - it: cozystack-gateway-hostname-policy CEL validates listener hostname against namespace.cozystack.io/host
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.variables[?(@.name=="tenantHost")].expression
+          pattern: 'namespace\.cozystack\.io/host'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'l\.hostname\.endsWith'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'variables\.tenantHost'
+
+  - it: cozystack-gateway-hostname-policy Binding is fail-closed (validationActions Deny)
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 1
+        equal:
+          path: spec.policyName
+          value: cozystack-gateway-hostname-policy
+      - documentIndex: 1
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+
+  - it: cozystack-gateway-attached-namespaces-policy targets Package CRs
+    asserts:
+      - documentIndex: 2
+        equal:
+          path: metadata.name
+          value: cozystack-gateway-attached-namespaces-policy
+      - documentIndex: 2
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["cozystack.io"]
+      - documentIndex: 2
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["packages"]
+      - documentIndex: 2
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'startsWith\("tenant-"\)'
+
+  - it: cozystack-gateway-attached-namespaces-policy Binding is fail-closed
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+      - documentIndex: 3
+        equal:
+          path: spec.policyName
+          value: cozystack-gateway-attached-namespaces-policy
+
+  - it: cozystack-tenant-host-policy targets Tenant CRs and gates on trusted callers
+    asserts:
+      - documentIndex: 4
+        equal:
+          path: metadata.name
+          value: cozystack-tenant-host-policy
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["apps.cozystack.io"]
+      - documentIndex: 4
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["tenants"]
+      - documentIndex: 4
+        matchRegex:
+          path: spec.variables[?(@.name=="trustedCaller")].expression
+          pattern: 'system:masters'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.variables[?(@.name=="trustedCaller")].expression
+          pattern: 'cozy-system'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.variables[?(@.name=="trustedCaller")].expression
+          pattern: 'cozy-fluxcd'
+      - documentIndex: 4
+        matchRegex:
+          path: spec.variables[?(@.name=="trustedCaller")].expression
+          pattern: 'cozy-cert-manager'
+
+  - it: cozystack-tenant-host-policy Binding is fail-closed
+    asserts:
+      - documentIndex: 5
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+
+  - it: cozystack-namespace-host-label-policy targets core/v1 Namespace
+    asserts:
+      - documentIndex: 6
+        equal:
+          path: metadata.name
+          value: cozystack-namespace-host-label-policy
+      - documentIndex: 6
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: [""]
+      - documentIndex: 6
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["namespaces"]
+      - documentIndex: 6
+        matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'immutable'
+
+  - it: cozystack-namespace-host-label-policy Binding is fail-closed
+    asserts:
+      - documentIndex: 7
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+      - documentIndex: 7
+        equal:
+          path: spec.policyName
+          value: cozystack-namespace-host-label-policy
+
+  - it: render fails when _cluster.gateway-attached-namespaces contains a tenant-* entry
+    set:
+      _cluster:
+        gateway-attached-namespaces: "cozy-cert-manager,tenant-alice"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'publishing.gateway.attachedNamespaces must not contain tenant-* namespaces (got "tenant-alice"). Adding a tenant namespace here lets that tenant attach HTTPRoutes to the publishing tenant''s Gateway and hijack hostnames. Child tenants that need their own Gateway must opt in via tenant.spec.gateway=true instead.'
+
+  - it: render passes with empty gateway-attached-namespaces
+    asserts:
+      - hasDocuments:
+          count: 8
+
+  - it: pins layer count — Layers 2-5 are exactly 4 VAP+Binding pairs
+    # The gateway README documents a 7-layer security model:
+    #   - Layer 1 (listener allowedRoutes selector) — controller-owned
+    #   - Layers 2-5 — VAPs on Gateway / Package / Tenant / Namespace
+    #     rendered by THIS template (4 VAPs × 2 documents = 8 docs)
+    #   - Layer 6 (render-time fail) — also in this template (no extra docs)
+    #   - Layer 7 (route-hostname VAP) — separate template
+    # If a maintainer trims one of the layer-2-5 VAPs without updating
+    # README.md, this assertion fires before the change merges.
+    asserts:
+      - hasDocuments:
+          count: 8

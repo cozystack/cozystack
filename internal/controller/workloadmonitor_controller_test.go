@@ -217,6 +217,7 @@ func TestReconcile_MonitorLabelsPropagatedToPodWorkload(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = cozyv1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
+	_ = cosiv1alpha1.AddToScheme(scheme)
 
 	monitor := &cozyv1alpha1.WorkloadMonitor{
 		ObjectMeta: metav1.ObjectMeta{
@@ -288,6 +289,7 @@ func TestReconcile_BackwardCompat_NoMonitorLabels(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = cozyv1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
+	_ = cosiv1alpha1.AddToScheme(scheme)
 
 	monitor := &cozyv1alpha1.WorkloadMonitor{
 		ObjectMeta: metav1.ObjectMeta{

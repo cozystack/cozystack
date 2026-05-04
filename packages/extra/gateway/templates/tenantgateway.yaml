@@ -1,0 +1,89 @@
+{{- $host := (index .Values._namespace "host") | default "" }}
+{{- if not $host }}
+{{- fail "_namespace.host is empty — the tenant has no apex domain. Either set tenant.spec.host on this tenant or inherit it from a parent that has host set." }}
+{{- end }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $issuerName := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $provider := (index .Values._cluster "dns01-provider") | default "cloudflare" }}
+{{- /*
+  Validate solver early — same check the old issuer.yaml ran. The
+  controller will refuse to render an Issuer with an unsupported
+  solver, so failing here gives the operator a clearer error.
+*/}}
+{{- if and (ne $solver "http01") (ne $solver "dns01") }}
+  {{- fail (printf "packages/extra/gateway: unsupported _cluster.solver=%q. Supported values: http01, dns01." $solver) }}
+{{- end }}
+{{- if eq $solver "dns01" }}
+  {{- $supported := list "cloudflare" "route53" "digitalocean" "rfc2136" }}
+  {{- if not (has $provider $supported) }}
+    {{- fail (printf "packages/extra/gateway: unsupported _cluster.dns01-provider=%q. Supported values: cloudflare, route53, digitalocean, rfc2136." $provider) }}
+  {{- end }}
+{{- end }}
+{{- if and (ne $issuerName "letsencrypt-prod") (ne $issuerName "letsencrypt-stage") }}
+  {{- fail (printf "packages/extra/gateway currently supports publishing.certificates.issuerName=letsencrypt-prod or letsencrypt-stage (got %q). For other issuers, extend the controller to map the name to the corresponding ACME server URL." $issuerName) }}
+{{- end }}
+{{- $extraNs := list }}
+{{- range splitList "," ((index .Values._cluster "gateway-attached-namespaces") | default "") }}
+  {{- $ns := . | trim }}
+  {{- if $ns }}
+    {{- $extraNs = append $extraNs $ns }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: gateway.cozystack.io/v1alpha1
+kind: TenantGateway
+metadata:
+  name: cozystack
+spec:
+  apex: {{ $host | quote }}
+  gatewayClassName: {{ .Values.gatewayClassName | quote }}
+  certMode: {{ $solver | quote }}
+  issuerName: {{ $issuerName | quote }}
+  {{- if eq $solver "dns01" }}
+  dns01:
+    provider: {{ $provider | quote }}
+    {{- if eq $provider "cloudflare" }}
+    cloudflare:
+      apiTokenSecretRef:
+        name: {{ (index .Values._cluster "dns01-cloudflare-secret-name") | default "cloudflare-api-token-secret" | quote }}
+        key: {{ (index .Values._cluster "dns01-cloudflare-secret-key") | default "api-token" | quote }}
+    {{- else if eq $provider "route53" }}
+    {{- if not (index .Values._cluster "dns01-route53-region") }}
+      {{- fail "packages/extra/gateway: _cluster.dns01-route53-region is required when dns01-provider=route53" }}
+    {{- end }}
+    route53:
+      region: {{ (index .Values._cluster "dns01-route53-region") | quote }}
+      accessKeyID: {{ (index .Values._cluster "dns01-route53-access-key-id") | default "" | quote }}
+      secretAccessKeySecretRef:
+        name: {{ (index .Values._cluster "dns01-route53-secret-name") | quote }}
+        key: {{ (index .Values._cluster "dns01-route53-secret-key") | default "secret-access-key" | quote }}
+    {{- else if eq $provider "digitalocean" }}
+    digitalocean:
+      tokenSecretRef:
+        name: {{ (index .Values._cluster "dns01-digitalocean-secret-name") | default "digitalocean-api-token-secret" | quote }}
+        key: {{ (index .Values._cluster "dns01-digitalocean-secret-key") | default "access-token" | quote }}
+    {{- else if eq $provider "rfc2136" }}
+    {{- if not (index .Values._cluster "dns01-rfc2136-nameserver") }}
+      {{- fail "packages/extra/gateway: _cluster.dns01-rfc2136-nameserver is required when dns01-provider=rfc2136" }}
+    {{- end }}
+    rfc2136:
+      nameserver: {{ (index .Values._cluster "dns01-rfc2136-nameserver") | quote }}
+      tsigKeyName: {{ (index .Values._cluster "dns01-rfc2136-tsig-key-name") | quote }}
+      tsigAlgorithm: {{ (index .Values._cluster "dns01-rfc2136-tsig-algorithm") | default "HMACSHA256" | quote }}
+      tsigSecretSecretRef:
+        name: {{ (index .Values._cluster "dns01-rfc2136-secret-name") | quote }}
+        key: {{ (index .Values._cluster "dns01-rfc2136-secret-key") | default "tsig-secret-key" | quote }}
+    {{- end }}
+  {{- end }}
+  {{- with $extraNs }}
+  attachedNamespaces:
+    {{- range . }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- with .Values.tlsPassthroughServices }}
+  tlsPassthroughServices:
+    {{- range . }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}

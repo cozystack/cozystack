@@ -29,6 +29,8 @@ type ConfigSpec struct {
 	// Deploy own Ingress Controller.
 	// +kubebuilder:default:=false
 	Ingress bool `json:"ingress"`
+	// Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When unset (the default), the chart auto-enables the Gateway for tenants whose apex is derived from the parent (i.e. `host` is empty), and leaves it off for tenants with a custom non-derived apex. Set to `true` or `false` explicitly to override that auto-behaviour. Note: leave the key absent (do not write `gateway: null`) — the chart distinguishes "unset" via missing-key, not via null value, to satisfy the JSON schema generated from this comment.
+	Gateway bool `json:"gateway,omitempty"`
 	// Deploy own SeaweedFS.
 	// +kubebuilder:default:=false
 	Seaweedfs bool `json:"seaweedfs"`

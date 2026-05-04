@@ -83,6 +83,40 @@ publishing:
   certificates:
     solver: http01 # "http01" or "dns01"
     issuerName: letsencrypt-prod
+    # Rate-limit note: every tenant with gateway=true issues one
+    # Certificate for its wildcard + apex hostnames. If many tenants share
+    # the same apex domain with issuerName=letsencrypt-prod, the cluster
+    # can hit the Let's Encrypt limits (50 certs / registered domain /
+    # week, 5 duplicate certs / week, 300 new orders / account / 3h).
+    # Use letsencrypt-stage for non-production clusters or gate the
+    # number of certificates per tenant via tenant.spec.resourceQuotas
+    # with count/certificates.cert-manager.io. See
+    # https://letsencrypt.org/docs/rate-limits/.
+    #
+    # DNS-01 solver configuration. Read only when solver=dns01. The
+    # provider key selects which sub-block is consumed; others are
+    # ignored. Cloudflare keeps backwards-compatible defaults so the
+    # most common opt-in path (cloudflare token + dns01) needs only
+    # solver=dns01 + dns01.cloudflare.secretName.
+    dns01:
+      provider: cloudflare # cloudflare | route53 | digitalocean | rfc2136
+      cloudflare:
+        secretName: cloudflare-api-token-secret
+        secretKey: api-token
+      route53:
+        region: ""
+        accessKeyID: ""
+        secretName: ""
+        secretKey: secret-access-key
+      digitalocean:
+        secretName: digitalocean-api-token-secret
+        secretKey: access-token
+      rfc2136:
+        nameserver: ""
+        tsigKeyName: ""
+        tsigAlgorithm: HMACSHA256
+        secretName: ""
+        secretKey: tsig-secret-key
 # Authentication configuration
 authentication:
   oidc:
@@ -94,6 +128,42 @@ authentication:
     # userinfo, logout) through this URL while keeping browser redirects on the external URL.
     # Example: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
     keycloakInternalUrl: ""
+# Gateway API configuration
+gateway:
+  # Enable Gateway API support across the platform. When true:
+  #   - cert-manager ClusterIssuers use an http01.gatewayHTTPRoute solver
+  #     that attaches to the root tenant's Gateway, so Certificate issuance
+  #     works for tenants whose ingress is via Gateway API rather than
+  #     ingress-nginx.
+  #   - Exposed services (dashboard, keycloak, harbor, bucket, grafana,
+  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an
+  #     HTTPRoute attached to the tenant's Gateway.
+  # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
+  # materialises the Gateway itself. This flag only controls platform-wide
+  # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
+  enabled: false
+  # Namespaces that are allowed to attach HTTPRoute or TLSRoute to a tenant
+  # Gateway. The publishing tenant namespace is always included implicitly.
+  # Additional entries must be the exact namespace name (matched on the
+  # built-in kubernetes.io/metadata.name label). Tenants not on this list
+  # cannot attach a route to somebody else's Gateway, which prevents
+  # hostname hijacking across tenants.
+  #
+  # The `default` namespace is included because the Kubernetes API's
+  # TLSRoute (shipped by the cozystack-api package) has to live next to
+  # the `kubernetes` Service it points at, which is always in `default`.
+  attachedNamespaces:
+    - cozy-cert-manager
+    - cozy-dashboard
+    - cozy-keycloak
+    - cozy-system
+    - cozy-harbor
+    - cozy-bucket
+    - cozy-kubevirt
+    - cozy-kubevirt-cdi
+    - cozy-monitoring
+    - cozy-linstor-gui
+    - default
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

@@ -1,0 +1,203 @@
+{{- $attachedNamespaces := (index .Values._cluster "gateway-attached-namespaces") | default "" }}
+{{- range splitList "," $attachedNamespaces }}
+  {{- $ns := . | trim }}
+  {{- if and $ns (hasPrefix "tenant-" $ns) }}
+    {{- fail (printf "publishing.gateway.attachedNamespaces must not contain tenant-* namespaces (got %q). Adding a tenant namespace here lets that tenant attach HTTPRoutes to the publishing tenant's Gateway and hijack hostnames. Child tenants that need their own Gateway must opt in via tenant.spec.gateway=true instead." $ns) }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gateway-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gateway.networking.k8s.io"]
+      apiVersions: ["v1", "v1beta1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["gateways"]
+  matchConditions:
+  - name: tenant-namespace
+    expression: object.metadata.namespace.startsWith("tenant-")
+  variables:
+  - name: tenantHost
+    expression: >-
+      (namespaceObject != null &&
+       has(namespaceObject.metadata.labels) &&
+       "namespace.cozystack.io/host" in namespaceObject.metadata.labels)
+         ? namespaceObject.metadata.labels["namespace.cozystack.io/host"]
+         : ""
+  validations:
+  - expression: >-
+      variables.tenantHost == "" ||
+      !has(object.spec.listeners) ||
+      object.spec.listeners.all(l,
+        !has(l.hostname) ||
+        l.hostname == variables.tenantHost ||
+        l.hostname.endsWith("." + variables.tenantHost)
+      )
+    messageExpression: >-
+      "Gateway listener hostname must equal " + variables.tenantHost +
+      " or end with ." + variables.tenantHost +
+      " (namespace " + object.metadata.namespace + " carries label namespace.cozystack.io/host=" + variables.tenantHost + ")"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gateway-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gateway-hostname-policy
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-gateway-attached-namespaces-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["cozystack.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["packages"]
+  matchConditions:
+  - name: has-gateway-attached-namespaces
+    expression: >-
+      has(object.spec) &&
+      has(object.spec.components) &&
+      "platform" in object.spec.components &&
+      has(object.spec.components.platform.values) &&
+      "gateway" in object.spec.components.platform.values &&
+      "attachedNamespaces" in object.spec.components.platform.values.gateway
+  validations:
+  - expression: >-
+      object.spec.components.platform.values.gateway.attachedNamespaces.all(ns, !ns.startsWith("tenant-"))
+    messageExpression: >-
+      "spec.components.platform.values.gateway.attachedNamespaces must not contain any tenant-* namespace; use tenant.spec.gateway=true instead of adding a tenant namespace to the publishing Gateway's whitelist"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-gateway-attached-namespaces-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-gateway-attached-namespaces-policy
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-tenant-host-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["apps.cozystack.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["tenants"]
+  matchConditions:
+  - name: has-host-field
+    expression: >-
+      (has(object.spec) && "host" in object.spec && object.spec.host != "") ||
+      (oldObject != null && has(oldObject.spec) && "host" in oldObject.spec && oldObject.spec.host != "")
+  variables:
+  - name: oldHost
+    expression: >-
+      (oldObject != null && has(oldObject.spec) && "host" in oldObject.spec) ? oldObject.spec.host : ""
+  - name: newHost
+    expression: >-
+      (has(object.spec) && "host" in object.spec) ? object.spec.host : ""
+  - name: hostChanged
+    expression: variables.oldHost != variables.newHost
+  - name: trustedCaller
+    expression: >-
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:cozy-cert-manager" ||
+        g == "system:serviceaccounts:cozy-fluxcd" ||
+        g == "system:serviceaccounts:kube-system")
+  validations:
+  - expression: "!variables.hostChanged || variables.trustedCaller"
+    messageExpression: >-
+      "tenant.spec.host can only be set or changed by cluster-admins (system:masters) or by cozystack/Flux service accounts; request user is " + request.userInfo.username + ". A tenant with empty spec.host inherits the apex from its parent tenant."
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-tenant-host-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-tenant-host-policy
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-namespace-host-label-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["namespaces"]
+  matchConditions:
+  - name: touches-host-label
+    expression: >-
+      (has(object.metadata.labels) && "namespace.cozystack.io/host" in object.metadata.labels) ||
+      (oldObject != null && has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels)
+  variables:
+  - name: oldHost
+    expression: >-
+      (oldObject != null && has(oldObject.metadata.labels) && "namespace.cozystack.io/host" in oldObject.metadata.labels)
+        ? oldObject.metadata.labels["namespace.cozystack.io/host"]
+        : ""
+  - name: newHost
+    expression: >-
+      has(object.metadata.labels) && "namespace.cozystack.io/host" in object.metadata.labels
+        ? object.metadata.labels["namespace.cozystack.io/host"]
+        : ""
+  - name: trustedCaller
+    expression: >-
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:masters" ||
+        g == "system:serviceaccounts:cozy-system" ||
+        g == "system:serviceaccounts:cozy-cert-manager" ||
+        g == "system:serviceaccounts:cozy-fluxcd" ||
+        g == "system:serviceaccounts:kube-system")
+  validations:
+  - expression: "variables.newHost == variables.oldHost || variables.trustedCaller"
+    messageExpression: >-
+      "namespace label namespace.cozystack.io/host is immutable once set (was " + variables.oldHost + ", requested " + variables.newHost + "); only cluster-admins and cozystack/Flux service accounts may change it. Request user: " + request.userInfo.username
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-namespace-host-label-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-namespace-host-label-policy
+  validationActions: [Deny]

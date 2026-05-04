@@ -31,7 +31,7 @@ check_and_run_test() {
     return 0
 }
 
-for package_dir in packages/apps packages/extra packages/system packages/library; do
+for package_dir in packages/apps packages/core packages/extra packages/system packages/library; do
     if [ ! -d "$package_dir" ]; then
         echo "Warning: Directory $package_dir does not exist, skipping..." >&2
         continue

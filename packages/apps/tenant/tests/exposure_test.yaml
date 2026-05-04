@@ -10,6 +10,11 @@ tests:
   - it: default exposure (externalIPs) renders no pool
     set:
       ingress: true
+      # Variant B auto-enables Gateway for derived-apex tenants, which
+      # would trigger the gateway-driven pool render. This case
+      # specifically exercises the externalIPs ingress flow, so
+      # opt-out the gateway path explicitly to keep the assert focused.
+      gateway: false
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10,192.0.2.11"
@@ -107,6 +112,10 @@ tests:
   - it: loadBalancer mode with ingress=false in publishing tenant renders no pool
     set:
       ingress: false
+      # Same as above — Variant B would auto-enable Gateway for the
+      # derived-apex case; explicitly opt out to isolate the no-ingress
+      # path under test.
+      gateway: false
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
@@ -118,6 +127,10 @@ tests:
   - it: loadBalancer mode in a non-publishing tenant renders no pool
     set:
       ingress: true
+      # Variant B would auto-enable Gateway for tenant-u1 (derived
+      # apex). This test covers the cross-tenant ingress-LB case —
+      # opt-out gateway to keep the assertion focused.
+      gateway: false
       _cluster:
         expose-ingress: tenant-root
         expose-external-ips: "192.0.2.10"
@@ -139,3 +152,107 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: gateway=true in any tenant renders pool with namespace-only selector
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: root-exposure
+      - equal:
+          path: spec.blocks
+          value:
+            - cidr: 192.0.2.10/32
+      - equal:
+          path: spec.serviceSelector.matchLabels["io.kubernetes.service.namespace"]
+          value: tenant-root
+
+  - it: gateway=true in a non-publishing tenant renders its own pool (not tied to publishing tenant)
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    release:
+      name: tenant-u1
+      namespace: tenant-u1
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: u1-exposure
+      - equal:
+          path: spec.serviceSelector.matchLabels["io.kubernetes.service.namespace"]
+          value: tenant-u1
+
+  - it: gateway=true + ingress=true + loadBalancer mode renders a single shared pool (no overlapping CIDR conflict)
+    set:
+      gateway: true
+      ingress: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+        expose-mode: loadBalancer
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: root-exposure
+
+  - it: gateway=true with ingress=false still renders pool (gateway alone is enough)
+    set:
+      gateway: true
+      ingress: false
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: "192.0.2.10"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: gateway=true with empty externalIPs in externalIPs mode fails chart render
+    # externalIPs mode has no LB IPAM source other than this list,
+    # so an empty list is an outright misconfig — fail render.
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: ""
+        expose-mode: externalIPs
+    asserts:
+      - failedTemplate:
+          errorMessage: "publishing.externalIPs is empty — a tenant Gateway has no source of LoadBalancer IPs in publishing.exposure=externalIPs mode. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform, or switch to publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately, before enabling tenant.spec.gateway=true."
+
+  - it: gateway=true with empty externalIPs in loadBalancer mode renders no pool (BGP/L2 operator pattern)
+    # loadBalancer + empty externalIPs is a legitimate operator pattern
+    # — Cilium picks IPs from a cluster-wide BGP / L2-announce pool
+    # managed outside this chart. Skip the per-tenant pool, do not
+    # fail render.
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: ""
+        expose-mode: loadBalancer
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: gateway=true with empty externalIPs in default exposure mode fails chart render
+    # No expose-mode key → defaults to externalIPs → must fail.
+    set:
+      gateway: true
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "publishing.externalIPs is empty — a tenant Gateway has no source of LoadBalancer IPs in publishing.exposure=externalIPs mode. The Gateway Service would stay in <pending> with no address. Set publishing.externalIPs on the platform, or switch to publishing.exposure=loadBalancer with a BGP / L2-announce pool you manage separately, before enabling tenant.spec.gateway=true."
