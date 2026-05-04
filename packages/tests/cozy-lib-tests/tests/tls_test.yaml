@@ -36,6 +36,9 @@ tests:
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Always
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS8
 
   # dnsNames are correctly set and quoted
   - it: sets dnsNames correctly
@@ -477,7 +480,7 @@ tests:
           kind: ClusterIssuer
     asserts:
       - failedTemplate:
-          errorMessage: 'ERROR: "dnsNames" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list.'
+          errorMessage: 'ERROR: "dnsNames" must be a list for cozy-lib.tls.certificate. Got a string -- wrap it in a list.'
 
   # String extraDnsNames triggers a type error
   - it: errors when extraDnsNames is a string instead of a list
@@ -497,7 +500,7 @@ tests:
         extraDnsNames: extra.example.com
     asserts:
       - failedTemplate:
-          errorMessage: 'ERROR: "extraDnsNames" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list.'
+          errorMessage: 'ERROR: "extraDnsNames" must be a list for cozy-lib.tls.certificate. Got a string -- wrap it in a list.'
 
   # String usages triggers a type error
   - it: errors when usages is a string instead of a list
@@ -517,4 +520,4 @@ tests:
         usages: server auth
     asserts:
       - failedTemplate:
-          errorMessage: 'ERROR: "usages" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list.'
+          errorMessage: 'ERROR: "usages" must be a list for cozy-lib.tls.certificate. Got a string -- wrap it in a list.'

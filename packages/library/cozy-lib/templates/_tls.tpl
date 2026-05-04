@@ -1,6 +1,10 @@
 {{/*
 TLS certificate helpers for cert-manager integration.
 These helpers render cert-manager Certificate CRs for services that need TLS.
+
+Scope: leaf (end-entity) TLS certificates only. For CA certificates that
+need isCA: true, commonName, signing/cert-sign usages, rotationPolicy: Never,
+or subject fields, write the Certificate CR by hand.
 */}}
 
 {{/*
@@ -25,8 +29,9 @@ Parameters:
   - duration   (optional) - certificate duration, defaults to 8760h (1 year); empty strings are treated as unset. Non-empty values are passed through without validation.
   - renewBefore (optional) - renewal window, defaults to 720h (30 days)
   - usages     (optional) - list of key usages, defaults to ["server auth"] (not cert-manager's default of "digital signature, key encipherment"; this is a deliberate choice for TLS server certificates). An empty list also falls back to the default.
-  Private key is hardcoded to RSA-2048 with rotationPolicy: Always; these are not configurable via this helper.
+  Private key is hardcoded to RSA-2048 PKCS#8 with rotationPolicy: Always; these are not configurable via this helper.
   extraDnsNames: nil is treated as an empty list (zero extra names appended).
+  metadata.namespace is always Release.Namespace; cross-namespace rendering is not supported.
 */}}
 {{- define "cozy-lib.tls.certificate" -}}
 {{- if not .Release -}}
@@ -42,13 +47,13 @@ Parameters:
 {{-   fail "ERROR: \"dnsNames\" is required for cozy-lib.tls.certificate. Provide at least one DNS name as a list." -}}
 {{- end -}}
 {{- if not (kindIs "slice" .dnsNames) -}}
-{{-   fail "ERROR: \"dnsNames\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
+{{-   fail "ERROR: \"dnsNames\" must be a list for cozy-lib.tls.certificate. Got a string -- wrap it in a list." -}}
 {{- end -}}
 {{- if and .extraDnsNames (not (kindIs "slice" .extraDnsNames)) -}}
-{{-   fail "ERROR: \"extraDnsNames\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
+{{-   fail "ERROR: \"extraDnsNames\" must be a list for cozy-lib.tls.certificate. Got a string -- wrap it in a list." -}}
 {{- end -}}
 {{- if and .usages (not (kindIs "slice" .usages)) -}}
-{{-   fail "ERROR: \"usages\" must be a list for cozy-lib.tls.certificate. Got a string — wrap it in a list." -}}
+{{-   fail "ERROR: \"usages\" must be a list for cozy-lib.tls.certificate. Got a string -- wrap it in a list." -}}
 {{- end -}}
 {{- if not .issuerRef -}}
 {{-   fail "ERROR: \"issuerRef\" is required for cozy-lib.tls.certificate. Provide a dict with \"name\" and \"kind\"." -}}
@@ -76,6 +81,7 @@ spec:
   renewBefore: {{ ternary "720h" .renewBefore (empty .renewBefore) | quote }}
   privateKey:
     algorithm: RSA
+    encoding: PKCS8
     size: 2048
     rotationPolicy: Always
   usages:
