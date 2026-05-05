@@ -4,16 +4,6 @@
 {{- end -}}
 ---
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: cozy-system
-  labels:
-    cozystack.io/system: "true"
-    pod-security.kubernetes.io/enforce: privileged
-  annotations:
-    helm.sh/resource-policy: keep
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: cozystack

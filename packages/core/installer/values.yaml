@@ -1,3 +1,10 @@
+# Render a bare `Namespace cozy-system` resource (with PSA + identity labels).
+# Off by default: helm install/upgrade callers create the namespace via
+# `--create-namespace` and let the pre-install labeler hook stamp the labels.
+# The top-level Makefile turns this on for the kubectl-apply release artifacts
+# (_out/assets/cozystack-operator-*.yaml).
+bareNamespace: false
+
 cozystackOperator:
   # Deployment variant: talos, generic, hosted
   variant: talos

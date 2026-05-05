@@ -41,19 +41,30 @@ build: build-deps
 manifests:
 	mkdir -p _out/assets
 	cat internal/crdinstall/manifests/*.yaml > _out/assets/cozystack-crds.yaml
+	# kubectl-apply install path: render the bare Namespace resource alongside
+	# the operator. bareNamespace=true gates a Namespace cozy-system with PSA +
+	# identity labels (see packages/core/installer/templates/cozy-system-namespace.yaml).
+	# helm install/upgrade users keep the default (false) and use --create-namespace
+	# + the pre-install labeler hook.
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-talos.yaml
 	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
 		--set cozystackOperator.variant=generic \
 		--set cozystack.apiServerHost=REPLACE_ME \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-generic.yaml
 	# Hosted variant (managed Kubernetes)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
 		--set cozystackOperator.variant=hosted \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-hosted.yaml
 
