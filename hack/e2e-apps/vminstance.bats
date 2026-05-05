@@ -80,6 +80,6 @@ EOF
   kubectl -n tenant-test wait hr vm-instance-$name --timeout=60s --for=condition=ready
   # VM ready follows IP assignment closely; 60s gives buffer for the qemu-guest-agent.
   kubectl -n tenant-test wait vm vm-instance-$name --timeout=60s --for=condition=ready
-  kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --timeout=3m
-  kubectl -n tenant-test delete vmdisks.apps.cozystack.io $diskName --timeout=3m
+  kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --ignore-not-found --timeout=3m
+  kubectl -n tenant-test delete vmdisks.apps.cozystack.io $diskName --ignore-not-found --timeout=3m
 }
