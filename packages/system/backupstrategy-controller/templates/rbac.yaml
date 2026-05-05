@@ -37,6 +37,11 @@ rules:
 - apiGroups: ["apps.cozystack.io"]
   resources: ["*"]
   verbs: ["get", "list", "watch"]
+# CNPG restore patches the Postgres app spec (.spec.bootstrap, .spec.backup)
+# so the chart re-renders the cnpg.io Cluster with bootstrap.recovery.
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["postgreses"]
+  verbs: ["patch", "update"]
 # KubeVirt: pre-restore halts VMs and checks VMI shutdown
 - apiGroups: ["kubevirt.io"]
   resources: ["virtualmachines"]
@@ -80,3 +85,17 @@ rules:
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["get", "list", "watch", "create", "update", "patch"]
+# CNPG strategy: SSA-patch the live Cluster (spec.backup.barmanObjectStore),
+# create one-shot Backup CRs, observe their status, and clean them up on
+# RestoreJob purge.
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters"]
+  verbs: ["get", "list", "watch", "patch", "delete"]
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["backups"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+# Note: the controller does NOT need cluster-scoped Secret read. The CNPG
+# restore path forwards the operator-supplied credentials Secret name into
+# spec.backup.s3CredentialsSecret on the Postgres app, which the chart then
+# wires into barmanObjectStore.s3Credentials. The Secret bytes never flow
+# through this controller.

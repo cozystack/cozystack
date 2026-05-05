@@ -202,6 +202,23 @@
           "type": "boolean",
           "default": false
         },
+        "endpointCA": {
+          "description": "Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery. The CNPG backup driver writes this field on restore.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "key": {
+              "description": "Key within the Secret containing the CA bundle. Defaults to `ca.crt`.",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
         "endpointURL": {
           "description": "S3 endpoint URL for uploads.",
           "type": "string",
@@ -213,12 +230,34 @@
           "default": "30d"
         },
         "s3AccessKey": {
-          "description": "Access key for S3 authentication.",
+          "description": "Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.",
           "type": "string",
           "default": "\u003cyour-access-key\u003e"
         },
+        "s3CredentialsSecret": {
+          "description": "Pre-existing Secret with S3 credentials. When set, the chart references this Secret directly instead of materialising one from `s3AccessKey`/`s3SecretKey`. The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "accessKeyIDKey": {
+              "description": "Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "Name of the Secret in the application namespace. Empty means the chart materialises `\u003crelease\u003e-s3-creds` from `s3AccessKey`/`s3SecretKey`.",
+              "type": "string",
+              "default": ""
+            },
+            "secretAccessKeyKey": {
+              "description": "Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
         "s3SecretKey": {
-          "description": "Secret key for S3 authentication.",
+          "description": "Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.",
           "type": "string",
           "default": "\u003cyour-secret-key\u003e"
         },

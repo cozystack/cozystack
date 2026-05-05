@@ -1,3 +1,16 @@
+{{/*
+  Skip the post-install/post-upgrade init Job entirely while the chart
+  renders bootstrap.recovery. Helm waits up to 5m for hooks to succeed,
+  but the Job's pg_isready loop can't drain that budget while CNPG is
+  still streaming the restore from S3 - the hook then times out and
+  Helm rolls the upgrade back to the previous bootstrap.initdb spec,
+  which makes every subsequent recovery pod panic in CNPG's
+  InitInfo.loadBackup (Recovery == nil after the rollback).
+  Recovered postgres carries source's roles/databases at the on-disk
+  level, so the chart's role/db management can re-converge on the next
+  user-driven helm upgrade after recovery completes.
+*/}}
+{{- if not .Values.bootstrap.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -65,3 +78,4 @@ spec:
       - name: scripts
         secret:
           secretName: {{ .Release.Name }}-init-script
+{{- end }}

@@ -65,16 +65,22 @@ type Backup struct {
 	// Enable regular backups.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+	// Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery. The CNPG backup driver writes this field on restore.
+	// +kubebuilder:default:={}
+	EndpointCA EndpointCA `json:"endpointCA,omitempty"`
 	// S3 endpoint URL for uploads.
 	// +kubebuilder:default:="http://minio-gateway-service:9000"
 	EndpointURL string `json:"endpointURL,omitempty"`
 	// Retention policy (e.g. "30d").
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
-	// Access key for S3 authentication.
+	// Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-access-key>"
 	S3AccessKey string `json:"s3AccessKey,omitempty"`
-	// Secret key for S3 authentication.
+	// Pre-existing Secret with S3 credentials. When set, the chart references this Secret directly instead of materialising one from `s3AccessKey`/`s3SecretKey`. The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.
+	// +kubebuilder:default:={}
+	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
+	// Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-secret-key>"
 	S3SecretKey string `json:"s3SecretKey,omitempty"`
 	// Cron schedule for automated backups.
@@ -111,6 +117,15 @@ type DatabaseRoles struct {
 	Readonly []string `json:"readonly,omitempty"`
 }
 
+type EndpointCA struct {
+	// Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
+	// +kubebuilder:default:=""
+	Key string `json:"key,omitempty"`
+	// Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+}
+
 type PostgreSQL struct {
 	// PostgreSQL server parameters. All values must be strings (quote numbers: "100"). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 	// +kubebuilder:default:={"max_connections":"100"}
@@ -131,6 +146,18 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type S3CredentialsSecret struct {
+	// Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.
+	// +kubebuilder:default:=""
+	AccessKeyIDKey string `json:"accessKeyIDKey,omitempty"`
+	// Name of the Secret in the application namespace. Empty means the chart materialises `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+	// Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
+	// +kubebuilder:default:=""
+	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
 }
 
 type User struct {
