@@ -1,7 +1,58 @@
 {{- define "cozystack.defaultCoreDNSValues" -}}
+{{- /*
+  Resolve CoreDNS ClusterIP. Order:
+    1. Explicit override (.Values.networking.coreDnsClusterIP)
+    2. Computed .10 host of serviceCIDR — only safe for CIDRs whose
+       last octet is 0 (e.g. /16, /24 aligned to a /24 boundary).
+       Fails fast if last octet is non-zero, prompting the user to
+       set coreDnsClusterIP explicitly.
+
+  Sprig's `cidrHost` is not present in the Helm 3.17 build that
+  Cozystack ships, so the host index is computed by hand.
+*/ -}}
+{{- $kubeDnsIP := .Values.networking.coreDnsClusterIP -}}
+{{- if not $kubeDnsIP -}}
+{{-   $cidrBase := index (splitList "/" .Values.networking.serviceCIDR) 0 -}}
+{{-   $parts := splitList "." $cidrBase -}}
+{{-   $lastOctet := atoi (index $parts 3) -}}
+{{-   if ne $lastOctet 0 -}}
+{{-     fail (printf "networking.serviceCIDR (%s) is not aligned to a /24 boundary (last octet must be 0). Set networking.coreDnsClusterIP explicitly." .Values.networking.serviceCIDR) -}}
+{{-   end -}}
+{{-   $kubeDnsIP = printf "%s.%s.%s.10" (index $parts 0) (index $parts 1) (index $parts 2) -}}
+{{- end }}
 coredns:
   service:
-    clusterIP: "10.95.0.10"
+    clusterIP: {{ $kubeDnsIP | quote }}
+{{- if ne .Values.networking.clusterDomain "cluster.local" }}
+  # Override the kubernetes plugin's cluster zone when using a custom clusterDomain.
+  # Mirrors the chart's default Corefile but swaps `cluster.local` for the configured domain.
+  servers:
+  - zones:
+    - zone: .
+      use_tcp: true
+    port: 53
+    plugins:
+    - name: errors
+    - name: health
+      configBlock: |-
+        lameduck 10s
+    - name: ready
+    - name: kubernetes
+      parameters: {{ .Values.networking.clusterDomain }} in-addr.arpa ip6.arpa
+      configBlock: |-
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+        ttl 30
+    - name: prometheus
+      parameters: 0.0.0.0:9153
+    - name: forward
+      parameters: . /etc/resolv.conf
+    - name: cache
+      parameters: 30
+    - name: loop
+    - name: reload
+    - name: loadbalance
+{{- end }}
 {{- end }}
 
 {{- if .Values._namespace.etcd }}

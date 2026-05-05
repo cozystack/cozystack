@@ -703,6 +703,40 @@
           "default": ""
         }
       }
+    },
+    "networking": {
+      "description": "Cluster network configuration. Defaults preserve historical behaviour (every tenant cluster shares the same CIDRs); override per-cluster when planning cross-cluster service mesh (Cilium ClusterMesh, Submariner, etc).",
+      "type": "object",
+      "default": {
+        "podCIDR": "10.243.0.0/16",
+        "serviceCIDR": "10.95.0.0/16",
+        "coreDnsClusterIP": "",
+        "clusterDomain": "cluster.local"
+      },
+      "properties": {
+        "podCIDR": {
+          "description": "CIDR block for pod IPs. WARNING: immutable in practice — changing post-create breaks the cluster (no automatic re-IP). Must not overlap with the management cluster pod CIDR or other tenant clusters that this cluster will mesh with.",
+          "type": "string",
+          "default": "10.243.0.0/16",
+          "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+        },
+        "serviceCIDR": {
+          "description": "CIDR block for service IPs. Same immutability and uniqueness rules as podCIDR.",
+          "type": "string",
+          "default": "10.95.0.0/16",
+          "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+        },
+        "coreDnsClusterIP": {
+          "description": "Optional explicit CoreDNS ClusterIP. When empty, defaults to the .10 host of serviceCIDR — only safe when serviceCIDR's last octet is 0. Set explicitly when using non-aligned CIDRs (e.g. /20 not aligned to a /24).",
+          "type": "string",
+          "default": ""
+        },
+        "clusterDomain": {
+          "description": "Cluster DNS domain (CAPI clusterNetwork.serviceDomain + CoreDNS clusterDomain). WARNING: immutable in practice.",
+          "type": "string",
+          "default": "cluster.local"
+        }
+      }
     }
   }
 }
