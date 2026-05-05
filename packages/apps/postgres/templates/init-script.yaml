@@ -25,6 +25,13 @@ stringData:
   {{ quote $user }}: {{ quote (index $passwords $user) }}
   {{- end }}
 {{- end }}
+{{/*
+  Skip the init-script Secret while bootstrap.recovery is in effect.
+  It only feeds the init-job Job, which is also skipped in that mode
+  (see init-job.yaml header comment). Keeping it would leave a stale
+  Secret without a consumer; dropping it keeps the chart output minimal.
+*/}}
+{{- if not .Values.bootstrap.enabled }}
 ---
 apiVersion: v1
 kind: Secret
@@ -222,3 +229,4 @@ stringData:
     EOT
     {{- end }}
     {{- end }}
+{{- end }}

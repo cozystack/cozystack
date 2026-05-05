@@ -867,6 +867,18 @@ func (r *RestoreJobReconciler) cnpgClusterHealthy(ctx context.Context, namespace
 // re-rendered with our restore-shaped values and the operator is using the
 // recovery bootstrap path. Treats a missing Cluster as "not yet" rather
 // than an error so the caller can keep polling while HelmRelease catches up.
+//
+// A Cluster carrying DeletionTimestamp is also treated as "not yet": that is
+// the in-flight purge case, where r.Delete has fired but cnpg.io's
+// finalizers have not yet drained. If we returned true here, the caller
+// would skip the next purge step and start waiting for "healthy" against a
+// CR that is about to disappear; if we returned false (would re-purge)
+// without the DeletionTimestamp guard, an SSA Apply from Helm could
+// race the original delete and merge bootstrap.recovery into the still-
+// terminating CR - cnpg-operator's bootstrap-immutability check then
+// drops the change and the cluster ends up with the original initdb spec.
+// Holding here forces the caller to requeue until the old CR is fully GC'd
+// and the chart re-creates a fresh one.
 func (r *RestoreJobReconciler) clusterHasRecoveryBootstrap(ctx context.Context, namespace, clusterName string) (bool, error) {
 	cluster := &cnpgtypes.Cluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, cluster); err != nil {
@@ -874,6 +886,9 @@ func (r *RestoreJobReconciler) clusterHasRecoveryBootstrap(ctx context.Context, 
 			return false, nil
 		}
 		return false, err
+	}
+	if !cluster.DeletionTimestamp.IsZero() {
+		return false, nil
 	}
 	return cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Recovery != nil, nil
 }

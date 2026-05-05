@@ -756,6 +756,75 @@ func TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster(t *testing.T) {
 	}
 }
 
+// TestClusterHasRecoveryBootstrap_TerminatingCluster locks in the
+// DeletionTimestamp guard. Without it, a Cluster CR mid-deletion (after
+// purgeExistingCluster fired r.Delete but cnpg.io's finalizers haven't
+// drained yet) would get treated as "still has bootstrap" by the
+// reconciler. The caller would then either skip the next purge or wait
+// for healthy on a CR that's about to disappear; in either case Helm
+// might SSA-merge the chart's bootstrap.recovery onto the terminating
+// CR and cnpg-operator's bootstrap-immutability check would drop the
+// change, leaving the cluster on the original initdb spec.
+func TestClusterHasRecoveryBootstrap_TerminatingCluster(t *testing.T) {
+	now := metav1.Now()
+	t.Run("terminating cluster reports not-yet-recovered", func(t *testing.T) {
+		cluster := &cnpgtypes.Cluster{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:         "tenant",
+				Name:              "postgres-app",
+				DeletionTimestamp: &now,
+				Finalizers:        []string{"cnpg.io/cluster"}, // satisfies finalizer requirement for DeletionTimestamp
+			},
+			Spec: cnpgtypes.ClusterSpec{
+				Bootstrap: &cnpgtypes.BootstrapConfiguration{
+					Recovery: &cnpgtypes.RecoverySource{Source: "pg-src"},
+				},
+			},
+		}
+		c := newCNPGStrategyTestClient(t, cluster)
+		r := &RestoreJobReconciler{Client: c}
+		got, err := r.clusterHasRecoveryBootstrap(context.Background(), "tenant", "postgres-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Fatalf("expected false for terminating cluster, got true")
+		}
+	})
+
+	t.Run("live recovery cluster reports recovered", func(t *testing.T) {
+		cluster := &cnpgtypes.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app"},
+			Spec: cnpgtypes.ClusterSpec{
+				Bootstrap: &cnpgtypes.BootstrapConfiguration{
+					Recovery: &cnpgtypes.RecoverySource{Source: "pg-src"},
+				},
+			},
+		}
+		c := newCNPGStrategyTestClient(t, cluster)
+		r := &RestoreJobReconciler{Client: c}
+		got, err := r.clusterHasRecoveryBootstrap(context.Background(), "tenant", "postgres-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !got {
+			t.Fatalf("expected true for live recovery cluster, got false")
+		}
+	})
+
+	t.Run("missing cluster reports not-yet", func(t *testing.T) {
+		c := newCNPGStrategyTestClient(t)
+		r := &RestoreJobReconciler{Client: c}
+		got, err := r.clusterHasRecoveryBootstrap(context.Background(), "tenant", "postgres-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got {
+			t.Fatalf("expected false for missing cluster, got true")
+		}
+	})
+}
+
 // TestApplyClusterBarmanObjectStore_PatchesExistingCluster confirms the
 // precondition does not regress the happy path: when the Cluster exists
 // the driver still SSA-patches spec.backup.barmanObjectStore.
