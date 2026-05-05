@@ -130,4 +130,4 @@ require (
 )
 
 // See: issues.k8s.io/135537
-replace k8s.io/apimachinery => github.com/cozystack/apimachinery v0.0.0-20251219010959-1f91eabae46c
+replace k8s.io/apimachinery => github.com/cozystack/apimachinery v0.34.2-0.20260505205437-63d051a39549
