@@ -285,6 +285,7 @@ spec:
     storage: "100Gi"
   seaweedfs: false
 EOF
+  timeout 60 sh -ec 'until kubectl get hr/tenant-test -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
   timeout 60 sh -ec 'until kubectl get namespace tenant-test >/dev/null 2>&1; do sleep 2; done'
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
