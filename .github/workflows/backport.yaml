@@ -17,6 +17,7 @@ jobs:
   prepare:
     if: |
       github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
       (
         contains(github.event.pull_request.labels.*.name, 'backport') ||
         contains(github.event.pull_request.labels.*.name, 'backport-previous') ||
@@ -90,6 +91,7 @@ jobs:
     needs: prepare
     if: |
       github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
       (needs.prepare.outputs.backport_current == 'true' || needs.prepare.outputs.backport_previous == 'true')
     runs-on: [self-hosted]
     strategy:
