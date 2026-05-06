@@ -13,7 +13,6 @@ spec:
     prefix: "harbor-"
     labels:
       sharding.fluxcd.io/key: tenants
-      internal.cozystack.io/tenantmodule: "true"
     chartRef:
       kind: ExternalArtifact
       name: cozystack-harbor-application-default-harbor
@@ -24,7 +23,6 @@ spec:
     plural: Harbor
     name: harbor
     description: Managed Harbor container registry
-    module: true
     tags:
       - registry
       - container
