@@ -150,7 +150,7 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	parseFlag := func(flagName, raw string) time.Duration {
-		d, err := parsePositiveDuration(flagName, raw)
+		d, err := parsePositiveDuration(flagName, raw, helmReleaseMinDuration)
 		if err != nil {
 			setupLog.Error(err, "invalid duration flag")
 			os.Exit(1)
@@ -439,17 +439,28 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	return nil
 }
 
+// helmReleaseMinDuration is the lower bound enforced on every HelmRelease
+// duration flag. time.ParseDuration accepts values like "1ms" that would
+// thrash the Flux controller (or the apiserver, for retry-interval) without
+// usefully changing behaviour. 15s matches the smallest interval that has
+// ever been observed to be useful in practice.
+const helmReleaseMinDuration = 15 * time.Second
+
 // parsePositiveDuration parses raw as a time.Duration and rejects malformed
-// or non-positive values. Flux HelmRelease fields (Interval, Timeout,
-// RetryInterval) require strictly positive durations, so a misconfigured
-// flag must fail fast at startup rather than propagating into every HR.
-func parsePositiveDuration(flagName, raw string) (time.Duration, error) {
+// values, non-positive values, and values below min. Flux HelmRelease fields
+// (Interval, Timeout, RetryInterval) require strictly positive durations, so
+// a misconfigured flag must fail fast at startup rather than propagating into
+// every HR. Pass min=0 to disable the lower-bound check.
+func parsePositiveDuration(flagName, raw string, min time.Duration) (time.Duration, error) {
 	d, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, fmt.Errorf("invalid duration for %s=%q: %w", flagName, raw, err)
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("%s must be > 0 (got %q)", flagName, raw)
+	}
+	if min > 0 && d < min {
+		return 0, fmt.Errorf("%s must be >= %s (got %q)", flagName, min, raw)
 	}
 	return d, nil
 }

@@ -578,21 +578,26 @@ func TestParsePositiveDuration(t *testing.T) {
 	tests := []struct {
 		name    string
 		raw     string
+		min     time.Duration
 		want    time.Duration
 		wantErr bool
 	}{
-		{name: "valid seconds", raw: "30s", want: 30 * time.Second},
-		{name: "valid minutes", raw: "5m", want: 5 * time.Minute},
-		{name: "valid compound", raw: "1h30m", want: 90 * time.Minute},
+		{name: "valid seconds, no min", raw: "30s", want: 30 * time.Second},
+		{name: "valid minutes, no min", raw: "5m", want: 5 * time.Minute},
+		{name: "valid compound, no min", raw: "1h30m", want: 90 * time.Minute},
 		{name: "zero rejected", raw: "0s", wantErr: true},
 		{name: "negative rejected", raw: "-5m", wantErr: true},
 		{name: "malformed rejected", raw: "5x", wantErr: true},
 		{name: "empty rejected", raw: "", wantErr: true},
+		{name: "above min accepted", raw: "30s", min: 15 * time.Second, want: 30 * time.Second},
+		{name: "at min accepted", raw: "15s", min: 15 * time.Second, want: 15 * time.Second},
+		{name: "below min rejected", raw: "1ms", min: 15 * time.Second, wantErr: true},
+		{name: "below min rejected (sub-second)", raw: "100ms", min: 15 * time.Second, wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parsePositiveDuration("--test-flag", tt.raw)
+			got, err := parsePositiveDuration("--test-flag", tt.raw, tt.min)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for %q, got nil", tt.raw)
