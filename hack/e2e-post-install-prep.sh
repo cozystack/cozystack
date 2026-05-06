@@ -22,13 +22,17 @@ timeout 60 sh -ec 'until [ $(kubectl exec -n cozy-linstor deploy/linstor-control
 
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
 created_pools=$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')
+pids=""
 for node in srv1 srv2 srv3; do
   case $created_pools in
     *" $node "*) echo "  pool 'data' already exists on $node"; continue;;
   esac
   kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor ps cdp zfs ${node} /dev/vdc --pool-name data --storage-pool data &
+  pids="$pids $!"
 done
-wait
+for pid in $pids; do
+  wait "$pid"
+done
 
 echo "[post-install-prep] applying StorageClasses"
 kubectl apply -f - <<'EOF'
