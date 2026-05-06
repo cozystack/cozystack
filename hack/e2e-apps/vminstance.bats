@@ -18,7 +18,9 @@ spec:
   storage: 5Gi
   storageClass: replicated
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr vm-disk-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr vm-disk-$name --timeout=5s --for=condition=ready
   kubectl -n tenant-test wait dv vm-disk-$name --timeout=250s --for=condition=ready
   kubectl -n tenant-test wait pvc vm-disk-$name --timeout=200s --for=jsonpath='{.status.phase}'=Bound
@@ -59,7 +61,9 @@ spec:
           - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPht0dPk5qQ+54g1hSX7A6AUxXJW5T6n/3d7Ga2F8gTF test@test
   cloudInitSeed: ""
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before downstream
+  # waits proceed (kubectl wait errors immediately if the HR does not exist).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr vm-instance-$name >/dev/null 2>&1; do sleep 2; done"
   timeout 20 sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 5; done"
   kubectl -n tenant-test wait hr vm-instance-$name --timeout=5s --for=condition=ready
   kubectl -n tenant-test wait vm vm-instance-$name --timeout=20s --for=condition=ready
