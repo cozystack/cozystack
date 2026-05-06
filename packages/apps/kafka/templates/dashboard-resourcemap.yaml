@@ -9,6 +9,9 @@ rules:
   - services
   resourceNames:
   - {{ .Release.Name }}-kafka-bootstrap
+  {{- if .Values.external }}
+  - {{ .Release.Name }}-kafka-external-bootstrap
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
