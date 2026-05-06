@@ -3,6 +3,12 @@
 # Reads the live cluster (not the report dir) so it can use kubectl JSONPath.
 # Usage: cozyreport-summary.sh > summary.txt
 set -eu
+# pipefail surfaces a failed kubectl in `kubectl ... | awk ...` chains as a
+# missing section instead of a silently-empty one. POSIX sh does not
+# guarantee `set -o pipefail`, but every shell cozystack ships with (dash,
+# bash, busybox ash) supports it; the call site wraps this script in
+# `|| true` so a hard exit here still produces a (truncated) summary.txt.
+set -o pipefail 2>/dev/null || true
 
 echo "# Cozystack E2E Diagnostic Summary"
 echo "Generated: $(date -Iseconds)"
