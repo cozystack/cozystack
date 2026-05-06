@@ -1,4 +1,10 @@
 #!/bin/sh
+# Best-effort diagnostic collection: deliberately runs without `set -e` so
+# one failed `kubectl` (missing CRD, RBAC denial, transient API timeout)
+# does not abort the rest of the report. Errors are captured into the
+# per-section output files via `2>&1`. The companion cozyreport-summary.sh
+# is fail-fast (`set -eu`) because it is wrapped in `|| true` at the call
+# site below — any change to either policy should be made deliberately.
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPORT_DATE=$(date +%Y-%m-%d_%H-%M-%S)
 REPORT_NAME=${1:-cozyreport-$REPORT_DATE}
