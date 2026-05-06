@@ -38,8 +38,24 @@ echo
 
 echo "## Recent OOMKilled events (last 20)"
 echo
+# Catches kernel-OOM events emitted by kubelet at the node level. Misses
+# cgroup-only container kills that exit 137 without escalating to a node
+# OOMKilling event — those show up in the container-state section below.
 kubectl get events -A --field-selector reason=OOMKilling --sort-by=.lastTimestamp 2>/dev/null \
   | tail -20
+echo
+
+echo "## Containers with OOMKilled lastState"
+echo
+# Complements the OOMKilling-event section above. Container statuses retain
+# the lastState even when no node-level OOMKilling event was emitted (e.g.
+# cgroup-only kills with no kernel memory-pressure broadcast), so this
+# catches the silent-restart cases. Use go-template (not jsonpath) so the
+# inner range can still reach pod-level metadata via the outer-scope $pod.
+kubectl get pod -A -o go-template='{{range .items}}{{$pod := .}}{{range .status.containerStatuses}}{{if and .lastState.terminated (eq .lastState.terminated.reason "OOMKilled")}}  {{$pod.metadata.namespace}}/{{$pod.metadata.name}} container={{.name}} exitCode={{.lastState.terminated.exitCode}} finishedAt={{.lastState.terminated.finishedAt}}
+{{end}}{{end}}{{range .status.initContainerStatuses}}{{if and .lastState.terminated (eq .lastState.terminated.reason "OOMKilled")}}  {{$pod.metadata.namespace}}/{{$pod.metadata.name}} initContainer={{.name}} exitCode={{.lastState.terminated.exitCode}} finishedAt={{.lastState.terminated.finishedAt}}
+{{end}}{{end}}{{end}}' 2>/dev/null \
+  | head -40
 echo
 
 echo "## Recent Warning events (top 30)"
