@@ -57,6 +57,17 @@ type CozyServerOptions struct {
 
 	// Add a field to store the configuration
 	ResourceConfig *config.ResourceConfig
+
+	// Raw HelmRelease generation flag values; parsed and validated in
+	// Complete() with config.ParsePositiveDuration so a misconfigured flag
+	// fails fast at startup. Kept in sync with the cozystack-operator
+	// flags of the same name (PR #2509) so both HelmRelease-generating
+	// paths share the same retry strategy and cadence.
+	HelmReleaseInterval       string
+	HelmReleaseRetryInterval  string
+	HelmReleaseInstallTimeout string
+	HelmReleaseUpgradeTimeout string
+	HelmReleaseMaxHistory     int
 }
 
 // NewCozyServerOptions returns a new instance of CozyServerOptions
@@ -71,6 +82,13 @@ func NewCozyServerOptions(out, errOut io.Writer) *CozyServerOptions {
 		),
 		StdOut: out,
 		StdErr: errOut,
+		// Defaults match cozystack-operator: production semantics are
+		// identical between the two HelmRelease-generating paths.
+		HelmReleaseInterval:       "5m",
+		HelmReleaseRetryInterval:  "30s",
+		HelmReleaseInstallTimeout: "10m",
+		HelmReleaseUpgradeTimeout: "10m",
+		HelmReleaseMaxHistory:     5,
 	}
 	o.RecommendedOptions.Etcd = nil
 	return o
@@ -100,6 +118,31 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 	flags := cmd.Flags()
 	o.RecommendedOptions.AddFlags(flags)
 
+	// HelmRelease generation knobs. Names, defaults, and validation match
+	// the cozystack-operator flags from PR #2509 so both HelmRelease-
+	// generating paths can be tuned together.
+	flags.StringVar(&o.HelmReleaseInterval, "helmrelease-interval", o.HelmReleaseInterval,
+		"Reconcile interval applied to HelmReleases generated from Application resources "+
+			"(Spec.Interval). Mirrors the cozystack-operator flag of the same name; same default 5m "+
+			"matches existing behaviour.")
+	flags.StringVar(&o.HelmReleaseRetryInterval, "helmrelease-retry-interval", o.HelmReleaseRetryInterval,
+		"Retry interval applied to Install.Strategy and Upgrade.Strategy of HelmReleases generated "+
+			"from Application resources. With Strategy.Name=RetryOnFailure, this controls how long "+
+			"the controller waits between failed install/upgrade attempts. Decoupled from "+
+			"--helmrelease-interval so failures recover fast without polling healthy releases at the "+
+			"same cadence.")
+	flags.StringVar(&o.HelmReleaseInstallTimeout, "helmrelease-install-timeout", o.HelmReleaseInstallTimeout,
+		"Default timeout for the Helm install action of HelmReleases generated from Application "+
+			"resources (Spec.Install.Timeout). Overridden per-Application by the "+
+			"release.cozystack.io/helm-install-timeout annotation on the ApplicationDefinition.")
+	flags.StringVar(&o.HelmReleaseUpgradeTimeout, "helmrelease-upgrade-timeout", o.HelmReleaseUpgradeTimeout,
+		"Default timeout for the Helm upgrade action of HelmReleases generated from Application "+
+			"resources (Spec.Upgrade.Timeout). Overridden per-Application by the "+
+			"release.cozystack.io/helm-install-timeout annotation on the ApplicationDefinition.")
+	flags.IntVar(&o.HelmReleaseMaxHistory, "helmrelease-max-history", o.HelmReleaseMaxHistory,
+		"Number of release revisions Helm keeps for HelmReleases generated from Application "+
+			"resources (Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default.")
+
 	// Note: KEP-4330 component versioning functionality (k8s.io/apiserver/pkg/util/version)
 	// is not available in Kubernetes v0.34.1. The component versioning code has been removed.
 
@@ -108,6 +151,29 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 
 // Complete fills in the fields that are not set
 func (o *CozyServerOptions) Complete() error {
+	// Validate the HelmRelease generation flags before any kubernetes I/O
+	// so a misconfigured operator restarts loudly instead of waiting until
+	// the first Application is created. Same shape as cozystack-operator.
+	hrInterval, err := config.ParsePositiveDuration("--helmrelease-interval", o.HelmReleaseInterval)
+	if err != nil {
+		return err
+	}
+	hrRetryInterval, err := config.ParsePositiveDuration("--helmrelease-retry-interval", o.HelmReleaseRetryInterval)
+	if err != nil {
+		return err
+	}
+	hrInstallTimeout, err := config.ParsePositiveDuration("--helmrelease-install-timeout", o.HelmReleaseInstallTimeout)
+	if err != nil {
+		return err
+	}
+	hrUpgradeTimeout, err := config.ParsePositiveDuration("--helmrelease-upgrade-timeout", o.HelmReleaseUpgradeTimeout)
+	if err != nil {
+		return err
+	}
+	if o.HelmReleaseMaxHistory < 0 {
+		return fmt.Errorf("--helmrelease-max-history must be >= 0 (got %d)", o.HelmReleaseMaxHistory)
+	}
+
 	scheme := runtime.NewScheme()
 	if err := v1alpha1.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("failed to register types: %w", err)
@@ -168,6 +234,16 @@ func (o *CozyServerOptions) Complete() error {
 				Name:      crd.Spec.Release.ChartRef.Name,
 				Namespace: crd.Spec.Release.ChartRef.Namespace,
 			},
+			// Per-Application HelmRelease generation defaults from server
+			// flags. The same five values are applied to every Resource,
+			// matching cozystack-operator's PackageReconciler. The
+			// per-Application HelmInstallTimeout annotation populated below
+			// still wins over HelmReleaseInstallTimeout/UpgradeTimeout.
+			HelmReleaseInterval:       hrInterval,
+			HelmReleaseRetryInterval:  hrRetryInterval,
+			HelmReleaseInstallTimeout: hrInstallTimeout,
+			HelmReleaseUpgradeTimeout: hrUpgradeTimeout,
+			HelmReleaseMaxHistory:     o.HelmReleaseMaxHistory,
 		}
 		// Per-Application HelmRelease Install/Upgrade timeout. Applications
 		// whose parent chart contains asynchronously-provisioned resources
