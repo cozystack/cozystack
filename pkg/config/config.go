@@ -89,6 +89,24 @@ type ReleaseConfig struct {
 	// release.cozystack.io/helm-install-timeout annotation on the
 	// ApplicationDefinition at start-up.
 	HelmInstallTimeout time.Duration `yaml:"helmInstallTimeout,omitempty"`
+	// DependencyMappings holds zero or more rules for building HelmRelease
+	// dependsOn entries at reconcile time. Each entry is populated from the
+	// corresponding ApplicationDefinitionRelease.DependencyMappings field by
+	// start.go. When empty, no dependsOn entries are generated.
+	DependencyMappings []DependencyMapping `yaml:"dependencyMappings,omitempty"`
+}
+
+// DependencyMapping mirrors api/v1alpha1.DependencyMapping for the operator's
+// internal config layer. It describes how to build a HelmRelease dependsOn
+// entry from a dot-separated path with wildcard support over the Application
+// spec and a name template.
+type DependencyMapping struct {
+	// ValuesPath is a dot-separated path with wildcard support evaluated
+	// against the Application spec to extract a scalar or list of values.
+	ValuesPath string `yaml:"valuesPath"`
+	// NameTemplate is a Go text/template expression that is rendered for each
+	// extracted value to produce a HelmRelease name to depend on.
+	NameTemplate string `yaml:"nameTemplate"`
 }
 
 // ChartRefConfig references a Flux source artifact for the Helm chart.

@@ -1528,6 +1528,15 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		},
 	}
 
+	// Build dependsOn from DependencyMappings if any are configured.
+	if app.Spec != nil && len(r.releaseConfig.DependencyMappings) > 0 {
+		dependsOn, err := buildDependsOnFromMappings(app.Spec.Raw, r.releaseConfig.DependencyMappings, app.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("building dependsOn for %s/%s: %w", app.Namespace, app.Name, err)
+		}
+		helmRelease.Spec.DependsOn = dependsOn
+	}
+
 	// Per-Application HelmRelease wait budget. The mechanism is generic:
 	// an ApplicationDefinition that sets
 	// release.cozystack.io/helm-install-timeout gets Install.Timeout and

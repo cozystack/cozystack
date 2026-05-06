@@ -73,6 +73,35 @@ type ApplicationDefinitionApplication struct {
 	Singular string `json:"singular"`
 }
 
+// DependencyMapping describes how a value is extracted from the CURRENT
+// application's spec to build a dependsOn entry for this release's
+// HelmRelease.
+//
+// ValuesPath is a dot-separated path with wildcard support evaluated against
+// the current Application spec (e.g. "global.storageClass" or "node[*].name").
+// Wildcards expand to multiple values, producing one dependsOn entry per value.
+//
+// NameTemplate is a Go text/template expression that is rendered for each
+// extracted value to produce the name of the HelmRelease to depend on. The
+// template has access to the same variables as ResourceNames selectors:
+//   - {{ .name }}      — the application instance name
+//   - {{ .kind }}      — lowercased application kind
+//   - {{ .namespace }} — the namespace being processed
+type DependencyMapping struct {
+	// ValuesPath is a dot-separated path with wildcard support evaluated
+	// against the current Application spec to extract a scalar or list of
+	// values (e.g. "node[*].name").
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	ValuesPath string `json:"valuesPath"`
+
+	// NameTemplate is a Go text/template expression that is rendered for each
+	// extracted value to produce the name of the HelmRelease to depend on.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	NameTemplate string `json:"nameTemplate"`
+}
+
 type ApplicationDefinitionRelease struct {
 	// Reference to the chart source
 	ChartRef *helmv2.CrossNamespaceSourceReference `json:"chartRef"`
@@ -80,6 +109,10 @@ type ApplicationDefinitionRelease struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// Prefix for the release name
 	Prefix string `json:"prefix"`
+	// DependencyMappings defines a list of value mappings from dependency
+	// HelmReleases into this release's Helm values.
+	// +optional
+	DependencyMappings []DependencyMapping `json:"dependencyMappings,omitempty"`
 }
 
 // ApplicationDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.

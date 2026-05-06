@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"text/template"
 	"time"
 
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -168,6 +169,20 @@ func (o *CozyServerOptions) Complete() error {
 				Name:      crd.Spec.Release.ChartRef.Name,
 				Namespace: crd.Spec.Release.ChartRef.Namespace,
 			},
+		}
+		for _, dm := range crd.Spec.Release.DependencyMappings {
+			release.DependencyMappings = append(release.DependencyMappings, config.DependencyMapping{
+				ValuesPath:   dm.ValuesPath,
+				NameTemplate: dm.NameTemplate,
+			})
+		}
+		for i, dm := range release.DependencyMappings {
+			if _, err := template.New("").Parse(dm.NameTemplate); err != nil {
+				return fmt.Errorf(
+					"applicationdefinition %q: dependencyMappings[%d].nameTemplate is invalid: %w",
+					crd.Name, i, err,
+				)
+			}
 		}
 		// Per-Application HelmRelease Install/Upgrade timeout. Applications
 		// whose parent chart contains asynchronously-provisioned resources

@@ -311,6 +311,45 @@ spec:
                     - kind
                     - name
                     type: object
+                  dependencyMappings:
+                    description: |-
+                      DependencyMappings defines a list of value mappings from dependency
+                      HelmReleases into this release's Helm values.
+                    items:
+                      description: |-
+                        DependencyMapping describes how a value is extracted from the CURRENT
+                        application's spec to build a dependsOn entry for this release's
+                        HelmRelease.
+
+                        ValuesPath is a dot-separated path with wildcard support evaluated against
+                        the current Application spec (e.g. "global.storageClass" or "node[*].name").
+                        Wildcards expand to multiple values, producing one dependsOn entry per value.
+
+                        NameTemplate is a Go text/template expression that is rendered for each
+                        extracted value to produce the name of the HelmRelease to depend on. The
+                        template has access to the same variables as ResourceNames selectors:
+                          - {{ .name }}      — the application instance name
+                          - {{ .kind }}      — lowercased application kind
+                          - {{ .namespace }} — the namespace being processed
+                      properties:
+                        nameTemplate:
+                          description: |-
+                            NameTemplate is a Go text/template expression that is rendered for each
+                            extracted value to produce the name of the HelmRelease to depend on.
+                          minLength: 1
+                          type: string
+                        valuesPath:
+                          description: |-
+                            ValuesPath is a dot-separated path with wildcard support evaluated
+                            against the current Application spec to extract a scalar or list of
+                            values (e.g. "node[*].name").
+                          minLength: 1
+                          type: string
+                      required:
+                      - nameTemplate
+                      - valuesPath
+                      type: object
+                    type: array
                   labels:
                     additionalProperties:
                       type: string

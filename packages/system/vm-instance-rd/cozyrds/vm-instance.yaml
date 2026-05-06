@@ -17,6 +17,9 @@ spec:
       kind: ExternalArtifact
       name: cozystack-vm-instance-application-kubevirt-vm-instance
       namespace: cozy-system
+    dependencyMappings:
+      - valuesPath: "disks[*].name"
+        nameTemplate: "vm-disk-{{ .value }}"
   dashboard:
     category: IaaS
     singular: VM Instance
