@@ -61,7 +61,7 @@ topics: []
 kafka:
   replicas: 3
   resources: {}
-  resourcesPreset: "small"
+  resourcesPreset: "medium"
   size: 10Gi
   storageClass: ""
 
@@ -80,6 +80,6 @@ kafka:
 zookeeper:
   replicas: 3
   resources: {}
-  resourcesPreset: "small"
+  resourcesPreset: "medium"
   size: 5Gi
   storageClass: ""

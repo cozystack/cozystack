@@ -67,9 +67,15 @@ spec:
     name: {{ .Release.Name }}-credentials
     valuesKey: redis-password
     targetPath: harbor.redis.external.password
+  # BucketInfo is the JSON blob populated by the COSI BucketAccess controller.
+  # Merge it at the values root (no targetPath) so Flux unmarshals it as YAML
+  # instead of running it through Helm's strvals parser, which would split the
+  # JSON on commas. This also gates reconciliation on the Secret being ready and
+  # forces a config-digest change when its contents change.
+  - kind: Secret
+    name: {{ .Release.Name }}-registry-bucket
+    valuesKey: BucketInfo
   values:
-    bucket:
-      secretName: {{ .Release.Name }}-registry-bucket
     db:
       replicas: {{ .Values.database.replicas }}
       size: {{ .Values.database.size }}

@@ -7,14 +7,46 @@
   fi
 }
 
+@test "Pre-pull platform images" {
+  # Cluster-member workloads (OVN raft, LINSTOR) fail if replicas start at
+  # different times due to image-pull stagger across nodes. Pre-pull these
+  # images to every node so all replicas start with images already cached.
+  #
+  # Source images directly from the rendered charts so version bumps stay in
+  # sync automatically. yq walks every PodSpec-shaped object and emits the
+  # images of each container — this scopes the result to images the kubelet
+  # actually pulls (skips configmap fields and CRD examples that happen to
+  # contain an `image:` key). Add a chart here when a new peer-sensitive
+  # workload is found.
+  # Capture each render into a variable first: bats does not enable
+  # `pipefail`, so a `helm template` failure inside a brace-grouped pipe
+  # would be silently masked by yq's exit code, the script would receive
+  # empty stdin, and the test would pass while pre-pull was skipped.
+  # Assigning to a variable lets `set -e` trigger on a render failure.
+  kubeovn_manifests=$(helm template packages/system/kubeovn)
+  linstor_manifests=$(helm template packages/system/linstor)
+  printf '%s\n%s\n' "$kubeovn_manifests" "$linstor_manifests" | yq -N '
+      (..|select(has("containers"))|.containers[]|.image),
+      (..|select(has("initContainers"))|.initContainers[]|.image)
+    ' | hack/e2e-prepull-images.sh
+}
+
 @test "Install Cozystack" {
   # Install cozy-installer chart (operator installs CRDs on startup via --install-crds)
   helm upgrade installer packages/core/installer \
     --install \
     --namespace cozy-system \
     --create-namespace \
+    --set cozystackOperator.helmReleaseInterval=30s \
     --wait \
     --timeout 2m
+
+  # The pre-install hook (cozy-system-labeler) must have stamped the PSA and
+  # cozystack identity labels onto cozy-system. Operator pods need
+  # enforce=privileged for hostNetwork=true; a silent regression in the hook
+  # would let helm install succeed but break operator admission downstream.
+  kubectl get ns cozy-system -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}' | grep -qx privileged
+  kubectl get ns cozy-system -o jsonpath='{.metadata.labels.cozystack\.io/system}' | grep -qx true
 
   # Verify the operator deployment is available
   kubectl wait deployment/cozystack-operator -n cozy-system --timeout=1m --for=condition=Available
@@ -53,6 +85,11 @@ EOF
 
   # Wait until HelmReleases appear & reconcile them
   timeout 180 sh -ec 'until [ $(kubectl get hr -A --no-headers 2>/dev/null | wc -l) -gt 10 ]; do sleep 1; done'
+  # TODO(e2e-replace-fixed-timeouts): genuine sleep. The threshold of 10 is a
+  # heuristic for "enough HRs visible to start waiting"; the snapshot below
+  # uses whatever HRs have appeared by then. There is no objective k8s API
+  # signal for "all platform HRs have been emitted" without hard-coding the
+  # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
   sleep 5
   kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
 
@@ -143,6 +180,7 @@ EOF
 }
 
 @test "Check Cozystack API service" {
+  timeout 60 sh -ec 'until kubectl get apiservices/v1alpha1.apps.cozystack.io apiservices/v1alpha1.core.cozystack.io >/dev/null 2>&1; do sleep 2; done'
   kubectl wait --for=condition=Available apiservices/v1alpha1.apps.cozystack.io apiservices/v1alpha1.core.cozystack.io --timeout=2m
 }
 
@@ -154,16 +192,7 @@ EOF
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   kubectl wait hr/etcd hr/ingress hr/tenant-root hr/seaweedfs -n tenant-root --timeout=4m --for=condition=ready
 
-  # TODO: Workaround ingress unvailability issue
-  if ! kubectl wait hr/monitoring -n tenant-root --timeout=2m --for=condition=ready; then
-    flux reconcile hr monitoring -n tenant-root --force
-    kubectl wait hr/monitoring -n tenant-root --timeout=2m --for=condition=ready
-  fi
-
-  if ! kubectl wait hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready; then
-    flux reconcile hr seaweedfs-system -n tenant-root --force
-    kubectl wait hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready
-  fi
+  kubectl wait hr/monitoring hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready
 
 
   # Expose Cozystack services through ingress
@@ -174,15 +203,22 @@ EOF
   kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=5m --for=condition=available
 
   # etcd statefulset
+  timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=5m
 
   # VictoriaMetrics components
+  timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
+  timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m
+  timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
 
   # Grafana
+  timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=5m
+  timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=5m
 
   # Verify Grafana via ingress
@@ -272,7 +308,9 @@ spec:
     storage: "100Gi"
   seaweedfs: false
 EOF
+  timeout 60 sh -ec 'until kubectl get hr/tenant-test -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait hr/tenant-test -n tenant-root --timeout=1m --for=condition=ready
+  timeout 60 sh -ec 'until kubectl get namespace tenant-test >/dev/null 2>&1; do sleep 2; done'
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
   # Wait for ResourceQuota to appear and assert values
   timeout 60 sh -ec 'until [ "$(kubectl get quota -n tenant-test --no-headers 2>/dev/null | wc -l)" -ge 1 ]; do sleep 1; done'

@@ -2,11 +2,14 @@
 
 FROM alpine AS source
 ARG COMMIT_REF=v0.2.2
-RUN apk add --no-cache curl tar
+RUN apk add --no-cache curl tar git
 WORKDIR /src
 
 RUN curl -sSL https://github.com/kubernetes-sigs/container-object-storage-interface/archive/${COMMIT_REF}.tar.gz \
         | tar -xz --strip-components=1
+
+COPY patches /patches
+RUN git apply /patches/*.diff
 
 FROM --platform=$BUILDPLATFORM docker.io/golang:1.24 AS builder
 ARG TARGETOS
