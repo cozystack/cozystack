@@ -54,6 +54,7 @@ import (
 	"github.com/cozystack/cozystack/internal/fluxinstall"
 	"github.com/cozystack/cozystack/internal/operator"
 	"github.com/cozystack/cozystack/internal/telemetry"
+	"github.com/cozystack/cozystack/pkg/config"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -150,7 +151,7 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	parseFlag := func(flagName, raw string) time.Duration {
-		d, err := parsePositiveDuration(flagName, raw)
+		d, err := config.ParsePositiveDuration(flagName, raw)
 		if err != nil {
 			setupLog.Error(err, "invalid duration flag")
 			os.Exit(1)
@@ -437,21 +438,6 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	}
 
 	return nil
-}
-
-// parsePositiveDuration parses raw as a time.Duration and rejects malformed
-// or non-positive values. Flux HelmRelease fields (Interval, Timeout,
-// RetryInterval) require strictly positive durations, so a misconfigured
-// flag must fail fast at startup rather than propagating into every HR.
-func parsePositiveDuration(flagName, raw string) (time.Duration, error) {
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration for %s=%q: %w", flagName, raw, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("%s must be > 0 (got %q)", flagName, raw)
-	}
-	return d, nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.

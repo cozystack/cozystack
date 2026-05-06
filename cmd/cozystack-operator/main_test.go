@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"testing"
-	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -574,37 +573,3 @@ func TestGenerateGitRepository_InvalidRef(t *testing.T) {
 	}
 }
 
-func TestParsePositiveDuration(t *testing.T) {
-	tests := []struct {
-		name    string
-		raw     string
-		want    time.Duration
-		wantErr bool
-	}{
-		{name: "valid seconds", raw: "30s", want: 30 * time.Second},
-		{name: "valid minutes", raw: "5m", want: 5 * time.Minute},
-		{name: "valid compound", raw: "1h30m", want: 90 * time.Minute},
-		{name: "zero rejected", raw: "0s", wantErr: true},
-		{name: "negative rejected", raw: "-5m", wantErr: true},
-		{name: "malformed rejected", raw: "5x", wantErr: true},
-		{name: "empty rejected", raw: "", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parsePositiveDuration("--test-flag", tt.raw)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error for %q, got nil", tt.raw)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error for %q: %v", tt.raw, err)
-			}
-			if got != tt.want {
-				t.Errorf("got %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
