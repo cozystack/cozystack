@@ -1509,8 +1509,19 @@ func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
 	return m.CreationTimestamp
 }
 
-// convertApplicationToHelmRelease implements the actual conversion logic
+// convertApplicationToHelmRelease implements the actual conversion logic.
+//
+// Spec.Interval, Install/Upgrade.Strategy{Name=RetryOnFailure,RetryInterval},
+// and Spec.MaxHistory are populated from ReleaseConfig fields fed by the
+// cozystack-api server flags (--helmrelease-interval,
+// --helmrelease-retry-interval, --helmrelease-max-history). This mirrors the
+// operator's PackageReconciler.buildHelmReleaseSpec so both HelmRelease-
+// generating paths share the same retry strategy, history retention, and
+// reconcile cadence — see cozystack-operator's PR #2509 for the rationale
+// (recurring 2-min E2E install timeouts caused by Remediation{Retries:-1}
+// being coupled to a 5m Interval).
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	maxHistory := r.releaseConfig.HelmReleaseMaxHistory
 	helmRelease := &helmv2.HelmRelease{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "helm.toolkit.fluxcd.io/v2",
@@ -1530,15 +1541,18 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 				Name:      r.releaseConfig.ChartRef.Name,
 				Namespace: r.releaseConfig.ChartRef.Namespace,
 			},
-			Interval: metav1.Duration{Duration: 5 * time.Minute},
+			Interval:   metav1.Duration{Duration: r.releaseConfig.HelmReleaseInterval},
+			MaxHistory: &maxHistory,
 			Install: &helmv2.Install{
-				Remediation: &helmv2.InstallRemediation{
-					Retries: -1,
+				Strategy: &helmv2.InstallStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			Upgrade: &helmv2.Upgrade{
-				Remediation: &helmv2.UpgradeRemediation{
-					Retries: -1,
+				Strategy: &helmv2.UpgradeStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			ValuesFrom: []helmv2.ValuesReference{
@@ -1551,24 +1565,35 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		},
 	}
 
-	// Per-Application HelmRelease wait budget. The mechanism is generic:
-	// an ApplicationDefinition that sets
-	// release.cozystack.io/helm-install-timeout gets Install.Timeout and
-	// Upgrade.Timeout populated from ReleaseConfig.HelmInstallTimeout
-	// (parsed at startup). Applications that leave it unset keep flux
-	// defaults so their failed installs remediate on the normal cadence.
-	// kubernetes-rd and tenant-rd carry the annotation today: the
-	// Kubernetes Application's parent chart contains CAPI/Kamaji
+	// Install/Upgrade.Timeout: per-Application annotation override
+	// (HelmInstallTimeout) wins over the global default
+	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout). When both
+	// are zero the field stays nil and flux defaults apply — preserving
+	// the pre-#2509 behaviour for tests that hand-construct ReleaseConfig
+	// without populating the new global fields.
+	//
+	// The annotation mechanism is generic: an ApplicationDefinition that
+	// sets release.cozystack.io/helm-install-timeout gets Install.Timeout
+	// and Upgrade.Timeout populated from ReleaseConfig.HelmInstallTimeout
+	// (parsed at startup). kubernetes-rd and tenant-rd carry the annotation
+	// today: the Kubernetes Application's parent chart contains CAPI/Kamaji
 	// resources whose admin-kubeconfig Secret is provisioned
 	// asynchronously and Kamaji cold-start routinely exceeds flux's
 	// default wait budget, and the Tenant parent chart bootstraps the
 	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
 	// Any future kind with the same shape can opt in by setting the
 	// same annotation.
+	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
+	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
 	if r.releaseConfig.HelmInstallTimeout > 0 {
-		timeout := metav1.Duration{Duration: r.releaseConfig.HelmInstallTimeout}
-		helmRelease.Spec.Install.Timeout = &timeout
-		helmRelease.Spec.Upgrade.Timeout = &timeout
+		installTimeout = r.releaseConfig.HelmInstallTimeout
+		upgradeTimeout = r.releaseConfig.HelmInstallTimeout
+	}
+	if installTimeout > 0 {
+		helmRelease.Spec.Install.Timeout = &metav1.Duration{Duration: installTimeout}
+	}
+	if upgradeTimeout > 0 {
+		helmRelease.Spec.Upgrade.Timeout = &metav1.Duration{Duration: upgradeTimeout}
 	}
 
 	return helmRelease, nil

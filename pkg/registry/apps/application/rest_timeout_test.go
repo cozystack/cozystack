@@ -4,12 +4,18 @@ import (
 	"testing"
 	"time"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
+// newRESTForTimeout builds a REST struct focused on the per-Application
+// HelmInstallTimeout annotation override path. Global HelmRelease* defaults
+// stay zero-valued so the test exercises the "annotation unset and no global
+// default" → flux-defaults path; the global-default path is covered by
+// rest_helmrelease_spec_test.go.
 func newRESTForTimeout(kind, prefix string, helmInstallTimeout time.Duration) *REST {
 	return &REST{
 		kindName: kind,
@@ -105,11 +111,24 @@ func TestConvertApplicationToHelmRelease_AppliesReleaseConfigTimeout(t *testing.
 				}
 			}
 
-			if hr.Spec.Install.Remediation == nil || hr.Spec.Install.Remediation.Retries != -1 {
-				t.Errorf("Spec.Install.Remediation.Retries must remain -1, got %+v", hr.Spec.Install.Remediation)
+			// Strategy must be RetryOnFailure with Remediation kept nil:
+			// helm-controller's XValidation rule rejects
+			// Strategy.Name=RetryOnFailure with RetryInterval set alongside
+			// a Remediation entry, so a future "for safety" re-introduction
+			// of Remediation{Retries: -1} would silently break every HR.
+			if hr.Spec.Install.Strategy == nil ||
+				hr.Spec.Install.Strategy.Name != string(helmv2.ActionStrategyRetryOnFailure) {
+				t.Errorf("Spec.Install.Strategy must be RetryOnFailure, got %+v", hr.Spec.Install.Strategy)
 			}
-			if hr.Spec.Upgrade.Remediation == nil || hr.Spec.Upgrade.Remediation.Retries != -1 {
-				t.Errorf("Spec.Upgrade.Remediation.Retries must remain -1, got %+v", hr.Spec.Upgrade.Remediation)
+			if hr.Spec.Install.Remediation != nil {
+				t.Errorf("Spec.Install.Remediation must be nil, got %+v", hr.Spec.Install.Remediation)
+			}
+			if hr.Spec.Upgrade.Strategy == nil ||
+				hr.Spec.Upgrade.Strategy.Name != string(helmv2.ActionStrategyRetryOnFailure) {
+				t.Errorf("Spec.Upgrade.Strategy must be RetryOnFailure, got %+v", hr.Spec.Upgrade.Strategy)
+			}
+			if hr.Spec.Upgrade.Remediation != nil {
+				t.Errorf("Spec.Upgrade.Remediation must be nil, got %+v", hr.Spec.Upgrade.Remediation)
 			}
 		})
 	}
