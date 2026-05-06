@@ -232,10 +232,12 @@ spec:
         {{- else if eq .Values.topology "MultiZone" }}
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
+        replicas: {{ .Values.filer.replicas }}
         s3:
           domainName: {{ .Values.host | default (printf "s3.%s" $host) }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.filer.resourcesPreset .Values.filer.resources $) | nindent 10 }}
       s3:
+        replicas: {{ .Values.s3.replicas }}
         ingress:
           className: {{ $ingress }}
           host: {{ .Values.host | default (printf "s3.%s" $host) }}
