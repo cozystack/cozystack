@@ -1,7 +1,9 @@
 {{- $host := .Values._namespace.host }}
 {{- $ingress := .Values._namespace.ingress }}
+{{- $gateway := .Values._namespace.gateway | default "" }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- if not $gateway }}
 
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -32,3 +34,4 @@ spec:
             name: {{ .Values.bucketName }}-ui
             port:
               number: 8080
+{{- end }}

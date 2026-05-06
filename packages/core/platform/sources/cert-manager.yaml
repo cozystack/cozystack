@@ -13,6 +13,7 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
+    - cozystack.gateway-api-crds
     components:
     - name: cert-manager-crds
       path: system/cert-manager-crds

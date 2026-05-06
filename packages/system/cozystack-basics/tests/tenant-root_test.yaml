@@ -1,0 +1,60 @@
+suite: tenant-root namespace + HelmRelease
+templates:
+  - templates/tenant-root.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+set:
+  _cluster:
+    root-host: example.org
+
+# tenant-root carries the platform's root apex. Without the
+# `namespace.cozystack.io/host` label set on the tenant-root namespace,
+# Layer 7 (cozystack-route-hostname-policy VAP) is fail-closed and
+# rejects every HTTPRoute the platform creates inside tenant-root —
+# including the dashboard and harbor routes the platform itself
+# publishes there. This regression would block bootstrap entirely.
+# Pin the label here so a refactor of tenant-root.yaml that forgets
+# the label fails CI immediately rather than at apply time.
+tests:
+  - it: tenant-root namespace carries namespace.cozystack.io/host label
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Namespace
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: tenant-root
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["namespace.cozystack.io/host"]
+          value: example.org
+
+  - it: host label tracks _cluster.root-host
+    set:
+      _cluster:
+        root-host: customer1.io
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["namespace.cozystack.io/host"]
+          value: customer1.io
+
+  - it: tenant-root HelmRelease references the tenant-application chart
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: HelmRelease
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: tenant-root
+      - documentIndex: 1
+        equal:
+          path: spec.chartRef.name
+          value: cozystack-tenant-application-default-tenant

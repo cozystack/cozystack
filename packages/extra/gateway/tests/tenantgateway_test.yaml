@@ -1,0 +1,276 @@
+suite: tenant gateway CR rendering
+templates:
+  - templates/tenantgateway.yaml
+
+release:
+  name: gateway
+  namespace: tenant-root
+
+tests:
+  - it: defaults to certMode=http01 with the apex from _namespace.host
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: TenantGateway
+      - equal:
+          path: apiVersion
+          value: gateway.cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: cozystack
+      - equal:
+          path: spec.apex
+          value: example.org
+      - equal:
+          path: spec.certMode
+          value: http01
+      - equal:
+          path: spec.gatewayClassName
+          value: cilium
+      - notExists:
+          path: spec.dns01
+
+  - it: child tenant carries its own apex (host inherited from parent)
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: alice.example.org
+    release:
+      namespace: tenant-alice
+    asserts:
+      - equal:
+          path: spec.apex
+          value: alice.example.org
+
+  - it: empty _namespace.host fails with explicit error
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+      _namespace:
+        host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "_namespace.host is empty — the tenant has no apex domain. Either set tenant.spec.host on this tenant or inherit it from a parent that has host set."
+
+  - it: dns01 mode renders dns01.cloudflare with default secret refs
+    set:
+      _cluster:
+        solver: dns01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: dns01
+      - equal:
+          path: spec.dns01.provider
+          value: cloudflare
+      - equal:
+          path: spec.dns01.cloudflare.apiTokenSecretRef.name
+          value: cloudflare-api-token-secret
+      - equal:
+          path: spec.dns01.cloudflare.apiTokenSecretRef.key
+          value: api-token
+
+  - it: dns01-provider=cloudflare with custom secret refs
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: cloudflare
+        dns01-cloudflare-secret-name: my-cf-secret
+        dns01-cloudflare-secret-key: token
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.dns01.cloudflare.apiTokenSecretRef.name
+          value: my-cf-secret
+      - equal:
+          path: spec.dns01.cloudflare.apiTokenSecretRef.key
+          value: token
+
+  - it: dns01-provider=route53 renders route53 block
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: route53
+        dns01-route53-region: us-east-1
+        dns01-route53-access-key-id: AKIAEXAMPLE
+        dns01-route53-secret-name: route53-creds
+        dns01-route53-secret-key: secret-access-key
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.dns01.provider
+          value: route53
+      - equal:
+          path: spec.dns01.route53.region
+          value: us-east-1
+      - equal:
+          path: spec.dns01.route53.accessKeyID
+          value: AKIAEXAMPLE
+      - equal:
+          path: spec.dns01.route53.secretAccessKeySecretRef.name
+          value: route53-creds
+
+  - it: dns01-provider=digitalocean
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: digitalocean
+        dns01-digitalocean-secret-name: do-token
+        dns01-digitalocean-secret-key: access-token
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.dns01.provider
+          value: digitalocean
+      - equal:
+          path: spec.dns01.digitalocean.tokenSecretRef.name
+          value: do-token
+
+  - it: dns01-provider=rfc2136 renders TSIG block with default algorithm
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: rfc2136
+        dns01-rfc2136-nameserver: 192.0.2.53:53
+        dns01-rfc2136-tsig-key-name: cozystack-acme
+        dns01-rfc2136-secret-name: rfc2136-tsig
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.dns01.rfc2136.nameserver
+          value: 192.0.2.53:53
+      - equal:
+          path: spec.dns01.rfc2136.tsigKeyName
+          value: cozystack-acme
+      - equal:
+          path: spec.dns01.rfc2136.tsigAlgorithm
+          value: HMACSHA256
+
+  - it: route53 fails clearly when required region is empty
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: route53
+        dns01-route53-access-key-id: AKIAEXAMPLE
+        dns01-route53-secret-name: route53-creds
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: "packages/extra/gateway: _cluster.dns01-route53-region is required when dns01-provider=route53"
+
+  - it: rfc2136 fails clearly when nameserver is empty
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: rfc2136
+        dns01-rfc2136-tsig-key-name: cozystack-acme
+        dns01-rfc2136-secret-name: rfc2136-tsig
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: "packages/extra/gateway: _cluster.dns01-rfc2136-nameserver is required when dns01-provider=rfc2136"
+
+  - it: unknown dns01-provider fails chart render
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: oraclednslol
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/extra/gateway: unsupported _cluster.dns01-provider="oraclednslol". Supported values: cloudflare, route53, digitalocean, rfc2136.'
+
+  - it: unknown solver fails chart render
+    set:
+      _cluster:
+        solver: tls-alpn-01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/extra/gateway: unsupported _cluster.solver="tls-alpn-01". Supported values: http01, dns01.'
+
+  - it: unknown issuer-name fails chart render
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: my-custom-ca
+      _namespace:
+        host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: 'packages/extra/gateway currently supports publishing.certificates.issuerName=letsencrypt-prod or letsencrypt-stage (got "my-custom-ca"). For other issuers, extend the controller to map the name to the corresponding ACME server URL.'
+
+  - it: attachedNamespaces propagates from _cluster.gateway-attached-namespaces
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-attached-namespaces: "cozy-cert-manager,cozy-dashboard,cozy-keycloak"
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.attachedNamespaces
+          value:
+            - cozy-cert-manager
+            - cozy-dashboard
+            - cozy-keycloak
+
+  - it: tlsPassthroughServices defaults to api,vm-exportproxy,cdi-uploadproxy
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.tlsPassthroughServices
+          value:
+            - api
+            - vm-exportproxy
+            - cdi-uploadproxy
