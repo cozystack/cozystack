@@ -3,6 +3,9 @@ NAMESPACE=cozy-system
 
 include ../../../hack/common-envs.mk
 
+test:
+	helm unittest .
+
 show:
 	cozyhr show --namespace $(NAMESPACE) $(NAME)
 

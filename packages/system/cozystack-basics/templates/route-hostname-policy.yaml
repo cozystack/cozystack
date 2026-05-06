@@ -1,0 +1,106 @@
+{{/*
+  cozystack-route-hostname-policy
+
+  Layer 7 of the Gateway API security model (see
+  packages/extra/gateway/README.md). The Gateway-side VAPs already in
+  this package validate Gateway listener hostnames; this VAP closes
+  the same surface at the route level so a tenant carrying RBAC for
+  HTTPRoute / TLSRoute in its own namespace cannot publish hostnames
+  that fall outside its apex.
+
+  Scope: only routes in tenant-* namespaces are gated. cozy-*
+  namespaces are cluster-admin-managed and trusted to publish under
+  any apex (they back platform services like dashboard, harbor,
+  bucket).
+
+  Two pairs of resources are rendered:
+   - VAP + Binding for HTTPRoute (gateway.networking.k8s.io/v1)
+   - VAP + Binding for TLSRoute (gateway.networking.k8s.io/v1alpha2)
+
+  TLSRoute stays at v1alpha2 in Gateway API v1.4–v1.5; its promotion
+  to v1 is tracked upstream and we will follow the rename when it
+  lands.
+*/}}
+{{- /*
+  CEL safety note: has() only works on field access expressions, not
+  on top-level variables. namespaceObject is a top-level var supplied
+  by the apiserver, so the nil check uses `!= null` first; the
+  nested has() then walks into metadata.labels safely. See the
+  feedback memory cel-has-field-only.md.
+
+  Defense-in-depth contract: this VAP is fail-closed. A tenant-*
+  namespace without `namespace.cozystack.io/host` is rejected (not
+  silently allowed) so a missing or scrubbed Layer-5 label cannot
+  open Layer 7 by itself. The only legitimate state where the
+  label is absent is an in-flight namespace creation that hasn't
+  finished labelling yet — in which case the caller should retry.
+*/}}
+{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.hostnames) || object.spec.hostnames.all(h, h == namespaceObject.metadata.labels["namespace.cozystack.io/host"] || h.endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"])))` -}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-route-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gateway.networking.k8s.io"]
+      apiVersions: ["v1", "v1beta1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["httproutes"]
+  matchConditions:
+  - name: tenant-namespace
+    expression: object.metadata.namespace.startsWith("tenant-")
+  validations:
+  - expression: >-
+      {{ $celValidator }}
+    messageExpression: >-
+      "HTTPRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-route-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-route-hostname-policy
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-route-hostname-policy-tls
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["gateway.networking.k8s.io"]
+      apiVersions: ["v1alpha2"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["tlsroutes"]
+  matchConditions:
+  - name: tenant-namespace
+    expression: object.metadata.namespace.startsWith("tenant-")
+  validations:
+  - expression: >-
+      {{ $celValidator }}
+    messageExpression: >-
+      "TLSRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-route-hostname-policy-tls
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-route-hostname-policy-tls
+  validationActions: [Deny]

@@ -115,6 +115,7 @@
 {{- end }}
 
 # Common Packages
+{{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
 {{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.7.0)
        ships a pre-delete Helm hook that sed-strips the BEGIN/END
@@ -187,6 +188,7 @@
 {{- $_ := set $ingressComponents "ingress-system" (dict "values" $ingressNginxValues) -}}
 {{- end }}
 {{include "cozystack.platform.package" (list "cozystack.ingress-application" "default" $ $ingressComponents) }}
+{{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}

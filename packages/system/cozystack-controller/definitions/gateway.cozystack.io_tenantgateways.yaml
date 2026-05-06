@@ -1,0 +1,395 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: tenantgateways.gateway.cozystack.io
+spec:
+  group: gateway.cozystack.io
+  names:
+    kind: TenantGateway
+    listKind: TenantGatewayList
+    plural: tenantgateways
+    shortNames:
+    - tgw
+    singular: tenantgateway
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.apex
+      name: Apex
+      type: string
+    - jsonPath: .spec.certMode
+      name: Mode
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          TenantGateway is the Schema for the tenantgateways API.
+          It expresses the operator-facing intent for a tenant's per-namespace
+          Gateway; the cozystack-controller reconciles the actual Gateway and
+          per-listener Certificate resources from this CR.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TenantGatewaySpec describes the desired state of a per-tenant
+              Gateway.
+            properties:
+              apex:
+                description: |-
+                  Apex is the tenant's apex hostname. The Gateway listeners are
+                  constrained to this apex and its subdomains.
+                type: string
+              attachedNamespaces:
+                description: |-
+                  AttachedNamespaces lists namespace names that are allowed to
+                  attach HTTPRoute or TLSRoute to this tenant's Gateway. The
+                  publishing tenant namespace is implicit. Selector is by built-in
+                  kubernetes.io/metadata.name (kube-apiserver-written, unspoofable).
+                items:
+                  type: string
+                type: array
+              certMode:
+                default: http01
+                description: |-
+                  CertMode selects between HTTP-01 per-listener Certificates and
+                  a wildcard cert via DNS-01.
+                enum:
+                - http01
+                - dns01
+                type: string
+              dns01:
+                description: |-
+                  DNS01 configures the DNS-01 solver when CertMode=dns01. Ignored
+                  otherwise. Required (provider + matching config block) when
+                  CertMode=dns01.
+                properties:
+                  cloudflare:
+                    description: Cloudflare config. Required when Provider=cloudflare.
+                    properties:
+                      apiTokenSecretRef:
+                        description: |-
+                          APITokenSecretRef references a Secret holding a Cloudflare API
+                          token with Zone:Read + Zone:DNS:Edit on the tenant's apex zone.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - apiTokenSecretRef
+                    type: object
+                  digitalocean:
+                    description: DigitalOcean config. Required when Provider=digitalocean.
+                    properties:
+                      tokenSecretRef:
+                        description: |-
+                          TokenSecretRef references a Secret holding a DigitalOcean API
+                          token with write access to the tenant's apex domain.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - tokenSecretRef
+                    type: object
+                  provider:
+                    default: cloudflare
+                    description: Provider selects which DNS-01 solver block to render.
+                    enum:
+                    - cloudflare
+                    - route53
+                    - digitalocean
+                    - rfc2136
+                    type: string
+                  rfc2136:
+                    description: RFC2136 config. Required when Provider=rfc2136.
+                    properties:
+                      nameserver:
+                        description: |-
+                          Nameserver is the host:port of the authoritative nameserver
+                          accepting dynamic updates.
+                        type: string
+                      tsigAlgorithm:
+                        default: HMACSHA256
+                        description: TSIGAlgorithm is the TSIG HMAC algorithm. Default
+                          HMACSHA256.
+                        type: string
+                      tsigKeyName:
+                        description: TSIGKeyName names the TSIG key authorising the
+                          update.
+                        type: string
+                      tsigSecretSecretRef:
+                        description: |-
+                          TSIGSecretSecretRef references the Secret holding the TSIG key
+                          material.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - nameserver
+                    - tsigKeyName
+                    - tsigSecretSecretRef
+                    type: object
+                  route53:
+                    description: Route53 config. Required when Provider=route53.
+                    properties:
+                      accessKeyID:
+                        description: |-
+                          AccessKeyID is the IAM access key ID. Optional when running with
+                          IRSA / instance profile.
+                        type: string
+                      region:
+                        description: Region is the AWS region of the hosted zone.
+                        type: string
+                      secretAccessKeySecretRef:
+                        description: |-
+                          SecretAccessKeySecretRef references a Secret holding the IAM
+                          secret access key. Optional when running with IRSA / instance
+                          profile.
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - region
+                    type: object
+                type: object
+              gatewayClassName:
+                default: cilium
+                description: |-
+                  GatewayClassName names the GatewayClass to attach the rendered
+                  Gateway to. Default cilium.
+                type: string
+              issuerName:
+                default: letsencrypt-prod
+                description: |-
+                  IssuerName picks the Let's Encrypt environment the controller
+                  configures the per-tenant Issuer with. Defaults to
+                  letsencrypt-prod. Set to letsencrypt-stage on dev clusters to
+                  avoid the LE production rate limits.
+                enum:
+                - letsencrypt-prod
+                - letsencrypt-stage
+                type: string
+              tlsPassthroughServices:
+                description: |-
+                  TLSPassthroughServices names services exposed via TLS-passthrough
+                  (mode: Passthrough listeners). Each service gets a dedicated
+                  listener; HTTPRoutes attach to TLS-terminate listeners instead.
+                items:
+                  type: string
+                type: array
+            required:
+            - apex
+            type: object
+          status:
+            description: TenantGatewayStatus reports the observed state of the tenant's
+              Gateway.
+            properties:
+              conditions:
+                description: |-
+                  Conditions describes the current state of the TenantGateway.
+                  Standard condition types: Ready, Programmed.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              listeners:
+                description: Listeners reports per-listener readiness and cert state.
+                items:
+                  description: |-
+                    TenantGatewayListenerStatus reports the observed state of a single
+                    listener on the tenant's Gateway.
+                  properties:
+                    certificateName:
+                      description: |-
+                        CertificateName names the cert-manager Certificate backing this
+                        listener.
+                      type: string
+                    hostname:
+                      description: Hostname is the hostname this listener serves.
+                      type: string
+                    name:
+                      description: Name is the listener's name (e.g. "https-harbor",
+                        "https-apex").
+                      type: string
+                    ready:
+                      description: |-
+                        Ready indicates the cert is issued and the Gateway has accepted
+                        the listener.
+                      type: boolean
+                    reason:
+                      description: Reason is a short machine-readable reason when
+                        Ready=false.
+                      type: string
+                  required:
+                  - name
+                  - ready
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration mirrors the .metadata.generation reflected in
+                  the latest reconciled state.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
