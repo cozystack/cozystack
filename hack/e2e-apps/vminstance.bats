@@ -31,14 +31,41 @@ EOF
   kubectl -n tenant-test wait hr vm-disk-$name --timeout=60s --for=condition=ready
   kubectl -n tenant-test wait dv vm-disk-$name --timeout=250s --for=condition=ready
   kubectl -n tenant-test wait pvc vm-disk-$name --timeout=200s --for=jsonpath='{.status.phase}'=Bound
+  # Drop the VMDisk so the next test starts from a clean slate. Each test
+  # owns its own resources; "Create a VM Instance" creates its own VMDisk
+  # inline rather than depending on this one.
+  kubectl -n tenant-test delete vmdisks.apps.cozystack.io $name --ignore-not-found --timeout=3m
 }
 
 @test "Create a VM Instance" {
-  diskName='test'
+  # Use a distinct disk name from "Create a VM Disk" so a flaky finalizer
+  # drain on the prior disk's PV/PVC cannot collide with this test's apply.
+  diskName='vmi-test'
   name='test'
-  # Same delete-finalizer-drain race as in "Create a VM Disk" above —
-  # block until removal completes, surface timeouts loudly.
+  # Pre-clean any leftover VMInstance from a prior run. The VMDisk is
+  # created by this test (decoupled from "Create a VM Disk" above), so no
+  # predelete here — the prior test already cleaned up its own VMDisk.
   kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --ignore-not-found --timeout=3m
+  # Create the VMDisk this test depends on. Same wait-for-HR pattern as the
+  # first test, so this block is self-contained.
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMDisk
+metadata:
+  name: $diskName
+  namespace: tenant-test
+spec:
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  optical: false
+  storage: 5Gi
+  storageClass: replicated
+EOF
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr vm-disk-$diskName >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr vm-disk-$diskName --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait dv vm-disk-$diskName --timeout=250s --for=condition=ready
+  kubectl -n tenant-test wait pvc vm-disk-$diskName --timeout=200s --for=jsonpath='{.status.phase}'=Bound
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMInstance
