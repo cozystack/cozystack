@@ -83,16 +83,36 @@ EOF
   # time ouroboros HR can fail the secret is reliably present. The
   # extra wait on the parent HR upper-bounds the case where the parent
   # itself never becomes Ready (the secret never appears, the kubectl
-  # wait below would fail with a misleading "no resources found").
+  # below would fail with a misleading "no resources found").
+  #
+  # Use `super-admin.conf` (NOT `super-admin.svc`) and rewrite the
+  # server URL to `https://localhost:<port>` then start a kubectl
+  # port-forward to the tenant apiserver Service in the host namespace.
+  # The `super-admin.svc` variant points at the in-cluster Service DNS
+  # name `<release>.<ns>.svc:6443`, which the e2e sandbox container
+  # cannot resolve — its resolver is the Docker/QEMU host link-local
+  # 169.254.169.254, not host-cluster CoreDNS, so every tenant-side
+  # kubectl call returns `no such host`. The port-forward + localhost
+  # rewrite is the same pattern used by hack/e2e-apps/run-kubernetes.sh.
   kubeconfig=$(mktemp)
-  trap "rm -f ${kubeconfig}" EXIT
+  pf_port=59999
+  cleanup_kubeconfig() {
+    pkill -f "port-forward.*service/kubernetes-${cluster}.*${pf_port}:" 2>/dev/null || true
+    rm -f "${kubeconfig}"
+  }
+  trap cleanup_kubeconfig EXIT
   kubectl --namespace "${ns}" wait \
     helmrelease "kubernetes-${cluster}" \
     --timeout=15m --for=condition=ready
   kubectl --namespace "${ns}" get secret \
     "kubernetes-${cluster}-admin-kubeconfig" \
-    --output jsonpath='{.data.super-admin\.svc}' \
+    --output jsonpath='{.data.super-admin\.conf}' \
     | base64 --decode > "${kubeconfig}"
+  yq -i ".clusters[0].cluster.server = \"https://localhost:${pf_port}\"" "${kubeconfig}"
+  pkill -f "port-forward.*service/kubernetes-${cluster}.*${pf_port}:" 2>/dev/null || true
+  kubectl --namespace "${ns}" port-forward \
+    "service/kubernetes-${cluster}" "${pf_port}":6443 > /dev/null 2>&1 &
+  timeout 30 sh -ec 'until curl -sk https://localhost:'"${pf_port}"' >/dev/null 2>&1; do sleep 1; done'
 
   # Wait for the addon HR. On failure, dump tenant-side diagnostics
   # before exiting — cozyreport stops at host scope and gives no
@@ -249,5 +269,5 @@ EOF
     delete ingress hairpin-probe --ignore-not-found 2>/dev/null || true
   kubectl --namespace "${ns}" delete kuberneteses.apps.cozystack.io \
     "${cluster}" --ignore-not-found --wait=false 2>/dev/null || true
-  rm -f "${kubeconfig}"
+  cleanup_kubeconfig
 }
