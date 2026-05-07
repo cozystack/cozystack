@@ -1,4 +1,21 @@
-{{- if .Values.backup.enabled }}
+{{/*
+  Legacy chart-managed scheduled backup.
+
+  Emits a cnpg.io/ScheduledBackup so the chart can drive recurring backups
+  on its own schedule. Superseded by the BackupClass + Plan flow under
+  `backups.cozystack.io` (see packages/apps/postgres/README.md), which is
+  the recommended path for tenant-managed backup orchestration.
+
+  Gating: rendered only when both `backup.enabled` and `backup.schedule`
+  are non-empty. `backup.enabled=true` alone is the documented way to
+  bootstrap `archive_command` on the source cluster (the BackupClass
+  driver SSA-merges spec.backup.barmanObjectStore with ForceOwnership);
+  leaving `backup.schedule=""` lets users opt into archive without also
+  getting a chart-emitted ScheduledBackup that competes with their
+  BackupClass policy. CNPG admission rejects an empty `schedule` field,
+  so the gate keeps invalid manifests from reaching the cluster.
+*/}}
+{{- if and .Values.backup.enabled .Values.backup.schedule }}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup

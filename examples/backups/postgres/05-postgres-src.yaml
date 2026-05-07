@@ -1,0 +1,49 @@
+# Source Postgres instance.
+#
+# backup.enabled is true so the chart renders spec.backup.barmanObjectStore
+# on the Cluster from helm-install. CNPG then starts postgres with
+# archive_command=barman-cloud-wal-archive instead of /bin/true, and WALs
+# flow to object storage from the very first segment switch. If we left
+# backup.enabled=false and relied on the BackupClass driver to inject
+# barmanObjectStore at BackupJob time, archive_command would still be a
+# no-op when the backup's begin_wal closes - that WAL never lands in S3,
+# and recovery later fails with "WAL not found" while the source PVC is
+# already gone.
+#
+# Coupling: the e2e harness substitutes REPLACE_WITH_COSI_BUCKET_NAME and
+# REPLACE_WITH_S3_ENDPOINT before apply, mirroring 10-cnpg-strategy.yaml.
+# Outside the e2e a human reader edits these to the bucket / endpoint
+# their environment uses.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: pg-src
+spec:
+  replicas: 2
+  size: 5Gi
+  databases:
+    demo:
+      roles:
+        admin:
+          - app
+  users:
+    app:
+      password: REPLACE_WITH_PASSWORD
+  backup:
+    enabled: true
+    # schedule intentionally empty: we do NOT use the chart's legacy
+    # cnpg.io/ScheduledBackup. Recurring backups are driven by the
+    # BackupClass + Plan flow (15-backupclass.yaml + 20-plan.yaml), and
+    # ad-hoc backups go through 25-backupjob-adhoc.yaml. backup.enabled
+    # above is only here to bootstrap archive_command on the source
+    # cluster from helm-install onwards - leaving it false would write
+    # the backup's begin_wal to /bin/true and break recovery later.
+    schedule: ""
+    destinationPath: s3://REPLACE_WITH_COSI_BUCKET_NAME/pg-src/
+    endpointURL: https://REPLACE_WITH_S3_ENDPOINT
+    endpointCA:
+      name: pg-src-cnpg-backup-ca
+      key: ca.crt
+    s3CredentialsSecret:
+      name: pg-src-cnpg-backup-creds

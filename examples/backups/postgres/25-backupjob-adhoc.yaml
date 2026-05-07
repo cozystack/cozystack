@@ -1,0 +1,13 @@
+# Ad-hoc BackupJob - useful for smoke-testing the strategy or running a
+# point-in-time backup outside the Plan schedule.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: pg-src-adhoc
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: pg-src
+  backupClassName: postgres-cnpg
