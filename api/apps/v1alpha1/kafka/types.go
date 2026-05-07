@@ -40,7 +40,7 @@ type Kafka struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="medium"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume size for Kafka.
 	// +kubebuilder:default:="10Gi"
@@ -76,7 +76,7 @@ type ZooKeeper struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="medium"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume size for ZooKeeper.
 	// +kubebuilder:default:="5Gi"
