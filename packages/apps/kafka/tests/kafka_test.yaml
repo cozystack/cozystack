@@ -1,0 +1,114 @@
+suite: Kafka CR tests
+
+templates:
+  - templates/kafka.yaml
+
+tests:
+  ###################
+  # Basic rendering #
+  ###################
+
+  - it: renders Kafka CR
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Kafka
+
+  - it: sets correct CR name
+    release:
+      name: my-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-kafka
+
+  #####################
+  # Internal listeners #
+  #####################
+
+  - it: always creates plain internal listener
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: plain
+            port: 9092
+            type: internal
+            tls: false
+
+  - it: always creates tls internal listener
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: tls
+            port: 9093
+            type: internal
+            tls: true
+
+  #####################
+  # External listener  #
+  #####################
+
+  - it: does not create external listener when external is false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - notContains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: false
+
+  - it: creates external loadbalancer listener when external is true
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: false
+
+  - it: has exactly 2 listeners when external is false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 2
+
+  - it: has exactly 3 listeners when external is true
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 3
