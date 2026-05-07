@@ -60,6 +60,8 @@ spec:
           path: system/prometheus-operator-crds
         - name: kubernetes-metrics-server
           path: system/metrics-server
+        - name: kubernetes-ouroboros
+          path: system/ouroboros
         - name: kubernetes
           path: apps/kubernetes
           libraries: ["cozy-lib"]
