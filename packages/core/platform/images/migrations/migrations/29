@@ -402,7 +402,8 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
     apps.cozystack.io/application.kind: VMDisk
-    apps.cozystack.io/application.name: vm-disk
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: ${INSTANCE}
 spec:
   suspend: true
   chartRef:
@@ -480,7 +481,8 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
     apps.cozystack.io/application.kind: VMInstance
-    apps.cozystack.io/application.name: vm-instance
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: ${INSTANCE}
 spec:
   suspend: true
   chartRef:
