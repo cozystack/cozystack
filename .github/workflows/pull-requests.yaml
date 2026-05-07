@@ -238,7 +238,23 @@ jobs:
       - name: Install Cozystack into sandbox
         run: |
           cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — see diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Run OpenAPI tests
         run: |
