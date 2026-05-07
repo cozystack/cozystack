@@ -76,19 +76,62 @@ EOF
   # current QEMU runners is around 25m for that path, so the timeout has
   # to leave headroom for that bringup before the addon HR even starts
   # reconciling.
-  kubectl --namespace "${ns}" wait \
-    helmrelease "kubernetes-${cluster}-ouroboros" \
-    --timeout=25m --for=condition=ready
-
-  # Capture the tenant admin-kubeconfig so subsequent kubectls hit the
-  # tenant apiserver, not the host. Tmp file is removed on exit of this
-  # @test body — cozytest does not invoke teardown().
+  # Extract the tenant admin-kubeconfig early so the failure-path
+  # diagnostic block below can inspect tenant-cluster state. The
+  # kubeconfig secret is created by the parent kubernetes HR's Kamaji
+  # bringup, well before the ouroboros HR starts reconciling — by the
+  # time ouroboros HR can fail the secret is reliably present. The
+  # extra wait on the parent HR upper-bounds the case where the parent
+  # itself never becomes Ready (the secret never appears, the kubectl
+  # wait below would fail with a misleading "no resources found").
   kubeconfig=$(mktemp)
   trap "rm -f ${kubeconfig}" EXIT
+  kubectl --namespace "${ns}" wait \
+    helmrelease "kubernetes-${cluster}" \
+    --timeout=15m --for=condition=ready
   kubectl --namespace "${ns}" get secret \
     "kubernetes-${cluster}-admin-kubeconfig" \
     --output jsonpath='{.data.super-admin\.svc}' \
     | base64 --decode > "${kubeconfig}"
+
+  # Wait for the addon HR. On failure, dump tenant-side diagnostics
+  # before exiting — cozyreport stops at host scope and gives no
+  # visibility into the tenant control plane, so without this dump
+  # CI failures show up as opaque `wait: timed out` with no actionable
+  # signal about why the proxy Deployment never reaches Ready.
+  if ! kubectl --namespace "${ns}" wait \
+       helmrelease "kubernetes-${cluster}-ouroboros" \
+       --timeout=20m --for=condition=ready; then
+    echo "=== ouroboros HR did not reach Ready — tenant-side diagnostics ==="
+    echo "--- host: HelmRelease describe ---"
+    kubectl --namespace "${ns}" describe \
+      helmrelease "kubernetes-${cluster}-ouroboros" || true
+    echo "--- tenant: cozy-ouroboros pods (-o wide) ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace cozy-ouroboros \
+      get pods --output wide || true
+    echo "--- tenant: cozy-ouroboros pod descriptions ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace cozy-ouroboros \
+      describe pods || true
+    echo "--- tenant: cozy-ouroboros recent events ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace cozy-ouroboros \
+      get events --sort-by=.lastTimestamp || true
+    echo "--- tenant: cozy-ouroboros controller logs ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace cozy-ouroboros \
+      logs --selector=app.kubernetes.io/component=controller \
+      --tail=200 --prefix=true --all-containers || true
+    echo "--- tenant: cozy-ouroboros proxy logs ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace cozy-ouroboros \
+      logs --selector=app.kubernetes.io/component=proxy \
+      --tail=200 --prefix=true --all-containers || true
+    echo "--- tenant: cozy-ingress-nginx pods/svc/endpoints ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace cozy-ingress-nginx \
+      get pods,svc,endpoints --output wide || true
+    echo "--- tenant: kube-system coredns Corefile + custom ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace kube-system \
+      get configmap coredns coredns-custom \
+      --output jsonpath='{range .items[*]}{.metadata.name}{"\n"}{.data}{"\n---\n"}{end}' || true
+    exit 1
+  fi
 
   # The cozystack coredns wrapper renders an empty coredns-custom
   # ConfigMap in kube-system (with the helm.sh/resource-policy: keep
