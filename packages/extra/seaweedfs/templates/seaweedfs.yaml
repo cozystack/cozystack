@@ -104,6 +104,15 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
 spec:
+  {{- if eq $ingress .Release.Namespace }}
+  # Ensure the ingress-nginx admission webhook is ready before creating Ingress resources.
+  # Only when this tenant owns its ingress; sub-tenants inherit ingress from a parent
+  # namespace where ingress-nginx-system already runs, and the dependency would deadlock
+  # because the HR doesn't exist locally.
+  dependsOn:
+  - name: ingress-nginx-system
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
   chartRef:
     kind: ExternalArtifact
     name: cozystack-seaweedfs-application-default-seaweedfs-system
