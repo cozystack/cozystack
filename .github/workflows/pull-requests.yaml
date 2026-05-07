@@ -242,7 +242,7 @@ jobs:
             fi
             echo "Attempt $attempt failed, retrying..."
           done
-          echo "Prepare environment completed after $attempt attempts"
+          echo "Prepare environment completed after $((attempt + 1)) attempts"
 
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
