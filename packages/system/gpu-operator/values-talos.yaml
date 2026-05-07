@@ -1,7 +1,0 @@
-gpu-operator:
-  sandboxWorkloads:
-    enabled: true
-  driver:
-    enabled: false
-  devicePlugin:
-    enabled: false
