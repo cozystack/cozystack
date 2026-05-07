@@ -18,12 +18,24 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: renders LoadBalancer service when external is true
+  - it: does not render in replica-set mode (operator handles per-pod LBs via replsets[].expose)
     release:
       name: test-mongodb
       namespace: tenant-test
     set:
       external: true
+      sharding: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders single LoadBalancer in sharded mode (mongos front-end)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
     asserts:
       - hasDocuments:
           count: 1
@@ -40,6 +52,7 @@ tests:
       namespace: tenant-test
     set:
       external: true
+      sharding: true
     asserts:
       - equal:
           path: metadata.name
@@ -51,6 +64,7 @@ tests:
       namespace: tenant-test
     set:
       external: true
+      sharding: true
     asserts:
       - equal:
           path: spec.type
@@ -62,6 +76,7 @@ tests:
       namespace: tenant-test
     set:
       external: true
+      sharding: true
     asserts:
       - equal:
           path: spec.externalTrafficPolicy
@@ -73,6 +88,7 @@ tests:
       namespace: tenant-test
     set:
       external: true
+      sharding: true
     asserts:
       - equal:
           path: spec.ports[0].name
@@ -82,73 +98,25 @@ tests:
           value: 27017
 
   ###########################
-  # Common selector labels  #
+  # Sharded selector        #
   ###########################
 
-  - it: sets app.kubernetes.io/name selector
+  - it: targets mongos pods only
     release:
       name: test-mongodb
       namespace: tenant-test
     set:
       external: true
+      sharding: true
     asserts:
       - equal:
           path: spec.selector["app.kubernetes.io/name"]
           value: percona-server-mongodb
-
-  - it: sets app.kubernetes.io/instance selector
-    release:
-      name: mydb
-      namespace: tenant-test
-    set:
-      external: true
-    asserts:
       - equal:
           path: spec.selector["app.kubernetes.io/instance"]
-          value: mydb
-
-  ###########################
-  # Replica set mode        #
-  ###########################
-
-  - it: selects mongod for replica set mode
-    release:
-      name: test-mongodb
-      namespace: tenant-test
-    set:
-      external: true
-      sharding: false
-    asserts:
-      - equal:
-          path: spec.selector["app.kubernetes.io/component"]
-          value: mongod
-      - equal:
-          path: spec.selector["app.kubernetes.io/replset"]
-          value: rs0
-
-  ###########################
-  # Sharded mode            #
-  ###########################
-
-  - it: selects mongos for sharded mode
-    release:
-      name: test-mongodb
-      namespace: tenant-test
-    set:
-      external: true
-      sharding: true
-    asserts:
+          value: test-mongodb
       - equal:
           path: spec.selector["app.kubernetes.io/component"]
           value: mongos
-
-  - it: does not set replset selector for sharded mode
-    release:
-      name: test-mongodb
-      namespace: tenant-test
-    set:
-      external: true
-      sharding: true
-    asserts:
       - notExists:
           path: spec.selector["app.kubernetes.io/replset"]
