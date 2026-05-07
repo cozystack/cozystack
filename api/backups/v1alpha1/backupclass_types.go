@@ -62,6 +62,15 @@ type BackupClassStrategy struct {
 	// Parameters holds strategy-specific and storage-specific parameters.
 	// Common parameters include:
 	// - backupStorageLocationName: Name of Velero BackupStorageLocation
+	//
+	// SECURITY: parameter values MUST NOT contain credentials, access keys,
+	// passwords, or any other secret material. The CNPG driver persists this
+	// map verbatim into Backup.status.underlyingResources at backup time so
+	// that restore-time template rendering reproduces the exact values used
+	// at backup time; that status field is tenant-readable and replicated
+	// through every Backup artifact derived from a strategy. Route credentials
+	// through the Secret references on the strategy template instead
+	// (e.g. CNPG's barmanObjectStore.s3Credentials.secretRef and endpointCA).
 	// +optional
 	Parameters map[string]string `json:"parameters,omitempty"`
 }

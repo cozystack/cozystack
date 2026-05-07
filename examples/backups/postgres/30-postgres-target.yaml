@@ -1,0 +1,19 @@
+# Empty target Postgres instance for the to-copy restore. Keeping the spec
+# minimal - the CNPG driver overlays bootstrap.* and backup.* values when
+# the RestoreJob fires; the chart then renders externalClusters[] from
+# those values so the new cluster's restore_command can fetch WALs from
+# the source's S3 archive.
+#
+# The CI e2e (hack/e2e-apps/backup-postgres.bats) deploys this manifest
+# in the same namespace as pg-src, exercising the same-namespace to-copy
+# happy path. The cross-tenant variant (target in tenant-test, source's
+# seaweedfs in tenant-root) is blocked by the per-tenant Cilium egress
+# policy and stays a manual / dev-cluster flow.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: pg-target
+spec:
+  replicas: 2
+  size: 5Gi

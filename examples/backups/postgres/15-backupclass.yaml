@@ -1,0 +1,16 @@
+# Maps Kind=Postgres to the CNPG strategy. BackupClass is cluster-scoped,
+# so a single instance covers every namespace.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: postgres-cnpg
+spec:
+  strategies:
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Postgres
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: CNPG
+        name: cnpg-strategy-default

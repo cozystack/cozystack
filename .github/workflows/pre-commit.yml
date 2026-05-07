@@ -26,6 +26,25 @@ jobs:
       - name: Install pre-commit
         run: pip install pre-commit
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Pre-fetch k8s.io/code-generator module
+        # The repo-root pre-commit hook (run-make-generate-root) shells out to
+        # hack/update-codegen.sh, which sources kube_codegen.sh from the Go
+        # module cache. The module is not declared in go.mod, so fetch it
+        # explicitly at the version pinned in the script - mirrors the
+        # equivalent step in codegen-drift.yml.
+        run: |
+          version=$(grep -oP 'code-generator@\Kv[0-9.]+' hack/update-codegen.sh)
+          tmpdir=$(mktemp -d)
+          cd "$tmpdir"
+          go mod init codegen-fetch
+          go get "k8s.io/code-generator@${version}"
+
       - name: Install generate
         run: |
           curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v1.3.0/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen

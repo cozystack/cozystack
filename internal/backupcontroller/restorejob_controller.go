@@ -25,7 +25,7 @@ import (
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
 
-const restoreJobFinalizer = "backups.cozystack.io/cleanup-velero-restore"
+const restoreJobFinalizer = "backups.cozystack.io/cleanup"
 
 // RestoreJobReconciler reconciles RestoreJob objects.
 // It routes RestoreJobs to strategy-specific handlers based on the strategy
@@ -53,15 +53,21 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	// Handle deletion: clean up Velero Restore
+	// Handle deletion: dispatch cleanup by strategy. The Velero strategy
+	// owns side-state (Velero Restore + ConfigMap in cozy-velero); the CNPG
+	// and Job strategies own no namespaced artifacts that survive RestoreJob
+	// deletion, so their cleanup is a no-op. Reading the referenced Backup
+	// to identify the strategy is best-effort - a missing/unreadable Backup
+	// must not block finalizer removal, otherwise the RestoreJob would be
+	// stuck in Terminating forever.
 	if !restoreJob.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(restoreJob, restoreJobFinalizer) {
-			r.cleanupVeleroRestore(ctx, restoreJob)
+			r.cleanupOnDelete(ctx, restoreJob)
 			controllerutil.RemoveFinalizer(restoreJob, restoreJobFinalizer)
 			if err := r.Update(ctx, restoreJob); err != nil {
 				return ctrl.Result{}, err
 			}
-			logger.V(1).Info("removed finalizer and cleaned up Velero Restore", "restoreJob", restoreJob.Name)
+			logger.V(1).Info("removed finalizer and cleaned up strategy-owned side state", "restoreJob", restoreJob.Name)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -104,6 +110,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileJobRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.VeleroStrategyKind:
 		return r.reconcileVeleroRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.CNPGStrategyKind:
+		return r.reconcileCNPGRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}
@@ -129,6 +137,15 @@ func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // markRestoreJobFailed updates the RestoreJob status to Failed with the given message.
+//
+// Coupling note: a failure that fires before reconcileCNPG's StartedAt block
+// has set restoreJob.Status.StartedAt leaves StartedAt nil. The CNPG path's
+// deadline gates (cnpgWALArchiveDeadline, options.effectiveRestoreDeadline)
+// only fire once StartedAt is set, so an early-failure retry that gets all
+// the way through to the StartedAt block restarts the deadline budget from
+// the retry's StartedAt - intentional, since retries are user-driven and a
+// fresh budget is what users expect after correcting the cause of the
+// previous failure.
 func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()
@@ -136,13 +153,16 @@ func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restore
 	restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseFailed
 	restoreJob.Status.Message = message
 
-	// Add condition
-	restoreJob.Status.Conditions = append(restoreJob.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "RestoreFailed",
-		Message:            message,
-		LastTransitionTime: now,
+	// SetStatusCondition keeps Conditions matching the +listType=map +listMapKey=type
+	// CRD contract: a previously-set Ready condition (e.g. from a transient
+	// retry path that flipped through ConditionFalse with a different
+	// Reason) is updated in-place rather than appended, and LastTransitionTime
+	// is preserved unless Status changes.
+	meta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  metav1.ConditionFalse,
+		Reason:  "RestoreFailed",
+		Message: message,
 	})
 
 	if err := r.Status().Update(ctx, restoreJob); err != nil {
@@ -168,6 +188,43 @@ func (r *RestoreJobReconciler) cleanupResourceModifierConfigMaps(ctx context.Con
 	if err := r.DeleteAllOf(ctx, &corev1.ConfigMap{}, opts...); err != nil {
 		logger.Error(err, "failed to clean up resourceModifiers ConfigMap(s)")
 	}
+}
+
+// cleanupOnDelete dispatches RestoreJob deletion cleanup to the strategy
+// driver that produced the side state. Velero RestoreJobs created Velero
+// Restore CRs and resourceModifiers ConfigMaps in cozy-velero; CNPG and
+// Job RestoreJobs do not. Dispatching avoids issuing pointless DeleteAllOf
+// calls against cozy-velero for non-Velero RestoreJobs and prevents the
+// "finalizer name says velero but the job is CNPG" UX papercut.
+func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob) {
+	logger := log.FromContext(ctx)
+	kind := strategyKindForRestoreJob(ctx, r.Client, restoreJob)
+	logger.V(1).Info("dispatching RestoreJob cleanup", "restoreJob", restoreJob.Name, "strategy", kind)
+	switch kind {
+	case strategyv1alpha1.VeleroStrategyKind:
+		r.cleanupVeleroRestore(ctx, restoreJob)
+	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind:
+		// Nothing to clean up: these drivers don't materialise namespaced
+		// artifacts that outlive the RestoreJob.
+	default:
+		// Unknown strategy or Backup unreadable. Conservative path: try
+		// the Velero cleanup since it's idempotent (DeleteAllOf with
+		// label selector returns 0 deletes when nothing matches), so a
+		// stray Velero Restore from an old RestoreJob still gets reaped.
+		r.cleanupVeleroRestore(ctx, restoreJob)
+	}
+}
+
+// strategyKindForRestoreJob looks up the strategy kind via the referenced
+// Backup. Returns "" if the Backup is missing or unreadable; callers must
+// treat that as "unknown" and fall back to a safe default.
+func strategyKindForRestoreJob(ctx context.Context, c client.Client, restoreJob *backupsv1alpha1.RestoreJob) string {
+	backup := &backupsv1alpha1.Backup{}
+	key := types.NamespacedName{Namespace: restoreJob.Namespace, Name: restoreJob.Spec.BackupRef.Name}
+	if err := c.Get(ctx, key, backup); err != nil {
+		return ""
+	}
+	return backup.Spec.StrategyRef.Kind
 }
 
 // cleanupVeleroRestore deletes all Velero Restores and resourceModifier
