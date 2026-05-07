@@ -65,3 +65,23 @@ tests:
             name: coredns-custom
             mountPath: /etc/coredns/custom
             readOnly: true
+
+  # The cozystack build pipeline injects the git SHA as semver build metadata
+  # (`0.0.0+<sha>`) at chart-package time. Kubernetes label values reject `+`
+  # (RFC 1123: `[a-zA-Z0-9]([-a-zA-Z0-9_.]*[a-zA-Z0-9])?`), so any template
+  # that interpolates `.Chart.Version` directly into a label produces a
+  # ConfigMap the apiserver rejects on apply. Pin the sanitization here —
+  # Chart.yaml ships the placeholder `0.0.0` and helm-unittest defaults to
+  # that, so without overriding `chart.version` to a build-metadata form the
+  # bug is invisible to the test suite.
+  - it: sanitizes the chart-version build metadata in the helm.sh/chart label
+    template: templates/coredns-custom.yaml
+    chart:
+      version: 0.0.0+abc1234567
+    asserts:
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: cozy-coredns-0.0.0_abc1234567
+      - matchRegex:
+          path: metadata.labels["helm.sh/chart"]
+          pattern: ^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$

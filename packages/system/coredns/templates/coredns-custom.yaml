@@ -22,6 +22,6 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/name: {{ .Chart.Name }}
     app.kubernetes.io/component: coredns-custom-import
-    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
   annotations:
     helm.sh/resource-policy: keep
