@@ -120,33 +120,35 @@
       "type": "object",
       "default": {},
       "required": [
-        "cleanupStrategy",
         "enabled",
-        "resticPassword",
         "s3AccessKey",
         "s3Bucket",
         "s3Region",
-        "s3SecretKey",
-        "schedule"
+        "s3SecretKey"
       ],
       "properties": {
         "cleanupStrategy": {
-          "description": "Retention strategy for cleaning up old backups.",
+          "description": "Legacy. Restic retention policy passed to the legacy CronJob (`restic forget …`). Unused by the Altinity strategy.",
           "type": "string",
           "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
         },
         "enabled": {
-          "description": "Enable regular backups (default: false).",
+          "description": "Enable backup integration. Materialises the chart-emitted `\u003crelease\u003e-backup-s3` Secret consumed by the Altinity backup strategy and, when `schedule` is non-empty, also renders the legacy chart-managed CronJob.",
           "type": "boolean",
           "default": false
         },
+        "endpoint": {
+          "description": "S3 endpoint URL. Stored in the chart-emitted `\u003crelease\u003e-backup-s3` Secret and consumed at runtime by the in-Pod `clickhouse-backup` sidecar. Empty means use the AWS default endpoint; in that case the chart also drops `S3_FORCE_PATH_STYLE` from the sidecar env, since AWS public S3 requires vhost-style.",
+          "type": "string",
+          "default": ""
+        },
         "resticPassword": {
-          "description": "Password for Restic backup encryption.",
+          "description": "Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.",
           "type": "string",
           "default": "\u003cpassword\u003e"
         },
         "s3AccessKey": {
-          "description": "Access key for S3 authentication.",
+          "description": "Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.",
           "type": "string",
           "default": "\u003cyour-access-key\u003e"
         },
@@ -155,20 +157,62 @@
           "type": "string",
           "default": "s3.example.org/clickhouse-backups"
         },
+        "s3CredentialsSecret": {
+          "description": "Reference to a pre-existing Secret carrying S3 credentials and bucket coordinates consumed by the chart-emitted `clickhouse-backup` sidecar. When `name` is set, the chart skips materialising `\u003crelease\u003e-backup-s3` and the sidecar reads from the referenced Secret instead. The strategy Pod is a curl/jq HTTP client and does not bind to this Secret directly.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "accessKeyIDKey": {
+              "description": "Key in the Secret holding the access key ID. Defaults to `accessKey`.",
+              "type": "string",
+              "default": ""
+            },
+            "bucketKey": {
+              "description": "Key in the Secret holding the bucket name. Defaults to `bucketName`.",
+              "type": "string",
+              "default": ""
+            },
+            "endpointKey": {
+              "description": "Key in the Secret holding the S3 endpoint URL. Defaults to `endpoint`.",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "Name of the Secret in the application namespace. Empty means the chart materialises `\u003crelease\u003e-backup-s3` from the legacy `s3*` fields.",
+              "type": "string",
+              "default": ""
+            },
+            "regionKey": {
+              "description": "Key in the Secret holding the S3 region. Defaults to `region`.",
+              "type": "string",
+              "default": ""
+            },
+            "secretAccessKeyKey": {
+              "description": "Key in the Secret holding the secret access key. Defaults to `secretKey`.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
+        "s3PathOverride": {
+          "description": "Object-key prefix the sidecar uses inside `s3Bucket`. Empty (default) scopes backups under the Helm release name so multiple ClickHouse releases sharing one bucket cannot clobber each other. Set this on a to-copy restore destination to point at the source release's prefix.",
+          "type": "string",
+          "default": ""
+        },
         "s3Region": {
           "description": "AWS S3 region where backups are stored.",
           "type": "string",
           "default": "us-east-1"
         },
         "s3SecretKey": {
-          "description": "Secret key for S3 authentication.",
+          "description": "Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.",
           "type": "string",
           "default": "\u003cyour-secret-key\u003e"
         },
         "schedule": {
-          "description": "Cron schedule for automated backups.",
+          "description": "Legacy. Cron schedule for the chart-emitted CronJob that runs the dump+restic backup. Empty (default) skips the legacy CronJob; recommended when a `BackupClass` + `Plan` from `backups.cozystack.io` already drives backup orchestration via the Altinity strategy.",
           "type": "string",
-          "default": "0 2 * * *"
+          "default": ""
         }
       }
     },

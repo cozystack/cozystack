@@ -1,0 +1,1 @@
+docker.io/altinity/clickhouse-backup:2.6.32@sha256:35d343d82cbce0f906af99c0e79e9349e2e0290484f10304ab8a73956d0cf4a3
