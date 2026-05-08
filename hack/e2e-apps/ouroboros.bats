@@ -100,29 +100,16 @@ EOF
     pkill -f "port-forward.*service/kubernetes-${cluster}.*${pf_port}:" 2>/dev/null || true
     rm -f "${kubeconfig}"
   }
-  trap cleanup_kubeconfig EXIT
-  kubectl --namespace "${ns}" wait \
-    helmrelease "kubernetes-${cluster}" \
-    --timeout=15m --for=condition=ready
-  kubectl --namespace "${ns}" get secret \
-    "kubernetes-${cluster}-admin-kubeconfig" \
-    --output jsonpath='{.data.super-admin\.conf}' \
-    | base64 --decode > "${kubeconfig}"
-  yq -i ".clusters[0].cluster.server = \"https://localhost:${pf_port}\"" "${kubeconfig}"
-  pkill -f "port-forward.*service/kubernetes-${cluster}.*${pf_port}:" 2>/dev/null || true
-  kubectl --namespace "${ns}" port-forward \
-    "service/kubernetes-${cluster}" "${pf_port}":6443 > /dev/null 2>&1 &
-  timeout 30 sh -ec 'until curl -sk https://localhost:'"${pf_port}"' >/dev/null 2>&1; do sleep 1; done'
-
-  # Wait for the addon HR. On failure, dump tenant-side diagnostics
-  # before exiting — cozyreport stops at host scope and gives no
-  # visibility into the tenant control plane, so without this dump
-  # CI failures show up as opaque `wait: timed out` with no actionable
-  # signal about why the proxy Deployment never reaches Ready.
-  if ! kubectl --namespace "${ns}" wait \
-       helmrelease "kubernetes-${cluster}-ouroboros" \
-       --timeout=20m --for=condition=ready; then
-    echo "=== ouroboros HR did not reach Ready — tenant-side diagnostics ==="
+  # Tenant-side state dump used both on the HR-not-Ready failure path and
+  # on every later assertion (rewrite snippet missing, dnscheck pod
+  # not Succeeded, etc.). Without one centralised dump every assertion
+  # would either need its own copy of the diagnostic block, or fail
+  # opaquely under set -e the moment the assertion command returns
+  # non-zero. Wrap each assertion in `if ! ...; then dump_tenant_state;
+  # exit 1; fi` so cozytest captures actionable tenant-side state on
+  # the failure that triggered the exit, regardless of which one fired.
+  dump_tenant_state() {
+    echo "=== ouroboros tenant-side diagnostics ==="
     echo "--- host: HelmRelease describe ---"
     kubectl --namespace "${ns}" describe \
       helmrelease "kubernetes-${cluster}-ouroboros" || true
@@ -150,6 +137,33 @@ EOF
     KUBECONFIG="${kubeconfig}" kubectl --namespace kube-system \
       get configmap coredns coredns-custom \
       --output jsonpath='{range .items[*]}{.metadata.name}{"\n"}{.data}{"\n---\n"}{end}' || true
+    echo "--- tenant: default ns Ingresses ---"
+    KUBECONFIG="${kubeconfig}" kubectl --namespace default \
+      get ingress --output yaml || true
+  }
+  trap cleanup_kubeconfig EXIT
+  kubectl --namespace "${ns}" wait \
+    helmrelease "kubernetes-${cluster}" \
+    --timeout=15m --for=condition=ready
+  kubectl --namespace "${ns}" get secret \
+    "kubernetes-${cluster}-admin-kubeconfig" \
+    --output jsonpath='{.data.super-admin\.conf}' \
+    | base64 --decode > "${kubeconfig}"
+  yq -i ".clusters[0].cluster.server = \"https://localhost:${pf_port}\"" "${kubeconfig}"
+  pkill -f "port-forward.*service/kubernetes-${cluster}.*${pf_port}:" 2>/dev/null || true
+  kubectl --namespace "${ns}" port-forward \
+    "service/kubernetes-${cluster}" "${pf_port}":6443 > /dev/null 2>&1 &
+  timeout 30 sh -ec 'until curl -sk https://localhost:'"${pf_port}"' >/dev/null 2>&1; do sleep 1; done'
+
+  # Wait for the addon HR. On failure, dump tenant-side diagnostics
+  # before exiting — cozyreport stops at host scope and gives no
+  # visibility into the tenant control plane, so without this dump
+  # CI failures show up as opaque `wait: timed out` with no actionable
+  # signal about why the proxy Deployment never reaches Ready.
+  if ! kubectl --namespace "${ns}" wait \
+       helmrelease "kubernetes-${cluster}-ouroboros" \
+       --timeout=20m --for=condition=ready; then
+    dump_tenant_state
     exit 1
   fi
 
@@ -213,7 +227,11 @@ EOF
     fi
     sleep 5
   done
-  echo "${snippet}" | grep -q "rewrite name ${hairpin_host}"
+  if ! echo "${snippet}" | grep -q "rewrite name ${hairpin_host}"; then
+    echo "rewrite snippet for ${hairpin_host} not written to coredns-custom within deadline"
+    dump_tenant_state
+    exit 1
+  fi
 
   # Beyond "rewrite written to ConfigMap", verify CoreDNS actually
   # serves the rewrite — otherwise an `import` directive misconfig,
@@ -226,7 +244,11 @@ EOF
   # failures that the rewrite-line check cannot see.
   proxy_ip=$(KUBECONFIG="${kubeconfig}" kubectl --namespace cozy-ouroboros \
     get service ouroboros-proxy --output jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
-  [ -n "${proxy_ip}" ]
+  if [ -z "${proxy_ip}" ]; then
+    echo "ouroboros-proxy Service has no ClusterIP"
+    dump_tenant_state
+    exit 1
+  fi
 
   KUBECONFIG="${kubeconfig}" kubectl --namespace default \
     delete pod dnscheck --ignore-not-found 2>/dev/null || true
@@ -261,7 +283,11 @@ EOF
     sleep 3
   done
   KUBECONFIG="${kubeconfig}" kubectl --namespace default logs dnscheck 2>&1 | sed 's/^/  dnscheck: /' || true
-  [ "${phase:-}" = "Succeeded" ]
+  if [ "${phase:-}" != "Succeeded" ]; then
+    echo "dnscheck pod did not reach Succeeded phase (last seen: ${phase:-<empty>})"
+    dump_tenant_state
+    exit 1
+  fi
 
   KUBECONFIG="${kubeconfig}" kubectl --namespace default \
     delete pod dnscheck --ignore-not-found 2>/dev/null || true
