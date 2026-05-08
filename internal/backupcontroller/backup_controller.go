@@ -100,6 +100,18 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// Nothing to clean up: Job-strategy Backups own no namespace-scoped
 		// artifacts that survive Backup deletion.
 		return nil
+	case strategyv1alpha1.AltinityStrategyKind:
+		// Cozystack Backup deletion does NOT purge the upstream
+		// clickhouse-backup archive in object storage. Lifecycle of the
+		// archive belongs to the clickhouse-backup tool inside the chi-*
+		// Pod (its retention config) or to manual purge through that
+		// tool's HTTP API (DELETE /backup/<name>/remote). Surfacing this
+		// as an explicit branch (rather than falling through to the
+		// Velero default) makes the contract obvious: the Altinity
+		// driver does not own the S3 data, so it does not delete it on
+		// CR removal. See packages/apps/clickhouse/README.md "Backup
+		// orchestration" for tenant-facing guidance.
+		return nil
 	case strategyv1alpha1.VeleroStrategyKind:
 		return r.cleanupVeleroBackup(ctx, backup)
 	default:

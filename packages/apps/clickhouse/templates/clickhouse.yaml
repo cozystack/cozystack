@@ -149,6 +149,149 @@ spec:
                   mountPath: /var/lib/clickhouse
                 - name: log-volume-template
                   mountPath: /var/log/clickhouse-server
+{{- if .Values.backup.enabled }}
+{{- /*
+  clickhouse-backup sidecar exposes the Altinity tool as an HTTP API on
+  port 7171, sharing the data PVC with the clickhouse-server container.
+  Backup strategy Pods (per BackupJob/RestoreJob) hit this endpoint
+  rather than running clickhouse-backup themselves: that gives the tool
+  the FREEZE/shadow filesystem access it needs without splitting the
+  RWO PVC across two Pods.
+
+  Credentials and bucket coordinates come from <release>-backup-s3
+  (rendered by templates/backup-strategy-secret.yaml when the user
+  hasn't set backup.s3CredentialsSecret.name) or from the user-supplied
+  Secret with the override keys when they have.
+*/}}
+{{- $sidecarSecretName := printf "%s-backup-s3" .Release.Name }}
+{{- $bucketKey := "bucketName" }}
+{{- $endpointKey := "endpoint" }}
+{{- $regionKey := "region" }}
+{{- $accessKeyKey := "accessKey" }}
+{{- $secretKeyKey := "secretKey" }}
+{{- with .Values.backup.s3CredentialsSecret }}
+{{- if .name }}
+{{- $sidecarSecretName = .name }}
+{{- if .bucketKey }}{{ $bucketKey = .bucketKey }}{{ end }}
+{{- if .endpointKey }}{{ $endpointKey = .endpointKey }}{{ end }}
+{{- if .regionKey }}{{ $regionKey = .regionKey }}{{ end }}
+{{- if .accessKeyIDKey }}{{ $accessKeyKey = .accessKeyIDKey }}{{ end }}
+{{- if .secretAccessKeyKey }}{{ $secretKeyKey = .secretAccessKeyKey }}{{ end }}
+{{- end }}
+{{- end }}
+            - name: clickhouse-backup
+              image: "{{ .Files.Get "images/altinity-clickhouse-backup.tag" | trim }}"
+              imagePullPolicy: IfNotPresent
+              command: ["clickhouse-backup", "server"]
+              ports:
+                - name: ch-backup-api
+                  containerPort: 7171
+                  protocol: TCP
+              env:
+                - name: CLICKHOUSE_HOST
+                  value: localhost
+                - name: CLICKHOUSE_PORT
+                  value: "9000"
+                - name: CLICKHOUSE_USERNAME
+                  value: backup
+                - name: CLICKHOUSE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-credentials
+                      key: backup
+                - name: ALLOW_EMPTY_BACKUPS
+                  value: "true"
+                - name: REMOTE_STORAGE
+                  value: s3
+                {{- /*
+                  S3_FORCE_PATH_STYLE is incompatible with AWS public S3
+                  (vhost-style is required in many regions). Skip it on
+                  the chart-emitted Secret path when the user has not
+                  configured an endpoint (AWS default). When the user
+                  brings their own Secret via s3CredentialsSecret.name we
+                  cannot peek inside it at render time, so we keep the
+                  upstream default - users on AWS in that mode must add
+                  S3_FORCE_PATH_STYLE=false to their own clickhouse-backup
+                  config.
+                */}}
+                {{- if or (not (eq (default "" .Values.backup.s3CredentialsSecret.name) "")) .Values.backup.endpoint }}
+                - name: S3_FORCE_PATH_STYLE
+                  value: "true"
+                {{- end }}
+                - name: API_LISTEN
+                  value: 0.0.0.0:7171
+                {{- /*
+                  Required HTTP auth on :7171. Without these the API
+                  is reachable to any Pod with network access to the
+                  ClickHouseInstallation Pod IP and accepts
+                  restore_remote (overwrites tables from S3) and
+                  DELETE /backup/<name>/remote (wipes archives) calls
+                  with no credentials. Sidecar reads from the
+                  chart-emitted backup-api-auth Secret; strategy Pod
+                  reads the same Secret and curls with -u user:pass.
+                */}}
+                - name: API_USERNAME
+                  valueFrom: { secretKeyRef: { name: {{ printf "%s-backup-api-auth" .Release.Name | quote }}, key: username } }
+                - name: API_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ printf "%s-backup-api-auth" .Release.Name | quote }}, key: password } }
+                {{- /*
+                  S3_PATH scopes every backup this release writes/lists
+                  under a release-named prefix inside the bucket. Tenants
+                  routinely point multiple ClickHouse releases at the
+                  same Bucket app; without a prefix, list/remote and
+                  restore_remote walk the bucket root and a restore on
+                  release A could pick up B's archive (data corruption).
+                  The prefix is fixed at chart-render time so source and
+                  destination releases share it iff they share a name -
+                  to-copy restore between two releases requires that the
+                  destination release explicitly point at the source
+                  release's prefix (set backup.s3PathOverride).
+                */}}
+                - name: S3_PATH
+                  value: {{ default .Release.Name .Values.backup.s3PathOverride | quote }}
+                - name: S3_BUCKET
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $bucketKey | quote }} } }
+                - name: S3_ENDPOINT
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }} } }
+                - name: S3_REGION
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $regionKey | quote }} } }
+                - name: S3_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }} } }
+                - name: S3_SECRET_KEY
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }} } }
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                - name: data-volume-template
+                  mountPath: /var/lib/clickhouse
+              securityContext:
+                # clickhouse-server stores data under /var/lib/clickhouse with
+                # uid=101 / mode 0750 (alpine clickhouse-server image's
+                # `clickhouse` user). Running as uid 0 alone is not enough -
+                # dropping ALL caps strips DAC_OVERRIDE and root loses its
+                # perm-bypass. DAC_OVERRIDE is in the PSA baseline-allowed
+                # set; adding DAC_READ_SEARCH would violate baseline so we
+                # rely on DAC_OVERRIDE alone (it covers read+write+exec for
+                # arbitrary files).
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                  # All in PSA baseline-allowed set:
+                  #   DAC_OVERRIDE - read/write/exec arbitrary files
+                  #   CHOWN, FOWNER, FSETID - clickhouse-backup chowns its
+                  #     own /var/lib/clickhouse/backup dir at startup and
+                  #     during create_remote
+                  add: ["DAC_OVERRIDE", "CHOWN", "FOWNER", "FSETID"]
+                runAsUser: 0
+                runAsGroup: 0
+                seccompProfile:
+                  type: RuntimeDefault
+{{- end }}
     serviceTemplates:
       - name: svc-template
         metadata:
