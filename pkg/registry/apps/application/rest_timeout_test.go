@@ -11,10 +11,18 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
+// Default HelmRelease global durations the api server applies after flag
+// parsing. Tests use these so the fixture exercises the same code path the
+// production binary takes — i.e. global timeouts are always non-zero.
+const (
+	testGlobalInstallTimeout = 10 * time.Minute
+	testGlobalUpgradeTimeout = 10 * time.Minute
+)
+
 // newRESTForTimeout builds a REST struct focused on the per-Application
 // HelmInstallTimeout annotation override path. Global HelmRelease* defaults
-// stay zero-valued so the test exercises the "annotation unset and no global
-// default" → flux-defaults path; the global-default path is covered by
+// are populated with production-shaped values so the unset-annotation case
+// exercises "global default applies". The full spec contract is covered by
 // rest_helmrelease_spec_test.go.
 func newRESTForTimeout(kind, prefix string, helmInstallTimeout time.Duration) *REST {
 	return &REST{
@@ -26,7 +34,12 @@ func newRESTForTimeout(kind, prefix string, helmInstallTimeout time.Duration) *R
 				Name:      "x",
 				Namespace: "cozy-system",
 			},
-			HelmInstallTimeout: helmInstallTimeout,
+			HelmReleaseInterval:       5 * time.Minute,
+			HelmReleaseRetryInterval:  30 * time.Second,
+			HelmReleaseInstallTimeout: testGlobalInstallTimeout,
+			HelmReleaseUpgradeTimeout: testGlobalUpgradeTimeout,
+			HelmReleaseMaxHistory:     5,
+			HelmInstallTimeout:        helmInstallTimeout,
 		},
 	}
 }
@@ -35,41 +48,45 @@ func newRESTForTimeout(kind, prefix string, helmInstallTimeout time.Duration) *R
 // budget. The Kubernetes kind's parent chart contains CAPI/Kamaji resources
 // whose admin-kubeconfig Secret is provisioned asynchronously, so its
 // ApplicationDefinition sets release.cozystack.io/helm-install-timeout=15m
-// (or longer). Other kinds leave the annotation unset and keep flux defaults
-// so their failed installs remediate on the normal cadence. The test must
-// cover both paths: a kind with the timeout set and one without.
+// (or longer). Other kinds leave the annotation unset and inherit the
+// global default. The test must cover both paths: a kind with the override
+// set and one without.
 func TestConvertApplicationToHelmRelease_AppliesReleaseConfigTimeout(t *testing.T) {
 	cases := []struct {
-		name       string
-		kind       string
-		prefix     string
-		configured time.Duration
-		wantSet    bool
+		name        string
+		kind        string
+		prefix      string
+		configured  time.Duration
+		wantInstall time.Duration
+		wantUpgrade time.Duration
 	}{
 		{
-			name:       "Kubernetes kind with 15m configured gets Install and Upgrade Timeout",
-			kind:       "Kubernetes",
-			prefix:     "kubernetes-",
-			configured: 15 * time.Minute,
-			wantSet:    true,
+			name:        "Kubernetes kind with 15m override beats global defaults",
+			kind:        "Kubernetes",
+			prefix:      "kubernetes-",
+			configured:  15 * time.Minute,
+			wantInstall: 15 * time.Minute,
+			wantUpgrade: 15 * time.Minute,
 		},
 		{
 			// Fictional kind on purpose: the test is about the unset path
 			// regardless of which real Application kind ends up needing a
 			// timeout override. Using a real kind name would create false
 			// coupling to that Application's ApplicationDefinition.
-			name:       "unrelated kind without configured timeout keeps flux defaults",
-			kind:       "PlaceholderKindForDefaults",
-			prefix:     "placeholder-",
-			configured: 0,
-			wantSet:    false,
+			name:        "unrelated kind without override inherits global defaults",
+			kind:        "PlaceholderKindForDefaults",
+			prefix:      "placeholder-",
+			configured:  0,
+			wantInstall: testGlobalInstallTimeout,
+			wantUpgrade: testGlobalUpgradeTimeout,
 		},
 		{
-			name:       "arbitrary future kind with 20m configured gets 20m",
-			kind:       "TalosCluster",
-			prefix:     "talos-",
-			configured: 20 * time.Minute,
-			wantSet:    true,
+			name:        "arbitrary future kind with 20m override gets 20m",
+			kind:        "TalosCluster",
+			prefix:      "talos-",
+			configured:  20 * time.Minute,
+			wantInstall: 20 * time.Minute,
+			wantUpgrade: 20 * time.Minute,
 		},
 	}
 
@@ -89,26 +106,11 @@ func TestConvertApplicationToHelmRelease_AppliesReleaseConfigTimeout(t *testing.
 				t.Fatalf("Spec.Install/Upgrade must be non-nil")
 			}
 
-			if tc.wantSet {
-				if hr.Spec.Install.Timeout == nil {
-					t.Fatalf("Spec.Install.Timeout must be set when HelmInstallTimeout=%v", tc.configured)
-				}
-				if hr.Spec.Install.Timeout.Duration != tc.configured {
-					t.Errorf("Spec.Install.Timeout = %v, want %v", hr.Spec.Install.Timeout.Duration, tc.configured)
-				}
-				if hr.Spec.Upgrade.Timeout == nil {
-					t.Fatalf("Spec.Upgrade.Timeout must be set when HelmInstallTimeout=%v", tc.configured)
-				}
-				if hr.Spec.Upgrade.Timeout.Duration != tc.configured {
-					t.Errorf("Spec.Upgrade.Timeout = %v, want %v", hr.Spec.Upgrade.Timeout.Duration, tc.configured)
-				}
-			} else {
-				if hr.Spec.Install.Timeout != nil {
-					t.Errorf("Spec.Install.Timeout must be nil when HelmInstallTimeout=0, got %v", hr.Spec.Install.Timeout.Duration)
-				}
-				if hr.Spec.Upgrade.Timeout != nil {
-					t.Errorf("Spec.Upgrade.Timeout must be nil when HelmInstallTimeout=0, got %v", hr.Spec.Upgrade.Timeout.Duration)
-				}
+			if hr.Spec.Install.Timeout == nil || hr.Spec.Install.Timeout.Duration != tc.wantInstall {
+				t.Errorf("Spec.Install.Timeout = %v, want %v", hr.Spec.Install.Timeout, tc.wantInstall)
+			}
+			if hr.Spec.Upgrade.Timeout == nil || hr.Spec.Upgrade.Timeout.Duration != tc.wantUpgrade {
+				t.Errorf("Spec.Upgrade.Timeout = %v, want %v", hr.Spec.Upgrade.Timeout, tc.wantUpgrade)
 			}
 
 			// Strategy must be RetryOnFailure with Remediation kept nil:
