@@ -19,29 +19,29 @@ ouroboros:
     mode: coredns-import
     gatewayApi:
       enabled: {{ $.Values.addons.gatewayAPI.enabled }}
-    {{- /* Cluster-domain is intentionally NOT pre-set by the wrapper.
-           The ouroboros chart 0.7.0 is platform-agnostic by default:
-           when controller.clusterDomain is empty (chart default,
-           which we leave alone), the chart emits --proxy-service-name
-           + --proxy-service-namespace and the controller composes
-           --proxy-fqdn at startup from the cluster-domain auto-detected
-           inside the pod via /etc/resolv.conf. Whatever the tenant
-           CoreDNS actually serves — cluster.local (kubeadm default,
-           which is what cozystack tenants bootstrap with), cozy.local
-           (federations), k8s.example.com (custom) — flows through
-           transparently with no wrapper logic.
+    {{- /* Pin clusterDomain to cluster.local. cozystack tenants bootstrap
+           a Kamaji-managed control plane whose `networkProfile.clusterDomain`
+           is `cluster.local` — that is the domain tenant CoreDNS actually
+           serves. The ouroboros proxy's BackendHost is composed at startup
+           from `<svc>.<ns>.svc.<clusterDomain>` and dialed by /readyz; if
+           it does not match what tenant CoreDNS serves, /readyz returns
+           503 NXDOMAIN forever and the proxy Deployment never reaches
+           Ready, blocking helm install on the tenant.
 
-           Pre-setting controller.clusterDomain here would be wrong:
-           the wrapper does not know the tenant's cluster-domain (it's
-           a tenant-side fact, not a host-side one), and any host-side
-           fact like _cluster.cluster-domain reflects the host platform
-           convention rather than the tenant's actual kubelet
-           --cluster-domain — passing it would either be a no-op (when
-           it happens to match) or a NXDOMAIN footgun (when it
-           doesn't). Operators that DO know their tenant's
-           cluster-domain and want to bake it explicitly can still
+           Cannot rely on the chart's per-pod `/etc/resolv.conf` auto-detect
+           here: cozystack tenant kubelet injects the host platform's
+           cluster-domain (`cozy.local`) into the pod search list, not
+           cluster.local. The mismatch between kubelet-injected search and
+           Kamaji TCP CoreDNS config is a separate cozystack tenant
+           bootstrap concern; until that is fixed independently, pinning
+           the chart input here keeps ouroboros operational for the
+           default cozystack tenant topology.
+
+           Operators on a non-cluster.local tenant CoreDNS (rare —
+           federations, custom kubelet --cluster-domain, etc.) can
            override via
            `addons.ouroboros.valuesOverride.ouroboros.controller.clusterDomain`. */}}
+    clusterDomain: cluster.local
 {{- end }}
 
 {{- /* addons.ouroboros.enabled requires addons.ingressNginx.enabled. The

@@ -32,7 +32,7 @@ tests:
       - hasDocuments:
           count: 1
 
-  - it: does NOT pre-set ouroboros.controller.clusterDomain — chart 0.7.0 is platform-agnostic by default, emits --proxy-service-name + --proxy-service-namespace and the controller composes the FQDN at runtime from the cluster-domain auto-detected via /etc/resolv.conf inside the pod (passing _cluster.cluster-domain would inject the host's domain, not the tenant's)
+  - it: pins ouroboros.controller.clusterDomain to cluster.local — Kamaji-managed tenant CoreDNS serves cluster.local (per TenantControlPlane.networkProfile), but cozystack tenant kubelet injects the host platform domain (cozy.local) into pod resolv.conf, which makes the chart's auto-detect path return the wrong value and the proxy /readyz NXDOMAIN forever
     set:
       addons:
         ouroboros:
@@ -43,8 +43,9 @@ tests:
           hosts: []
           valuesOverride: {}
     asserts:
-      - notExists:
+      - equal:
           path: spec.values.ouroboros.controller.clusterDomain
+          value: cluster.local
       - isKind:
           of: HelmRelease
 
