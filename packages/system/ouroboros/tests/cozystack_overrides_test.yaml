@@ -40,4 +40,4 @@ tests:
       # a Makefile bump that forgets to bump the tag (or vice versa).
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/lexfrei/ouroboros:0.7.0@sha256:478665e05dd0ffc4c1f7764320ea24b52251781884ddfd668d93a03e39d9094c
+          value: ghcr.io/lexfrei/ouroboros:0.7.2@sha256:1a8479b42ed34640752df2bfe0e9ccf052448c6849826c24cab4c30e10d76393

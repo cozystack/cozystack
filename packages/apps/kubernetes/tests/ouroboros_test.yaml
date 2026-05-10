@@ -49,6 +49,24 @@ tests:
       - isKind:
           of: HelmRelease
 
+  - it: lets a tenant-supplied valuesOverride opt into controller.logLevel=debug (escape hatch — operators chasing an in-tenant ouroboros issue can flip to debug without forking the chart; default stays at upstream info)
+    set:
+      addons:
+        ouroboros:
+          enabled: true
+          valuesOverride:
+            ouroboros:
+              controller:
+                logLevel: debug
+        ingressNginx:
+          enabled: true
+          hosts: []
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.ouroboros.controller.logLevel
+          value: debug
+
   - it: lets a tenant-supplied valuesOverride set controller.clusterDomain explicitly (escape hatch for non-default tenant cluster-domain)
     set:
       addons:

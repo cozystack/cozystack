@@ -84,7 +84,7 @@ ouroboros:
        reconciles the parent kubernetes-application chart, sees the
        child HelmRelease has disappeared from the rendered output,
        and runs `helm uninstall` on the tenant. The vendored
-       cozy-ouroboros chart (0.7.0) ships a pre-delete Helm hook
+       cozy-ouroboros chart ships a pre-delete Helm hook
        (charts/ouroboros/templates/coredns-cleanup-hook.yaml) that
        nulls the ouroboros.override data key on the tenant's
        kube-system/coredns-custom ConfigMap before the controller

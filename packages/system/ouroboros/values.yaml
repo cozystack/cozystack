@@ -6,7 +6,7 @@ ouroboros:
     # Air-gapped operators must mirror both this image and the OCI chart
     # at oci://ghcr.io/lexfrei/charts/ouroboros separately. Bump the tag
     # here together with OUROBOROS_CHART_VERSION in the Makefile.
-    tag: 0.7.0@sha256:478665e05dd0ffc4c1f7764320ea24b52251781884ddfd668d93a03e39d9094c
+    tag: 0.7.2@sha256:1a8479b42ed34640752df2bfe0e9ccf052448c6849826c24cab4c30e10d76393
   controller:
     # Host scenario default: mutate the live kube-system/coredns Corefile
     # directly. The host CoreDNS on cozystack is Talos-managed and its
