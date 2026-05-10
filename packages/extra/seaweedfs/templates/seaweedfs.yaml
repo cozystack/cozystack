@@ -108,7 +108,9 @@ spec:
     kind: ExternalArtifact
     name: cozystack-seaweedfs-application-default-seaweedfs-system
     namespace: cozy-system
-  interval: 5m
+  dependsOn:
+    - name: {{ .Release.Name }}-db
+  interval: 30s
   timeout: 10m
   install:
     remediation:
@@ -123,13 +125,6 @@ spec:
   values:
     global:
       serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"
-    db:
-      replicas: {{ .Values.db.replicas }}
-      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.db.resourcesPreset .Values.db.resources $) | nindent 8 }}
-      size: {{ .Values.db.size }}
-      {{- with .Values.db.storageClass }}
-      storageClass: {{ . }}
-      {{- end }}
     seaweedfs:
       master:
         {{ if eq .Values.topology "Simple" }}
