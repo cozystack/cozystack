@@ -17,6 +17,8 @@ spec:
         - name: cozy-lib
           path: library/cozy-lib
       components:
+        - name: seaweedfs-db
+          path: system/seaweedfs-db
         - name: seaweedfs-system
           path: system/seaweedfs
         - name: seaweedfs
