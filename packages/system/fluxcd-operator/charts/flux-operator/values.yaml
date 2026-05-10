@@ -3,16 +3,59 @@
 nameOverride: ""
 fullnameOverride: ""
 
-# -- Enable [multitenancy lockdown](https://fluxcd.control-plane.io/operator/resourceset/#role-based-access-control) for the ResourceSet APIs.
+# -- Enable [multitenancy lockdown](https://fluxoperator.dev/docs/crd/resourceset/#role-based-access-control) for the ResourceSet APIs.
 multitenancy:
   enabled: false
   enabledForWorkloadIdentity: false
   defaultServiceAccount: "flux-operator" # @schema required: true
   defaultWorkloadIdentityServiceAccount: "flux-operator" # @schema required: true
 
-# -- Flux [reporting](https://fluxcd.control-plane.io/operator/fluxreport/) settings.
+# -- Flux [reporting](https://fluxoperator.dev/docs/crd/fluxreport/) settings.
 reporting:
   interval: 5m # @schema required: true
+
+web:
+  # -- Enable the [Flux Status web server](https://fluxoperator.dev/web-ui/) on port 9080.
+  enabled: true
+  # -- The spec of the [Web Config API](https://fluxoperator.dev/docs/web-ui/web-config-api/)
+  config: { } # @schema type: object
+  # -- Reference to an existing Secret in the same namespace as the deployment containing the Web Config API. Should have the key `config.yaml`.
+  configSecretName: "" # @schema default: ""
+  # -- Create a NetworkPolicy to allow access to the Flux Status web interface.
+  networkPolicy:
+    create: true
+  # -- Create standard roles for [user access management](https://fluxoperator.dev/docs/web-ui/user-management/).
+  rbac:
+    createRoles: true # @schema default: true
+    createAggregation: false # @schema default: false
+  # -- Run the Flux Status web server as a standalone deployment (requires a dedicated Helm release).
+  serverOnly: false
+  # -- Number of replicas for the Flux Status web server standalone deployment (only applicable if `web.serverOnly` is `true`).
+  serverReplicas: 1 # @schema default: 1
+  # -- Ingress settings for the Flux Status web interface.
+  ingress: # @schema default: {"enabled":false,"className":"","annotations":{}}
+    enabled: false # @schema default: false
+    className: ""
+    annotations: { } # @schema type: object
+    hosts: [ ] # @schema item: object ; uniqueItems: true
+    # - host: flux-operator.example.com
+    #   paths:
+    #     - path: /
+    #       pathType: ImplementationSpecific
+    tls: [ ] # @schema item: object ; uniqueItems: true
+    #  - secretName: flux-operator-tls
+    #    hosts:
+    #      - flux-operator.example.com
+  # -- Gateway API HTTPRoute settings for the Flux Status web interface.
+  httpRoute: # @schema default: {"enabled":false,"annotations":{},"parentRefs":[],"hostnames":[]}
+    enabled: false # @schema default: false
+    annotations: { } # @schema type: object
+    parentRefs: [ ] # @schema item: object ; uniqueItems: true
+    # - name: my-gateway
+    #   namespace: gateway-system
+    #   sectionName: https
+    hostnames: [ ] # @schema item: string ; uniqueItems: true
+    # - flux.example.com
 
 # -- Install and upgrade the custom resource definitions.
 installCRDs: true # @schema default: true
