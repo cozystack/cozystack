@@ -56,7 +56,7 @@ spec:
                   resource: limits.memory
             - name: TUF_ROOT
               value: /tmp/.sigstore
-          image: "ghcr.io/fluxcd/helm-controller:v1.4.3"
+          image: "ghcr.io/fluxcd/helm-controller:v1.5.0"
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:
