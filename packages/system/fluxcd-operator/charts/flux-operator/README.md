@@ -1,6 +1,6 @@
 # flux-operator
 
-![Version: 0.33.0](https://img.shields.io/badge/Version-0.33.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.33.0](https://img.shields.io/badge/AppVersion-v0.33.0-informational?style=flat-square)
+![Version: 0.48.0](https://img.shields.io/badge/Version-0.48.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.48.0](https://img.shields.io/badge/AppVersion-v0.48.0-informational?style=flat-square)
 
 The [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator) provides a
 declarative API for the installation and upgrade of CNCF [Flux](https://fluxcd.io) and the
@@ -9,12 +9,15 @@ ControlPlane [enterprise distribution](https://control-plane.io/enterprise-for-f
 The operator automates the patching for hotfixes and CVEs affecting the Flux controllers container images
 and enables the configuration of multi-tenancy lockdown on Kubernetes and OpenShift clusters.
 
+The operator comes with the Flux Status Page web UI exposed on port `9080` that allows users to visualize the
+status of the Flux installation and monitor the GitOps delivery pipeline in real-time.
+
 ## Prerequisites
 
-- Kubernetes 1.22+
+- Kubernetes 1.30+
 - Helm 3.8+
 
-## Installing the Chart
+## Installing Flux Operator
 
 To install the operator in the `flux-system` namespace:
 
@@ -25,8 +28,22 @@ helm install flux-operator oci://ghcr.io/controlplaneio-fluxcd/charts/flux-opera
   --wait
 ```
 
+## Installing the Flux Web UI as a Standalone Deployment
+
+You can install the Flux Status Web UI as a dedicated deployment in your Kubernetes cluster,
+separate from the Flux Operator with:
+
+```console
+helm install flux-web oci://ghcr.io/controlplaneio-fluxcd/charts/flux-operator \
+  --namespace flux-system \
+  --set fullnameOverride=flux-web \
+  --set web.serverOnly=true \
+  --set installCRDs=false \
+  --wait
+```
+
 To deploy the Flux controllers and to configure automated updates,
-see the Flux Operator [documentation](https://fluxcd.control-plane.io/operator/).
+see the Flux Operator [documentation](https://fluxoperator.dev/docs/).
 
 ## Values
 
@@ -47,7 +64,7 @@ see the Flux Operator [documentation](https://fluxcd.control-plane.io/operator/)
 | livenessProbe | object | `{"httpGet":{"path":"/healthz","port":8081},"initialDelaySeconds":15,"periodSeconds":20}` | Container liveness probe settings. |
 | logLevel | string | `"info"` | Container logging level flag. |
 | marketplace | object | `{"account":"","license":"","type":""}` | Marketplace settings. |
-| multitenancy | object | `{"defaultServiceAccount":"flux-operator","defaultWorkloadIdentityServiceAccount":"flux-operator","enabled":false,"enabledForWorkloadIdentity":false}` | Enable [multitenancy lockdown](https://fluxcd.control-plane.io/operator/resourceset/#role-based-access-control) for the ResourceSet APIs. |
+| multitenancy | object | `{"defaultServiceAccount":"flux-operator","defaultWorkloadIdentityServiceAccount":"flux-operator","enabled":false,"enabledForWorkloadIdentity":false}` | Enable [multitenancy lockdown](https://fluxoperator.dev/docs/crd/resourceset/#role-based-access-control) for the ResourceSet APIs. |
 | nameOverride | string | `""` |  |
 | nodeSelector | object | `{}` | Pod Node Selector settings. |
 | podSecurityContext | object | `{}` | Pod security context settings. |
@@ -55,12 +72,21 @@ see the Flux Operator [documentation](https://fluxcd.control-plane.io/operator/)
 | rbac.create | bool | `true` | Grant the cluster-admin role to the flux-operator service account (required for the Flux Instance deployment). |
 | rbac.createAggregation | bool | `true` | Grant the Kubernetes view, edit and admin roles access to ResourceSet APIs. |
 | readinessProbe | object | `{"httpGet":{"path":"/readyz","port":8081},"initialDelaySeconds":5,"periodSeconds":10}` | Container readiness probe settings. |
-| reporting | object | `{"interval":"5m"}` | Flux [reporting](https://fluxcd.control-plane.io/operator/fluxreport/) settings. |
+| reporting | object | `{"interval":"5m"}` | Flux [reporting](https://fluxoperator.dev/docs/crd/fluxreport/) settings. |
 | resources | object | `{"limits":{"cpu":"2000m","memory":"1Gi"},"requests":{"cpu":"100m","memory":"64Mi"}}` | Container resources requests and limits settings. |
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Container security context settings. The default is compliant with the pod security restricted profile. |
 | serviceAccount | object | `{"automount":true,"create":true,"name":""}` | Pod service account settings. The name of the service account defaults to the release name. |
 | serviceMonitor | object | `{"create":false,"interval":"60s","labels":{},"scrapeTimeout":"30s"}` | Prometheus Operator scraping settings. |
 | tolerations | list | `[]` | Pod tolerations settings. |
+| web.config | object | `{}` | The spec of the [Web Config API](https://fluxoperator.dev/docs/web-ui/web-config-api/) |
+| web.configSecretName | string | `""` | Reference to an existing Secret in the same namespace as the deployment containing the Web Config API. Should have the key `config.yaml`. |
+| web.enabled | bool | `true` | Enable the [Flux Status web server](https://fluxoperator.dev/web-ui/) on port 9080. |
+| web.httpRoute | object | `{"annotations":{},"enabled":false,"hostnames":[],"parentRefs":[]}` | Gateway API HTTPRoute settings for the Flux Status web interface. |
+| web.ingress | object | `{"annotations":{},"className":"","enabled":false,"hosts":[],"tls":[]}` | Ingress settings for the Flux Status web interface. |
+| web.networkPolicy | object | `{"create":true}` | Create a NetworkPolicy to allow access to the Flux Status web interface. |
+| web.rbac | object | `{"createAggregation":false,"createRoles":true}` | Create standard roles for [user access management](https://fluxoperator.dev/docs/web-ui/user-management/). |
+| web.serverOnly | bool | `false` | Run the Flux Status web server as a standalone deployment (requires a dedicated Helm release). |
+| web.serverReplicas | int | `1` | Number of replicas for the Flux Status web server standalone deployment (only applicable if `web.serverOnly` is `true`). |
 
 ## Source Code
 

@@ -14,7 +14,7 @@ metadata:
   {{- end }}
 spec:
   distribution:
-    version: {{ .Values.instance.distribution.version }}
+    version: {{ .Values.instance.distribution.version | quote }}
     registry: {{ .Values.instance.distribution.registry }}
     artifact: {{ .Values.instance.distribution.artifact }}
     {{- if .Values.instance.distribution.artifactPullSecret }}
@@ -22,6 +22,9 @@ spec:
     {{- end }}
     {{- if .Values.instance.distribution.imagePullSecret }}
     imagePullSecret: {{ .Values.instance.distribution.imagePullSecret }}
+    {{- end }}
+    {{- if .Values.instance.distribution.variant }}
+    variant: {{ .Values.instance.distribution.variant }}
     {{- end }}
   components: {{ .Values.instance.components | toYaml | nindent 4 }}
   cluster:

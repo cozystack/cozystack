@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.20.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -164,7 +164,11 @@ spec:
               components:
                 description: |-
                   Components is the list of controllers to install.
-                  Defaults to a commonly used subset.
+                  Defaults to the core Flux controllers:
+                    - source-controller
+                    - kustomize-controller
+                    - helm-controller
+                    - notification-controller
                 items:
                   description: Component is the name of a controller to install.
                   enum:
@@ -211,6 +215,7 @@ spec:
                     - upstream-alpine
                     - enterprise-alpine
                     - enterprise-distroless
+                    - enterprise-distroless-fips
                     type: string
                   version:
                     description: Version semver expression e.g. '2.x', '2.3.x'.
@@ -618,7 +623,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.20.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -785,7 +790,7 @@ spec:
                         failing:
                           description: |-
                             Failing is the number of reconciled
-                            resources in the Failing state.
+                            resources in the Failing state and not Suspended.
                           type: integer
                         running:
                           description: |-
@@ -921,7 +926,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.20.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -985,9 +990,9 @@ spec:
                   - a PEM-encoded CA certificate (`ca.crt`)
                   - a PEM-encoded client certificate (`tls.crt`) and private key (`tls.key`)
 
-                  When connecting to a Git or OCI provider that uses self-signed certificates, the CA certificate
-                  must be set in the Secret under the 'ca.crt' key to establish the trust relationship.
-                  When connecting to an OCI provider that supports client certificates (mTLS), the client certificate
+                  When connecting to a Git, OCI, or ExternalService provider that uses self-signed certificates,
+                  the CA certificate must be set in the Secret under the 'ca.crt' key to establish the trust relationship.
+                  When connecting to a provider that supports client certificates (mTLS), the client certificate
                   and private key must be set in the Secret under the 'tls.crt' and 'tls.key' keys, respectively.
                 properties:
                   name:
@@ -1013,6 +1018,11 @@ spec:
                       ExcludeBranch specifies the regular expression to filter the branches
                       that the input provider should exclude.
                     type: string
+                  excludeEnvironment:
+                    description: |-
+                      ExcludeEnvironment specifies the regular expression to filter the environments
+                      that the input provider should exclude.
+                    type: string
                   excludeTag:
                     description: |-
                       ExcludeTag specifies the regular expression to filter the tags
@@ -1021,6 +1031,11 @@ spec:
                   includeBranch:
                     description: |-
                       IncludeBranch specifies the regular expression to filter the branches
+                      that the input provider should include.
+                    type: string
+                  includeEnvironment:
+                    description: |-
+                      IncludeEnvironment specifies the regular expression to filter the environments
                       that the input provider should include.
                     type: string
                   includeTag:
@@ -1048,6 +1063,11 @@ spec:
                       Supported only for tags at the moment.
                     type: string
                 type: object
+              insecure:
+                description: |-
+                  Insecure allows connecting to an ExternalService or OCIArtifactTag provider
+                  over plain HTTP without TLS. When not set, the URL must use HTTPS.
+                type: boolean
               schedule:
                 description: Schedule defines the schedules for the input provider
                   to run.
@@ -1075,13 +1095,16 @@ spec:
                 type: array
               secretRef:
                 description: |-
-                  SecretRef specifies the Kubernetes Secret containing the basic-auth credentials
+                  SecretRef specifies the Kubernetes Secret containing the credentials
                   to access the input provider.
                   When connecting to a Git provider, the secret must contain the keys
                   'username' and 'password', and the password should be a personal access token
                   that grants read-only access to the repository.
                   When connecting to an OCI provider, the secret must contain a Kubernetes
                   Image Pull Secret, as if created by `kubectl create secret docker-registry`.
+                  When connecting to an ExternalService provider, the secret must contain either
+                  a 'token' key for bearer token authentication, or 'username' and 'password'
+                  keys for basic authentication.
                 properties:
                   name:
                     description: Name of the referent.
@@ -1119,13 +1142,18 @@ spec:
                 - GitLabBranch
                 - GitLabTag
                 - GitLabMergeRequest
+                - GitLabEnvironment
                 - AzureDevOpsBranch
                 - AzureDevOpsTag
                 - AzureDevOpsPullRequest
+                - GiteaBranch
+                - GiteaTag
+                - GiteaPullRequest
                 - OCIArtifactTag
                 - ACRArtifactTag
                 - ECRArtifactTag
                 - GARArtifactTag
+                - ExternalService
                 type: string
               url:
                 description: |-
@@ -1151,6 +1179,16 @@ spec:
             - message: spec.url must start with 'oci://' when spec.type is an OCI
                 provider
               rule: '!self.type.endsWith(''ArtifactTag'') || self.url.startsWith(''oci'')'
+            - message: spec.url must start with 'http://' or 'https://' when spec.type
+                is 'ExternalService'
+              rule: self.type != 'ExternalService' || self.url.startsWith('http')
+            - message: spec.insecure can only be set when spec.type is 'ExternalService'
+                or 'OCIArtifactTag'
+              rule: '!has(self.insecure) || !self.insecure || self.type == ''ExternalService''
+                || self.type == ''OCIArtifactTag'''
+            - message: spec.url must use 'https://' unless spec.insecure is true
+              rule: self.type != 'ExternalService' || !self.url.startsWith('http://')
+                || (has(self.insecure) && self.insecure)
             - message: cannot specify spec.serviceAccountName when spec.type is not
                 one of AzureDevOps* or *ArtifactTag
               rule: '!has(self.serviceAccountName) || self.type.startsWith(''AzureDevOps'')
@@ -1289,7 +1327,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.20.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -1403,6 +1441,15 @@ spec:
                   input provider objects are used. Defaults to flattening all inputs
                   from all providers into a single list of input sets.
                 properties:
+                  includeEmptyProviders:
+                    description: |-
+                      IncludeEmptyProviders controls how input providers that export no
+                      inputs are treated. Only applies when Name is Permute. When true, if
+                      any provider has zero inputs the resulting permutation set is empty
+                      (mathematically correct Cartesian product behavior). When false or
+                      unset (default), providers with zero inputs are silently skipped and
+                      the remaining providers still permute among themselves.
+                    type: boolean
                   name:
                     description: |-
                       Name defines how the inputs are combined when multiple
@@ -1425,6 +1472,9 @@ spec:
                 required:
                 - name
                 type: object
+                x-kubernetes-validations:
+                - message: includeEmptyProviders only applies when name is Permute
+                  rule: '!has(self.includeEmptyProviders) || self.name == ''Permute'''
               inputs:
                 description: Inputs contains the list of ResourceSet inputs.
                 items:
@@ -1602,6 +1652,16 @@ spec:
                   - status
                   - type
                   type: object
+                type: array
+              externalChecksumRefs:
+                description: |-
+                  ExternalChecksumRefs lists the ConfigMap and Secret references
+                  discovered in checksumFrom annotations on the last reconciliation
+                  that point to objects not rendered by this ResourceSet. Each entry
+                  has the form "Kind/namespace/name". It is used to trigger a
+                  reconciliation when one of the referenced objects changes.
+                items:
+                  type: string
                 type: array
               history:
                 description: |-
