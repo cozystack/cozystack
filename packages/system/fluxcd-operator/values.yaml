@@ -12,3 +12,7 @@ flux-operator:
     requests:
       cpu: 100m
       memory: 350Mi
+  # Flux Status Web UI is opt-in. Override `web.enabled: true` (and configure
+  # `web.config` / `web.configSecretName` / `web.ingress` as needed) to enable.
+  web:
+    enabled: false

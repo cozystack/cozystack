@@ -2,7 +2,7 @@ diff --git a/charts/flux-operator/templates/network-policy.yaml b/packages/syste
 new file mode 100644
 --- /dev/null	(revision 52a23eacfc32430d8b008b765c64a81526521bae)
 +++ b/charts/flux-operator/templates/network-policy.yaml	(revision 52a23eacfc32430d8b008b765c64a81526521bae)
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,22 @@
 +{{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumClusterwideNetworkPolicy" }}
 +apiVersion: cilium.io/v2
 +kind: CiliumClusterwideNetworkPolicy
@@ -18,6 +18,8 @@ new file mode 100644
 +            - port: "8080"
 +              protocol: TCP
 +            - port: "8081"
++              protocol: TCP
++            - port: "9080"
 +              protocol: TCP
 +  ingress:
 +    - fromEntities:
