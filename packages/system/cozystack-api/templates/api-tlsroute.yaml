@@ -1,0 +1,24 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- if and (has "api" $exposeServices) (eq $gatewayEnabled "true") }}
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: kubernetes-api
+  namespace: default
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cozystack
+    namespace: {{ $exposeIngress }}
+    sectionName: tls-api
+  hostnames:
+  - {{ printf "api.%s" $host | quote }}
+  rules:
+  - backendRefs:
+    - name: kubernetes
+      port: 443
+{{- end }}

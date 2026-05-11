@@ -50,6 +50,9 @@ jobs:
       - name: Run unit tests
         run: make unit-tests
 
+      - name: Run controller Go tests
+        run: make test-controllers
+
       - name: Set up Docker config
         run: |
           if [ -d ~/.docker ]; then

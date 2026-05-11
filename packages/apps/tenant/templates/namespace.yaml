@@ -29,6 +29,24 @@
 {{- $ingress = $tenantName }}
 {{- end }}
 
+{{/*
+  Gateway reference is NOT inherited from parent. A child tenant
+  namespace is not on the parent Gateway's allowedRoutes whitelist,
+  and the parent Gateway's wildcard cert only covers <apex> +
+  *.<apex> (one level) while a child apex would be two levels deep —
+  inheritance would break both admission and TLS. Each tenant that
+  wants Gateway-attached apps either sets tenant.spec.gateway=true
+  explicitly or hits the auto-default for derived-apex tenants
+  (tenant.gatewayEffective). The same helper is consulted by
+  gateway.yaml (HelmRelease render) so the per-tenant Gateway, the
+  namespace label, and _namespace.gateway propagation to apps stay
+  in lockstep.
+*/}}
+{{- $gateway := "" }}
+{{- if eq (include "tenant.gatewayEffective" .) "true" }}
+{{- $gateway = $tenantName }}
+{{- end }}
+
 {{- $monitoring := $parentNamespace.monitoring | default "" }}
 {{- if .Values.monitoring }}
 {{- $monitoring = $tenantName }}
@@ -61,6 +79,7 @@ metadata:
     {{/* Labels for network policies */}}
     namespace.cozystack.io/etcd: {{ $etcd | quote }}
     namespace.cozystack.io/ingress: {{ $ingress | quote }}
+    namespace.cozystack.io/gateway: {{ $gateway | quote }}
     namespace.cozystack.io/monitoring: {{ $monitoring | quote }}
     namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
     namespace.cozystack.io/host: {{ $computedHost | quote }}
@@ -92,6 +111,7 @@ stringData:
     _namespace:
       etcd: {{ $etcd | quote }}
       ingress: {{ $ingress | quote }}
+      gateway: {{ $gateway | quote }}
       monitoring: {{ $monitoring | quote }}
       seaweedfs: {{ $seaweedfs | quote }}
       host: {{ $computedHost | quote }}

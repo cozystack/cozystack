@@ -518,7 +518,7 @@ func selectVariantInteractive(ps *cozyv1alpha1.PackageSource) (string, error) {
 	}
 
 	for {
-		fmt.Fprintf(os.Stderr, prompt)
+		fmt.Fprint(os.Stderr, prompt)
 		input, err := reader.ReadString('\n')
 		if err != nil {
 			return "", fmt.Errorf("failed to read input: %w", err)
