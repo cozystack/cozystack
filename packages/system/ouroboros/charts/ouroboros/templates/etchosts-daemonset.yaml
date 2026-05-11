@@ -32,6 +32,7 @@ spec:
             - --mode=etc-hosts
             - --etc-hosts=/host/hosts
             - --proxy-ip={{ required "etcHosts.proxyIP is required when etcHosts.enabled=true. Install once with etcHosts.enabled=false, look up the proxy Service ClusterIP, then upgrade with --set etcHosts.proxyIP=<that-IP>." .Values.etcHosts.proxyIP }}
+            - --log-level={{ .Values.controller.logLevel }}
             {{- if .Values.controller.gatewayApi.enabled }}
             - --gateway-api
             {{- end }}

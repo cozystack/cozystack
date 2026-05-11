@@ -33,6 +33,20 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --gateway-api
 
+  - it: emits chart-default --resync=30s — host scenario inherits the upstream chart default (changed from 10m in upstream v0.7.x). The reduction is the controller's only recovery path when an Ingress watch silently dies, and 30s caps worst-case event-to-reconcile latency under broken-watch conditions. Pinning here catches a future upstream bump back to the longer value before it lands as a CI surprise.
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --resync=30s
+
+  - it: emits chart-default --log-level=info — host scenario stays at info verbosity by upstream chart default. Tenants override to debug via apps/kubernetes wrapper (see cozystack.defaultOuroborosValues). Pinning here keeps the host quiet by default and catches a regression where the host wrapper accidentally inherits the tenant debug value.
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --log-level=info
+
   - it: writes into the kube-system/coredns Corefile by default (host mode)
     template: charts/ouroboros/templates/controller-deployment.yaml
     asserts:

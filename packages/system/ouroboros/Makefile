@@ -10,7 +10,7 @@ include ../../../hack/package.mk
 # manifest at ghcr.io/lexfrei/charts/ouroboros — it pins the contents
 # of the helm chart artefact (templates, values.yaml, Chart.yaml).
 # It is NOT the digest of the controller container image. The image
-# digest lives in values.yaml under image.tag (`image.tag: "0.7.0@sha256:..."`)
+# digest lives in values.yaml under image.tag (`image.tag: "<version>@sha256:..."`)
 # and pins ghcr.io/lexfrei/ouroboros (the runtime binary). Both
 # digests have to land together at every chart bump — the chart
 # version, the chart-manifest digest, and the controller-image
@@ -26,8 +26,8 @@ include ../../../hack/package.mk
 # and update both lines below; resolve the new image digest with
 #   crane digest ghcr.io/lexfrei/ouroboros:<new-tag>
 # and update values.yaml.
-OUROBOROS_CHART_VERSION ?= 0.7.0
-OUROBOROS_CHART_DIGEST ?= sha256:f28bfac9fd7070b1f3357983ff5aad28c16115e7de1cfc16ee568a3b4cfc9d7e
+OUROBOROS_CHART_VERSION ?= 0.7.2
+OUROBOROS_CHART_DIGEST ?= sha256:c67315551196a766aeb97cee6065083a5f4d78b67ab0377e25257e61d4615a43
 
 test:
 	helm unittest .

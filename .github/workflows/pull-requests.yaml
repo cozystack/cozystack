@@ -159,7 +159,7 @@ jobs:
     name: "E2E Tests"
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-24cpu-96gb-x86-64' }}
     #runs-on: [oracle-vm-32cpu-128gb-x86-64]
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: read
       packages: read

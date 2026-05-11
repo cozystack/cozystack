@@ -52,6 +52,7 @@ spec:
             - controller
             - --mode={{ $mode }}
             - --resync={{ .Values.controller.resync }}
+            - --log-level={{ .Values.controller.logLevel }}
             {{- if .Values.controller.gatewayApi.enabled }}
             - --gateway-api
             {{- end }}
