@@ -478,6 +478,10 @@ metadata:
 {{- $talosCA := lookup "v1" "Secret" $.Release.Namespace (printf "%s-talos-ca" $.Release.Name) }}
 {{- $k8sCA := lookup "v1" "Secret" $.Release.Namespace (printf "%s-ca" $.Release.Name) }}
 {{- $talosReady := and (and $talosSecrets $talosCA) (and (index $talosCA.data "tls.crt" | default "") (and $k8sCA (index $k8sCA.data "ca.crt" | default ""))) }}
+{{- /* Also gate on the apiserver Service existing so we can embed its
+       ClusterIP into the worker machineconfig. */}}
+{{- $apiSvcLookup := lookup "v1" "Service" $.Release.Namespace $.Release.Name }}
+{{- $talosReady = and $talosReady (and $apiSvcLookup $apiSvcLookup.spec.clusterIP) }}
 {{- if $talosReady }}
 {{- $talosToken := index $talosSecrets.data "token" | b64dec }}
 {{- $clusterId := index $talosSecrets.data "clusterId" | b64dec }}
@@ -485,12 +489,15 @@ metadata:
 {{- $bootstrapToken := index $talosSecrets.data "bootstrapToken" | b64dec }}
 {{- $talosCACrt := index $talosCA.data "tls.crt" }}
 {{- $k8sCACrt := index $k8sCA.data "ca.crt" }}
-{{- /* Use absolute FQDN with the host cluster domain (cozy.local on
-       cozystack). Talos's bootstrap DNS comes from cloud-init and points
-       at the host cluster CoreDNS, which only knows cozy.local — so a
-       short kubernetes-talos1.tenant-test.svc form fails to resolve. */}}
-{{- $clusterDomain := index $.Values._cluster "cluster-domain" | default "cluster.local" }}
-{{- $apiEndpoint := printf "%s.%s.svc.%s:6443" $.Release.Name $.Release.Namespace $clusterDomain }}
+{{- /* Talos boots before any cluster DNS exists, so the apiserver
+       endpoint cannot depend on Kubernetes/CoreDNS resolution. Use the
+       ClusterIP of the Kamaji-managed apiserver Service directly. */}}
+{{- $apiSvc := lookup "v1" "Service" $.Release.Namespace $.Release.Name }}
+{{- $apiSvcIP := "" }}
+{{- if $apiSvc }}
+{{-   $apiSvcIP = $apiSvc.spec.clusterIP }}
+{{- end }}
+{{- $apiEndpoint := printf "%s:6443" $apiSvcIP }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
 {{- $talosVersion := "v1.13.0" }}
 {{- $talosSchematic := "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515" }}
