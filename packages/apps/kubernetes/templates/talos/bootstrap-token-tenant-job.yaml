@@ -46,7 +46,7 @@ spec:
       serviceAccountName: {{ .Release.Name }}-bootstrap-token-tenant
       containers:
         - name: kubectl
-          image: bitnami/kubectl:1.33
+          image: docker.io/alpine/k8s:1.33.4
           env:
             - name: TENANT_KUBECONFIG
               value: /tenant-admin/admin.svc
