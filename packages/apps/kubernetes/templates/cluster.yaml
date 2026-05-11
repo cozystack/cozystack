@@ -48,24 +48,9 @@ spec:
           source:
             http:
               url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.0/openstack-amd64.raw.xz
-          storage:
-            resources:
-              requests:
-                storage: "8Gi"
-            {{- with .group.storageClass }}
-            storageClassName: {{ . | quote }}
-            {{- end }}
-      - metadata:
-          name: disk-kubelet
-          annotations:
-            {{/* Populator creates intermediate PVC + PV rebind that causes ClaimMisbound with LINSTOR CSI */}}
-            cdi.kubevirt.io/storage.usePopulator: "false"
-        spec:
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}
-          source:
-            blank: {}
           storage:
             resources:
               requests:
@@ -118,13 +103,6 @@ spec:
                 blockSize:
                   matchVolume:
                     enabled: true
-              - name: disk-kubelet
-                disk:
-                  bus: virtio
-                  pciAddress: 0000:08:00.0
-                blockSize:
-                  matchVolume:
-                    enabled: true
               interfaces:
               - name: default
                 bridge: {}
@@ -140,9 +118,6 @@ spec:
           - name: system
             dataVolume:
               name: disk-system
-          - name: disk-kubelet
-            dataVolume:
-              name: disk-kubelet
           networks:
           - name: default
             pod: {}
@@ -559,10 +534,6 @@ spec:
             disk: /dev/vda
             image: factory.talos.dev/installer/{{ $talosSchematic }}:{{ $talosVersion }}
             wipe: false
-          disks:
-            - device: /dev/vdb
-              partitions:
-                - mountpoint: /var/lib/kubelet
           features:
             rbac: true
             kubePrism:
