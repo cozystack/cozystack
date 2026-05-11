@@ -15,8 +15,11 @@
 {{- $kubevirtmachinetemplateNames := list }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
+  {{- /* Talos has no SSH; use 'none' so CAPK does not block Machine.Ready
+        on an SSH probe that will never succeed. The Machine reaches Ready
+        once kubelet registers with the tenant apiserver via standard CSR. */}}
   virtualMachineBootstrapCheck:
-    checkStrategy: ssh
+    checkStrategy: none
   virtualMachineTemplate:
     metadata:
       namespace: {{ $.Release.Namespace }}
@@ -37,9 +40,14 @@ spec:
           annotations:
             cdi.kubevirt.io/storage.usePopulator: "false"
         spec:
+          {{- /* Use the openstack/configdrive Talos image: KubeVirt CAPK
+                injects bootstrap data via cloudInitConfigDrive (OpenStack
+                metadata service shape), and the openstack platform image
+                is the one that reads it. The nocloud-amd64 image silently
+                ignores configdrive and never applies the machineconfig. */}}
           source:
             http:
-              url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.0/nocloud-amd64.raw.xz
+              url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.0/openstack-amd64.raw.xz
           storage:
             resources:
               requests:
