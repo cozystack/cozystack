@@ -87,10 +87,6 @@ spec:
               cores: {{ .group.resources.cpu }}
               sockets: 1
             {{- end }}
-            firmware:
-              bootloader:
-                efi:
-                  secureBoot: false
             devices:
               {{- if .group.gpus }}
               gpus:
@@ -105,8 +101,9 @@ spec:
                   bus: virtio
                   pciAddress: 0000:07:00.0
                 blockSize:
-                  matchVolume:
-                    enabled: true
+                  custom:
+                    logical: 512
+                    physical: 4096
               interfaces:
               - name: default
                 bridge: {}
