@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check preflight
 
 include hack/common-envs.mk
 
@@ -94,10 +94,17 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
+
+# Pin the resourcesPreset enum in every ApplicationDefinition openAPISchema
+# to the canonical 47-value set (40 instance-type names + 7 legacy aliases).
+# Catches the regression where one chart's Makefile forgets to invoke
+# hack/update-crd.sh and that RD's schema drifts from values.schema.json.
+rd-presets-check:
+	hack/check-rd-presets.sh
 
 # Scoped go test over the cozystack-api surface that this repo owns. Kept
 # narrow intentionally - running `go test ./...` pulls in generated code

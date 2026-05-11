@@ -7,6 +7,9 @@ generate:
 	cozyvalues-gen -m 'clickhouse' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/clickhouse/types.go
 	../../../hack/update-crd.sh
 
+test:
+	helm unittest .
+
 image:
 	docker buildx build images/clickhouse-backup \
 		--tag $(REGISTRY)/clickhouse-backup:$(call settag,$(CLICKHOUSE_BACKUP_TAG)) \
