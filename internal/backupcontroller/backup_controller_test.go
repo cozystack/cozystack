@@ -119,6 +119,57 @@ func TestBackupCleanup_Velero_DispatchUnchanged(t *testing.T) {
 	}
 }
 
+// TestBackupCleanup_Altinity_DoesNotFallThroughToVelero locks in the
+// review-flagged bug fix: the dispatcher must explicitly route Altinity-
+// strategy Backups to a no-op cleanup, not fall through to the Velero
+// default. The Velero cleanup is keyed on a metadata field that never
+// gets set on Altinity Backups, so without an explicit branch the call
+// silently no-ops AND any pre-existing DriverMetadata (e.g. a stray
+// velero-owned key from earlier experiments) would mistakenly trigger a
+// DeleteBackupRequest. The branch makes the contract explicit:
+// clickhouse-backup owns the S3 lifecycle; Cozystack does not delete it.
+func TestBackupCleanup_Altinity_DoesNotFallThroughToVelero(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	veleroBk := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: veleroNamespace, Name: "stale-vb"},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.AltinityStrategyKind, Name: "altinity",
+			},
+			// Intentionally include the velero metadata keys to expose the
+			// bug behaviour: with the old default-fallback dispatch, this
+			// would synthesise a DeleteBackupRequest. The Altinity branch
+			// must short-circuit before that happens.
+			DriverMetadata: map[string]string{
+				veleroBackupNameMetadataKey:      "stale-vb",
+				veleroBackupNamespaceMetadataKey: veleroNamespace,
+			},
+		},
+	}
+	c := newBackupTestClient(t, backup, veleroBk)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+
+	dbrList := &velerov1.DeleteBackupRequestList{}
+	if err := c.List(context.Background(), dbrList, client.InNamespace(veleroNamespace)); err != nil {
+		t.Fatalf("list DeleteBackupRequests: %v", err)
+	}
+	if len(dbrList.Items) != 0 {
+		t.Fatalf("expected no DeleteBackupRequests for Altinity Backup, got %d (Velero fall-through leak)", len(dbrList.Items))
+	}
+	// Velero Backup itself must remain untouched.
+	got := &velerov1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: veleroNamespace, Name: "stale-vb"}, got); err != nil {
+		t.Fatalf("Velero Backup unexpectedly removed: %v", err)
+	}
+}
+
 // TestStrategyKindForBackup mirrors the dispatcher's strategy lookup. Useful
 // in isolation when reasoning about edge cases (empty strategyRef, etc.).
 func TestStrategyKindForBackup(t *testing.T) {
@@ -131,6 +182,7 @@ func TestStrategyKindForBackup(t *testing.T) {
 		{"velero", strategyv1alpha1.VeleroStrategyKind, strategyv1alpha1.VeleroStrategyKind},
 		{"cnpg", strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.CNPGStrategyKind},
 		{"job", strategyv1alpha1.JobStrategyKind, strategyv1alpha1.JobStrategyKind},
+		{"altinity", strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.AltinityStrategyKind},
 		{"empty", "", ""},
 	}
 	for _, tc := range cases {

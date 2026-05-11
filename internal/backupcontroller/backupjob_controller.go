@@ -80,11 +80,13 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileVelero(ctx, j, resolved)
 	case strategyv1alpha1.CNPGStrategyKind:
 		return r.reconcileCNPG(ctx, j, resolved)
+	case strategyv1alpha1.AltinityStrategyKind:
+		return r.reconcileAltinity(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
 			"kind", strategyRef.Kind,
-			"supported", []string{strategyv1alpha1.JobStrategyKind, strategyv1alpha1.VeleroStrategyKind, strategyv1alpha1.CNPGStrategyKind})
+			"supported", []string{strategyv1alpha1.JobStrategyKind, strategyv1alpha1.VeleroStrategyKind, strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.AltinityStrategyKind})
 		return ctrl.Result{}, nil
 	}
 }

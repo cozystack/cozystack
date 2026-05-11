@@ -99,3 +99,11 @@ rules:
 # spec.backup.s3CredentialsSecret on the Postgres app, which the chart then
 # wires into barmanObjectStore.s3Credentials. The Secret bytes never flow
 # through this controller.
+# Altinity strategy: drives clickhouse-backup as a one-shot batch/v1.Job
+# per BackupJob / RestoreJob. The controller renders the strategy
+# PodTemplateSpec into a Job in the application namespace and watches the
+# Job's terminal condition (Complete/Failed) to drive Cozystack Backup /
+# RestoreJob status transitions.
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
