@@ -44,6 +44,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
@@ -180,6 +181,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
+
+	r.warnLegacyPresets(app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -502,6 +505,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, false, apierrors.NewBadRequest(err.Error())
 	}
+
+	r.warnLegacyPresets(app)
 
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
@@ -1755,6 +1760,31 @@ func (r *REST) Kind() string {
 // GroupVersionKind returns the GroupVersionKind for REST
 func (r *REST) GroupVersionKind(schema.GroupVersion) schema.GroupVersionKind {
 	return r.gvk
+}
+
+// deprecationMessagesFor builds the deprecation log lines for any
+// resourcesPreset field on the Application that still carries a legacy
+// flat name (nano/micro/.../2xlarge). Returned in the order
+// presets.FindLegacyPresets discovers them. Pure function so tests can
+// assert the output without intercepting klog.
+func deprecationMessagesFor(kindName string, app *appsv1alpha1.Application) []string {
+	if app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+		return nil
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(app.Spec.Raw, &spec); err != nil {
+		return nil
+	}
+	return presets.FormatDeprecationMessages(kindName, app.Namespace, app.Name, presets.FindLegacyPresets(spec))
+}
+
+// warnLegacyPresets emits a klog warning per deprecation message for
+// the given Application. Non-blocking: the value still renders
+// correctly through cozy-lib legacy aliases.
+func (r *REST) warnLegacyPresets(app *appsv1alpha1.Application) {
+	for _, msg := range deprecationMessagesFor(r.kindName, app) {
+		klog.Warning(msg)
+	}
 }
 
 // errNotAcceptable indicates that the resource does not support conversion to Table
