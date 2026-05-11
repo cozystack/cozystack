@@ -552,6 +552,10 @@ spec:
           clusterName: {{ $.Release.Name | quote }}
           network:
             dnsDomain: cluster.local
+            podSubnets:
+              - 10.243.0.0/16
+            serviceSubnets:
+              - 10.95.0.0/16
           token: {{ $bootstrapToken | quote }}
           ca:
             crt: {{ $k8sCACrt | quote }}
