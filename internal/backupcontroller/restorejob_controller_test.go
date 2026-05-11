@@ -125,6 +125,51 @@ func TestCleanupOnDelete_CNPG_DoesNotTouchVeleroNamespace(t *testing.T) {
 	}
 }
 
+// TestCleanupOnDelete_FoundationDB_DoesNotTouchVeleroNamespace mirrors the
+// CNPG cleanup test for the FoundationDB strategy. The dispatch switch in
+// cleanupOnDelete groups CNPG / Job / Altinity / MariaDB / FoundationDB
+// into the no-op cleanup branch (none of them materialise namespaced
+// artefacts in cozy-velero that outlive the RestoreJob). A future
+// refactor that drops FoundationDB from the no-op group would fall
+// through to the conservative `default` branch which runs the Velero
+// cleanup unconditionally - and silently start reaping matching
+// velero.io/Restore objects in cozy-velero. Seeding a label-matching
+// Velero Restore proves the FoundationDB branch stays no-op.
+func TestCleanupOnDelete_FoundationDB_DoesNotTouchVeleroNamespace(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	rj := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.FoundationDBStrategyKind, Name: "s",
+			},
+		},
+	}
+	owned := &velerov1.Restore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: veleroNamespace,
+			Name:      "would-be-victim",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      "rj",
+				backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+			},
+		},
+	}
+	c := newRestoreJobTestClient(t, rj, backup, owned)
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	r.cleanupOnDelete(context.Background(), rj)
+
+	got := &velerov1.Restore{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(owned), got); err != nil {
+		t.Fatalf("FoundationDB cleanup incorrectly routed to Velero cleanup; matching Velero Restore was deleted (err=%v)", err)
+	}
+}
+
 // TestCleanupOnDelete_Velero_DeletesOwnedRestore confirms the dispatcher
 // still routes Velero RestoreJob deletions to the Velero cleanup path.
 func TestCleanupOnDelete_Velero_DeletesOwnedRestore(t *testing.T) {

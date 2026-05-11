@@ -29,7 +29,7 @@ type ConfigSpec struct {
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="c1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
-	// Backup configuration.
+	// DEPRECATED Backup configuration (use the Cozystack backups framework: BackupClass + FoundationDB strategy).
 	// +kubebuilder:default:={}
 	Backup Backup `json:"backup"`
 	// Monitoring configuration.
@@ -50,37 +50,37 @@ type ConfigSpec struct {
 }
 
 type Backup struct {
-	// Enable backups.
+	// DEPRECATED Enable in-chart backups (superseded by BackupClass + FoundationDB strategy).
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Retention policy for backups.
+	// DEPRECATED Retention policy for backups.
 	// +kubebuilder:default:="7d"
 	RetentionPolicy string `json:"retentionPolicy"`
-	// S3 configuration for backups.
+	// DEPRECATED S3 configuration for backups.
 	// +kubebuilder:default:={}
 	S3 BackupS3 `json:"s3"`
 }
 
 type BackupS3 struct {
-	// S3 bucket name.
+	// DEPRECATED S3 bucket name.
 	// +kubebuilder:default:=""
 	Bucket string `json:"bucket"`
-	// S3 credentials.
+	// DEPRECATED S3 credentials.
 	// +kubebuilder:default:={}
 	Credentials BackupS3Credentials `json:"credentials"`
-	// S3 endpoint URL.
+	// DEPRECATED S3 endpoint URL.
 	// +kubebuilder:default:=""
 	Endpoint string `json:"endpoint"`
-	// S3 region.
+	// DEPRECATED S3 region.
 	// +kubebuilder:default:="us-east-1"
 	Region string `json:"region"`
 }
 
 type BackupS3Credentials struct {
-	// S3 access key ID.
+	// DEPRECATED S3 access key ID.
 	// +kubebuilder:default:=""
 	AccessKeyId string `json:"accessKeyId"`
-	// S3 secret access key.
+	// DEPRECATED S3 secret access key.
 	// +kubebuilder:default:=""
 	SecretAccessKey string `json:"secretAccessKey"`
 }
