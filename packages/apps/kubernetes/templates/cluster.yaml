@@ -43,7 +43,7 @@ spec:
           storage:
             resources:
               requests:
-                storage: "4Gi"
+                storage: "8Gi"
             {{- with .group.storageClass }}
             storageClassName: {{ . | quote }}
             {{- end }}
