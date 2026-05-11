@@ -205,10 +205,43 @@ spec:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
       hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}:443
       className: "{{ $ingress }}"
+    additionalServicePorts:
+      - name: talos-trustd
+        port: 50001
+        targetPort: 50001
+        protocol: TCP
   deployment:
     podAdditionalMetadata:
       labels:
         policy.cozystack.io/allow-to-etcd: "true"
+    extraContainers:
+      - name: talos-csr-signer
+        image: ghcr.io/clastix/talos-csr-signer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - name: trustd
+            containerPort: 50001
+            protocol: TCP
+        env:
+          - name: TALOS_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Release.Name }}-talos-secrets
+                key: token
+        volumeMounts:
+          - name: talos-ca
+            mountPath: /etc/talos-ca
+            readOnly: true
+          - name: talos-tls-cert
+            mountPath: /etc/talos-server-crt
+            readOnly: true
+    extraVolumes:
+      - name: talos-ca
+        secret:
+          secretName: {{ .Release.Name }}-talos-ca
+      - name: talos-tls-cert
+        secret:
+          secretName: {{ .Release.Name }}-talos-tls-cert
   replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}
 ---
