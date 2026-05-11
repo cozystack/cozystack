@@ -44,34 +44,34 @@ type ConfigSpec struct {
 	// Databases configuration map.
 	// +kubebuilder:default:={}
 	Databases map[string]Database `json:"databases,omitempty"`
-	// Backup configuration.
+	// DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
 	// +kubebuilder:default:={}
 	Backup Backup `json:"backup"`
 }
 
 type Backup struct {
-	// Retention strategy for cleaning up old backups.
+	// DEPRECATED: Retention strategy for cleaning up old backups.
 	// +kubebuilder:default:="--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
 	CleanupStrategy string `json:"cleanupStrategy"`
-	// Enable regular backups (default: false).
+	// DEPRECATED: Enable regular backups (default: false).
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Password for Restic backup encryption.
+	// DEPRECATED: Password for Restic backup encryption.
 	// +kubebuilder:default:="<password>"
 	ResticPassword string `json:"resticPassword"`
-	// Access key for S3 authentication.
+	// DEPRECATED: Access key for S3 authentication.
 	// +kubebuilder:default:="<your-access-key>"
 	S3AccessKey string `json:"s3AccessKey"`
-	// S3 bucket used for storing backups.
+	// DEPRECATED: S3 bucket used for storing backups.
 	// +kubebuilder:default:="s3.example.org/mariadb-backups"
 	S3Bucket string `json:"s3Bucket"`
-	// AWS S3 region where backups are stored.
+	// DEPRECATED: AWS S3 region where backups are stored.
 	// +kubebuilder:default:="us-east-1"
 	S3Region string `json:"s3Region"`
-	// Secret key for S3 authentication.
+	// DEPRECATED: Secret key for S3 authentication.
 	// +kubebuilder:default:="<your-secret-key>"
 	S3SecretKey string `json:"s3SecretKey"`
-	// Cron schedule for automated backups.
+	// DEPRECATED: Cron schedule for automated backups.
 	// +kubebuilder:default:="0 2 * * *"
 	Schedule string `json:"schedule"`
 }

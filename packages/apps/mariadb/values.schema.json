@@ -142,7 +142,7 @@
       }
     },
     "backup": {
-      "description": "Backup configuration.",
+      "description": "DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.",
       "type": "object",
       "default": {},
       "required": [
@@ -157,42 +157,42 @@
       ],
       "properties": {
         "cleanupStrategy": {
-          "description": "Retention strategy for cleaning up old backups.",
+          "description": "DEPRECATED: Retention strategy for cleaning up old backups.",
           "type": "string",
           "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
         },
         "enabled": {
-          "description": "Enable regular backups (default: false).",
+          "description": "DEPRECATED: Enable regular backups (default: false).",
           "type": "boolean",
           "default": false
         },
         "resticPassword": {
-          "description": "Password for Restic backup encryption.",
+          "description": "DEPRECATED: Password for Restic backup encryption.",
           "type": "string",
           "default": "\u003cpassword\u003e"
         },
         "s3AccessKey": {
-          "description": "Access key for S3 authentication.",
+          "description": "DEPRECATED: Access key for S3 authentication.",
           "type": "string",
           "default": "\u003cyour-access-key\u003e"
         },
         "s3Bucket": {
-          "description": "S3 bucket used for storing backups.",
+          "description": "DEPRECATED: S3 bucket used for storing backups.",
           "type": "string",
           "default": "s3.example.org/mariadb-backups"
         },
         "s3Region": {
-          "description": "AWS S3 region where backups are stored.",
+          "description": "DEPRECATED: AWS S3 region where backups are stored.",
           "type": "string",
           "default": "us-east-1"
         },
         "s3SecretKey": {
-          "description": "Secret key for S3 authentication.",
+          "description": "DEPRECATED: Secret key for S3 authentication.",
           "type": "string",
           "default": "\u003cyour-secret-key\u003e"
         },
         "schedule": {
-          "description": "Cron schedule for automated backups.",
+          "description": "DEPRECATED: Cron schedule for automated backups.",
           "type": "string",
           "default": "0 2 * * *"
         }

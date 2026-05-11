@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"sort"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -12,8 +13,39 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
+
+// TestSupportedBackupStrategyKindsMatchesDispatch pins every Kind that the
+// BackupJob reconciler's dispatch switch handles. Before the fix the
+// unsupported-strategy log payload was hand-maintained inline next to the
+// switch and silently dropped AltinityStrategyKind when MariaDB was added,
+// which misled operators staring at the message and trying to figure out
+// which strategies the controller actually supports. The single
+// supportedBackupStrategyKinds() source of truth keeps log and dispatch in
+// lockstep; this test fails the moment a new strategy is added to either
+// half but not the other.
+func TestSupportedBackupStrategyKindsMatchesDispatch(t *testing.T) {
+	got := append([]string(nil), supportedBackupStrategyKinds()...)
+	want := []string{
+		strategyv1alpha1.JobStrategyKind,
+		strategyv1alpha1.VeleroStrategyKind,
+		strategyv1alpha1.CNPGStrategyKind,
+		strategyv1alpha1.AltinityStrategyKind,
+		strategyv1alpha1.MariaDBStrategyKind,
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("supportedBackupStrategyKinds: got %d kinds %v, want %d %v", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("supportedBackupStrategyKinds[%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
 
 // TestMarkBackupJobFailed_DoesNotAppendDuplicateReady locks in the fix:
 // markBackupJobFailed used to `append` to Status.Conditions, which violates

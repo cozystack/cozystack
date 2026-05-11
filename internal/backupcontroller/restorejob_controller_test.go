@@ -34,6 +34,7 @@ func TestStrategyKindForRestoreJob(t *testing.T) {
 		{"velero strategy", strategyv1alpha1.VeleroStrategyKind, strategyv1alpha1.VeleroStrategyKind},
 		{"cnpg strategy", strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.CNPGStrategyKind},
 		{"job strategy", strategyv1alpha1.JobStrategyKind, strategyv1alpha1.JobStrategyKind},
+		{"mariadb strategy", strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MariaDBStrategyKind},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

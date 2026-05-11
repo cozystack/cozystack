@@ -33,7 +33,21 @@ NAME        READY   STATUS    PRIMARY POD   AGE
 <instance>  True    Running   app-db1-1     41d
 ```
 
-### How to restore backup:
+### How to back up and restore a MariaDB application
+
+The recommended path is the Cozystack `BackupClass` / `Plan` /
+`RestoreJob` flow with the operator-native `strategy.backups.cozystack.io/MariaDB`
+strategy. See [examples/backups/mariadb](../../../examples/backups/mariadb/)
+for a numbered, end-to-end walkthrough (bucket, source, strategy,
+BackupClass, Plan, ad-hoc BackupJob, and both in-place + to-copy
+RestoreJob fixtures).
+
+The chart's `backup.*` block (mariadb-dump + restic CronJob) is
+**deprecated** and remains supported for backward compatibility only.
+Existing tenants can keep using it unchanged; new deployments should
+use the operator-native flow above.
+
+#### How to restore from a deprecated restic-based backup
 
 find snapshot:
 ```bash
@@ -95,19 +109,19 @@ more details:
 | `databases[name].roles.readonly` | List of users with read-only privileges. | `[]string`          | `[]`  |
 
 
-### Backup parameters
+### Backup parameters (DEPRECATED)
 
-| Name                     | Description                                     | Type     | Value                                                  |
-| ------------------------ | ----------------------------------------------- | -------- | ------------------------------------------------------ |
-| `backup`                 | Backup configuration.                           | `object` | `{}`                                                   |
-| `backup.enabled`         | Enable regular backups (default: false).        | `bool`   | `false`                                                |
-| `backup.s3Region`        | AWS S3 region where backups are stored.         | `string` | `us-east-1`                                            |
-| `backup.s3Bucket`        | S3 bucket used for storing backups.             | `string` | `s3.example.org/mariadb-backups`                       |
-| `backup.schedule`        | Cron schedule for automated backups.            | `string` | `0 2 * * *`                                            |
-| `backup.cleanupStrategy` | Retention strategy for cleaning up old backups. | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | Access key for S3 authentication.               | `string` | `<your-access-key>`                                    |
-| `backup.s3SecretKey`     | Secret key for S3 authentication.               | `string` | `<your-secret-key>`                                    |
-| `backup.resticPassword`  | Password for Restic backup encryption.          | `string` | `<password>`                                           |
+| Name                     | Description                                                                                           | Type     | Value                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
+| `backup`                 | DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/. | `object` | `{}`                                                   |
+| `backup.enabled`         | DEPRECATED: Enable regular backups (default: false).                                                  | `bool`   | `false`                                                |
+| `backup.s3Region`        | DEPRECATED: AWS S3 region where backups are stored.                                                   | `string` | `us-east-1`                                            |
+| `backup.s3Bucket`        | DEPRECATED: S3 bucket used for storing backups.                                                       | `string` | `s3.example.org/mariadb-backups`                       |
+| `backup.schedule`        | DEPRECATED: Cron schedule for automated backups.                                                      | `string` | `0 2 * * *`                                            |
+| `backup.cleanupStrategy` | DEPRECATED: Retention strategy for cleaning up old backups.                                           | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
+| `backup.s3AccessKey`     | DEPRECATED: Access key for S3 authentication.                                                         | `string` | `<your-access-key>`                                    |
+| `backup.s3SecretKey`     | DEPRECATED: Secret key for S3 authentication.                                                         | `string` | `<your-secret-key>`                                    |
+| `backup.resticPassword`  | DEPRECATED: Password for Restic backup encryption.                                                    | `string` | `<password>`                                           |
 
 
 ## Parameter examples and reference

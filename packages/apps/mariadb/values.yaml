@@ -81,20 +81,27 @@ databases: {}
 ##       - user2
 
 ##
-## @section Backup parameters
+## @section Backup parameters (DEPRECATED)
 ##
+## DEPRECATED: the fields below drive the chart's original mariadb-dump+restic
+## CronJob backup mechanism. They are preserved for backward compatibility:
+## existing tenants who already rely on the cronjob can keep using it
+## unchanged. New deployments should use the operator-native backup path
+## via Cozystack's BackupClass / Plan / RestoreJob CRDs and the
+## strategy.backups.cozystack.io/MariaDB driver. See
+## examples/backups/mariadb/ for a full end-to-end walkthrough.
 
-## @typedef {struct} Backup - Backup configuration.
-## @field {bool} enabled - Enable regular backups (default: false).
-## @field {string} s3Region - AWS S3 region where backups are stored.
-## @field {string} s3Bucket - S3 bucket used for storing backups.
-## @field {string} schedule - Cron schedule for automated backups.
-## @field {string} cleanupStrategy - Retention strategy for cleaning up old backups.
-## @field {string} s3AccessKey - Access key for S3 authentication.
-## @field {string} s3SecretKey - Secret key for S3 authentication.
-## @field {string} resticPassword - Password for Restic backup encryption.
+## @typedef {struct} Backup - DEPRECATED: Backup configuration.
+## @field {bool} enabled - DEPRECATED: Enable regular backups (default: false).
+## @field {string} s3Region - DEPRECATED: AWS S3 region where backups are stored.
+## @field {string} s3Bucket - DEPRECATED: S3 bucket used for storing backups.
+## @field {string} schedule - DEPRECATED: Cron schedule for automated backups.
+## @field {string} cleanupStrategy - DEPRECATED: Retention strategy for cleaning up old backups.
+## @field {string} s3AccessKey - DEPRECATED: Access key for S3 authentication.
+## @field {string} s3SecretKey - DEPRECATED: Secret key for S3 authentication.
+## @field {string} resticPassword - DEPRECATED: Password for Restic backup encryption.
 
-## @param {Backup} backup - Backup configuration.
+## @param {Backup} backup - DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
 backup:
   enabled: false
   s3Region: us-east-1

@@ -107,3 +107,16 @@ rules:
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "delete"]
+# MariaDB strategy: read the operator-side MariaDB CR to surface "not yet
+# rendered" preconditions, create one-shot k8s.mariadb.com/Backup CRs on
+# the BackupJob path, and create k8s.mariadb.com/Restore CRs on the
+# RestoreJob path. The driver only ever Creates/Lists/Gets these objects -
+# it does not patch or delete them; their lifecycle is owned by
+# mariadb-operator and (for cleanup) by tenants / explicit teardown flows,
+# never by this controller.
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["mariadbs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["backups", "restores"]
+  verbs: ["get", "list", "watch", "create"]
