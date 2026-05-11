@@ -87,6 +87,10 @@ spec:
               cores: {{ .group.resources.cpu }}
               sockets: 1
             {{- end }}
+            firmware:
+              bootloader:
+                efi:
+                  secureBoot: false
             devices:
               {{- if .group.gpus }}
               gpus:
