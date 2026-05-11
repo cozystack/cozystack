@@ -1,0 +1,22 @@
+# To-copy restore. Targets the empty mariadb-target MariaDB app from
+# 30-mariadb-target.yaml; the driver creates a k8s.mariadb.com/Restore CR
+# with mariaDbRef=mariadb-target so the operator replays the logical
+# dump into the running target while mariadb-src stays running and
+# untouched.
+#
+# Smoke-testable manually with kubectl apply -f for the same-namespace
+# happy path. The cross-tenant variant stays manual; see
+# 30-mariadb-target.yaml for the network-policy reason. A dedicated bats
+# e2e harness will land in a follow-up PR.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: mariadb-src-to-mariadb-target
+spec:
+  backupRef:
+    name: mariadb-src-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: MariaDB
+    name: mariadb-target

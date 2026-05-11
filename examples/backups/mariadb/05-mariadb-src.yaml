@@ -1,0 +1,28 @@
+# Source MariaDB instance.
+#
+# The strategy/BackupClass/Plan path is decoupled from the chart - no chart
+# field has to be set to enable backups. The legacy chart-side `backup`
+# block is left at its defaults (backup.enabled=false) so the legacy
+# CronJob+restic flow stays dormant; tenants who keep using it can still
+# do so unchanged. New tenants should ignore it and drive backups through
+# this directory.
+#
+# The "app" user is created so a smoke harness (or a human running the
+# example by hand) can write a sentinel row before the BackupJob fires.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb-src
+spec:
+  replicas: 2
+  size: 1Gi
+  databases:
+    demo:
+      roles:
+        admin:
+          - app
+  users:
+    app:
+      password: REPLACE_WITH_PASSWORD
+      maxUserConnections: 100
