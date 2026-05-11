@@ -485,7 +485,12 @@ metadata:
 {{- $bootstrapToken := index $talosSecrets.data "bootstrapToken" | b64dec }}
 {{- $talosCACrt := index $talosCA.data "tls.crt" }}
 {{- $k8sCACrt := index $k8sCA.data "ca.crt" }}
-{{- $apiEndpoint := printf "%s.%s.svc:6443" $.Release.Name $.Release.Namespace }}
+{{- /* Use absolute FQDN with the host cluster domain (cozy.local on
+       cozystack). Talos's bootstrap DNS comes from cloud-init and points
+       at the host cluster CoreDNS, which only knows cozy.local — so a
+       short kubernetes-talos1.tenant-test.svc form fails to resolve. */}}
+{{- $clusterDomain := index $.Values._cluster "cluster-domain" | default "cluster.local" }}
+{{- $apiEndpoint := printf "%s.%s.svc.%s:6443" $.Release.Name $.Release.Namespace $clusterDomain }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
 {{- $talosVersion := "v1.13.0" }}
 {{- $talosSchematic := "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515" }}
