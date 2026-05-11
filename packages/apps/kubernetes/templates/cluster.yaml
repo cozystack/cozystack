@@ -112,6 +112,9 @@ spec:
                 disk:
                   bus: virtio
                   pciAddress: 0000:07:00.0
+                blockSize:
+                  matchVolume:
+                    enabled: true
               - name: disk-kubelet
                 disk:
                   bus: virtio
