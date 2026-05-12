@@ -1,9 +1,7 @@
 # Default values for vm-adoption-controller
 
-image:
-  repository: ""
-  tag: ""
-  pullPolicy: IfNotPresent
+# Full container image reference (populated by `make image` with digest pin).
+image: ""
 
 replicas: 1
 
