@@ -86,3 +86,63 @@ version: v8
 
 ## @param {bool} authEnabled - Enable password generation.
 authEnabled: true
+
+## @enum {string} IssuerKind - cert-manager Issuer kind.
+## @value Issuer
+## @value ClusterIssuer
+
+## @typedef {struct} TLSIssuerRef - cert-manager Issuer reference.
+## @field {string} name - Issuer/ClusterIssuer resource name. When empty, a self-signed CA chain is created.
+## @field {IssuerKind} kind - Either "Issuer" or "ClusterIssuer".
+## @field {string} group - Issuer API group.
+
+## @typedef {struct} TLSCertificate - Leaf certificate configuration.
+## @field {string} secretName - Custom TLS secret name. Defaults to "<release>-tls".
+## @field {string} duration - Certificate lifetime.
+## @field {string} renewBefore - Renew this long before expiry.
+## @field {[]string} dnsNames - Explicit DNS SANs for the certificate. Merged with computed names from dnsNameSuffixes. When external is true and tls is enabled, add the LoadBalancer IP or hostname here so external clients can verify the certificate.
+## @field {[]string} dnsNameSuffixes - Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.
+## @field {[]string} usages - Key usages.
+## @field {PrivateKeyEncoding} encoding - Private key encoding.
+
+## @enum {string} PrivateKeyEncoding - Private key encoding format.
+## @value PKCS1
+## @value PKCS8
+
+## @typedef {struct} TLSCA - CA certificate configuration.
+## @field {string} duration - CA certificate lifetime.
+
+## @typedef {struct} CozyTLS - TLS certificate chain sub-chart configuration.
+## @field {bool} enabled - Enable TLS termination via nginx stream sidecar and cert-manager PKI chain.
+## @field {string} clusterDomain - Cluster domain used when constructing fully-qualified DNS SANs from dnsNameSuffixes.
+## @field {TLSIssuerRef} issuerRef - External Issuer reference. When name is empty, a self-signed CA chain is created.
+## @field {TLSCA} ca - CA certificate settings (only used with self-signed chain).
+## @field {TLSCertificate} certificate - Leaf certificate settings.
+
+## TLS limitations:
+## - Intra-cluster traffic on 6379 (operator probes, sentinel, replication) remains plaintext.
+## - Sentinel HA clients (rfs-*:26379) operate on plaintext and resolve master IP as <ip>:6379.
+## - For automatic master failover with TLS: use <release>-master:6380 (follows master role label).
+
+## @param {CozyTLS} [tls] - TLS configuration. When enabled, an nginx stream sidecar terminates TLS on port 6380. Certificate chain is managed by the cozy-tls sub-chart.
+tls:
+  enabled: false
+  clusterDomain: "cozy.local"
+  issuerRef:
+    name: ""
+    kind: "Issuer"
+    group: "cert-manager.io"
+  ca:
+    duration: "43800h"
+  certificate:
+    secretName: ""
+    duration: "8760h"
+    renewBefore: "720h"
+    dnsNames: []
+    dnsNameSuffixes:
+      - master
+      - replicas
+      - external-lb
+    usages:
+      - server auth
+    encoding: "PKCS8"

@@ -17,10 +17,12 @@ spec:
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
+        - name: cozy-tls
+          path: library/cozy-tls
       components:
         - name: redis
           path: apps/redis
-          libraries: ["cozy-lib"]
+          libraries: ["cozy-lib", "cozy-tls"]
         - name: redis-rd
           path: system/redis-rd
           install:

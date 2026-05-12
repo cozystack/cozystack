@@ -131,6 +131,143 @@
       "description": "Enable password generation.",
       "type": "boolean",
       "default": true
+    },
+    "tls": {
+      "description": "TLS configuration. When enabled, an nginx stream sidecar terminates TLS on port 6380. Certificate chain is managed by the cozy-tls sub-chart.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "ca",
+        "certificate",
+        "clusterDomain",
+        "enabled",
+        "issuerRef"
+      ],
+      "properties": {
+        "ca": {
+          "description": "CA certificate settings (only used with self-signed chain).",
+          "type": "object",
+          "default": {},
+          "required": [
+            "duration"
+          ],
+          "properties": {
+            "duration": {
+              "description": "CA certificate lifetime.",
+              "type": "string",
+              "default": "43800h"
+            }
+          }
+        },
+        "certificate": {
+          "description": "Leaf certificate settings.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "duration",
+            "encoding",
+            "renewBefore",
+            "secretName"
+          ],
+          "properties": {
+            "dnsNameSuffixes": {
+              "description": "Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.",
+              "type": "array",
+              "default": [
+                "master",
+                "replicas",
+                "external-lb"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "dnsNames": {
+              "description": "Explicit DNS SANs for the certificate. Merged with computed names from dnsNameSuffixes. When external is true and tls is enabled, add the LoadBalancer IP or hostname here so external clients can verify the certificate.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "duration": {
+              "description": "Certificate lifetime.",
+              "type": "string",
+              "default": "8760h"
+            },
+            "encoding": {
+              "description": "Private key encoding.",
+              "type": "string",
+              "default": "PKCS8",
+              "enum": [
+                "PKCS1",
+                "PKCS8"
+              ]
+            },
+            "renewBefore": {
+              "description": "Renew this long before expiry.",
+              "type": "string",
+              "default": "720h"
+            },
+            "secretName": {
+              "description": "Custom TLS secret name. Defaults to \"\u003crelease\u003e-tls\".",
+              "type": "string",
+              "default": ""
+            },
+            "usages": {
+              "description": "Key usages.",
+              "type": "array",
+              "default": [
+                "server auth"
+              ],
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "clusterDomain": {
+          "description": "Cluster domain used when constructing fully-qualified DNS SANs from dnsNameSuffixes.",
+          "type": "string",
+          "default": "cozy.local"
+        },
+        "enabled": {
+          "description": "Enable TLS termination via nginx stream sidecar and cert-manager PKI chain.",
+          "type": "boolean",
+          "default": false
+        },
+        "issuerRef": {
+          "description": "External Issuer reference. When name is empty, a self-signed CA chain is created.",
+          "type": "object",
+          "default": {},
+          "required": [
+            "group",
+            "kind",
+            "name"
+          ],
+          "properties": {
+            "group": {
+              "description": "Issuer API group.",
+              "type": "string",
+              "default": "cert-manager.io"
+            },
+            "kind": {
+              "description": "Either \"Issuer\" or \"ClusterIssuer\".",
+              "type": "string",
+              "default": "Issuer",
+              "enum": [
+                "Issuer",
+                "ClusterIssuer"
+              ]
+            },
+            "name": {
+              "description": "Issuer/ClusterIssuer resource name. When empty, a self-signed CA chain is created.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        }
+      }
     }
   }
 }

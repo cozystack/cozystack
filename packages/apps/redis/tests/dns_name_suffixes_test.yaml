@@ -1,0 +1,70 @@
+suite: Certificate DNS name suffixes and clusterDomain propagation
+templates:
+  - charts/tls/templates/certificate.yaml
+release:
+  namespace: tenant-test
+tests:
+  - it: default clusterDomain produces correct FQDN for each suffix
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-master
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-master.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-master.tenant-test.svc.cozy.local
+
+  - it: custom clusterDomain is propagated to FQDN SANs
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "custom.domain"
+      tls.certificate.dnsNameSuffixes:
+        - master
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-master.tenant-test.svc.custom.domain
+      - notContains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-master.tenant-test.svc.cozy.local
+
+  - it: each suffix expands to exactly four DNS forms
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - RELEASE-NAME-master
+            - RELEASE-NAME-master.tenant-test
+            - RELEASE-NAME-master.tenant-test.svc
+            - RELEASE-NAME-master.tenant-test.svc.cozy.local
+
+  - it: all default suffixes produce FQDNs with default clusterDomain
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+        - replicas
+        - external-lb
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-master.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-replicas.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: RELEASE-NAME-external-lb.tenant-test.svc.cozy.local

@@ -41,6 +41,27 @@ type ConfigSpec struct {
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
+	// TLS configuration. When enabled, an nginx stream sidecar terminates TLS on port 6380. Certificate chain is managed by the cozy-tls sub-chart.
+	// +kubebuilder:default:={}
+	Tls CozyTLS `json:"tls,omitempty"`
+}
+
+type CozyTLS struct {
+	// CA certificate settings (only used with self-signed chain).
+	// +kubebuilder:default:={}
+	Ca TLSCA `json:"ca"`
+	// Leaf certificate settings.
+	// +kubebuilder:default:={}
+	Certificate TLSCertificate `json:"certificate"`
+	// Cluster domain used when constructing fully-qualified DNS SANs from dnsNameSuffixes.
+	// +kubebuilder:default:="cozy.local"
+	ClusterDomain string `json:"clusterDomain"`
+	// Enable TLS termination via nginx stream sidecar and cert-manager PKI chain.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// External Issuer reference. When name is empty, a self-signed CA chain is created.
+	// +kubebuilder:default:={}
+	IssuerRef TLSIssuerRef `json:"issuerRef"`
 }
 
 type Resources struct {
@@ -49,6 +70,54 @@ type Resources struct {
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
+
+type TLSCA struct {
+	// CA certificate lifetime.
+	// +kubebuilder:default:="43800h"
+	Duration string `json:"duration"`
+}
+
+type TLSCertificate struct {
+	// Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.
+	// +kubebuilder:default:={"master","replicas","external-lb"}
+	DnsNameSuffixes []string `json:"dnsNameSuffixes,omitempty"`
+	// Explicit DNS SANs for the certificate. Merged with computed names from dnsNameSuffixes. When external is true and tls is enabled, add the LoadBalancer IP or hostname here so external clients can verify the certificate.
+	// +kubebuilder:default:={}
+	DnsNames []string `json:"dnsNames,omitempty"`
+	// Certificate lifetime.
+	// +kubebuilder:default:="8760h"
+	Duration string `json:"duration"`
+	// Private key encoding.
+	// +kubebuilder:default:="PKCS8"
+	Encoding PrivateKeyEncoding `json:"encoding"`
+	// Renew this long before expiry.
+	// +kubebuilder:default:="720h"
+	RenewBefore string `json:"renewBefore"`
+	// Custom TLS secret name. Defaults to "<release>-tls".
+	// +kubebuilder:default:=""
+	SecretName string `json:"secretName"`
+	// Key usages.
+	// +kubebuilder:default:={"server auth"}
+	Usages []string `json:"usages,omitempty"`
+}
+
+type TLSIssuerRef struct {
+	// Issuer API group.
+	// +kubebuilder:default:="cert-manager.io"
+	Group string `json:"group"`
+	// Either "Issuer" or "ClusterIssuer".
+	// +kubebuilder:default:="Issuer"
+	Kind IssuerKind `json:"kind"`
+	// Issuer/ClusterIssuer resource name. When empty, a self-signed CA chain is created.
+	// +kubebuilder:default:=""
+	Name string `json:"name"`
+}
+
+// +kubebuilder:validation:Enum="Issuer";"ClusterIssuer"
+type IssuerKind string
+
+// +kubebuilder:validation:Enum="PKCS1";"PKCS8"
+type PrivateKeyEncoding string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
