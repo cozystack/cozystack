@@ -1,0 +1,990 @@
+diff --git a/Makefile b/Makefile
+index 8392bc8a..7f5ad13f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -87,7 +87,7 @@ unit:
+ test: lint unit e2e
+ 
+ e2e:
+-	KILO_IMAGE=squat/kilo:test bash_unit $(BASH_UNIT_FLAGS) ./e2e/setup.sh ./e2e/full-mesh.sh ./e2e/location-mesh.sh ./e2e/multi-cluster.sh ./e2e/handlers.sh ./e2e/kgctl.sh ./e2e/teardown.sh
++	KILO_IMAGE=squat/kilo:test bash_unit $(BASH_UNIT_FLAGS) ./e2e/setup.sh ./e2e/full-mesh.sh ./e2e/location-mesh.sh ./e2e/cross-mesh.sh ./e2e/multi-cluster.sh ./e2e/handlers.sh ./e2e/kgctl.sh ./e2e/teardown.sh
+ 
+ docs/kg.md:
+ 	go run ./cmd/kg/... --help | head -n -2 > help.txt
+diff --git a/cmd/kg/main.go b/cmd/kg/main.go
+index 4472f7f7..0edd9842 100644
+--- a/cmd/kg/main.go
++++ b/cmd/kg/main.go
+@@ -77,6 +77,7 @@ var (
+ 	availableGranularities = strings.Join([]string{
+ 		string(mesh.LogicalGranularity),
+ 		string(mesh.FullGranularity),
++		string(mesh.CrossGranularity),
+ 	}, ", ")
+ 	availableLogLevels = strings.Join([]string{
+ 		logLevelAll,
+@@ -237,6 +238,7 @@ func runRoot(_ *cobra.Command, _ []string) error {
+ 	switch gr {
+ 	case mesh.LogicalGranularity:
+ 	case mesh.FullGranularity:
++	case mesh.CrossGranularity:
+ 	default:
+ 		return fmt.Errorf("mesh granularity %v unknown; possible values are: %s", granularity, availableGranularities)
+ 	}
+diff --git a/cmd/kgctl/main.go b/cmd/kgctl/main.go
+index 7f92031f..b3169d83 100644
+--- a/cmd/kgctl/main.go
++++ b/cmd/kgctl/main.go
+@@ -49,6 +49,7 @@ var (
+ 	availableGranularities = []string{
+ 		string(mesh.LogicalGranularity),
+ 		string(mesh.FullGranularity),
++		string(mesh.CrossGranularity),
+ 		string(mesh.AutoGranularity),
+ 	}
+ 	availableLogLevels = []string{
+@@ -91,6 +92,7 @@ func runRoot(c *cobra.Command, _ []string) error {
+ 	switch opts.granularity {
+ 	case mesh.LogicalGranularity:
+ 	case mesh.FullGranularity:
++	case mesh.CrossGranularity:
+ 	case mesh.AutoGranularity:
+ 	default:
+ 		return fmt.Errorf("mesh granularity %s unknown; posible values are: %s", granularity, availableGranularities)
+@@ -164,8 +166,9 @@ func determineGranularity(gr mesh.Granularity, ns []*mesh.Node) (mesh.Granularit
+ 		switch ret {
+ 		case mesh.LogicalGranularity:
+ 		case mesh.FullGranularity:
++		case mesh.CrossGranularity:
+ 		default:
+-			return ret, fmt.Errorf("mesh granularity %s is not supported", opts.granularity)
++			return ret, fmt.Errorf("mesh granularity %s is not supported", ret)
+ 		}
+ 		return ret, nil
+ 	}
+diff --git a/docs/kg.md b/docs/kg.md
+index 3f58515e..f4829a25 100644
+--- a/docs/kg.md
++++ b/docs/kg.md
+@@ -50,7 +50,7 @@ Flags:
+       --local                          Should Kilo manage routes within a location? (default true)
+       --log-level string               Log level to use. Possible values: all, debug, info, warn, error, none (default "info")
+       --master string                  The address of the Kubernetes API server (overrides any value in kubeconfig).
+-      --mesh-granularity string        The granularity of the network mesh to create. Possible values: location, full (default "location")
++      --mesh-granularity string        The granularity of the network mesh to create. Possible values: location, full, cross (default "location")
+       --mtu string                     The MTU of the WireGuard interface created by Kilo. Set to 'auto' to detect from the underlay interface. (default "auto")
+       --port int                       The port over which WireGuard peers should communicate. (default 51820)
+       --prioritise-private-addresses   Prefer to assign a private IP address to the node's endpoint.
+diff --git a/docs/topology.md b/docs/topology.md
+index e5eafd0a..3fbef690 100644
+--- a/docs/topology.md
++++ b/docs/topology.md
+@@ -47,6 +47,11 @@ kgctl graph | circo -Tsvg > cluster.svg
+ 
+ <img src="./graphs/full-mesh.svg" />
+ 
++# Cross Mesh
++
++In this topology all nodes within the same location are not encrypted. Traffic to any other node outside of current location is encrypted
++with direct node-to-node encryption. To use this mesh specify `--mesh-granularity=cross`.
++
+ ## Mixed 
+ 
+ The `kilo.squat.ai/location` annotation can be used to create cluster mixing some fully meshed nodes and some nodes grouped by logical location.
+diff --git a/e2e/cross-mesh.sh b/e2e/cross-mesh.sh
+new file mode 100755
+index 00000000..0874b9d4
+--- /dev/null
++++ b/e2e/cross-mesh.sh
+@@ -0,0 +1,63 @@
++#!/usr/bin/env bash
++# shellcheck disable=SC1091
++. lib.sh
++
++# This suite exercises --mesh-granularity=cross on the bridge-CNI test
++# cluster. Cross drops the WireGuard tunnel between nodes that share a
++# location and expects the underlying CNI to handle intra-location
++# traffic over its own overlay (e.g. Cilium VXLAN). The Kilo bridge CNI
++# used by this kind cluster has no such overlay, so cross-location peer
++# topology can be validated here but pod-to-pod connectivity cannot —
++# that lives in the Cilium-CNI suite (e2e/cilium-cross-mesh.sh).
++
++setup_suite() {
++	# Place control-plane and the first worker into one location, and the
++	# second worker into another, so that "cross" produces tunnels only
++	# between the two locations and not within a single location.
++	_kubectl annotate node "$KIND_CLUSTER-control-plane" kilo.squat.ai/location=loc-a --overwrite
++	_kubectl annotate node "$KIND_CLUSTER-worker"        kilo.squat.ai/location=loc-a --overwrite
++	_kubectl annotate node "$KIND_CLUSTER-worker2"       kilo.squat.ai/location=loc-b --overwrite
++	# shellcheck disable=SC2016
++	_kubectl patch ds -n kube-system kilo -p '{"spec": {"template":{"spec":{"containers":[{"name":"kilo","args":["--hostname=$(NODE_NAME)","--create-interface=false","--kubeconfig=/etc/kubernetes/kubeconfig","--mesh-granularity=cross"]}]}}}}'
++	block_until_ready_by_name kube-system kilo-userspace
++}
++
++# Restore the cluster to a clean state for the suites that follow
++# (multi-cluster.sh, handlers.sh, kgctl.sh): remove the location
++# annotations this suite added and roll the DaemonSet back to
++# --mesh-granularity=location, matching the state location-mesh.sh
++# leaves behind.
++teardown_suite() {
++	_kubectl annotate node "$KIND_CLUSTER-control-plane" kilo.squat.ai/location- 2>/dev/null || true
++	_kubectl annotate node "$KIND_CLUSTER-worker"        kilo.squat.ai/location- 2>/dev/null || true
++	_kubectl annotate node "$KIND_CLUSTER-worker2"       kilo.squat.ai/location- 2>/dev/null || true
++	# shellcheck disable=SC2016
++	_kubectl patch ds -n kube-system kilo -p '{"spec": {"template":{"spec":{"containers":[{"name":"kilo","args":["--hostname=$(NODE_NAME)","--create-interface=false","--kubeconfig=/etc/kubernetes/kubeconfig","--mesh-granularity=location"]}]}}}}'
++	block_until_ready_by_name kube-system kilo-userspace
++}
++
++test_cross_mesh_peer() {
++	check_peer wg99 e2e 10.5.0.1/32 cross
++}
++
++test_mesh_granularity_auto_detect() {
++	assert_equals "$(_kgctl graph)" "$(_kgctl graph --mesh-granularity cross)"
++}
++
++# In "cross" granularity, every node in another location must appear as a
++# WireGuard peer (direct tunnels across locations), while nodes in the same
++# location must NOT appear as peers (intra-location traffic stays on the CNI).
++# In "location" the same-location worker would not have any [Peer] entry at
++# all (it is a non-leader); in "full" both same- and cross-location nodes
++# would appear as peers. This sanity-checks that "cross" sits in between.
++test_cross_peer_topology() {
++	local CP_PEERS WORKER_PEERS WORKER2_PEERS
++	CP_PEERS=$(_kgctl showconf node "$KIND_CLUSTER-control-plane" | grep -c '^\[Peer\]')
++	WORKER_PEERS=$(_kgctl showconf node "$KIND_CLUSTER-worker"        | grep -c '^\[Peer\]')
++	WORKER2_PEERS=$(_kgctl showconf node "$KIND_CLUSTER-worker2"      | grep -c '^\[Peer\]')
++	# Each loc-a node should peer only with the single loc-b node.
++	assert_equals "1" "$CP_PEERS"      "control-plane (loc-a) should have 1 peer (the loc-b node)"
++	assert_equals "1" "$WORKER_PEERS"  "worker (loc-a) should have 1 peer (the loc-b node)"
++	# The loc-b node should peer with both loc-a nodes.
++	assert_equals "2" "$WORKER2_PEERS" "worker2 (loc-b) should have 2 peers (both loc-a nodes)"
++}
+diff --git a/pkg/k8s/backend.go b/pkg/k8s/backend.go
+index 91d78aef..ae8a72a9 100644
+--- a/pkg/k8s/backend.go
++++ b/pkg/k8s/backend.go
+@@ -340,6 +340,7 @@ func translateNode(node *v1.Node, topologyLabel string) *mesh.Node {
+ 		switch meshGranularity {
+ 		case mesh.LogicalGranularity:
+ 		case mesh.FullGranularity:
++		case mesh.CrossGranularity:
+ 		default:
+ 			meshGranularity = ""
+ 		}
+diff --git a/pkg/mesh/backend.go b/pkg/mesh/backend.go
+index eebbec2a..78becc89 100644
+--- a/pkg/mesh/backend.go
++++ b/pkg/mesh/backend.go
+@@ -50,6 +50,9 @@ const (
+ 	// FullGranularity indicates that the network should create
+ 	// a mesh between every node.
+ 	FullGranularity Granularity = "full"
++	// CrossGranularity indicates that network is encrypted only
++	// between nodes in different locations.
++	CrossGranularity Granularity = "cross"
+ 	// AutoGranularity can be used with kgctl to obtain
+ 	// the granularity automatically.
+ 	AutoGranularity Granularity = "auto"
+diff --git a/pkg/mesh/graph.go b/pkg/mesh/graph.go
+index cdf9ff3b..42130c6b 100644
+--- a/pkg/mesh/graph.go
++++ b/pkg/mesh/graph.go
+@@ -44,22 +44,30 @@ func (t *Topology) Dot() (string, error) {
+ 		return "", fmt.Errorf("failed to set direction")
+ 	}
+ 	leaders := make([]string, len(t.segments))
++	nodeLocations := make([]string, len(t.segments))
+ 	nodeAttrs := map[string]string{
+ 		string(gographviz.Shape): "ellipse",
+ 	}
+ 
+ 	for i, s := range t.segments {
+-		if err := g.AddSubGraph("kilo", subGraphName(s.location), nil); err != nil {
++		location := s.location
++		plainConnection := false
++		if s.nodeLocation != "" {
++			location = s.nodeLocation
++			plainConnection = true
++		}
++
++		if err := g.AddSubGraph("kilo", subGraphName(location), nil); err != nil {
+ 			return "", fmt.Errorf("failed to add subgraph")
+ 		}
+-		if err := g.AddAttr(subGraphName(s.location), string(gographviz.Label), graphEscape(s.location)); err != nil {
++		if err := g.AddAttr(subGraphName(location), string(gographviz.Label), graphEscape(location)); err != nil {
+ 			return "", fmt.Errorf("failed to add label to subgraph")
+ 		}
+-		if err := g.AddAttr(subGraphName(s.location), string(gographviz.Style), `"dashed,rounded"`); err != nil {
++		if err := g.AddAttr(subGraphName(location), string(gographviz.Style), `"dashed,rounded"`); err != nil {
+ 			return "", fmt.Errorf("failed to add style to subgraph")
+ 		}
+ 		for j := range s.cidrs {
+-			if err := g.AddNode(subGraphName(s.location), graphEscape(s.hostnames[j]), nodeAttrs); err != nil {
++			if err := g.AddNode(subGraphName(location), graphEscape(s.hostnames[j]), nodeAttrs); err != nil {
+ 				return "", fmt.Errorf("failed to add node to subgraph")
+ 			}
+ 			var wg net.IP
+@@ -75,14 +83,28 @@ func (t *Topology) Dot() (string, error) {
+ 			if s.privateIPs != nil {
+ 				priv = s.privateIPs[j]
+ 			}
+-			if err := g.Nodes.Lookup[graphEscape(s.hostnames[j])].Attrs.Add(string(gographviz.Label), nodeLabel(s.location, s.hostnames[j], s.cidrs[j], priv, wg, endpoint)); err != nil {
++			if err := g.Nodes.Lookup[graphEscape(s.hostnames[j])].Attrs.Add(string(gographviz.Label), nodeLabel(location, s.hostnames[j], s.cidrs[j], priv, wg, endpoint)); err != nil {
+ 				return "", fmt.Errorf("failed to add label to node")
+ 			}
+ 		}
+-		meshSubGraph(g, g.Relations.SortedChildren(subGraphName(s.location)), s.leader, nil)
++		if s.nodeLocation == "" {
++			meshSubGraph(g, g.Relations.SortedChildren(subGraphName(location)), s.leader, plainConnection, nil)
++		}
++		nodeLocations[i] = s.nodeLocation
+ 		leaders[i] = graphEscape(s.hostnames[s.leader])
+ 	}
+-	meshGraph(g, leaders, nil)
++
++	seen := make(map[string]bool)
++	for _, s := range t.segments {
++		if s.nodeLocation == "" || seen[s.nodeLocation] {
++			continue
++		}
++		seen[s.nodeLocation] = true
++		children := g.Relations.SortedChildren(subGraphName(s.nodeLocation))
++		meshSubGraph(g, children, 0, true, nil)
++	}
++
++	meshGraph(g, leaders, nodeLocations, nil)
+ 
+ 	if err := g.AddSubGraph("kilo", graphEscape("cluster_peers"), nil); err != nil {
+ 		return "", fmt.Errorf("failed to add peer subgraph")
+@@ -106,7 +128,7 @@ func (t *Topology) Dot() (string, error) {
+ 	return g.String(), nil
+ }
+ 
+-func meshGraph(g *gographviz.Graph, nodes []string, attrs gographviz.Attrs) {
++func meshGraph(g *gographviz.Graph, nodes []string, nodeLocations []string, attrs gographviz.Attrs) {
+ 	if attrs == nil {
+ 		attrs = make(gographviz.Attrs)
+ 		attrs[gographviz.Dir] = "both"
+@@ -116,21 +138,43 @@ func meshGraph(g *gographviz.Graph, nodes []string, attrs gographviz.Attrs) {
+ 			if i == j {
+ 				continue
+ 			}
++			if nodeLocations != nil && nodeLocations[i] != "" && nodeLocations[i] == nodeLocations[j] {
++				continue
++			}
++			dsts := g.Edges.SrcToDsts[nodes[i]]
++			if dsts != nil && len(dsts[nodes[j]]) != 0 {
++				// nodes already connected via plain connection
++				continue
++			}
++
+ 			g.Edges.Add(&gographviz.Edge{Src: nodes[i], Dst: nodes[j], Dir: true, Attrs: attrs})
+ 		}
+ 	}
+ }
+ 
+-func meshSubGraph(g *gographviz.Graph, nodes []string, leader int, attrs gographviz.Attrs) {
++func meshSubGraph(g *gographviz.Graph, nodes []string, leader int, plainConnection bool, attrs gographviz.Attrs) {
+ 	if attrs == nil {
+ 		attrs = make(gographviz.Attrs)
+ 		attrs[gographviz.Dir] = "both"
++		if plainConnection {
++			attrs[gographviz.Style] = "dotted"
++			attrs[gographviz.ArrowHead] = "none"
++			attrs[gographviz.ArrowTail] = "none"
++		}
+ 	}
+-	for i := range nodes {
+-		if i == leader {
+-			continue
++	if plainConnection {
++		for i := range nodes {
++			for j := i + 1; j < len(nodes); j++ {
++				g.Edges.Add(&gographviz.Edge{Src: nodes[i], Dst: nodes[j], Dir: true, Attrs: attrs})
++			}
++		}
++	} else {
++		for i := range nodes {
++			if i == leader {
++				continue
++			}
++			g.Edges.Add(&gographviz.Edge{Src: nodes[leader], Dst: nodes[i], Dir: true, Attrs: attrs})
+ 		}
+-		g.Edges.Add(&gographviz.Edge{Src: nodes[leader], Dst: nodes[i], Dir: true, Attrs: attrs})
+ 	}
+ }
+ 
+diff --git a/pkg/mesh/routes.go b/pkg/mesh/routes.go
+index 38d6c97c..f81cf821 100644
+--- a/pkg/mesh/routes.go
++++ b/pkg/mesh/routes.go
+@@ -147,7 +147,7 @@ func (t *Topology) Routes(kiloIfaceName string, kiloIface, privIface, tunlIface
+ 	}
+ 	for _, segment := range t.segments {
+ 		// Add routes for the current segment if local is true.
+-		if segment.location == t.location {
++		if (segment.location == t.location) || (t.nodeLocation != "" && segment.nodeLocation == t.nodeLocation) {
+ 			// If the local node does not have a private IP address,
+ 			// then skip adding routes, because the node is in its own location.
+ 			if local && t.privateIP != nil {
+@@ -402,9 +402,12 @@ func (t *Topology) Rules(cni, iptablesForwardRule bool) iptables.RuleSet {
+ 		// Make sure packets to allowed location IPs go through the KILO-NAT chain, so they can be MASQUERADEd,
+ 		// Otherwise packets to these destinations will reach the destination, but never find their way back.
+ 		// We only want to NAT in locations of the corresponding allowed location IPs.
++		// Skip the jump when the source is in the same allowed-location CIDR: that traffic is local L2
++		// (e.g. node-to-VIP) and must not be MASQUERADEd, otherwise floating IPs / VIPs whose addresses
++		// have no explicit RETURN rule fall through to MASQUERADE and break etcd / control-plane HA.
+ 		if t.location == s.location {
+ 			for _, alip := range s.allowedLocationIPs {
+-				rules.AddToPrepend(iptables.NewRule(iptables.GetProtocol(alip.IP), "nat", "POSTROUTING", "-d", alip.String(), "-m", "comment", "--comment", "Kilo: jump to NAT chain", "-j", "KILO-NAT"))
++				rules.AddToPrepend(iptables.NewRule(iptables.GetProtocol(alip.IP), "nat", "POSTROUTING", "-d", alip.String(), "!", "-s", alip.String(), "-m", "comment", "--comment", "Kilo: jump to NAT chain", "-j", "KILO-NAT"))
+ 			}
+ 		}
+ 	}
+diff --git a/pkg/mesh/topology.go b/pkg/mesh/topology.go
+index e08528f2..2734900c 100644
+--- a/pkg/mesh/topology.go
++++ b/pkg/mesh/topology.go
+@@ -37,10 +37,12 @@ type Topology struct {
+ 	// key is the private key of the node creating the topology.
+ 	key  wgtypes.Key
+ 	port int
+-	// Location is the logical location of the local host.
++	// location is the logical location of the local host.
+ 	location string
+-	segments []*segment
+-	peers    []*Peer
++	// nodeLocation is the location annotation of the node. This is set only in cross location topology.
++	nodeLocation string
++	segments     []*segment
++	peers        []*Peer
+ 
+ 	// hostname is the hostname of the local host.
+ 	hostname string
+@@ -75,8 +77,10 @@ type segment struct {
+ 	endpoint            *wireguard.Endpoint
+ 	key                 wgtypes.Key
+ 	persistentKeepalive time.Duration
+-	// Location is the logical location of this segment.
++	// location is the logical location of this segment.
+ 	location string
++	// nodeLocation is the node location annotation. This is set only for cross location topology.
++	nodeLocation string
+ 
+ 	// cidrs is a slice of subnets of all peers in the segment.
+ 	cidrs []*net.IPNet
+@@ -97,36 +101,48 @@ type segment struct {
+ 	allowedLocationIPs []net.IPNet
+ }
+ 
++// topoKey is used to group nodes into locations.
++type topoKey struct {
++	location     string
++	nodeLocation string
++}
++
+ // NewTopology creates a new Topology struct from a given set of nodes and peers.
+ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Granularity, hostname string, port int, key wgtypes.Key, subnet *net.IPNet, serviceCIDRs []*net.IPNet, persistentKeepalive time.Duration, logger log.Logger) (*Topology, error) {
+ 	if logger == nil {
+ 		logger = log.NewNopLogger()
+ 	}
+-	topoMap := make(map[string][]*Node)
++	topoMap := make(map[topoKey][]*Node)
++	var localLocation, localNodeLocation string
++	switch granularity {
++	case LogicalGranularity:
++		localLocation = logicalLocationPrefix + nodes[hostname].Location
++		if nodes[hostname].InternalIP == nil {
++			localLocation = nodeLocationPrefix + hostname
++		}
++	case FullGranularity:
++		localLocation = nodeLocationPrefix + hostname
++	case CrossGranularity:
++		localLocation = nodeLocationPrefix + hostname
++		localNodeLocation = logicalLocationPrefix + nodes[hostname].Location
++	}
++
+ 	for _, node := range nodes {
+-		var location string
++		var location, nodeLocation string
+ 		switch granularity {
+ 		case LogicalGranularity:
+ 			location = logicalLocationPrefix + node.Location
+-			// Put node in a different location, if no private
+-			// IP was found.
+ 			if node.InternalIP == nil {
+ 				location = nodeLocationPrefix + node.Name
+ 			}
+ 		case FullGranularity:
+ 			location = nodeLocationPrefix + node.Name
++		case CrossGranularity:
++			location = nodeLocationPrefix + node.Name
++			nodeLocation = logicalLocationPrefix + node.Location
+ 		}
+-		topoMap[location] = append(topoMap[location], node)
+-	}
+-	var localLocation string
+-	switch granularity {
+-	case LogicalGranularity:
+-		localLocation = logicalLocationPrefix + nodes[hostname].Location
+-		if nodes[hostname].InternalIP == nil {
+-			localLocation = nodeLocationPrefix + hostname
+-		}
+-	case FullGranularity:
+-		localLocation = nodeLocationPrefix + hostname
++		key := topoKey{location: location, nodeLocation: nodeLocation}
++		topoMap[key] = append(topoMap[key], node)
+ 	}
+ 
+ 	t := Topology{
+@@ -134,6 +150,7 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
+ 		port:                port,
+ 		hostname:            hostname,
+ 		location:            localLocation,
++		nodeLocation:        localNodeLocation,
+ 		persistentKeepalive: persistentKeepalive,
+ 		privateIP:           nodes[hostname].InternalIP,
+ 		subnet:              nodes[hostname].Subnet,
+@@ -148,7 +165,7 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
+ 			return topoMap[location][i].Name < topoMap[location][j].Name
+ 		})
+ 		leader := findLeader(topoMap[location])
+-		if location == localLocation && topoMap[location][leader].Name == hostname {
++		if location.nodeLocation != "" || (location.location == localLocation && topoMap[location][leader].Name == hostname) {
+ 			t.leader = true
+ 		}
+ 		var allowedIPs []net.IPNet
+@@ -190,7 +207,8 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
+ 			endpoint:            topoMap[location][leader].Endpoint,
+ 			key:                 topoMap[location][leader].Key,
+ 			persistentKeepalive: topoMap[location][leader].PersistentKeepalive,
+-			location:            location,
++			location:            location.location,
++			nodeLocation:        location.nodeLocation,
+ 			cidrs:               cidrs,
+ 			hostnames:           hostnames,
+ 			leader:              leader,
+@@ -235,7 +253,7 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
+ 
+ 		// Now that the topology is ordered, update the discoveredEndpoints map
+ 		// add new ones by going through the ordered topology: segments, nodes
+-		for _, node := range topoMap[segment.location] {
++		for _, node := range topoMap[topoKey{location: segment.location, nodeLocation: segment.nodeLocation}] {
+ 			for key := range node.DiscoveredEndpoints {
+ 				if _, ok := t.discoveredEndpoints[key]; !ok {
+ 					t.discoveredEndpoints[key] = node.DiscoveredEndpoints[key]
+@@ -323,7 +341,7 @@ func (t *Topology) Conf() *wireguard.Conf {
+ 		},
+ 	}
+ 	for _, s := range t.segments {
+-		if s.location == t.location {
++		if (s.location == t.location) || (t.nodeLocation != "" && t.nodeLocation == s.nodeLocation) {
+ 			continue
+ 		}
+ 		peer := wireguard.Peer{
+diff --git a/pkg/mesh/topology_test.go b/pkg/mesh/topology_test.go
+index b8e86f55..cf71628b 100644
+--- a/pkg/mesh/topology_test.go
++++ b/pkg/mesh/topology_test.go
+@@ -41,6 +41,7 @@ var (
+ 	key3 = wgtypes.Key{'k', 'e', 'y', '3'}
+ 	key4 = wgtypes.Key{'k', 'e', 'y', '4'}
+ 	key5 = wgtypes.Key{'k', 'e', 'y', '5'}
++	key6 = wgtypes.Key{'k', 'e', 'y', '6'}
+ )
+ 
+ func setup(t *testing.T) (map[string]*Node, map[string]*Peer, wgtypes.Key, int) {
+@@ -557,6 +558,492 @@ func TestNewTopology(t *testing.T) {
+ 				logger: log.NewNopLogger(),
+ 			},
+ 		},
++		{
++			name:        "cross from a",
++			granularity: CrossGranularity,
++			hostname:    nodes["a"].Name,
++			result: &Topology{
++				hostname:      nodes["a"].Name,
++				leader:        true,
++				location:      nodeLocationPrefix + nodes["a"].Name,
++				nodeLocation:  logicalLocationPrefix + nodes["a"].Location,
++				subnet:        nodes["a"].Subnet,
++				privateIP:     nodes["a"].InternalIP,
++				wireGuardCIDR: &net.IPNet{IP: w1, Mask: net.CIDRMask(16, 32)},
++				segments: []*segment{
++					{
++						allowedIPs:          []net.IPNet{*nodes["a"].Subnet, *nodes["a"].InternalIP, {IP: w1, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["a"].Endpoint,
++						key:                 nodes["a"].Key,
++						persistentKeepalive: nodes["a"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["a"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["a"].Location,
++						cidrs:               []*net.IPNet{nodes["a"].Subnet},
++						hostnames:           []string{"a"},
++						privateIPs:          []net.IP{nodes["a"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w1,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["b"].Subnet, *nodes["b"].InternalIP, {IP: w2, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["b"].Endpoint,
++						key:                 nodes["b"].Key,
++						persistentKeepalive: nodes["b"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["b"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["b"].Location,
++						cidrs:               []*net.IPNet{nodes["b"].Subnet},
++						hostnames:           []string{"b"},
++						privateIPs:          []net.IP{nodes["b"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w2,
++						allowedLocationIPs:  nodes["b"].AllowedLocationIPs,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["c"].Subnet, *nodes["c"].InternalIP, {IP: w3, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["c"].Endpoint,
++						key:                 nodes["c"].Key,
++						persistentKeepalive: nodes["c"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["c"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["c"].Location,
++						cidrs:               []*net.IPNet{nodes["c"].Subnet},
++						hostnames:           []string{"c"},
++						privateIPs:          []net.IP{nodes["c"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w3,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["d"].Subnet, {IP: w4, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["d"].Endpoint,
++						key:                 nodes["d"].Key,
++						persistentKeepalive: nodes["d"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["d"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["d"].Location,
++						cidrs:               []*net.IPNet{nodes["d"].Subnet},
++						hostnames:           []string{"d"},
++						privateIPs:          nil,
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w4,
++					},
++				},
++				peers:  []*Peer{peers["a"], peers["b"]},
++				logger: log.NewNopLogger(),
++			},
++		},
++		{
++			name:        "cross from b",
++			granularity: CrossGranularity,
++			hostname:    nodes["b"].Name,
++			result: &Topology{
++				hostname:      nodes["b"].Name,
++				leader:        true,
++				location:      nodeLocationPrefix + nodes["b"].Name,
++				nodeLocation:  logicalLocationPrefix + nodes["b"].Location,
++				subnet:        nodes["b"].Subnet,
++				privateIP:     nodes["b"].InternalIP,
++				wireGuardCIDR: &net.IPNet{IP: w2, Mask: net.CIDRMask(16, 32)},
++				segments: []*segment{
++					{
++						allowedIPs:          []net.IPNet{*nodes["a"].Subnet, *nodes["a"].InternalIP, {IP: w1, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["a"].Endpoint,
++						key:                 nodes["a"].Key,
++						persistentKeepalive: nodes["a"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["a"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["a"].Location,
++						cidrs:               []*net.IPNet{nodes["a"].Subnet},
++						hostnames:           []string{"a"},
++						privateIPs:          []net.IP{nodes["a"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w1,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["b"].Subnet, *nodes["b"].InternalIP, {IP: w2, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["b"].Endpoint,
++						key:                 nodes["b"].Key,
++						persistentKeepalive: nodes["b"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["b"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["b"].Location,
++						cidrs:               []*net.IPNet{nodes["b"].Subnet},
++						hostnames:           []string{"b"},
++						privateIPs:          []net.IP{nodes["b"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w2,
++						allowedLocationIPs:  nodes["b"].AllowedLocationIPs,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["c"].Subnet, *nodes["c"].InternalIP, {IP: w3, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["c"].Endpoint,
++						key:                 nodes["c"].Key,
++						persistentKeepalive: nodes["c"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["c"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["c"].Location,
++						cidrs:               []*net.IPNet{nodes["c"].Subnet},
++						hostnames:           []string{"c"},
++						privateIPs:          []net.IP{nodes["c"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w3,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["d"].Subnet, {IP: w4, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["d"].Endpoint,
++						key:                 nodes["d"].Key,
++						persistentKeepalive: nodes["d"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["d"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["d"].Location,
++						cidrs:               []*net.IPNet{nodes["d"].Subnet},
++						hostnames:           []string{"d"},
++						privateIPs:          nil,
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w4,
++					},
++				},
++				peers:  []*Peer{peers["a"], peers["b"]},
++				logger: log.NewNopLogger(),
++			},
++		},
++		{
++			name:        "cross from c",
++			granularity: CrossGranularity,
++			hostname:    nodes["c"].Name,
++			result: &Topology{
++				hostname:      nodes["c"].Name,
++				leader:        true,
++				location:      nodeLocationPrefix + nodes["c"].Name,
++				nodeLocation:  logicalLocationPrefix + nodes["c"].Location,
++				subnet:        nodes["c"].Subnet,
++				privateIP:     nodes["c"].InternalIP,
++				wireGuardCIDR: &net.IPNet{IP: w3, Mask: net.CIDRMask(16, 32)},
++				segments: []*segment{
++					{
++						allowedIPs:          []net.IPNet{*nodes["a"].Subnet, *nodes["a"].InternalIP, {IP: w1, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["a"].Endpoint,
++						key:                 nodes["a"].Key,
++						persistentKeepalive: nodes["a"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["a"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["a"].Location,
++						cidrs:               []*net.IPNet{nodes["a"].Subnet},
++						hostnames:           []string{"a"},
++						privateIPs:          []net.IP{nodes["a"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w1,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["b"].Subnet, *nodes["b"].InternalIP, {IP: w2, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["b"].Endpoint,
++						key:                 nodes["b"].Key,
++						persistentKeepalive: nodes["b"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["b"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["b"].Location,
++						cidrs:               []*net.IPNet{nodes["b"].Subnet},
++						hostnames:           []string{"b"},
++						privateIPs:          []net.IP{nodes["b"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w2,
++						allowedLocationIPs:  nodes["b"].AllowedLocationIPs,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["c"].Subnet, *nodes["c"].InternalIP, {IP: w3, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["c"].Endpoint,
++						key:                 nodes["c"].Key,
++						persistentKeepalive: nodes["c"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["c"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["c"].Location,
++						cidrs:               []*net.IPNet{nodes["c"].Subnet},
++						hostnames:           []string{"c"},
++						privateIPs:          []net.IP{nodes["c"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w3,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["d"].Subnet, {IP: w4, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["d"].Endpoint,
++						key:                 nodes["d"].Key,
++						persistentKeepalive: nodes["d"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["d"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["d"].Location,
++						cidrs:               []*net.IPNet{nodes["d"].Subnet},
++						hostnames:           []string{"d"},
++						privateIPs:          nil,
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w4,
++					},
++				},
++				peers:  []*Peer{peers["a"], peers["b"]},
++				logger: log.NewNopLogger(),
++			},
++		},
++		{
++			name:        "cross from d",
++			granularity: CrossGranularity,
++			hostname:    nodes["d"].Name,
++			result: &Topology{
++				hostname:      nodes["d"].Name,
++				leader:        true,
++				location:      nodeLocationPrefix + nodes["d"].Name,
++				nodeLocation:  logicalLocationPrefix + nodes["d"].Location,
++				subnet:        nodes["d"].Subnet,
++				privateIP:     nil,
++				wireGuardCIDR: &net.IPNet{IP: w4, Mask: net.CIDRMask(16, 32)},
++				segments: []*segment{
++					{
++						allowedIPs:          []net.IPNet{*nodes["a"].Subnet, *nodes["a"].InternalIP, {IP: w1, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["a"].Endpoint,
++						key:                 nodes["a"].Key,
++						persistentKeepalive: nodes["a"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["a"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["a"].Location,
++						cidrs:               []*net.IPNet{nodes["a"].Subnet},
++						hostnames:           []string{"a"},
++						privateIPs:          []net.IP{nodes["a"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w1,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["b"].Subnet, *nodes["b"].InternalIP, {IP: w2, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["b"].Endpoint,
++						key:                 nodes["b"].Key,
++						persistentKeepalive: nodes["b"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["b"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["b"].Location,
++						cidrs:               []*net.IPNet{nodes["b"].Subnet},
++						hostnames:           []string{"b"},
++						privateIPs:          []net.IP{nodes["b"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w2,
++						allowedLocationIPs:  nodes["b"].AllowedLocationIPs,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["c"].Subnet, *nodes["c"].InternalIP, {IP: w3, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["c"].Endpoint,
++						key:                 nodes["c"].Key,
++						persistentKeepalive: nodes["c"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["c"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["c"].Location,
++						cidrs:               []*net.IPNet{nodes["c"].Subnet},
++						hostnames:           []string{"c"},
++						privateIPs:          []net.IP{nodes["c"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w3,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["d"].Subnet, {IP: w4, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["d"].Endpoint,
++						key:                 nodes["d"].Key,
++						persistentKeepalive: nodes["d"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["d"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["d"].Location,
++						cidrs:               []*net.IPNet{nodes["d"].Subnet},
++						hostnames:           []string{"d"},
++						privateIPs:          nil,
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w4,
++					},
++				},
++				peers:  []*Peer{peers["a"], peers["b"]},
++				logger: log.NewNopLogger(),
++			},
++		},
++	} {
++		tc.result.key = key
++		tc.result.port = port
++		topo, err := NewTopology(nodes, peers, tc.granularity, tc.hostname, port, key, DefaultKiloSubnet, nil, 0, nil)
++		if err != nil {
++			t.Errorf("test case %q: failed to generate Topology: %v", tc.name, err)
++		}
++		if diff := pretty.Compare(topo, tc.result); diff != "" {
++			t.Errorf("test case %q: got diff: %v", tc.name, diff)
++		}
++	}
++}
++
++func TestNewTopologyEmptyLocation(t *testing.T) {
++	nodes, peers, key, port := setup(t)
++
++	e5 := &net.IPNet{IP: net.ParseIP("10.1.0.5").To4(), Mask: net.CIDRMask(16, 32)}
++	i5 := &net.IPNet{IP: net.ParseIP("10.1.0.5").To4(), Mask: net.CIDRMask(32, 32)}
++	nodes["e"] = &Node{
++		Name:       "e",
++		Endpoint:   wireguard.NewEndpoint(e5.IP, DefaultKiloPort),
++		InternalIP: i5,
++		Location:   "",
++		Subnet:     &net.IPNet{IP: net.ParseIP("10.2.5.0"), Mask: net.CIDRMask(24, 32)},
++		Key:        key6,
++	}
++
++	// LogicalGranularity: node e has empty Location and a valid InternalIP.
++	// Because Location == "", it is grouped under "location:" (logicalLocationPrefix + "").
++	//
++	// Segment sort order (location string):
++	//   location:   → node e        → w1  (Location="" with InternalIP set)
++	//   location:1  → node a        → w2
++	//   location:2  → nodes b, c    → w3
++	//   node:d      → node d        → w4  (Location="1" but InternalIP==nil)
++	w1 := net.ParseIP("10.4.0.1").To4()
++	w2 := net.ParseIP("10.4.0.2").To4()
++	w3 := net.ParseIP("10.4.0.3").To4()
++	w4 := net.ParseIP("10.4.0.4").To4()
++	w5 := net.ParseIP("10.4.0.5").To4()
++
++	for _, tc := range []struct {
++		name        string
++		granularity Granularity
++		hostname    string
++		result      *Topology
++	}{
++		{
++			name:        "logical from e (empty location)",
++			granularity: LogicalGranularity,
++			hostname:    nodes["e"].Name,
++			result: &Topology{
++				hostname:      nodes["e"].Name,
++				leader:        true,
++				location:      logicalLocationPrefix + nodes["e"].Location,
++				subnet:        nodes["e"].Subnet,
++				privateIP:     nodes["e"].InternalIP,
++				wireGuardCIDR: &net.IPNet{IP: w1, Mask: net.CIDRMask(16, 32)},
++				segments: []*segment{
++					{
++						allowedIPs:          []net.IPNet{*nodes["e"].Subnet, *nodes["e"].InternalIP, {IP: w1, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["e"].Endpoint,
++						key:                 nodes["e"].Key,
++						persistentKeepalive: nodes["e"].PersistentKeepalive,
++						location:            logicalLocationPrefix + nodes["e"].Location,
++						cidrs:               []*net.IPNet{nodes["e"].Subnet},
++						hostnames:           []string{"e"},
++						privateIPs:          []net.IP{nodes["e"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w1,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["a"].Subnet, *nodes["a"].InternalIP, {IP: w2, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["a"].Endpoint,
++						key:                 nodes["a"].Key,
++						persistentKeepalive: nodes["a"].PersistentKeepalive,
++						location:            logicalLocationPrefix + nodes["a"].Location,
++						cidrs:               []*net.IPNet{nodes["a"].Subnet},
++						hostnames:           []string{"a"},
++						privateIPs:          []net.IP{nodes["a"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w2,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["b"].Subnet, *nodes["b"].InternalIP, *nodes["c"].Subnet, *nodes["c"].InternalIP, {IP: w3, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["b"].Endpoint,
++						key:                 nodes["b"].Key,
++						persistentKeepalive: nodes["b"].PersistentKeepalive,
++						location:            logicalLocationPrefix + nodes["b"].Location,
++						cidrs:               []*net.IPNet{nodes["b"].Subnet, nodes["c"].Subnet},
++						hostnames:           []string{"b", "c"},
++						privateIPs:          []net.IP{nodes["b"].InternalIP.IP, nodes["c"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil, nil},
++						wireGuardIP:         w3,
++						allowedLocationIPs:  nodes["b"].AllowedLocationIPs,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["d"].Subnet, {IP: w4, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["d"].Endpoint,
++						key:                 nodes["d"].Key,
++						persistentKeepalive: nodes["d"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["d"].Name,
++						cidrs:               []*net.IPNet{nodes["d"].Subnet},
++						hostnames:           []string{"d"},
++						privateIPs:          nil,
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w4,
++					},
++				},
++				peers:  []*Peer{peers["a"], peers["b"]},
++				logger: log.NewNopLogger(),
++			},
++		},
++		{
++			// CrossGranularity: every node gets its own segment keyed by node name.
++			// For node e with empty Location, nodeLocation must be "location:" (logicalLocationPrefix + "").
++			//
++			// Segment sort order (location = node:<name>):
++			//   node:a → w1, node:b → w2, node:c → w3, node:d → w4, node:e → w5
++			name:        "cross from e (empty location)",
++			granularity: CrossGranularity,
++			hostname:    nodes["e"].Name,
++			result: &Topology{
++				hostname:      nodes["e"].Name,
++				leader:        true,
++				location:      nodeLocationPrefix + nodes["e"].Name,
++				nodeLocation:  logicalLocationPrefix + nodes["e"].Location,
++				subnet:        nodes["e"].Subnet,
++				privateIP:     nodes["e"].InternalIP,
++				wireGuardCIDR: &net.IPNet{IP: w5, Mask: net.CIDRMask(16, 32)},
++				segments: []*segment{
++					{
++						allowedIPs:          []net.IPNet{*nodes["a"].Subnet, *nodes["a"].InternalIP, {IP: w1, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["a"].Endpoint,
++						key:                 nodes["a"].Key,
++						persistentKeepalive: nodes["a"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["a"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["a"].Location,
++						cidrs:               []*net.IPNet{nodes["a"].Subnet},
++						hostnames:           []string{"a"},
++						privateIPs:          []net.IP{nodes["a"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w1,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["b"].Subnet, *nodes["b"].InternalIP, {IP: w2, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["b"].Endpoint,
++						key:                 nodes["b"].Key,
++						persistentKeepalive: nodes["b"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["b"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["b"].Location,
++						cidrs:               []*net.IPNet{nodes["b"].Subnet},
++						hostnames:           []string{"b"},
++						privateIPs:          []net.IP{nodes["b"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w2,
++						allowedLocationIPs:  nodes["b"].AllowedLocationIPs,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["c"].Subnet, *nodes["c"].InternalIP, {IP: w3, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["c"].Endpoint,
++						key:                 nodes["c"].Key,
++						persistentKeepalive: nodes["c"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["c"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["c"].Location,
++						cidrs:               []*net.IPNet{nodes["c"].Subnet},
++						hostnames:           []string{"c"},
++						privateIPs:          []net.IP{nodes["c"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w3,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["d"].Subnet, {IP: w4, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["d"].Endpoint,
++						key:                 nodes["d"].Key,
++						persistentKeepalive: nodes["d"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["d"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["d"].Location,
++						cidrs:               []*net.IPNet{nodes["d"].Subnet},
++						hostnames:           []string{"d"},
++						privateIPs:          nil,
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w4,
++					},
++					{
++						allowedIPs:          []net.IPNet{*nodes["e"].Subnet, *nodes["e"].InternalIP, {IP: w5, Mask: net.CIDRMask(32, 32)}},
++						endpoint:            nodes["e"].Endpoint,
++						key:                 nodes["e"].Key,
++						persistentKeepalive: nodes["e"].PersistentKeepalive,
++						location:            nodeLocationPrefix + nodes["e"].Name,
++						nodeLocation:        logicalLocationPrefix + nodes["e"].Location,
++						cidrs:               []*net.IPNet{nodes["e"].Subnet},
++						hostnames:           []string{"e"},
++						privateIPs:          []net.IP{nodes["e"].InternalIP.IP},
++						cniCompatibilityIPs: []*net.IPNet{nil},
++						wireGuardIP:         w5,
++					},
++				},
++				peers:  []*Peer{peers["a"], peers["b"]},
++				logger: log.NewNopLogger(),
++			},
++		},
+ 	} {
+ 		tc.result.key = key
+ 		tc.result.port = port
