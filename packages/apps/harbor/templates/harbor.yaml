@@ -118,7 +118,7 @@ spec:
             {{- end }}
         {{- end }}
       portal:
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.nano" (dict) $) | nindent 10 }}
       core:
         {{- if and $tokenKey $tokenCert }}
         tokenKey: {{ $tokenKey | quote }}
