@@ -191,12 +191,13 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 
 ### FoundationDB configuration
 
-| Name                         | Description                                | Type       | Value   |
-| ---------------------------- | ------------------------------------------ | ---------- | ------- |
-| `customParameters`           | Custom parameters to pass to FoundationDB. | `[]string` | `[]`    |
-| `imageType`                  | Container image deployment type.           | `string`   | `split` |
-| `securityContext`            | Security context for containers.           | `object`   | `{}`    |
-| `securityContext.runAsUser`  | User ID to run the container.              | `int`      | `4059`  |
-| `securityContext.runAsGroup` | Group ID to run the container.             | `int`      | `4059`  |
-| `automaticReplacements`      | Enable automatic pod replacements.         | `bool`     | `true`  |
+| Name                         | Description                                                                                                                                                                                                       | Type       | Value   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `customParameters`           | Custom parameters to pass to FoundationDB.                                                                                                                                                                        | `[]string` | `[]`    |
+| `imageType`                  | Container image deployment type.                                                                                                                                                                                  | `string`   | `split` |
+| `securityContext`            | Security context for containers.                                                                                                                                                                                  | `object`   | `{}`    |
+| `securityContext.runAsUser`  | User ID to run the container.                                                                                                                                                                                     | `int`      | `4059`  |
+| `securityContext.runAsGroup` | Group ID to run the container.                                                                                                                                                                                    | `int`      | `4059`  |
+| `automaticReplacements`      | Enable automatic pod replacements.                                                                                                                                                                                | `bool`     | `true`  |
+| `schedulingClass`            | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`    |
 

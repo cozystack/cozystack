@@ -34,13 +34,14 @@ coordinates).
 
 ### Common parameters
 
-| Name               | Description                                                                                                                | Type       | Value    |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------- | ---------- | -------- |
-| `version`          | etcd version (X.Y.Z) to run, set on the EtcdCluster's spec.version; the operator pulls etcd from its own configured image. | `string`   | `3.6.11` |
-| `size`             | Persistent Volume size.                                                                                                    | `quantity` | `4Gi`    |
-| `storageClass`     | StorageClass used to store the data.                                                                                       | `string`   | `""`     |
-| `replicas`         | Number of etcd replicas.                                                                                                   | `int`      | `3`      |
-| `resources`        | Resource configuration for etcd.                                                                                           | `object`   | `{}`     |
-| `resources.cpu`    | Number of CPU cores allocated.                                                                                             | `quantity` | `1000m`  |
-| `resources.memory` | Amount of memory allocated.                                                                                                | `quantity` | `512Mi`  |
+| Name               | Description                                                                                                                                                                                                       | Type       | Value    |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | -------- |
+| `version`          | etcd version (X.Y.Z) to run, set on the EtcdCluster's spec.version; the operator pulls etcd from its own configured image.                                                                                        | `string`   | `3.6.11` |
+| `size`             | Persistent Volume size.                                                                                                                                                                                           | `quantity` | `4Gi`    |
+| `storageClass`     | StorageClass used to store the data.                                                                                                                                                                              | `string`   | `""`     |
+| `replicas`         | Number of etcd replicas.                                                                                                                                                                                          | `int`      | `3`      |
+| `resources`        | Resource configuration for etcd.                                                                                                                                                                                  | `object`   | `{}`     |
+| `resources.cpu`    | Number of CPU cores allocated.                                                                                                                                                                                    | `quantity` | `1000m`  |
+| `resources.memory` | Amount of memory allocated.                                                                                                                                                                                       | `quantity` | `512Mi`  |
+| `schedulingClass`  | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`     |
 

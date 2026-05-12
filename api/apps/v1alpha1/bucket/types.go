@@ -25,6 +25,9 @@ type ConfigSpec struct {
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type User struct {

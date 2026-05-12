@@ -90,14 +90,15 @@ The deployment architecture is illustrated in the diagram below:
 
 ### Nginx parameters
 
-| Name                     | Description                                                                                              | Type       | Value     |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | --------- |
-| `nginx`                  | Nginx configuration.                                                                                     | `object`   | `{}`      |
-| `nginx.replicas`         | Number of Nginx replicas.                                                                                | `int`      | `2`       |
-| `nginx.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
-| `nginx.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`      |
-| `nginx.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`      |
-| `nginx.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `t1.nano` |
+| Name                     | Description                                                                                                                                                                                                       | Type       | Value     |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `nginx`                  | Nginx configuration.                                                                                                                                                                                              | `object`   | `{}`      |
+| `nginx.replicas`         | Number of Nginx replicas.                                                                                                                                                                                         | `int`      | `2`       |
+| `nginx.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.                                                                                                          | `object`   | `{}`      |
+| `nginx.resources.cpu`    | CPU available to each replica.                                                                                                                                                                                    | `quantity` | `""`      |
+| `nginx.resources.memory` | Memory (RAM) available to each replica.                                                                                                                                                                           | `quantity` | `""`      |
+| `nginx.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                                                                                           | `string`   | `t1.nano` |
+| `schedulingClass`        | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`      |
 
 
 ## Parameter examples and reference
