@@ -21,7 +21,8 @@ It provides identity-based secrets and encryption management for cloud infrastru
 
 ### Application-specific parameters
 
-| Name | Description                | Type   | Value  |
-| ---- | -------------------------- | ------ | ------ |
-| `ui` | Enable the OpenBAO web UI. | `bool` | `true` |
+| Name              | Description                                                                                                                                                                                                       | Type     | Value  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `ui`              | Enable the OpenBAO web UI.                                                                                                                                                                                        | `bool`   | `true` |
+| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string` | `""`   |
 

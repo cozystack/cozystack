@@ -50,6 +50,9 @@ type ConfigSpec struct {
 	// ClickHouse Keeper configuration.
 	// +kubebuilder:default:={}
 	ClickhouseKeeper ClickHouseKeeper `json:"clickhouseKeeper"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type Backup struct {

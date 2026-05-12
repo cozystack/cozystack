@@ -36,16 +36,17 @@
 
 ### ZooKeeper configuration
 
-| Name                         | Description                                                                                              | Type       | Value      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
-| `zookeeper`                  | ZooKeeper configuration.                                                                                 | `object`   | `{}`       |
-| `zookeeper.replicas`         | Number of ZooKeeper replicas.                                                                            | `int`      | `3`        |
-| `zookeeper.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
-| `zookeeper.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`       |
-| `zookeeper.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
-| `zookeeper.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
-| `zookeeper.size`             | Persistent Volume size for ZooKeeper.                                                                    | `quantity` | `5Gi`      |
-| `zookeeper.storageClass`     | StorageClass used to store the ZooKeeper data.                                                           | `string`   | `""`       |
+| Name                         | Description                                                                                                                                                                                                       | Type       | Value      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `zookeeper`                  | ZooKeeper configuration.                                                                                                                                                                                          | `object`   | `{}`       |
+| `zookeeper.replicas`         | Number of ZooKeeper replicas.                                                                                                                                                                                     | `int`      | `3`        |
+| `zookeeper.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.                                                                                                          | `object`   | `{}`       |
+| `zookeeper.resources.cpu`    | CPU available to each replica.                                                                                                                                                                                    | `quantity` | `""`       |
+| `zookeeper.resources.memory` | Memory (RAM) available to each replica.                                                                                                                                                                           | `quantity` | `""`       |
+| `zookeeper.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                                                                                           | `string`   | `c1.small` |
+| `zookeeper.size`             | Persistent Volume size for ZooKeeper.                                                                                                                                                                             | `quantity` | `5Gi`      |
+| `zookeeper.storageClass`     | StorageClass used to store the ZooKeeper data.                                                                                                                                                                    | `string`   | `""`       |
+| `schedulingClass`            | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`       |
 
 
 ## Parameter examples and reference

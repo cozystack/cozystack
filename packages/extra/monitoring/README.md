@@ -95,9 +95,10 @@
 
 ### Vmagent configuration
 
-| Name                     | Description                              | Type     | Value |
-| ------------------------ | ---------------------------------------- | -------- | ----- |
-| `vmagent`                | Configuration for VictoriaMetrics Agent. | `object` | `{}`  |
-| `vmagent.externalLabels` | External labels applied to all metrics.  | `object` | `{}`  |
-| `vmagent.remoteWrite`    | Remote write configuration.              | `object` | `{}`  |
+| Name                     | Description                                                                                                                                                                                                       | Type     | Value |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `vmagent`                | Configuration for VictoriaMetrics Agent.                                                                                                                                                                          | `object` | `{}`  |
+| `vmagent.externalLabels` | External labels applied to all metrics.                                                                                                                                                                           | `object` | `{}`  |
+| `vmagent.remoteWrite`    | Remote write configuration.                                                                                                                                                                                       | `object` | `{}`  |
+| `schedulingClass`        | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string` | `""`  |
 

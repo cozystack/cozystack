@@ -97,17 +97,18 @@ more details:
 
 ### Backup parameters
 
-| Name                     | Description                                     | Type     | Value                                                  |
-| ------------------------ | ----------------------------------------------- | -------- | ------------------------------------------------------ |
-| `backup`                 | Backup configuration.                           | `object` | `{}`                                                   |
-| `backup.enabled`         | Enable regular backups (default: false).        | `bool`   | `false`                                                |
-| `backup.s3Region`        | AWS S3 region where backups are stored.         | `string` | `us-east-1`                                            |
-| `backup.s3Bucket`        | S3 bucket used for storing backups.             | `string` | `s3.example.org/mariadb-backups`                       |
-| `backup.schedule`        | Cron schedule for automated backups.            | `string` | `0 2 * * *`                                            |
-| `backup.cleanupStrategy` | Retention strategy for cleaning up old backups. | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | Access key for S3 authentication.               | `string` | `<your-access-key>`                                    |
-| `backup.s3SecretKey`     | Secret key for S3 authentication.               | `string` | `<your-secret-key>`                                    |
-| `backup.resticPassword`  | Password for Restic backup encryption.          | `string` | `<password>`                                           |
+| Name                     | Description                                                                                                                                                                                                       | Type     | Value                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
+| `backup`                 | Backup configuration.                                                                                                                                                                                             | `object` | `{}`                                                   |
+| `backup.enabled`         | Enable regular backups (default: false).                                                                                                                                                                          | `bool`   | `false`                                                |
+| `backup.s3Region`        | AWS S3 region where backups are stored.                                                                                                                                                                           | `string` | `us-east-1`                                            |
+| `backup.s3Bucket`        | S3 bucket used for storing backups.                                                                                                                                                                               | `string` | `s3.example.org/mariadb-backups`                       |
+| `backup.schedule`        | Cron schedule for automated backups.                                                                                                                                                                              | `string` | `0 2 * * *`                                            |
+| `backup.cleanupStrategy` | Retention strategy for cleaning up old backups.                                                                                                                                                                   | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
+| `backup.s3AccessKey`     | Access key for S3 authentication.                                                                                                                                                                                 | `string` | `<your-access-key>`                                    |
+| `backup.s3SecretKey`     | Secret key for S3 authentication.                                                                                                                                                                                 | `string` | `<your-secret-key>`                                    |
+| `backup.resticPassword`  | Password for Restic backup encryption.                                                                                                                                                                            | `string` | `<password>`                                           |
+| `schedulingClass`        | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string` | `""`                                                   |
 
 
 ## Parameter examples and reference
