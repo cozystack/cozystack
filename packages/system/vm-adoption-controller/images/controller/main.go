@@ -469,9 +469,9 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 	}
 
 	// Extract Multus networks from VM spec
-	networks, _, _ := unstructured.NestedSlice(templateSpec, "networks")
-	var subnets []interface{}
-	for i, net := range networks {
+	sourceNetworks, _, _ := unstructured.NestedSlice(templateSpec, "networks")
+	var mappedNetworks []interface{}
+	for i, net := range sourceNetworks {
 		netMap, ok := net.(map[string]interface{})
 		if !ok {
 			klog.V(2).Infof("VM %s/%s: skipping network %d: unexpected type %T", vm.Namespace, vm.Name, i, net)
@@ -498,19 +498,19 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 
 		// networkName format is "namespace/name" — extract just the name part
 		// since the vm-instance template re-adds the namespace prefix
-		subnetName := networkName
+		netRef := networkName
 		if idx := strings.LastIndex(networkName, "/"); idx >= 0 {
-			subnetName = networkName[idx+1:]
+			netRef = networkName[idx+1:]
 		}
 
-		subnets = append(subnets, map[string]interface{}{
-			"name": subnetName,
+		mappedNetworks = append(mappedNetworks, map[string]interface{}{
+			"name": netRef,
 		})
-		klog.V(3).Infof("VM %s/%s: added subnet %s (from %s)", vm.Namespace, vm.Name, subnetName, networkName)
+		klog.V(3).Infof("VM %s/%s: added network %s (from %s)", vm.Namespace, vm.Name, netRef, networkName)
 	}
 
-	klog.Infof("VM %s/%s: extracted %d disk(s), %d subnet(s), instanceType=%s, preference=%s, runStrategy=%s",
-		vm.Namespace, vm.Name, len(disks), len(subnets), instanceType, preference, runStrategy)
+	klog.Infof("VM %s/%s: extracted %d disk(s), %d network(s), instanceType=%s, preference=%s, runStrategy=%s",
+		vm.Namespace, vm.Name, len(disks), len(mappedNetworks), instanceType, preference, runStrategy)
 
 	// Create VMInstance name
 	vmInstanceName := vm.Name
@@ -588,7 +588,7 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 				"gpus":             []interface{}{},
 				"resources":        map[string]interface{}{},
 				"sshKeys":          []interface{}{},
-				"subnets":          subnets,
+				"networks":         mappedNetworks,
 				"cloudInit":        "",
 				"cloudInitSeed":    "",
 			},
