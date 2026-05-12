@@ -23,3 +23,10 @@ cilium:
   operator:
     rollOutPods: true
     replicas: 1
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 128Mi
