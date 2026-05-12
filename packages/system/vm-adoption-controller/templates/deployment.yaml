@@ -18,8 +18,8 @@ spec:
       serviceAccountName: vm-adoption-controller
       containers:
       - name: controller
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.Version }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: {{ required "values.image is required (run `make image` in packages/system/vm-adoption-controller)" .Values.image | quote }}
+        imagePullPolicy: IfNotPresent
         args:
         - -v=2
         {{- if .Values.controller.watchNamespace }}

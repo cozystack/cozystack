@@ -33,6 +33,7 @@ build: build-deps
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
 	make -C packages/system/grafana-operator image
+	make -C packages/system/vm-adoption-controller image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
 	make -C packages/core/platform image
