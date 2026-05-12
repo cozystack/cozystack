@@ -32,5 +32,10 @@ imagePullSecrets: []
 # Each entry is appended verbatim to the container's env list and
 # supports the full corev1.EnvVar schema (value, valueFrom, ...).
 extraEnv: []
-# - name: DOCS_BASE_URL
-#   value: "https://docs.example.com"
+# - name: MY_VAR
+#   value: "some-value"
+# - name: MY_SECRET_VAR
+#   valueFrom:
+#     secretKeyRef:
+#       name: my-secret
+#       key: my-key

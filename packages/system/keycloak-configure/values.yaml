@@ -45,13 +45,12 @@
 # userProfile:
 #   unmanagedAttributePolicy: ENABLED
 #   attributes:
-#     - name: publicOfferAccepted
-#       displayName: "Public offer accepted"
-#       required:
-#         roles: [user]
+#     - name: department
+#       displayName: "Department"
 #       permissions:
 #         view: [user, admin]
-#         edit: [user, admin]
+#         edit: [admin]
 #       validations:
-#         pattern:
-#           pattern: "^true$"
+#         length:
+#           min: 1
+#           max: 255
