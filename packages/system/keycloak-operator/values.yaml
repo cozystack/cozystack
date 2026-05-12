@@ -6,6 +6,7 @@ keycloak-operator:
   clusterReconciliationEnabled: true
   resources:
     limits:
+      cpu: 200m
       memory: 512Mi
     requests:
       cpu: 50m
