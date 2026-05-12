@@ -21,17 +21,22 @@ for f in packages/system/*-rd/cozyrds/*.yaml; do
   if [ -z "$schema" ]; then
     continue
   fi
-  # The schema is a JSON blob. Pull every resourcesPreset enum out of it.
+  # Pull every resourcesPreset enum out of the schema. Key on the JSON
+  # path ending in "resourcesPreset" rather than a description heuristic,
+  # so an unrelated field with "preset" in its description does not match.
   enums=$(printf '%s' "$schema" | jq -r '
-    [.. | objects | select(has("enum") and (.description? // "" | test("preset"; "i")))]
-    | .[].enum[]
+    [paths(type == "object" and has("enum")) as $p
+     | select($p[-1] == "resourcesPreset")
+     | getpath($p).enum[]]
+    | .[]
   ' 2>/dev/null || true)
   if [ -z "$enums" ]; then
     continue
   fi
   missing=()
   for want in "${EXPECTED[@]}"; do
-    if ! printf '%s\n' "$enums" | grep -qx "$want"; then
+    # -F: literal match so the `.` in t1.nano does not match any character.
+    if ! printf '%s\n' "$enums" | grep -Fqx -- "$want"; then
       missing+=("$want")
     fi
   done
