@@ -20,16 +20,17 @@ It provides a data layer for cloud native applications, IoT messaging, and micro
 
 ### Application-specific parameters
 
-| Name                   | Description                                                   | Type                | Value  |
-| ---------------------- | ------------------------------------------------------------- | ------------------- | ------ |
-| `users`                | Users configuration map.                                      | `map[string]object` | `{}`   |
-| `users[name].password` | Password for the user.                                        | `string`            | `""`   |
-| `jetstream`            | Jetstream configuration.                                      | `object`            | `{}`   |
-| `jetstream.enabled`    | Enable or disable Jetstream for persistent messaging in NATS. | `bool`              | `true` |
-| `jetstream.size`       | Jetstream persistent storage size.                            | `quantity`          | `10Gi` |
-| `config`               | NATS configuration.                                           | `object`            | `{}`   |
-| `config.merge`         | Additional configuration to merge into NATS config.           | `*object`           | `{}`   |
-| `config.resolver`      | Additional resolver configuration to merge into NATS config.  | `*object`           | `{}`   |
+| Name                   | Description                                                                                                                                                                                                       | Type                | Value  |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------ |
+| `users`                | Users configuration map.                                                                                                                                                                                          | `map[string]object` | `{}`   |
+| `users[name].password` | Password for the user.                                                                                                                                                                                            | `string`            | `""`   |
+| `jetstream`            | Jetstream configuration.                                                                                                                                                                                          | `object`            | `{}`   |
+| `jetstream.enabled`    | Enable or disable Jetstream for persistent messaging in NATS.                                                                                                                                                     | `bool`              | `true` |
+| `jetstream.size`       | Jetstream persistent storage size.                                                                                                                                                                                | `quantity`          | `10Gi` |
+| `config`               | NATS configuration.                                                                                                                                                                                               | `object`            | `{}`   |
+| `config.merge`         | Additional configuration to merge into NATS config.                                                                                                                                                               | `*object`           | `{}`   |
+| `config.resolver`      | Additional resolver configuration to merge into NATS config.                                                                                                                                                      | `*object`           | `{}`   |
+| `schedulingClass`      | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`            | `""`   |
 
 
 ## Parameter examples and reference

@@ -48,13 +48,14 @@
 
 ### OpenSearch Dashboards configuration
 
-| Name                          | Description                                           | Type       | Value      |
-| ----------------------------- | ----------------------------------------------------- | ---------- | ---------- |
-| `dashboards`                  | OpenSearch Dashboards configuration.                  | `object`   | `{}`       |
-| `dashboards.enabled`          | Enable OpenSearch Dashboards deployment.              | `bool`     | `false`    |
-| `dashboards.replicas`         | Number of Dashboards replicas.                        | `int`      | `1`        |
-| `dashboards.resources`        | Explicit CPU and memory configuration for Dashboards. | `object`   | `{}`       |
-| `dashboards.resources.cpu`    | CPU available to each node.                           | `quantity` | `""`       |
-| `dashboards.resources.memory` | Memory (RAM) available to each node.                  | `quantity` | `""`       |
-| `dashboards.resourcesPreset`  | Default sizing preset for Dashboards.                 | `string`   | `c1.small` |
+| Name                          | Description                                                                                                                                                                                                       | Type       | Value      |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `dashboards`                  | OpenSearch Dashboards configuration.                                                                                                                                                                              | `object`   | `{}`       |
+| `dashboards.enabled`          | Enable OpenSearch Dashboards deployment.                                                                                                                                                                          | `bool`     | `false`    |
+| `dashboards.replicas`         | Number of Dashboards replicas.                                                                                                                                                                                    | `int`      | `1`        |
+| `dashboards.resources`        | Explicit CPU and memory configuration for Dashboards.                                                                                                                                                             | `object`   | `{}`       |
+| `dashboards.resources.cpu`    | CPU available to each node.                                                                                                                                                                                       | `quantity` | `""`       |
+| `dashboards.resources.memory` | Memory (RAM) available to each node.                                                                                                                                                                              | `quantity` | `""`       |
+| `dashboards.resourcesPreset`  | Default sizing preset for Dashboards.                                                                                                                                                                             | `string`   | `c1.small` |
+| `schedulingClass`             | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`   | `""`       |
 
