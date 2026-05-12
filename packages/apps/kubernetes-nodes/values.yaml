@@ -1,0 +1,60 @@
+##
+## @section Linkage
+##
+
+## @param {string} kubernetes - Name of the parent Kubernetes cluster (Cluster CR) in the same namespace. Required.
+kubernetes: ""
+
+##
+## @section Storage
+##
+
+## @param {string} storageClass - StorageClass used for the worker system disk.
+storageClass: replicated
+
+##
+## @section Scaling
+##
+
+## @param {int} minReplicas - Minimum replicas in this pool. Used as the cluster-autoscaler floor.
+minReplicas: 0
+
+## @param {int} maxReplicas - Maximum replicas in this pool. Used as the cluster-autoscaler ceiling.
+maxReplicas: 10
+
+##
+## @section Sizing
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for a node.
+## @field {quantity} [cpu] - CPU available.
+## @field {quantity} [memory] - Memory (RAM) available.
+
+## @typedef {struct} GPU - GPU configuration.
+## @field {string} name - Name of GPU resource, such as "nvidia.com/AD102GL_L40S".
+
+## @typedef {struct} Kubelet - Kubelet resource reservations.
+## @field {string} [systemReservedMemory] - Memory reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedMemory] - Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [systemReservedCpu] - CPU reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedCpu] - CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [evictionHardMemory]="7%" - Hard eviction threshold for memory.
+## @field {string} [evictionSoftMemory]="10%" - Soft eviction threshold for memory.
+
+## @param {string} instanceType - VirtualMachineClusterInstancetype reference. Leave empty to specify resources explicitly.
+instanceType: u1.medium
+
+## @param {Resources} [resources] - Explicit CPU/memory when instanceType is empty.
+resources: {}
+
+## @param {quantity} diskSize - System disk size. Talos partitions EPHEMERAL on top.
+diskSize: 20Gi
+
+## @param {[]string} roles - Node-role labels applied via node-role.kubernetes.io/<role>.
+roles: []
+
+## @param {[]GPU} [gpus] - GPU passthrough devices.
+gpus: []
+
+## @param {Kubelet} [kubelet] - Kubelet reservation overrides.
+kubelet: {}
