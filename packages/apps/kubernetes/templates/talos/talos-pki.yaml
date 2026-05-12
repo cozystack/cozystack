@@ -73,6 +73,14 @@ spec:
   dnsNames:
     - {{ .Release.Name }}.{{ .Release.Namespace }}.svc
     - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.cluster.local
+  {{- /* Workers contact trustd via the Kamaji Service ClusterIP (the
+         same address used for the apiserver), so the cert must cover
+         that IP too. */}}
+  {{- $trustdSvc := lookup "v1" "Service" .Release.Namespace .Release.Name }}
+  {{- if and $trustdSvc $trustdSvc.spec.clusterIP }}
+  ipAddresses:
+    - {{ $trustdSvc.spec.clusterIP | quote }}
+  {{- end }}
   issuerRef:
     name: {{ .Release.Name }}-talos-ca
     kind: Issuer
