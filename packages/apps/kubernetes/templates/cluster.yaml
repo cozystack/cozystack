@@ -518,8 +518,6 @@ spec:
             crt: {{ $talosCACrt | quote }}
           kubelet:
             image: ghcr.io/siderolabs/kubelet:{{ $kubeletVersion }}
-            extraArgs:
-              rotate-server-certificates: "true"
             extraConfig:
               systemReserved:
                 cpu: "{{ $systemReservedCpu }}"
