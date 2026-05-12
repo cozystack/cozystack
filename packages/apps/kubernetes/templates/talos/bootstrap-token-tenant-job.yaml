@@ -101,37 +101,49 @@ spec:
               echo "[$(date -u +%H:%M:%S)] bootstrap-token-${TOKEN_ID} ensured"
 
               # Grant system:nodes the ability to watch the kubernetes
-              # Endpoint/EndpointSlice. Talos workers run an internal
-              # k8s.EndpointController (apiserver failover discovery) that
-              # otherwise spams "endpointslices forbidden" warnings.
+              # Endpoint/EndpointSlice in the default namespace. Talos
+              # workers run an internal k8s.EndpointController (apiserver
+              # failover discovery) that otherwise spams
+              # "endpointslices forbidden" warnings.
+              # Note: resourceNames intentionally omitted — Talos's
+              # informer issues unbounded list/watch and Kubernetes RBAC
+              # only honours resourceNames on list/watch when the client
+              # restricts via a field selector, which Talos does not.
+              # The Role is namespace-scoped to default, where only the
+              # built-in "kubernetes" endpoint lives.
               cat <<'EOF' | kubectl apply -f -
               apiVersion: rbac.authorization.k8s.io/v1
-              kind: ClusterRole
+              kind: Role
               metadata:
                 name: talos:node-apiserver-endpoint-discovery
+                namespace: default
               rules:
                 - apiGroups: [""]
                   resources: ["endpoints"]
-                  resourceNames: ["kubernetes"]
                   verbs: ["get", "list", "watch"]
                 - apiGroups: ["discovery.k8s.io"]
                   resources: ["endpointslices"]
-                  resourceNames: ["kubernetes"]
                   verbs: ["get", "list", "watch"]
               ---
               apiVersion: rbac.authorization.k8s.io/v1
-              kind: ClusterRoleBinding
+              kind: RoleBinding
               metadata:
                 name: talos:node-apiserver-endpoint-discovery
+                namespace: default
               roleRef:
                 apiGroup: rbac.authorization.k8s.io
-                kind: ClusterRole
+                kind: Role
                 name: talos:node-apiserver-endpoint-discovery
               subjects:
                 - kind: Group
                   apiGroup: rbac.authorization.k8s.io
                   name: system:nodes
               EOF
+
+              # Drop the previous ClusterRole/Binding incarnation if it
+              # exists from earlier deploys of this chart.
+              kubectl delete clusterrole talos:node-apiserver-endpoint-discovery --ignore-not-found
+              kubectl delete clusterrolebinding talos:node-apiserver-endpoint-discovery --ignore-not-found
 
               echo "[$(date -u +%H:%M:%S)] talos:node-apiserver-endpoint-discovery RBAC ensured"
       volumes:
