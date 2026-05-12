@@ -1,6 +1,13 @@
 {{- define "cozystack.defaultCiliumValues" -}}
+{{- /* Cilium DaemonSet runs with hostNetwork and gets the host's
+       resolv.conf (the host cluster CoreDNS), which does not resolve
+       <svc>.<ns>.svc. Bind to the Kamaji apiserver service ClusterIP
+       directly. */}}
+{{- $kcpSvc := lookup "v1" "Service" .Release.Namespace .Release.Name }}
+{{- $kcpSvcIP := "" }}
+{{- if $kcpSvc }}{{ $kcpSvcIP = $kcpSvc.spec.clusterIP }}{{ end }}
 cilium:
-  k8sServiceHost: {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+  k8sServiceHost: {{ $kcpSvcIP | default (printf "%s.%s.svc" .Release.Name .Release.Namespace) }}
   k8sServicePort: 6443
   routingMode: tunnel
   MTU: 1350
