@@ -21,3 +21,11 @@ external-dns:
   # -- Specify the DNS provider (e.g., "aws", "google", "azure", etc.)
   provider:
     name: ""
+
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
