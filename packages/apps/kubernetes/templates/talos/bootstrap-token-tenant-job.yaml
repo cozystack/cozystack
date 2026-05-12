@@ -99,6 +99,41 @@ spec:
               EOF
 
               echo "[$(date -u +%H:%M:%S)] bootstrap-token-${TOKEN_ID} ensured"
+
+              # Grant system:nodes the ability to watch the kubernetes
+              # Endpoint/EndpointSlice. Talos workers run an internal
+              # k8s.EndpointController (apiserver failover discovery) that
+              # otherwise spams "endpointslices forbidden" warnings.
+              cat <<'EOF' | kubectl apply -f -
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRole
+              metadata:
+                name: talos:node-apiserver-endpoint-discovery
+              rules:
+                - apiGroups: [""]
+                  resources: ["endpoints"]
+                  resourceNames: ["kubernetes"]
+                  verbs: ["get", "list", "watch"]
+                - apiGroups: ["discovery.k8s.io"]
+                  resources: ["endpointslices"]
+                  resourceNames: ["kubernetes"]
+                  verbs: ["get", "list", "watch"]
+              ---
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRoleBinding
+              metadata:
+                name: talos:node-apiserver-endpoint-discovery
+              roleRef:
+                apiGroup: rbac.authorization.k8s.io
+                kind: ClusterRole
+                name: talos:node-apiserver-endpoint-discovery
+              subjects:
+                - kind: Group
+                  apiGroup: rbac.authorization.k8s.io
+                  name: system:nodes
+              EOF
+
+              echo "[$(date -u +%H:%M:%S)] talos:node-apiserver-endpoint-discovery RBAC ensured"
       volumes:
         - name: tenant-admin
           secret:
