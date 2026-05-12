@@ -112,6 +112,18 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// CR removal. See packages/apps/clickhouse/README.md "Backup
 		// orchestration" for tenant-facing guidance.
 		return nil
+	case strategyv1alpha1.MariaDBStrategyKind:
+		// Cozystack Backup deletion does NOT delete the operator-side
+		// k8s.mariadb.com/Backup CR or the backing S3/PVC archive.
+		// Lifecycle of that CR is owned by mariadb-operator's
+		// MaxRetention setting and by tenants / explicit teardown flows;
+		// the controller's RBAC has no delete verb on
+		// k8s.mariadb.com/backups for that reason. Surfacing this as an
+		// explicit branch (rather than falling through to the Velero
+		// default) keeps the contract honest: the MariaDB driver does
+		// not own the archive, so it does not delete it on CR removal.
+		// Mirrors the Altinity branch's "we do not own S3" stance.
+		return nil
 	case strategyv1alpha1.VeleroStrategyKind:
 		return r.cleanupVeleroBackup(ctx, backup)
 	default:

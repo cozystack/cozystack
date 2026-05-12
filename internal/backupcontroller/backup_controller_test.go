@@ -170,6 +170,57 @@ func TestBackupCleanup_Altinity_DoesNotFallThroughToVelero(t *testing.T) {
 	}
 }
 
+// TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero locks in the same
+// invariant as the Altinity test above for the MariaDB strategy. The
+// dispatcher must explicitly route MariaDB-strategy Backups to a no-op
+// cleanup rather than fall through to the Velero default - the MariaDB
+// driver does not own the operator-side k8s.mariadb.com/Backup CR or the
+// S3/PVC archive behind it (rbac.yaml grants no delete verb on
+// k8s.mariadb.com/backups for that reason). The test seeds the Velero
+// metadata keys plus a matching velero.io/Backup; with the explicit branch
+// no DeleteBackupRequest is synthesised, and the Velero Backup survives.
+// Without the branch the default falls through to cleanupVeleroBackup,
+// which would observe the metadata key and create a DBR.
+func TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	veleroBk := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: veleroNamespace, Name: "stale-vb-mdb"},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk-mdb"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.MariaDBStrategyKind, Name: "mariadb-strategy-default",
+			},
+			// Seed the velero metadata keys so the test would fail with
+			// a DeleteBackupRequest leak if MariaDB ever fell through to
+			// the Velero default branch.
+			DriverMetadata: map[string]string{
+				veleroBackupNameMetadataKey:      "stale-vb-mdb",
+				veleroBackupNamespaceMetadataKey: veleroNamespace,
+			},
+		},
+	}
+	c := newBackupTestClient(t, backup, veleroBk)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+
+	dbrList := &velerov1.DeleteBackupRequestList{}
+	if err := c.List(context.Background(), dbrList, client.InNamespace(veleroNamespace)); err != nil {
+		t.Fatalf("list DeleteBackupRequests: %v", err)
+	}
+	if len(dbrList.Items) != 0 {
+		t.Fatalf("expected no DeleteBackupRequests for MariaDB Backup, got %d (Velero fall-through leak)", len(dbrList.Items))
+	}
+	got := &velerov1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: veleroNamespace, Name: "stale-vb-mdb"}, got); err != nil {
+		t.Fatalf("Velero Backup unexpectedly removed: %v", err)
+	}
+}
+
 // TestStrategyKindForBackup mirrors the dispatcher's strategy lookup. Useful
 // in isolation when reasoning about edge cases (empty strategyRef, etc.).
 func TestStrategyKindForBackup(t *testing.T) {
@@ -183,6 +234,7 @@ func TestStrategyKindForBackup(t *testing.T) {
 		{"cnpg", strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.CNPGStrategyKind},
 		{"job", strategyv1alpha1.JobStrategyKind, strategyv1alpha1.JobStrategyKind},
 		{"altinity", strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.AltinityStrategyKind},
+		{"mariadb", strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MariaDBStrategyKind},
 		{"empty", "", ""},
 	}
 	for _, tc := range cases {

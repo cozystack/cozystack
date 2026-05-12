@@ -82,12 +82,28 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileCNPG(ctx, j, resolved)
 	case strategyv1alpha1.AltinityStrategyKind:
 		return r.reconcileAltinity(ctx, j, resolved)
+	case strategyv1alpha1.MariaDBStrategyKind:
+		return r.reconcileMariaDB(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
 			"kind", strategyRef.Kind,
-			"supported", []string{strategyv1alpha1.JobStrategyKind, strategyv1alpha1.VeleroStrategyKind, strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.AltinityStrategyKind})
+			"supported", supportedBackupStrategyKinds())
 		return ctrl.Result{}, nil
+	}
+}
+
+// supportedBackupStrategyKinds returns every strategy.Kind the dispatch
+// switch above handles. Centralised so the unsupported-strategy diagnostic
+// can't drift out of sync with the real dispatch table - the unit test
+// TestSupportedBackupStrategyKindsMatchesDispatch locks in this invariant.
+func supportedBackupStrategyKinds() []string {
+	return []string{
+		strategyv1alpha1.JobStrategyKind,
+		strategyv1alpha1.VeleroStrategyKind,
+		strategyv1alpha1.CNPGStrategyKind,
+		strategyv1alpha1.AltinityStrategyKind,
+		strategyv1alpha1.MariaDBStrategyKind,
 	}
 }
 
