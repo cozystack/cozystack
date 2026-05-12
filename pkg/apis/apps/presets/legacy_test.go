@@ -143,11 +143,7 @@ func TestFormatDeprecationMessages(t *testing.T) {
 		`Postgres/db1 in tenant-x uses deprecated resourcesPreset "micro" at spec.clickhouseKeeper.resourcesPreset; migrate to "t1.micro" (1:1 equivalent CPU and memory)`,
 	}
 	if !reflect.DeepEqual(got, want) {
-		for i := range got {
-			if i >= len(want) || got[i] != want[i] {
-				t.Errorf("line %d:\n got:  %s\n want: %s", i, got[i], want[i])
-			}
-		}
+		t.Fatalf("got %#v\nwant %#v", got, want)
 	}
 }
 
