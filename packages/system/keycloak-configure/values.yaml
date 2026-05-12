@@ -37,3 +37,21 @@
 #         # configMapKeyRef:
 #         #   name: "configmap-name"
 #         #   key: "key"
+
+# Declarative User Profile configuration mirrored into
+# ClusterKeycloakRealm.spec.userProfileConfig. Use this to define
+# custom user attributes that should be required at registration or
+# managed via the account console.
+# userProfile:
+#   unmanagedAttributePolicy: ENABLED
+#   attributes:
+#     - name: publicOfferAccepted
+#       displayName: "Public offer accepted"
+#       required:
+#         roles: [user]
+#       permissions:
+#         view: [user, admin]
+#         edit: [user, admin]
+#       validations:
+#         pattern:
+#           pattern: "^true$"

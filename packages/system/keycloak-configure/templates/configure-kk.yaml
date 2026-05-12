@@ -45,6 +45,10 @@ spec:
   smtp:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with .Values.userProfile }}
+  userProfileConfig:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   sessions:
     ssoSessionSettings:
       idleTimeout: 86400
