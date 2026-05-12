@@ -38,11 +38,11 @@ func makeApp(name, namespace, rawSpec string) *appsv1alpha1.Application {
 }
 
 func TestDeprecationMessagesFor_TopAndNested(t *testing.T) {
-	app := makeApp("db1", "tenant-x", `{
+	raw := []byte(`{
 		"resourcesPreset":"small",
 		"sub":{"resourcesPreset":"micro"}
 	}`)
-	got := deprecationMessagesFor("Postgres", app)
+	got := deprecationMessagesFor("Postgres", "tenant-x", "db1", raw)
 	sort.Strings(got)
 
 	want := []string{
@@ -55,30 +55,23 @@ func TestDeprecationMessagesFor_TopAndNested(t *testing.T) {
 }
 
 func TestDeprecationMessagesFor_NewValuesSilent(t *testing.T) {
-	app := makeApp("db1", "tenant-x",
-		`{"resourcesPreset":"t1.small","sub":{"resourcesPreset":"c1.medium"}}`)
-	if got := deprecationMessagesFor("Postgres", app); len(got) != 0 {
+	raw := []byte(`{"resourcesPreset":"t1.small","sub":{"resourcesPreset":"c1.medium"}}`)
+	if got := deprecationMessagesFor("Postgres", "tenant-x", "db1", raw); len(got) != 0 {
 		t.Errorf("instance-type values must not produce messages, got %v", got)
 	}
 }
 
-func TestDeprecationMessagesFor_NilAndEmpty(t *testing.T) {
-	if got := deprecationMessagesFor("Postgres", nil); got != nil {
-		t.Errorf("nil app produced %v", got)
+func TestDeprecationMessagesFor_Empty(t *testing.T) {
+	if got := deprecationMessagesFor("Postgres", "ns", "name", nil); got != nil {
+		t.Errorf("nil raw produced %v", got)
 	}
-	if got := deprecationMessagesFor("Postgres", &appsv1alpha1.Application{}); got != nil {
-		t.Errorf("app with nil spec produced %v", got)
-	}
-	emptyRaw := makeApp("x", "ns", "")
-	emptyRaw.Spec = &apiextensionsv1.JSON{Raw: []byte("")}
-	if got := deprecationMessagesFor("Postgres", emptyRaw); got != nil {
-		t.Errorf("empty raw spec produced %v", got)
+	if got := deprecationMessagesFor("Postgres", "ns", "name", []byte("")); got != nil {
+		t.Errorf("empty raw produced %v", got)
 	}
 }
 
 func TestDeprecationMessagesFor_MalformedSpec(t *testing.T) {
-	app := makeApp("x", "ns", "{not-json")
-	if got := deprecationMessagesFor("Postgres", app); got != nil {
+	if got := deprecationMessagesFor("Postgres", "ns", "name", []byte("{not-json")); got != nil {
 		t.Errorf("malformed spec produced %v", got)
 	}
 }

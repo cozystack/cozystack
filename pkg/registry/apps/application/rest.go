@@ -1767,22 +1767,32 @@ func (r *REST) GroupVersionKind(schema.GroupVersion) schema.GroupVersionKind {
 // flat name (nano/micro/.../2xlarge). Returned in the order
 // presets.FindLegacyPresets discovers them. Pure function so tests can
 // assert the output without intercepting klog.
-func deprecationMessagesFor(kindName string, app *appsv1alpha1.Application) []string {
-	if app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+//
+// A malformed spec.Raw is reported via a V(2) debug log instead of a
+// hard error: validation upstream of this hook owns rejecting invalid
+// specs, and surfacing the unmarshal failure as a warning here would
+// fire even on transient inputs the caller is about to reject anyway.
+func deprecationMessagesFor(kindName, namespace, name string, raw []byte) []string {
+	if len(raw) == 0 {
 		return nil
 	}
 	var spec map[string]any
-	if err := json.Unmarshal(app.Spec.Raw, &spec); err != nil {
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		klog.V(2).Infof("deprecationMessagesFor: skipping %s/%s in %s: spec is not valid JSON: %v",
+			kindName, name, namespace, err)
 		return nil
 	}
-	return presets.FormatDeprecationMessages(kindName, app.Namespace, app.Name, presets.FindLegacyPresets(spec))
+	return presets.FormatDeprecationMessages(kindName, namespace, name, presets.FindLegacyPresets(spec))
 }
 
 // warnLegacyPresets emits a klog warning per deprecation message for
 // the given Application. Non-blocking: the value still renders
 // correctly through cozy-lib legacy aliases.
 func (r *REST) warnLegacyPresets(app *appsv1alpha1.Application) {
-	for _, msg := range deprecationMessagesFor(r.kindName, app) {
+	if app == nil || app.Spec == nil {
+		return
+	}
+	for _, msg := range deprecationMessagesFor(r.kindName, app.Namespace, app.Name, app.Spec.Raw) {
 		klog.Warning(msg)
 	}
 }
