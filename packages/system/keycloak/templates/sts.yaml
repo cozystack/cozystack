@@ -172,6 +172,9 @@ spec:
               value: https://{{ $ingressHost }}
             - name: JAVA_OPTS_APPEND
               value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- if .Values.themes }}
           volumeMounts:
             - name: themes
