@@ -212,6 +212,17 @@ spec:
         port: 50001
         targetPort: 50001
         protocol: TCP
+    {{- /* Talos workers point at the apiserver Service ClusterIP (see
+           controlPlane.endpoint in the worker machineconfig); include
+           that IP and the short/long Service FQDNs in the apiserver
+           cert so Talos's internal controllers don't trip on TLS. */}}
+    certSANs:
+      - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
+      - {{ printf "%s.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
+      {{- $kcpSvcForSANs := lookup "v1" "Service" .Release.Namespace .Release.Name }}
+      {{- if and $kcpSvcForSANs $kcpSvcForSANs.spec.clusterIP }}
+      - {{ $kcpSvcForSANs.spec.clusterIP }}
+      {{- end }}
   deployment:
     podAdditionalMetadata:
       labels:
