@@ -103,14 +103,23 @@ authEnabled: true
 ## @field {[]string} dnsNames - Explicit DNS SANs for the certificate. Merged with computed names from dnsNameSuffixes. When external is true and tls is enabled, add the LoadBalancer IP or hostname here so external clients can verify the certificate.
 ## @field {[]string} dnsNameSuffixes - Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.
 ## @field {[]string} usages - Key usages.
+## @field {PrivateKeyAlgorithm} algorithm - Key algorithm. Ed25519 uses a fixed key; the size field is ignored.
+## @field {int} [size] - Key size in bits. Ignored for Ed25519.
 ## @field {PrivateKeyEncoding} encoding - Private key encoding.
 
 ## @enum {string} PrivateKeyEncoding - Private key encoding format.
 ## @value PKCS1
 ## @value PKCS8
 
+## @enum {string} PrivateKeyAlgorithm - Key algorithm for TLS certificates.
+## @value ECDSA
+## @value RSA
+## @value Ed25519
+
 ## @typedef {struct} TLSCA - CA certificate configuration.
 ## @field {string} duration - CA certificate lifetime.
+## @field {PrivateKeyAlgorithm} algorithm - Key algorithm. Ed25519 uses a fixed key; the size field is ignored.
+## @field {int} [size] - Key size in bits. Ignored for Ed25519.
 
 ## @typedef {struct} CozyTLS - TLS certificate chain sub-chart configuration.
 ## @field {bool} enabled - Enable TLS termination via nginx stream sidecar and cert-manager PKI chain.
@@ -134,6 +143,8 @@ tls:
     group: "cert-manager.io"
   ca:
     duration: "43800h"
+    algorithm: "ECDSA"
+    size: 256
   certificate:
     secretName: ""
     duration: "8760h"
@@ -145,4 +156,6 @@ tls:
       - external-lb
     usages:
       - server auth
+    algorithm: "ECDSA"
+    size: 256
     encoding: "PKCS8"

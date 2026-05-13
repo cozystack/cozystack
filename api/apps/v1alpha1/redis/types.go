@@ -72,12 +72,21 @@ type Resources struct {
 }
 
 type TLSCA struct {
+	// Key algorithm. Ed25519 uses a fixed key; the size field is ignored.
+	// +kubebuilder:default:="ECDSA"
+	Algorithm PrivateKeyAlgorithm `json:"algorithm"`
 	// CA certificate lifetime.
 	// +kubebuilder:default:="43800h"
 	Duration string `json:"duration"`
+	// Key size in bits. Ignored for Ed25519.
+	// +kubebuilder:default:=256
+	Size int `json:"size,omitempty"`
 }
 
 type TLSCertificate struct {
+	// Key algorithm. Ed25519 uses a fixed key; the size field is ignored.
+	// +kubebuilder:default:="ECDSA"
+	Algorithm PrivateKeyAlgorithm `json:"algorithm"`
 	// Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.
 	// +kubebuilder:default:={"master","replicas","external-lb"}
 	DnsNameSuffixes []string `json:"dnsNameSuffixes,omitempty"`
@@ -96,6 +105,9 @@ type TLSCertificate struct {
 	// Custom TLS secret name. Defaults to "<release>-tls".
 	// +kubebuilder:default:=""
 	SecretName string `json:"secretName"`
+	// Key size in bits. Ignored for Ed25519.
+	// +kubebuilder:default:=256
+	Size int `json:"size,omitempty"`
 	// Key usages.
 	// +kubebuilder:default:={"server auth"}
 	Usages []string `json:"usages,omitempty"`
@@ -115,6 +127,9 @@ type TLSIssuerRef struct {
 
 // +kubebuilder:validation:Enum="Issuer";"ClusterIssuer"
 type IssuerKind string
+
+// +kubebuilder:validation:Enum="ECDSA";"RSA";"Ed25519"
+type PrivateKeyAlgorithm string
 
 // +kubebuilder:validation:Enum="PKCS1";"PKCS8"
 type PrivateKeyEncoding string

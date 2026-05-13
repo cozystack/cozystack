@@ -149,13 +149,29 @@
           "type": "object",
           "default": {},
           "required": [
+            "algorithm",
             "duration"
           ],
           "properties": {
+            "algorithm": {
+              "description": "Key algorithm. Ed25519 uses a fixed key; the size field is ignored.",
+              "type": "string",
+              "default": "ECDSA",
+              "enum": [
+                "ECDSA",
+                "RSA",
+                "Ed25519"
+              ]
+            },
             "duration": {
               "description": "CA certificate lifetime.",
               "type": "string",
               "default": "43800h"
+            },
+            "size": {
+              "description": "Key size in bits. Ignored for Ed25519.",
+              "type": "integer",
+              "default": 256
             }
           }
         },
@@ -164,12 +180,23 @@
           "type": "object",
           "default": {},
           "required": [
+            "algorithm",
             "duration",
             "encoding",
             "renewBefore",
             "secretName"
           ],
           "properties": {
+            "algorithm": {
+              "description": "Key algorithm. Ed25519 uses a fixed key; the size field is ignored.",
+              "type": "string",
+              "default": "ECDSA",
+              "enum": [
+                "ECDSA",
+                "RSA",
+                "Ed25519"
+              ]
+            },
             "dnsNameSuffixes": {
               "description": "Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.",
               "type": "array",
@@ -213,6 +240,11 @@
               "description": "Custom TLS secret name. Defaults to \"\u003crelease\u003e-tls\".",
               "type": "string",
               "default": ""
+            },
+            "size": {
+              "description": "Key size in bits. Ignored for Ed25519.",
+              "type": "integer",
+              "default": 256
             },
             "usages": {
               "description": "Key usages.",
