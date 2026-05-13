@@ -86,6 +86,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileMariaDB(ctx, j, resolved)
 	case strategyv1alpha1.FoundationDBStrategyKind:
 		return r.reconcileFoundationDB(ctx, j, resolved)
+	case strategyv1alpha1.EtcdStrategyKind:
+		return r.reconcileEtcd(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
@@ -107,6 +109,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.AltinityStrategyKind,
 		strategyv1alpha1.MariaDBStrategyKind,
 		strategyv1alpha1.FoundationDBStrategyKind,
+		strategyv1alpha1.EtcdStrategyKind,
 	}
 }
 

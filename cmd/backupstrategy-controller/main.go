@@ -41,6 +41,8 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller"
 	"github.com/cozystack/cozystack/internal/backupcontroller/cnpgtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/etcdapp"
+	"github.com/cozystack/cozystack/internal/backupcontroller/etcdtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
@@ -67,6 +69,8 @@ func init() {
 	utilruntime.Must(mariadbapp.AddToScheme(scheme))
 	utilruntime.Must(foundationdbtypes.AddToScheme(scheme))
 	utilruntime.Must(foundationdbapp.AddToScheme(scheme))
+	utilruntime.Must(etcdtypes.AddToScheme(scheme))
+	utilruntime.Must(etcdapp.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

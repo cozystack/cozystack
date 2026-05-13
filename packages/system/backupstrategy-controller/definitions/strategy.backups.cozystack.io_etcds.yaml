@@ -1,0 +1,230 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: etcds.strategy.backups.cozystack.io
+spec:
+  group: strategy.backups.cozystack.io
+  names:
+    kind: Etcd
+    listKind: EtcdList
+    plural: etcds
+    singular: etcd
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Etcd defines a backup strategy that delegates execution to the
+          etcd-operator (etcd.aenix.io). The strategy carries a templated backup
+          destination configuration; the driver materialises one
+          etcd.aenix.io/v1alpha1 EtcdBackup per Cozystack BackupJob and surfaces
+          it as a Cozystack Backup artefact. Restores are driven by stamping the
+          rendered destination back onto EtcdCluster.spec.bootstrap.restore.source
+          on the target Etcd application - either by recreating the source
+          EtcdCluster (in-place) or by patching a freshly provisioned target
+          EtcdCluster before the operator marks it Ready (to-copy).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: EtcdSpec specifies the desired etcd-operator-driven backup
+              strategy.
+            properties:
+              template:
+                description: |-
+                  Template carries the templated EtcdBackup destination configuration
+                  applied per BackupJob (and re-rendered against the same
+                  .Application / .Parameters at restore time). String fields support
+                  Helm-style Go templating with two top-level values:
+                    .Application - the application object (apps.cozystack.io/Etcd)
+                    .Parameters  - the parameters from the matched BackupClassStrategy.
+                                   These values MUST NOT carry credentials; route S3
+                                   access keys through
+                                   Destination.S3.CredentialsSecretRef.
+                properties:
+                  destination:
+                    description: |-
+                      Destination defines where the etcd snapshot will be stored. Field
+                      semantics mirror etcd.aenix.io/v1alpha1 EtcdBackup.spec.destination.
+                    properties:
+                      pvc:
+                        description: |-
+                          PVC configures a PersistentVolumeClaim-backed storage target.
+                          Templating is supported on ClaimName and SubPath.
+                        properties:
+                          claimName:
+                            description: |-
+                              ClaimName is the name of the PersistentVolumeClaim to use as the
+                              backup destination. The PVC must live in the application's
+                              namespace and be ReadWriteMany if multiple BackupJobs may run
+                              concurrently. Templating is supported.
+                            minLength: 1
+                            type: string
+                          subPath:
+                            description: |-
+                              SubPath is an optional sub-directory within the PVC volume. The
+                              operator appends the snapshot filename automatically. Templating is
+                              supported.
+                            type: string
+                        required:
+                        - claimName
+                        type: object
+                      s3:
+                        description: |-
+                          S3 configures an S3-compatible storage target. Templating is
+                          supported on every string field (Bucket, Endpoint, Key, Region,
+                          CredentialsSecretRef.Name).
+                        properties:
+                          bucket:
+                            description: |-
+                              Bucket is the S3 (or compatible) bucket name. Templating is
+                              supported.
+                            minLength: 1
+                            type: string
+                          credentialsSecretRef:
+                            description: |-
+                              CredentialsSecretRef references a Secret containing
+                              AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys. The Secret must
+                              live in the application's namespace. Templating is supported on
+                              Name (typical pattern:
+                              "{{ .Application.metadata.name }}-etcd-backup-creds").
+                            properties:
+                              name:
+                                description: Name is the Secret name. Templating is
+                                  supported.
+                                minLength: 1
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          endpoint:
+                            description: |-
+                              Endpoint is the S3-compatible endpoint URL, including scheme (e.g.
+                              "https://s3.amazonaws.com" or
+                              "http://seaweedfs-s3.tenant-root.svc:8333"). Templating is
+                              supported.
+                            minLength: 1
+                            type: string
+                          forcePathStyle:
+                            description: |-
+                              ForcePathStyle forces path-style S3 URLs (e.g., endpoint/bucket/key)
+                              instead of virtual-hosted-style (e.g., bucket.endpoint/key). Most
+                              S3-compatible providers (MinIO, Ceph, seaweedfs-s3) require path
+                              style.
+                            type: boolean
+                          key:
+                            description: |-
+                              Key is the key prefix (directory path) within the bucket. The
+                              etcd-operator appends the snapshot filename automatically.
+                              Templating is supported.
+                            type: string
+                          region:
+                            description: |-
+                              Region is the AWS region for the S3 bucket. Templating is
+                              supported.
+                            type: string
+                        required:
+                        - bucket
+                        - credentialsSecretRef
+                        - endpoint
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of s3 or pvc must be set
+                      rule: '(has(self.s3) ? 1 : 0) + (has(self.pvc) ? 1 : 0) == 1'
+                required:
+                - destination
+                type: object
+            required:
+            - template
+            type: object
+          status:
+            description: |-
+              EtcdStatus reports observed state for the strategy CR. Driver
+              controllers surface diagnostic conditions here (e.g. validation issues).
+            properties:
+              conditions:
+                description: Conditions holds the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
