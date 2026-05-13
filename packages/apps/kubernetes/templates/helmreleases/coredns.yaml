@@ -37,10 +37,6 @@ spec:
   values:
     {{- toYaml (deepCopy .Values.addons.coredns.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultCoreDNSValues" .))) | nindent 4 }}
   dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
 {{- end }}

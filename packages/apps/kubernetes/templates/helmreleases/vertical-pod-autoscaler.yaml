@@ -58,10 +58,6 @@ spec:
   values:
     {{- toYaml (deepCopy .Values.addons.verticalPodAutoscaler.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultVPAValues" .))) | nindent 4 }}
   dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
   - name: {{ .Release.Name }}-monitoring-agents
     namespace: {{ .Release.Namespace }}
 {{- end }}
