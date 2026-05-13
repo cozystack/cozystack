@@ -119,7 +119,7 @@ tests:
       - failedTemplate:
           errorPattern: ca.duration
 
-  - it: fails when issuerRef.name is whitespace-only
+  - it: defaults to CA issuer when issuerRef.name is whitespace-only
     set:
       cozy-tls.enabled: true
       cozy-tls.certificate.dnsNames[0]: test

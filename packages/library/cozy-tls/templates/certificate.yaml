@@ -4,9 +4,11 @@
   {{- $allDnsNames = append $allDnsNames . -}}
 {{- end -}}
 {{- range .Values.certificate.dnsNameSuffixes -}}
-  {{- $allDnsNames = append $allDnsNames (printf "%s-%s" $.Release.Name .) -}}
-  {{- $allDnsNames = append $allDnsNames (printf "%s-%s.%s.svc" $.Release.Name . $.Release.Namespace) -}}
-  {{- $allDnsNames = append $allDnsNames (printf "%s-%s.%s.svc.%s" $.Release.Name . $.Release.Namespace $.Values.clusterDomain) -}}
+  {{- $name := printf "%s-%s" $.Release.Name . -}}
+  {{- $allDnsNames = append $allDnsNames $name -}}
+  {{- $allDnsNames = append $allDnsNames (printf "%s.%s" $name $.Release.Namespace) -}}
+  {{- $allDnsNames = append $allDnsNames (printf "%s.%s.svc" $name $.Release.Namespace) -}}
+  {{- $allDnsNames = append $allDnsNames (printf "%s.%s.svc.%s" $name $.Release.Namespace $.Values.clusterDomain) -}}
 {{- end -}}
 {{- if not $allDnsNames }}
 {{- fail "dnsNames and/or dnsNameSuffixes must not be empty when cozy-tls is enabled" }}
@@ -40,9 +42,9 @@ spec:
     {{- toYaml .Values.certificate.usages | nindent 4 }}
   issuerRef:
     {{- if (.Values.issuerRef.name | trim) }}
-    name: {{ .Values.issuerRef.name | quote }}
-    kind: {{ .Values.issuerRef.kind | quote }}
-    group: {{ .Values.issuerRef.group | quote }}
+    name: {{ .Values.issuerRef.name | trim | quote }}
+    kind: {{ .Values.issuerRef.kind | trim | quote }}
+    group: {{ .Values.issuerRef.group | trim | quote }}
     {{- else }}
     name: {{ include "cozy-tls.ca-name" . }}
     kind: Issuer

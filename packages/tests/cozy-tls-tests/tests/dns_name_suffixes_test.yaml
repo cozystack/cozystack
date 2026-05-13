@@ -4,7 +4,7 @@ templates:
   - charts/cozy-tls/templates/certificate.yaml
 
 tests:
-  - it: expands suffixes into three DNS forms each
+  - it: expands suffixes into four DNS forms each
     values:
       - ca_chain_suffixes_values.yaml
     release:
@@ -15,9 +15,11 @@ tests:
           path: spec.dnsNames
           value:
             - myredis-master
+            - myredis-master.tenant-test
             - myredis-master.tenant-test.svc
             - myredis-master.tenant-test.svc.cozy.local
             - myredis-replicas
+            - myredis-replicas.tenant-test
             - myredis-replicas.tenant-test.svc
             - myredis-replicas.tenant-test.svc.cozy.local
 
@@ -35,9 +37,11 @@ tests:
           value:
             - custom.example.com
             - myredis-master
+            - myredis-master.tenant-test
             - myredis-master.tenant-test.svc
             - myredis-master.tenant-test.svc.cozy.local
             - myredis-replicas
+            - myredis-replicas.tenant-test
             - myredis-replicas.tenant-test.svc
             - myredis-replicas.tenant-test.svc.cozy.local
 
