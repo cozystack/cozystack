@@ -1,5 +1,7 @@
 {
-    "title": "Chart Values",
-    "type": "object",
-    "properties": {}
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+
+  }
 }
