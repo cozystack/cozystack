@@ -1,0 +1,100 @@
+suite: schema validation
+
+tests:
+  # ── issuerRef.kind enum ───────────────────────────────────────────────────────
+
+  - it: rejects issuerRef.kind values outside the Issuer/ClusterIssuer enum
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.issuerRef.kind: Secret
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}
+
+  # ── algorithm enum ────────────────────────────────────────────────────────────
+
+  - it: rejects certificate.algorithm values outside the ECDSA/RSA/Ed25519 enum
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.algorithm: "AES"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects ca.algorithm values outside the ECDSA/RSA/Ed25519 enum
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.ca.algorithm: "AES"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}
+
+  # ── encoding enum ─────────────────────────────────────────────────────────────
+
+  - it: rejects certificate.encoding values outside the PKCS1/PKCS8 enum
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.encoding: "DER"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}
+
+  # ── clusterDomain minLength ───────────────────────────────────────────────────
+
+  - it: rejects empty clusterDomain via minLength constraint
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.clusterDomain: ""
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}
+
+  # ── duration pattern ──────────────────────────────────────────────────────────
+
+  - it: rejects ca.duration with non-pure-hours format via schema pattern
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.ca.duration: "43800h0m0s"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects certificate.duration with non-pure-hours format via schema pattern
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.duration: "8760h30m"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects certificate.renewBefore with non-pure-hours format via schema pattern
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.renewBefore: "720h30m"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate: {}

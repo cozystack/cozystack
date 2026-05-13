@@ -366,7 +366,7 @@ tests:
             - redis-master
             - redis-master.tenant-test.svc
 
-  - it: leaf Certificate commonName equals release-tls
+  - it: leaf Certificate commonName equals first DNS name
     values:
       - ca_chain_values.yaml
     release:
@@ -376,7 +376,7 @@ tests:
     asserts:
       - equal:
           path: spec.commonName
-          value: myredis-tls
+          value: redis-master
 
   # ── CA chain — overrides ──────────────────────────────────────────────────────
 
@@ -668,3 +668,41 @@ tests:
       - equal:
           path: spec.privateKey.encoding
           value: PKCS1
+
+  # ── Label convention ──────────────────────────────────────────────────────────
+
+  - it: app.kubernetes.io/name label equals chart name on leaf Certificate
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: cozy-tls
+
+  - it: app.kubernetes.io/instance label equals release name on leaf Certificate
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: myredis
+
+  - it: app.kubernetes.io/name label equals chart name on CA Certificate
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: cozy-tls

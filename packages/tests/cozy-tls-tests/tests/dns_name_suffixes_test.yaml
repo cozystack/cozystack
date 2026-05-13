@@ -85,3 +85,14 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: myredis-master.tenant-test.svc.cozy.local
+
+  - it: commonName equals first computed DNS name when using dnsNameSuffixes
+    values:
+      - ca_chain_suffixes_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.commonName
+          value: myredis-master
