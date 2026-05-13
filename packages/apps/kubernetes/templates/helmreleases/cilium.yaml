@@ -46,12 +46,8 @@ spec:
       retries: -1
   values:
     {{- toYaml (deepCopy .Values.addons.cilium.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultCiliumValues" .))) | nindent 4 }}
-  dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
   {{- if $.Values.addons.gatewayAPI.enabled }}
+  dependsOn:
   - name: {{ .Release.Name }}-gateway-api-crds
     namespace: {{ .Release.Namespace }}
   {{- end }}

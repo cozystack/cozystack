@@ -28,9 +28,4 @@ spec:
   upgrade:
     remediation:
       retries: -1
-  dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
 {{- end }}
