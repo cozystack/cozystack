@@ -1,8 +1,16 @@
 cluster-autoscaler:
   cloudProvider: externalgrpc
   extraArgs:
-    # path to ConfigMap-mounted file containing: address: "localhost:8086"
     cloud-config: /etc/externalgrpc/cloud-config
+
+  livenessProbe:
+    httpGet:
+      path: /health-check
+      port: 8085
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 1
 
   rbac:
     additionalRules:
