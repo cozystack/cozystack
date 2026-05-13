@@ -45,15 +45,14 @@
       "default": {},
       "required": [
         "algorithm",
-        "duration",
-        "size"
+        "duration"
       ],
       "properties": {
         "algorithm": {
-          "description": "Key algorithm for the CA certificate (ECDSA or RSA).",
+          "description": "Key algorithm for the CA certificate (ECDSA, RSA, or Ed25519).",
           "type": "string",
           "default": "ECDSA",
-          "enum": ["ECDSA", "RSA"]
+          "enum": ["ECDSA", "RSA", "Ed25519"]
         },
         "duration": {
           "description": "Validity duration of the CA certificate.",
@@ -77,15 +76,14 @@
         "duration",
         "encoding",
         "renewBefore",
-        "secretName",
-        "size"
+        "secretName"
       ],
       "properties": {
         "algorithm": {
-          "description": "Key algorithm for the leaf certificate (ECDSA or RSA).",
+          "description": "Key algorithm for the leaf certificate (ECDSA, RSA, or Ed25519).",
           "type": "string",
           "default": "ECDSA",
-          "enum": ["ECDSA", "RSA"]
+          "enum": ["ECDSA", "RSA", "Ed25519"]
         },
         "dnsNameSuffixes": {
           "description": "List of DNS name suffixes appended to auto-generated SANs.",

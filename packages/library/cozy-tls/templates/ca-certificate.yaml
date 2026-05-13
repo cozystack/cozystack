@@ -20,6 +20,8 @@ spec:
     group: cert-manager.io
   privateKey:
     algorithm: {{ .Values.ca.algorithm | quote }}
+    {{- if ne .Values.ca.algorithm "Ed25519" }}
     size: {{ .Values.ca.size }}
+    {{- end }}
     rotationPolicy: Never
 {{- end }}

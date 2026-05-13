@@ -52,7 +52,9 @@ spec:
     {{- end }}
   privateKey:
     algorithm: {{ .Values.certificate.algorithm | quote }}
+    {{- if ne .Values.certificate.algorithm "Ed25519" }}
     size: {{ .Values.certificate.size }}
+    {{- end }}
     encoding: {{ .Values.certificate.encoding | quote }}
     rotationPolicy: Always
 {{- end }}

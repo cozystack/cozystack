@@ -463,3 +463,73 @@ tests:
       - equal:
           path: spec.privateKey.encoding
           value: PKCS1
+
+  # ── Ed25519 — CA Certificate ──────────────────────────────────────────────────
+
+  - it: CA Certificate Ed25519 algorithm renders without size field
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.ca.algorithm: Ed25519
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  - it: CA Certificate Ed25519 omits size even when explicitly set
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.ca.algorithm: Ed25519
+      cozy-tls.ca.size: 256
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  # ── Ed25519 — leaf Certificate ────────────────────────────────────────────────
+
+  - it: leaf Certificate Ed25519 algorithm renders without size field
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.algorithm: Ed25519
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  - it: leaf Certificate Ed25519 omits size even when explicitly set
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.algorithm: Ed25519
+      cozy-tls.certificate.size: 256
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
