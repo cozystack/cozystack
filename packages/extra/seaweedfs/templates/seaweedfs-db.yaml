@@ -24,11 +24,16 @@ spec:
   # before CNPG has bootstrapped postgres.
   waitStrategy:
     name: poller
+  # CNPG sets Ready=False with reason=ClusterIsNotReady during normal bootstrap,
+  # so a plain Ready=False predicate flags the HR failed within seconds. Treat
+  # the bootstrap reason as in-progress; reserve `failed` for other Ready=False
+  # reasons CNPG might add in the future. The HR `timeout:` is the real backstop.
   healthCheckExprs:
     - apiVersion: postgresql.cnpg.io/v1
       kind: Cluster
-      current: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
-      failed:  has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False')
+      inProgress: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason == 'ClusterIsNotReady')
+      failed:     has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason != 'ClusterIsNotReady')
+      current:    has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
   valuesFrom:
   - kind: Secret
     name: cozystack-values
