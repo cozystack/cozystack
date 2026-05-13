@@ -1,1 +1,1 @@
-docker.io/altinity/clickhouse-backup:2.6.32@sha256:35d343d82cbce0f906af99c0e79e9349e2e0290484f10304ab8a73956d0cf4a3
+ghcr.io/cozystack/cozystack/altinity-clickhouse-backup:0.0.0@sha256:65d15779d062680ddb69210c1dfaf8920ea4be2beb069d028bcb5934870a4d72
