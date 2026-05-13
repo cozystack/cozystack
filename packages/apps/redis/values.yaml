@@ -101,7 +101,7 @@ authEnabled: true
 ## @field {string} duration - Certificate lifetime.
 ## @field {string} renewBefore - Renew this long before expiry.
 ## @field {[]string} dnsNames - Explicit DNS SANs for the certificate. Merged with computed names from dnsNameSuffixes. When external is true and tls is enabled, add the LoadBalancer IP or hostname here so external clients can verify the certificate.
-## @field {[]string} dnsNameSuffixes - Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.
+## @field {[]string} dnsNameSuffixes - Service name suffixes used to auto-compute DNS SANs. Each suffix expands to four DNS forms using the release name and namespace.
 ## @field {[]string} usages - Key usages.
 ## @field {PrivateKeyAlgorithm} algorithm - Key algorithm. Ed25519 uses a fixed key; the size field is ignored.
 ## @field {int} [size] - Key size in bits. Ignored for Ed25519.

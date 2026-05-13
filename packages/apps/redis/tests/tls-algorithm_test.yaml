@@ -1,0 +1,208 @@
+suite: TLS certificate algorithm and key size propagation
+templates:
+  - charts/tls/templates/certificate.yaml
+  - charts/tls/templates/ca-certificate.yaml
+release:
+  namespace: tenant-test
+tests:
+  ###################################################################
+  # Leaf certificate (certificate.yaml)                             #
+  ###################################################################
+
+  - it: default leaf algorithm is ECDSA with size 256
+    template: charts/tls/templates/certificate.yaml
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: Ed25519 leaf renders algorithm without size field
+    template: charts/tls/templates/certificate.yaml
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.certificate.algorithm: Ed25519
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  - it: RSA leaf with custom size renders algorithm and size
+    template: charts/tls/templates/certificate.yaml
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.certificate.algorithm: RSA
+      tls.certificate.size: 4096
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 4096
+
+  ###################################################################
+  # CA certificate (ca-certificate.yaml)                            #
+  ###################################################################
+
+  - it: default CA algorithm is ECDSA with size 256
+    template: charts/tls/templates/ca-certificate.yaml
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: Ed25519 CA renders algorithm without size field
+    template: charts/tls/templates/ca-certificate.yaml
+    set:
+      tls.enabled: true
+      tls.clusterDomain: "cozy.local"
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.ca.algorithm: Ed25519
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  - it: Ed25519 CA with explicit size still omits size field
+    template: charts/tls/templates/ca-certificate.yaml
+    set:
+      tls.enabled: true
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.ca.algorithm: Ed25519
+      tls.ca.size: 4096
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  - it: RSA CA with explicit size renders algorithm and size
+    template: charts/tls/templates/ca-certificate.yaml
+    set:
+      tls.enabled: true
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.ca.algorithm: RSA
+      tls.ca.size: 2048
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 2048
+
+  ###################################################################
+  # Mixed algorithms (CA=RSA, leaf=Ed25519)                         #
+  ###################################################################
+
+  - it: mixed algorithms — CA RSA renders algorithm and size
+    template: charts/tls/templates/ca-certificate.yaml
+    set:
+      tls.enabled: true
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.ca.algorithm: RSA
+      tls.ca.size: 4096
+      tls.certificate.algorithm: Ed25519
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 4096
+
+  - it: mixed algorithms — leaf Ed25519 renders algorithm without size
+    template: charts/tls/templates/certificate.yaml
+    set:
+      tls.enabled: true
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.ca.algorithm: RSA
+      tls.ca.size: 4096
+      tls.certificate.algorithm: Ed25519
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  ###################################################################
+  # Validation guards                                               #
+  ###################################################################
+
+  - it: Ed25519 leaf with PKCS1 encoding fails with clear error
+    template: charts/tls/templates/certificate.yaml
+    set:
+      tls.enabled: true
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.certificate.algorithm: Ed25519
+      tls.certificate.encoding: PKCS1
+    asserts:
+      - failedTemplate:
+          errorMessage: "Ed25519 does not support PKCS1 encoding; use PKCS8 instead"
+
+  - it: ECDSA leaf with PKCS1 encoding renders successfully
+    template: charts/tls/templates/certificate.yaml
+    set:
+      tls.enabled: true
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.certificate.algorithm: ECDSA
+      tls.certificate.encoding: PKCS1
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS1
+
+  - it: RSA leaf with PKCS1 encoding renders successfully
+    template: charts/tls/templates/certificate.yaml
+    set:
+      tls.enabled: true
+      tls.certificate.dnsNameSuffixes:
+        - master
+      tls.certificate.algorithm: RSA
+      tls.certificate.size: 4096
+      tls.certificate.encoding: PKCS1
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS1

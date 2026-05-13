@@ -198,7 +198,7 @@
               ]
             },
             "dnsNameSuffixes": {
-              "description": "Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.",
+              "description": "Service name suffixes used to auto-compute DNS SANs. Each suffix expands to four DNS forms using the release name and namespace.",
               "type": "array",
               "default": [
                 "master",

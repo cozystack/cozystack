@@ -87,7 +87,7 @@ type TLSCertificate struct {
 	// Key algorithm. Ed25519 uses a fixed key; the size field is ignored.
 	// +kubebuilder:default:="ECDSA"
 	Algorithm PrivateKeyAlgorithm `json:"algorithm"`
-	// Service name suffixes used to auto-compute DNS SANs. Each suffix expands to three DNS forms using the release name and namespace.
+	// Service name suffixes used to auto-compute DNS SANs. Each suffix expands to four DNS forms using the release name and namespace.
 	// +kubebuilder:default:={"master","replicas","external-lb"}
 	DnsNameSuffixes []string `json:"dnsNameSuffixes,omitempty"`
 	// Explicit DNS SANs for the certificate. Merged with computed names from dnsNameSuffixes. When external is true and tls is enabled, add the LoadBalancer IP or hostname here so external clients can verify the certificate.
