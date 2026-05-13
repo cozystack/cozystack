@@ -35,7 +35,7 @@ spec:
   secretName: {{ include "cozy-tls.certificate-secret-name" . }}
   duration: {{ .Values.certificate.duration | quote }}
   renewBefore: {{ .Values.certificate.renewBefore | quote }}
-  commonName: {{ include "cozy-tls.certificate-name" . }}
+  commonName: {{ index $allDnsNames 0 | quote }}
   dnsNames:
     {{- toYaml $allDnsNames | nindent 4 }}
   usages:

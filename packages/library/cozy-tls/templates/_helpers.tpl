@@ -2,7 +2,7 @@
 Expand the name of the chart.
 */}}
 {{- define "cozy-tls.name" -}}
-{{- .Release.Name }}
+{{- .Chart.Name }}
 {{- end }}
 
 {{/*
