@@ -1,0 +1,10 @@
+cozy-tls:
+  enabled: true
+
+  certificate:
+    dnsNames:
+      - redis-master
+      - redis-master.tenant-test.svc
+    usages:
+      - server auth
+      - client auth

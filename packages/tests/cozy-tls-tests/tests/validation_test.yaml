@@ -1,0 +1,131 @@
+suite: input validation
+
+templates:
+  - charts/cozy-tls/templates/certificate.yaml
+
+tests:
+  - it: fails when enabled is true but both dnsNames and dnsNameSuffixes are empty
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames: []
+      cozy-tls.certificate.dnsNameSuffixes: []
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorMessage: "dnsNames and/or dnsNameSuffixes must not be empty when cozy-tls is enabled"
+
+  - it: fails when enabled is true and neither dnsNames nor dnsNameSuffixes keys are set
+    set:
+      cozy-tls.enabled: true
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorMessage: "dnsNames and/or dnsNameSuffixes must not be empty when cozy-tls is enabled"
+
+  - it: fails when renewBefore equals duration
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.duration: "720h"
+      cozy-tls.certificate.renewBefore: "720h"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorMessage: "certificate.renewBefore (720h) must be less than certificate.duration (720h)"
+
+  - it: fails when renewBefore exceeds duration
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.duration: "720h"
+      cozy-tls.certificate.renewBefore: "800h"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorMessage: "certificate.renewBefore (800h) must be less than certificate.duration (720h)"
+
+  - it: fails when duration uses non-pure-hours format (e.g. 8760h0m0s)
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.duration: "8760h0m0s"
+      cozy-tls.certificate.renewBefore: "720h"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "8760h0m0s"
+
+  - it: fails when renewBefore uses non-pure-hours format (e.g. 720h30m)
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.duration: "8760h"
+      cozy-tls.certificate.renewBefore: "720h30m"
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "720h30m"
+
+  - it: fails when ca.duration is not in pure hours format
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.ca.duration: "43800h0m0s"
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: ca.duration
+
+  - it: fails when certificate.duration is 0h
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.duration: "0h"
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: certificate.duration
+  - it: fails when certificate.renewBefore is 0h
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.certificate.renewBefore: "0h"
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: certificate.renewBefore
+  - it: fails when ca.duration is 0h
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.ca.duration: "0h"
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: ca.duration
+
+  - it: fails when issuerRef.name is whitespace-only
+    set:
+      cozy-tls.enabled: true
+      cozy-tls.certificate.dnsNames[0]: test
+      cozy-tls.issuerRef.name: " "
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.issuerRef.name
+          value: RELEASE-NAME-ca

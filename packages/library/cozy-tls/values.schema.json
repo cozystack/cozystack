@@ -1,0 +1,147 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "description": "Enable TLS provisioning for the application.",
+      "type": "boolean",
+      "default": false
+    },
+    "clusterDomain": {
+      "description": "Cluster domain used when constructing default DNS names. Parent charts should forward _cluster[\"cluster-domain\"] to this value.",
+      "type": "string",
+      "default": "cozy.local"
+    },
+    "issuerRef": {
+      "description": "Reference to the cert-manager Issuer or ClusterIssuer that signs certificates.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "group",
+        "kind",
+        "name"
+      ],
+      "properties": {
+        "group": {
+          "description": "API group of the issuer resource.",
+          "type": "string",
+          "default": "cert-manager.io"
+        },
+        "kind": {
+          "description": "Kind of the issuer resource (Issuer or ClusterIssuer).",
+          "type": "string",
+          "default": "Issuer"
+        },
+        "name": {
+          "description": "Name of the Issuer or ClusterIssuer resource.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "ca": {
+      "description": "Configuration for the CA certificate issued by cert-manager.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "algorithm",
+        "duration",
+        "size"
+      ],
+      "properties": {
+        "algorithm": {
+          "description": "Key algorithm for the CA certificate (ECDSA or RSA).",
+          "type": "string",
+          "default": "ECDSA",
+          "enum": ["ECDSA", "RSA"]
+        },
+        "duration": {
+          "description": "Validity duration of the CA certificate.",
+          "type": "string",
+          "default": "43800h",
+          "pattern": "^[1-9][0-9]*h$"
+        },
+        "size": {
+          "description": "Key size in bits for the chosen algorithm.",
+          "type": "integer",
+          "default": 256
+        }
+      }
+    },
+    "certificate": {
+      "description": "Configuration for the leaf TLS certificate.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "algorithm",
+        "duration",
+        "encoding",
+        "renewBefore",
+        "secretName",
+        "size"
+      ],
+      "properties": {
+        "algorithm": {
+          "description": "Key algorithm for the leaf certificate (ECDSA or RSA).",
+          "type": "string",
+          "default": "ECDSA",
+          "enum": ["ECDSA", "RSA"]
+        },
+        "dnsNameSuffixes": {
+          "description": "List of DNS name suffixes appended to auto-generated SANs.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "dnsNames": {
+          "description": "Explicit list of DNS SANs to add to the certificate.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "duration": {
+          "description": "Validity duration of the leaf certificate.",
+          "type": "string",
+          "default": "8760h",
+          "pattern": "^[1-9][0-9]*h$"
+        },
+        "encoding": {
+          "description": "Private key encoding format (PKCS1 or PKCS8).",
+          "type": "string",
+          "default": "PKCS8",
+          "enum": ["PKCS1", "PKCS8"]
+        },
+        "renewBefore": {
+          "description": "How long before expiry cert-manager should renew the certificate.",
+          "type": "string",
+          "default": "720h",
+          "pattern": "^[1-9][0-9]*h$"
+        },
+        "secretName": {
+          "description": "Name of the Kubernetes Secret where the certificate is stored.",
+          "type": "string",
+          "default": ""
+        },
+        "size": {
+          "description": "Key size in bits for the chosen algorithm.",
+          "type": "integer",
+          "default": 256
+        },
+        "usages": {
+          "description": "List of key usages for the certificate.",
+          "type": "array",
+          "default": [
+            "server auth"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

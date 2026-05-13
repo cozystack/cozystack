@@ -1,0 +1,11 @@
+cozy-tls:
+  enabled: true
+
+  issuerRef:
+    name: my-cluster-issuer
+    kind: ClusterIssuer
+
+  certificate:
+    dnsNames:
+      - redis-master
+      - redis-master.tenant-test.svc

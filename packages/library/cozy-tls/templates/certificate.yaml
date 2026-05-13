@@ -1,0 +1,56 @@
+{{- if .Values.enabled }}
+{{- $allDnsNames := list -}}
+{{- range .Values.certificate.dnsNames -}}
+  {{- $allDnsNames = append $allDnsNames . -}}
+{{- end -}}
+{{- range .Values.certificate.dnsNameSuffixes -}}
+  {{- $allDnsNames = append $allDnsNames (printf "%s-%s" $.Release.Name .) -}}
+  {{- $allDnsNames = append $allDnsNames (printf "%s-%s.%s.svc" $.Release.Name . $.Release.Namespace) -}}
+  {{- $allDnsNames = append $allDnsNames (printf "%s-%s.%s.svc.%s" $.Release.Name . $.Release.Namespace $.Values.clusterDomain) -}}
+{{- end -}}
+{{- if not $allDnsNames }}
+{{- fail "dnsNames and/or dnsNameSuffixes must not be empty when cozy-tls is enabled" }}
+{{- end }}
+{{- if not (regexMatch "^[1-9][0-9]*h$" .Values.certificate.duration) }}
+{{- fail (printf "certificate.duration (%s) must be in pure hours format (e.g. \"8760h\")" .Values.certificate.duration) }}
+{{- end }}
+{{- if not (regexMatch "^[1-9][0-9]*h$" .Values.certificate.renewBefore) }}
+{{- fail (printf "certificate.renewBefore (%s) must be in pure hours format (e.g. \"720h\")" .Values.certificate.renewBefore) }}
+{{- end }}
+{{- $durationHours := .Values.certificate.duration | trimSuffix "h" | float64 }}
+{{- $renewBeforeHours := .Values.certificate.renewBefore | trimSuffix "h" | float64 }}
+{{- if ge $renewBeforeHours $durationHours }}
+{{- fail (printf "certificate.renewBefore (%s) must be less than certificate.duration (%s)" .Values.certificate.renewBefore .Values.certificate.duration) }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "cozy-tls.certificate-name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozy-tls.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "cozy-tls.certificate-secret-name" . }}
+  duration: {{ .Values.certificate.duration | quote }}
+  renewBefore: {{ .Values.certificate.renewBefore | quote }}
+  commonName: {{ include "cozy-tls.certificate-name" . }}
+  dnsNames:
+    {{- toYaml $allDnsNames | nindent 4 }}
+  usages:
+    {{- toYaml .Values.certificate.usages | nindent 4 }}
+  issuerRef:
+    {{- if (.Values.issuerRef.name | trim) }}
+    name: {{ .Values.issuerRef.name | quote }}
+    kind: {{ .Values.issuerRef.kind | quote }}
+    group: {{ .Values.issuerRef.group | quote }}
+    {{- else }}
+    name: {{ include "cozy-tls.ca-name" . }}
+    kind: Issuer
+    group: cert-manager.io
+    {{- end }}
+  privateKey:
+    algorithm: {{ .Values.certificate.algorithm | quote }}
+    size: {{ .Values.certificate.size }}
+    encoding: {{ .Values.certificate.encoding | quote }}
+    rotationPolicy: Always
+{{- end }}

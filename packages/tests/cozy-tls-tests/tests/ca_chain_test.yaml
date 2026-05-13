@@ -1,0 +1,465 @@
+suite: per-service CA chain
+
+templates:
+  - charts/cozy-tls/templates/selfsigned-issuer.yaml
+  - charts/cozy-tls/templates/ca-certificate.yaml
+  - charts/cozy-tls/templates/ca-issuer.yaml
+  - charts/cozy-tls/templates/certificate.yaml
+
+tests:
+  # ── SelfSigned Issuer ────────────────────────────────────────────────────────
+
+  - it: renders SelfSigned Issuer with correct name and namespace
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/selfsigned-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: myredis-selfsigned
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+
+  - it: renders SelfSigned Issuer with selfSigned spec
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/selfsigned-issuer.yaml
+    asserts:
+      - isNotNull:
+          path: spec.selfSigned
+      - equal:
+          path: spec.selfSigned
+          value: {}
+
+  # ── CA Certificate ────────────────────────────────────────────────────────────
+
+  - it: renders CA Certificate with isCA true
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: myredis-ca
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec.isCA
+          value: true
+
+  - it: CA Certificate secretName equals release-ca
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: myredis-ca
+
+  - it: CA Certificate has default duration
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.duration
+          value: "43800h"
+
+  - it: CA Certificate issuerRef points to selfsigned issuer
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.issuerRef.name
+          value: myredis-selfsigned
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+
+  - it: CA Certificate privateKey rotationPolicy is Never
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: CA Certificate privateKey defaults — ECDSA, size 256
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: custom ca.algorithm and ca.size override CA Certificate privateKey
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.ca.algorithm: RSA
+      cozy-tls.ca.size: 4096
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 4096
+
+  - it: CA Certificate commonName equals release-ca
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.commonName
+          value: myredis-ca
+
+  - it: CA Certificate does not set renewBefore (cert-manager defaults to 2/3 of lifetime)
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - notExists:
+          path: spec.renewBefore
+
+  # ── CA Issuer ─────────────────────────────────────────────────────────────────
+
+  - it: renders CA Issuer with correct name and namespace
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: myredis-ca
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+
+  - it: CA Issuer spec.ca.secretName points to CA secret
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-issuer.yaml
+    asserts:
+      - equal:
+          path: spec.ca.secretName
+          value: myredis-ca
+
+  # ── Leaf Certificate — defaults ───────────────────────────────────────────────
+
+  - it: renders leaf Certificate with correct name and namespace
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: myredis-tls
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+
+  - it: leaf Certificate secretName defaults to release-tls
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: myredis-tls
+
+  - it: leaf Certificate has default duration
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.duration
+          value: "8760h"
+
+  - it: leaf Certificate has default renewBefore
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.renewBefore
+          value: "720h"
+
+  - it: leaf Certificate has default usages
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.usages
+          value:
+            - server auth
+
+  - it: leaf Certificate privateKey defaults — ECDSA, size 256, PKCS8, rotationPolicy Always
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS8
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+
+  - it: custom certificate.algorithm and size override leaf Certificate privateKey
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.algorithm: RSA
+      cozy-tls.certificate.size: 4096
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 4096
+
+  - it: leaf Certificate issuerRef points to CA Issuer (not selfsigned, not external)
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.issuerRef.name
+          value: myredis-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+
+  - it: leaf Certificate has correct dnsNames from values
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - redis-master
+            - redis-master.tenant-test.svc
+
+  - it: leaf Certificate commonName equals release-tls
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.commonName
+          value: myredis-tls
+
+  # ── CA chain — overrides ──────────────────────────────────────────────────────
+
+  - it: custom ca.duration overrides default on CA Certificate
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.ca.duration: "87600h"
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.duration
+          value: "87600h"
+
+  - it: custom certificate.duration overrides default on leaf Certificate
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.duration: "4380h"
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.duration
+          value: "4380h"
+
+  - it: custom certificate.renewBefore overrides default on leaf Certificate
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.renewBefore: "360h"
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.renewBefore
+          value: "360h"
+
+  - it: custom certificate.secretName overrides default on leaf Certificate
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.secretName: my-custom-tls-secret
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: my-custom-tls-secret
+
+  - it: custom certificate.usages overrides default on leaf Certificate
+    values:
+      - ca_chain_usages_override.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.usages
+          value:
+            - server auth
+            - client auth
+
+  - it: custom certificate.encoding overrides default on leaf Certificate
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.encoding: PKCS1
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS1

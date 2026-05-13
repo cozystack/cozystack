@@ -1,0 +1,83 @@
+suite: dnsNameSuffixes expansion
+
+templates:
+  - charts/cozy-tls/templates/certificate.yaml
+
+tests:
+  - it: expands suffixes into three DNS forms each
+    values:
+      - ca_chain_suffixes_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - myredis-master
+            - myredis-master.tenant-test.svc
+            - myredis-master.tenant-test.svc.cozy.local
+            - myredis-replicas
+            - myredis-replicas.tenant-test.svc
+            - myredis-replicas.tenant-test.svc.cozy.local
+
+  - it: merges explicit dnsNames with computed dnsNameSuffixes
+    values:
+      - ca_chain_suffixes_values.yaml
+    set:
+      cozy-tls.certificate.dnsNames[0]: custom.example.com
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - custom.example.com
+            - myredis-master
+            - myredis-master.tenant-test.svc
+            - myredis-master.tenant-test.svc.cozy.local
+            - myredis-replicas
+            - myredis-replicas.tenant-test.svc
+            - myredis-replicas.tenant-test.svc.cozy.local
+
+  - it: succeeds with only dnsNameSuffixes and empty dnsNames
+    values:
+      - ca_chain_suffixes_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: succeeds with only explicit dnsNames and empty dnsNameSuffixes
+    values:
+      - ca_chain_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.dnsNames
+          value:
+            - redis-master
+            - redis-master.tenant-test.svc
+
+  - it: uses custom clusterDomain in generated dnsNames
+    values:
+      - ca_chain_suffixes_values.yaml
+    set:
+      cozy-tls.clusterDomain: custom.example.io
+    release:
+      name: myredis
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myredis-master.tenant-test.svc.custom.example.io
+      - notContains:
+          path: spec.dnsNames
+          content: myredis-master.tenant-test.svc.cozy.local

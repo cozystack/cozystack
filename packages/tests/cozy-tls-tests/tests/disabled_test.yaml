@@ -1,0 +1,92 @@
+suite: disabled mode
+
+templates:
+  - charts/cozy-tls/templates/selfsigned-issuer.yaml
+  - charts/cozy-tls/templates/ca-certificate.yaml
+  - charts/cozy-tls/templates/ca-issuer.yaml
+  - charts/cozy-tls/templates/certificate.yaml
+
+tests:
+  # ── enabled: false (explicit) ─────────────────────────────────────────────────
+
+  - it: selfsigned-issuer renders nothing when enabled is false
+    set:
+      cozy-tls.enabled: false
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/selfsigned-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ca-certificate renders nothing when enabled is false
+    set:
+      cozy-tls.enabled: false
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ca-issuer renders nothing when enabled is false
+    set:
+      cozy-tls.enabled: false
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: certificate renders nothing when enabled is false
+    set:
+      cozy-tls.enabled: false
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── enabled omitted (chart default is false) ──────────────────────────────────
+
+  - it: selfsigned-issuer renders nothing with chart default values
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/selfsigned-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ca-certificate renders nothing with chart default values
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ca-issuer renders nothing with chart default values
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: certificate renders nothing with chart default values
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

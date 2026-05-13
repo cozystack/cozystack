@@ -1,0 +1,7 @@
+cozy-tls:
+  enabled: true
+
+  certificate:
+    dnsNameSuffixes:
+      - master
+      - replicas

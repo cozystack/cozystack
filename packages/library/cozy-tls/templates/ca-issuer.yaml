@@ -1,0 +1,12 @@
+{{- if and .Values.enabled (not (.Values.issuerRef.name | trim)) }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "cozy-tls.ca-name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozy-tls.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "cozy-tls.ca-secret-name" . }}
+{{- end }}

@@ -1,0 +1,183 @@
+suite: external issuer mode
+
+templates:
+  - charts/cozy-tls/templates/selfsigned-issuer.yaml
+  - charts/cozy-tls/templates/ca-certificate.yaml
+  - charts/cozy-tls/templates/ca-issuer.yaml
+  - charts/cozy-tls/templates/certificate.yaml
+
+tests:
+  # ── CA chain must be suppressed ───────────────────────────────────────────────
+
+  - it: selfsigned-issuer renders zero documents when external issuerRef is set
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/selfsigned-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ca-certificate renders zero documents when external issuerRef is set
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: ca-issuer renders zero documents when external issuerRef is set
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── Leaf Certificate is rendered ──────────────────────────────────────────────
+
+  - it: leaf Certificate IS rendered when external issuerRef is set
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Certificate
+
+  - it: leaf Certificate issuerRef.name matches external value
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.issuerRef.name
+          value: my-cluster-issuer
+
+  - it: leaf Certificate issuerRef.kind matches ClusterIssuer from values
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+
+  - it: leaf Certificate issuerRef.group defaults to cert-manager.io
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+
+  - it: leaf Certificate has correct dnsNames when using external issuer
+    values:
+      - external_issuer_values.yaml
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - redis-master
+            - redis-master.tenant-test.svc
+
+  # ── External issuer with kind Issuer (not ClusterIssuer) ─────────────────────
+
+  - it: works with kind Issuer as external issuerRef
+    values:
+      - external_issuer_values.yaml
+    set:
+      cozy-tls.issuerRef.name: my-namespace-issuer
+      cozy-tls.issuerRef.kind: Issuer
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.issuerRef.name
+          value: my-namespace-issuer
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+
+  - it: selfsigned-issuer renders zero documents even when external kind is Issuer
+    values:
+      - external_issuer_values.yaml
+    set:
+      cozy-tls.issuerRef.name: my-namespace-issuer
+      cozy-tls.issuerRef.kind: Issuer
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/selfsigned-issuer.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ── Custom issuerRef.group ────────────────────────────────────────────────────
+
+  - it: custom issuerRef.group is passed through to leaf Certificate
+    values:
+      - external_issuer_values.yaml
+    set:
+      cozy-tls.issuerRef.group: cert-manager.example.io
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.example.io
+
+  # ── dnsNameSuffixes with external issuer ─────────────────────────────────────
+
+  - it: dnsNameSuffixes expand correctly when using external issuer
+    values:
+      - external_issuer_values.yaml
+    set:
+      cozy-tls.certificate.dnsNameSuffixes[0]: master
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myredis-master
+      - contains:
+          path: spec.dnsNames
+          content: myredis-master.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myredis-master.tenant-test.svc.cozy.local

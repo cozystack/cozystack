@@ -1,0 +1,25 @@
+{{- if and .Values.enabled (not (.Values.issuerRef.name | trim)) }}
+{{- if not (regexMatch "^[1-9][0-9]*h$" .Values.ca.duration) }}
+{{- fail (printf "ca.duration (%s) must be in pure hours format (e.g. \"43800h\")" .Values.ca.duration) }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "cozy-tls.ca-name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozy-tls.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "cozy-tls.ca-secret-name" . }}
+  duration: {{ .Values.ca.duration | quote }}
+  commonName: {{ include "cozy-tls.ca-name" . }}
+  isCA: true
+  issuerRef:
+    name: {{ include "cozy-tls.selfsigned-issuer-name" . }}
+    kind: Issuer
+    group: cert-manager.io
+  privateKey:
+    algorithm: {{ .Values.ca.algorithm | quote }}
+    size: {{ .Values.ca.size }}
+    rotationPolicy: Never
+{{- end }}
