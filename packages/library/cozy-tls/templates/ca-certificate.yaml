@@ -18,9 +18,14 @@ spec:
     name: {{ include "cozy-tls.selfsigned-issuer-name" . }}
     kind: Issuer
     group: cert-manager.io
+  {{- $caAlgorithm := .Values.ca.algorithm -}}
+  {{- if eq ($caAlgorithm | lower) "ed25519" }}{{ $caAlgorithm = "Ed25519" }}
+  {{- else if eq ($caAlgorithm | lower) "rsa" }}{{ $caAlgorithm = "RSA" }}
+  {{- else if eq ($caAlgorithm | lower) "ecdsa" }}{{ $caAlgorithm = "ECDSA" }}
+  {{- end }}
   privateKey:
-    algorithm: {{ .Values.ca.algorithm | quote }}
-    {{- if ne .Values.ca.algorithm "Ed25519" }}
+    algorithm: {{ $caAlgorithm | quote }}
+    {{- if ne ($caAlgorithm | lower) "ed25519" }}
     size: {{ .Values.ca.size }}
     {{- end }}
     rotationPolicy: Never

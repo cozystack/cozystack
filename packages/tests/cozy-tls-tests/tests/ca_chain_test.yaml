@@ -533,3 +533,138 @@ tests:
           value: Ed25519
       - notExists:
           path: spec.privateKey.size
+
+  # ── Mixed algorithms ──────────────────────────────────────────────────────────
+
+  - it: mixed algorithms — CA uses RSA with size, leaf uses Ed25519 without size (ca-certificate)
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.ca.algorithm: RSA
+      cozy-tls.ca.size: 4096
+      cozy-tls.certificate.algorithm: Ed25519
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 4096
+
+  - it: mixed algorithms — CA uses RSA with size, leaf uses Ed25519 without size (certificate)
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.ca.algorithm: RSA
+      cozy-tls.ca.size: 4096
+      cozy-tls.certificate.algorithm: Ed25519
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  # ── Ed25519 with external issuer ──────────────────────────────────────────────
+
+  - it: leaf Certificate Ed25519 with external issuer renders without size field
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.algorithm: Ed25519
+      cozy-tls.issuerRef.name: my-issuer
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: Ed25519
+      - notExists:
+          path: spec.privateKey.size
+
+  # ── Ed25519 + PKCS1 validation ────────────────────────────────────────────────
+
+  - it: leaf Certificate Ed25519 with PKCS1 encoding fails with clear error
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.algorithm: Ed25519
+      cozy-tls.certificate.encoding: PKCS1
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "Ed25519 does not support PKCS1 encoding; use PKCS8 instead"
+
+  # ── RSA CA with explicit size ─────────────────────────────────────────────────
+
+  - it: CA Certificate RSA algorithm renders with custom size
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.ca.algorithm: RSA
+      cozy-tls.ca.size: 2048
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/ca-certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.size
+          value: 2048
+
+  # ── ECDSA + PKCS1 (positive) ──────────────────────────────────────────────────
+
+  - it: leaf Certificate ECDSA with PKCS1 encoding renders successfully
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.algorithm: ECDSA
+      cozy-tls.certificate.encoding: PKCS1
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS1
+
+  # ── RSA + PKCS1 (positive) ────────────────────────────────────────────────────
+
+  - it: leaf Certificate RSA with PKCS1 encoding renders successfully
+    values:
+      - ca_chain_values.yaml
+    set:
+      cozy-tls.certificate.algorithm: RSA
+      cozy-tls.certificate.size: 4096
+      cozy-tls.certificate.encoding: PKCS1
+    release:
+      name: myredis
+      namespace: tenant-test
+    template: charts/cozy-tls/templates/certificate.yaml
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: RSA
+      - equal:
+          path: spec.privateKey.encoding
+          value: PKCS1

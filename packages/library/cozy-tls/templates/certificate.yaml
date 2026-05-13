@@ -50,9 +50,17 @@ spec:
     kind: Issuer
     group: cert-manager.io
     {{- end }}
+  {{- $algorithm := .Values.certificate.algorithm -}}
+  {{- if eq ($algorithm | lower) "ed25519" }}{{ $algorithm = "Ed25519" }}
+  {{- else if eq ($algorithm | lower) "rsa" }}{{ $algorithm = "RSA" }}
+  {{- else if eq ($algorithm | lower) "ecdsa" }}{{ $algorithm = "ECDSA" }}
+  {{- end }}
+  {{- if and (eq ($algorithm | lower) "ed25519") (eq (.Values.certificate.encoding | lower) "pkcs1") }}
+  {{- fail "Ed25519 does not support PKCS1 encoding; use PKCS8 instead" }}
+  {{- end }}
   privateKey:
-    algorithm: {{ .Values.certificate.algorithm | quote }}
-    {{- if ne .Values.certificate.algorithm "Ed25519" }}
+    algorithm: {{ $algorithm | quote }}
+    {{- if ne ($algorithm | lower) "ed25519" }}
     size: {{ .Values.certificate.size }}
     {{- end }}
     encoding: {{ .Values.certificate.encoding | quote }}
