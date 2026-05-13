@@ -18,7 +18,7 @@ kind: Altinity
 metadata:
   name: ${STRATEGY_NAME}
 spec:
-  jobTemplate:
+  template:
     spec:
       restartPolicy: Never
       containers:

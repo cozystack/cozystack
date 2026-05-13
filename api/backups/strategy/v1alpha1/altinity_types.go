@@ -54,7 +54,7 @@ type AltinityList struct {
 
 // AltinitySpec specifies the desired Altinity-driven backup strategy.
 type AltinitySpec struct {
-	// JobTemplate is the PodTemplateSpec the driver wraps in a batch/v1.Job
+	// Template is the PodTemplateSpec the driver wraps in a batch/v1.Job
 	// for both backup and restore runs. Helm-style Go templates are supported
 	// in every string field. The available context is:
 	//   .Application - the application object (apps.cozystack.io/ClickHouse)
@@ -62,9 +62,11 @@ type AltinitySpec struct {
 	//                                       name/namespace
 	//   .Mode        - "backup" or "restore"
 	//   .Parameters  - map[string]string from the matched BackupClassStrategy
-	//   .Backup      - the source Backup object (only set on restore;
-	//                  carries .Name, .Spec, .Status)
-	JobTemplate corev1.PodTemplateSpec `json:"jobTemplate"`
+	//   .Backup      - the source Backup metadata (only set on restore);
+	//                  exposes .Name, .Namespace, and
+	//                  .ApplicationRef.{APIGroup,Kind,Name} so to-copy
+	//                  restores can address the source release.
+	Template corev1.PodTemplateSpec `json:"template"`
 }
 
 // AltinityStatus reports observed state for the strategy CR. Driver

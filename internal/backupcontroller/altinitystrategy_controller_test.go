@@ -88,7 +88,7 @@ func newAltinityStrategy(name string) *strategyv1alpha1.Altinity {
 	return &strategyv1alpha1.Altinity{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: strategyv1alpha1.AltinitySpec{
-			JobTemplate: corev1.PodTemplateSpec{
+			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
@@ -335,7 +335,7 @@ func TestReconcileAltinityRestore_CreatesBatchJobInTargetNamespace(t *testing.T)
 	strategy := &strategyv1alpha1.Altinity{
 		ObjectMeta: metav1.ObjectMeta{Name: "clickhouse-strategy"},
 		Spec: strategyv1alpha1.AltinitySpec{
-			JobTemplate: corev1.PodTemplateSpec{
+			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
@@ -625,7 +625,7 @@ func TestReconcileAltinityRestore_ExposesSourceApplicationRef(t *testing.T) {
 	strategy := &strategyv1alpha1.Altinity{
 		ObjectMeta: metav1.ObjectMeta{Name: "clickhouse-strategy"},
 		Spec: strategyv1alpha1.AltinitySpec{
-			JobTemplate: corev1.PodTemplateSpec{
+			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{

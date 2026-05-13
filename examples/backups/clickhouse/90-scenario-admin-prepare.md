@@ -32,7 +32,7 @@ referencing the BackupClass created here, with no further admin action.
 
 ## How the strategy template gets rendered
 
-The Altinity driver renders the `Altinity.spec.jobTemplate` PodTemplateSpec
+The Altinity driver renders the `Altinity.spec.template` PodTemplateSpec
 with this context for every BackupJob/RestoreJob run:
 
 | Variable | Source |
@@ -41,7 +41,7 @@ with this context for every BackupJob/RestoreJob run:
 | `.Release.Name` / `.Release.Namespace` | `metadata.name` / `metadata.namespace` of `.Application` |
 | `.Parameters` | `BackupClass.spec.strategies[].parameters` (kept available for future strategy variants — this template does not use it) |
 | `.Mode` | `"backup"` or `"restore"` |
-| `.Backup` | `{ Name, Namespace }` (only for restore runs) |
+| `.Backup` | `{ Name, Namespace, ApplicationRef.{APIGroup,Kind,Name} }` (only for restore runs; `.ApplicationRef` points at the *source* release so to-copy restores can derive its name and namespace prefix) |
 
 The same template renders both backup and restore Pods; the
 `if [ "{{ .Mode }}" = "backup" ]; then ... else ... fi` branch in `args`
