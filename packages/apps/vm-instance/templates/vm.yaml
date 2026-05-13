@@ -67,14 +67,14 @@ spec:
           - name: disk-{{ $disk.name }}
             {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
             {{- if $dv }}
-            {{- if and (hasKey $dv.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $dv.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
-            cdrom:
+            {{- $isOptical := and (hasKey $dv.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $dv.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
+            {{- $deviceKey := ternary "cdrom" "disk" $isOptical }}
+            {{- if $disk.bus }}
+            {{ $deviceKey }}:
+              bus: {{ $disk.bus }}
             {{- else }}
-            disk:
+            {{ $deviceKey }}: {}
             {{- end }}
-              {{- with $disk.bus }}
-              bus: {{ . }}
-              {{- end }}
             bootOrder: {{ add $i 1 }}
             {{- else }}
             {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
