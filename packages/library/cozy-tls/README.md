@@ -12,8 +12,8 @@
 | `issuerRef.group`             | API group of the issuer resource.                                                                                               | `string`   | `cert-manager.io` |
 | `ca`                          | Configuration for the CA certificate issued by cert-manager.                                                                    | `object`   | `{}`              |
 | `ca.duration`                 | Validity duration of the CA certificate.                                                                                        | `string`   | `43800h`          |
-| `ca.algorithm`                | Key algorithm for the CA certificate (ECDSA or RSA).                                                                            | `string`   | `ECDSA`           |
-| `ca.size`                     | Key size in bits for the chosen algorithm.                                                                                      | `int`      | `256`             |
+| `ca.algorithm`                | Key algorithm for the CA certificate (ECDSA, RSA, or Ed25519).                                                                  | `string`   | `ECDSA`           |
+| `ca.size`                     | Key size in bits for the chosen algorithm (not used for Ed25519).                                                               | `int`      | `256`             |
 | `certificate`                 | Configuration for the leaf TLS certificate.                                                                                     | `object`   | `{}`              |
 | `certificate.secretName`      | Name of the Kubernetes Secret where the certificate is stored.                                                                  | `string`   | `""`              |
 | `certificate.duration`        | Validity duration of the leaf certificate.                                                                                      | `string`   | `8760h`           |
@@ -22,6 +22,6 @@
 | `certificate.dnsNameSuffixes` | List of DNS name suffixes appended to auto-generated SANs.                                                                      | `[]string` | `[]`              |
 | `certificate.usages`          | List of key usages for the certificate.                                                                                         | `[]string` | `[server auth]`   |
 | `certificate.encoding`        | Private key encoding format (PKCS1 or PKCS8).                                                                                   | `string`   | `PKCS8`           |
-| `certificate.algorithm`       | Key algorithm for the leaf certificate (ECDSA or RSA).                                                                          | `string`   | `ECDSA`           |
-| `certificate.size`            | Key size in bits for the chosen algorithm.                                                                                      | `int`      | `256`             |
+| `certificate.algorithm`       | Key algorithm for the leaf certificate (ECDSA, RSA, or Ed25519).                                                                | `string`   | `ECDSA`           |
+| `certificate.size`            | Key size in bits for the chosen algorithm (not used for Ed25519).                                                               | `int`      | `256`             |
 

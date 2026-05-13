@@ -2,11 +2,25 @@
 enabled: false
 
 ## @param {string} clusterDomain="cozy.local" - Cluster domain used when constructing default DNS names. Parent charts should forward _cluster["cluster-domain"] to this value.
+## @minLength 1
 clusterDomain: "cozy.local"
+
+## @enum {string} PrivateKeyAlgorithm - Key algorithm for TLS certificates.
+## @value ECDSA
+## @value RSA
+## @value Ed25519
+
+## @enum {string} PrivateKeyEncoding - Private key encoding format.
+## @value PKCS1
+## @value PKCS8
+
+## @enum {string} IssuerKind - Kind of the cert-manager issuer resource.
+## @value Issuer
+## @value ClusterIssuer
 
 ## @typedef {struct} IssuerRef - Reference to the cert-manager Issuer or ClusterIssuer.
 ## @field {string} name - Name of the Issuer or ClusterIssuer resource.
-## @field {string} kind - Kind of the issuer resource (Issuer or ClusterIssuer).
+## @field {IssuerKind} kind - Kind of the issuer resource (Issuer or ClusterIssuer).
 ## @field {string} group - API group of the issuer resource.
 
 ## @param {IssuerRef} issuerRef - Reference to the cert-manager Issuer or ClusterIssuer that signs certificates.
@@ -17,7 +31,8 @@ issuerRef:
 
 ## @typedef {struct} CA - Configuration for the CA certificate.
 ## @field {string} duration - Validity duration of the CA certificate.
-## @field {string} algorithm - Key algorithm for the CA certificate (ECDSA, RSA, or Ed25519).
+## @pattern ^[1-9][0-9]*h$
+## @field {PrivateKeyAlgorithm} algorithm - Key algorithm for the CA certificate (ECDSA, RSA, or Ed25519).
 ## @field {int} size - Key size in bits for the chosen algorithm (not used for Ed25519).
 
 ## @param {CA} ca - Configuration for the CA certificate issued by cert-manager.
@@ -29,12 +44,14 @@ ca:
 ## @typedef {struct} Certificate - Configuration for the leaf TLS certificate.
 ## @field {string} secretName - Name of the Kubernetes Secret where the certificate is stored.
 ## @field {string} duration - Validity duration of the leaf certificate.
+## @pattern ^[1-9][0-9]*h$
 ## @field {string} renewBefore - How long before expiry cert-manager should renew the certificate.
+## @pattern ^[1-9][0-9]*h$
 ## @field {[]string} dnsNames - Explicit list of DNS SANs to add to the certificate.
 ## @field {[]string} dnsNameSuffixes - List of DNS name suffixes appended to auto-generated SANs.
 ## @field {[]string} usages - List of key usages for the certificate.
-## @field {string} encoding - Private key encoding format (PKCS1 or PKCS8).
-## @field {string} algorithm - Key algorithm for the leaf certificate (ECDSA, RSA, or Ed25519).
+## @field {PrivateKeyEncoding} encoding - Private key encoding format (PKCS1 or PKCS8).
+## @field {PrivateKeyAlgorithm} algorithm - Key algorithm for the leaf certificate (ECDSA, RSA, or Ed25519).
 ## @field {int} size - Key size in bits for the chosen algorithm (not used for Ed25519).
 
 ## @param {Certificate} certificate - Configuration for the leaf TLS certificate.

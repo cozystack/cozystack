@@ -10,7 +10,8 @@
     "clusterDomain": {
       "description": "Cluster domain used when constructing default DNS names. Parent charts should forward _cluster[\"cluster-domain\"] to this value.",
       "type": "string",
-      "default": "cozy.local"
+      "default": "cozy.local",
+      "minLength": 1
     },
     "issuerRef": {
       "description": "Reference to the cert-manager Issuer or ClusterIssuer that signs certificates.",
@@ -30,7 +31,11 @@
         "kind": {
           "description": "Kind of the issuer resource (Issuer or ClusterIssuer).",
           "type": "string",
-          "default": "Issuer"
+          "default": "Issuer",
+          "enum": [
+            "Issuer",
+            "ClusterIssuer"
+          ]
         },
         "name": {
           "description": "Name of the Issuer or ClusterIssuer resource.",
@@ -45,14 +50,19 @@
       "default": {},
       "required": [
         "algorithm",
-        "duration"
+        "duration",
+        "size"
       ],
       "properties": {
         "algorithm": {
           "description": "Key algorithm for the CA certificate (ECDSA, RSA, or Ed25519).",
           "type": "string",
           "default": "ECDSA",
-          "enum": ["ECDSA", "RSA", "Ed25519"]
+          "enum": [
+            "ECDSA",
+            "RSA",
+            "Ed25519"
+          ]
         },
         "duration": {
           "description": "Validity duration of the CA certificate.",
@@ -61,7 +71,7 @@
           "pattern": "^[1-9][0-9]*h$"
         },
         "size": {
-          "description": "Key size in bits for the chosen algorithm.",
+          "description": "Key size in bits for the chosen algorithm (not used for Ed25519).",
           "type": "integer",
           "default": 256
         }
@@ -76,14 +86,19 @@
         "duration",
         "encoding",
         "renewBefore",
-        "secretName"
+        "secretName",
+        "size"
       ],
       "properties": {
         "algorithm": {
           "description": "Key algorithm for the leaf certificate (ECDSA, RSA, or Ed25519).",
           "type": "string",
           "default": "ECDSA",
-          "enum": ["ECDSA", "RSA", "Ed25519"]
+          "enum": [
+            "ECDSA",
+            "RSA",
+            "Ed25519"
+          ]
         },
         "dnsNameSuffixes": {
           "description": "List of DNS name suffixes appended to auto-generated SANs.",
@@ -111,7 +126,10 @@
           "description": "Private key encoding format (PKCS1 or PKCS8).",
           "type": "string",
           "default": "PKCS8",
-          "enum": ["PKCS1", "PKCS8"]
+          "enum": [
+            "PKCS1",
+            "PKCS8"
+          ]
         },
         "renewBefore": {
           "description": "How long before expiry cert-manager should renew the certificate.",
@@ -125,7 +143,7 @@
           "default": ""
         },
         "size": {
-          "description": "Key size in bits for the chosen algorithm.",
+          "description": "Key size in bits for the chosen algorithm (not used for Ed25519).",
           "type": "integer",
           "default": 256
         },
