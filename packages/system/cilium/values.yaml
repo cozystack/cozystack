@@ -16,7 +16,7 @@ cilium:
   image:
     repository: ghcr.io/cozystack/cozystack/cilium
     tag: 1.19.3
-    digest: "sha256:700f06f4803a838a8e830be5ace4650e3ad82bdefabfb2f4d110368d307a5efb"
+    digest: "sha256:94dc74c9301f0da5695c80e77b77ee0486ad0086b5be60a94136a2cafd410b73"
   envoy:
     enabled: false
   rollOutCiliumPods: true
