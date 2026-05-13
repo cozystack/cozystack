@@ -52,7 +52,7 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - --provider=oidc
-            - --upstream=http://incloud-web-nginx.{{ .Release.Namespace }}.svc:8080
+            - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
             - --http-address=0.0.0.0:8000
             - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
             - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/cozy
@@ -97,7 +97,7 @@ spec:
           image: {{ .Values.tokenProxy.image }}
           imagePullPolicy: IfNotPresent
           args:
-            - --upstream=http://incloud-web-nginx.{{ .Release.Namespace }}.svc:8080
+            - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
             - --http-address=0.0.0.0:8000
             - --cookie-refresh=1h
             - --cookie-name=kc-access

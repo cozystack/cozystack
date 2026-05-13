@@ -14,6 +14,10 @@ metadata:
     acme.cert-manager.io/http01-ingress-ingressclassname: {{ $exposeIngress }}
     {{- end }}
     nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location ~* ^/openapi-ui {
+        return 301 /;
+      }
     nginx.ingress.kubernetes.io/client-max-body-size: 100m
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
     nginx.ingress.kubernetes.io/proxy-buffer-size: 100m
