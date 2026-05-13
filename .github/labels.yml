@@ -21,7 +21,7 @@
 #   area/         subsystem; extensible — add when 3+ open issues exist
 #   do-not-merge/ PR merge blockers
 #   security/     security-finding severity and status (Cozystack-specific)
-#   size:         PR size (auto-applied)
+#   size/         PR size (auto-applied)
 #
 # `aliases:` lets EndBug/label-sync rename existing labels without losing
 # references on already-tagged issues and PRs.
@@ -295,32 +295,38 @@
   description: Indicates a non-member PR is safe to run CI on
 
 # ──────────────────────────────────────────────
-# size: — PR size (auto-applied by sizing bot)
+# size/ — PR size (auto-applied by .github/workflows/pr-size.yaml)
 # ──────────────────────────────────────────────
 
-- name: 'size:XS'
+- name: size/XS
   color: '00ff00'
   description: This PR changes 0-9 lines, ignoring generated files
+  aliases: ['size:XS']
 
-- name: 'size:S'
+- name: size/S
   color: '77b800'
   description: This PR changes 10-29 lines, ignoring generated files
+  aliases: ['size:S']
 
-- name: 'size:M'
+- name: size/M
   color: 'ebb800'
   description: This PR changes 30-99 lines, ignoring generated files
+  aliases: ['size:M']
 
-- name: 'size:L'
+- name: size/L
   color: 'eb9500'
   description: This PR changes 100-499 lines, ignoring generated files
+  aliases: ['size:L']
 
-- name: 'size:XL'
+- name: size/XL
   color: 'ff823f'
   description: This PR changes 500-999 lines, ignoring generated files
+  aliases: ['size:XL']
 
-- name: 'size:XXL'
+- name: size/XXL
   color: 'ffb8b8'
   description: This PR changes 1000+ lines, ignoring generated files
+  aliases: ['size:XXL']
 
 # ──────────────────────────────────────────────
 # security/ — security-finding severity and status

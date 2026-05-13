@@ -1,0 +1,53 @@
+{{- if .Values.proxy.enabled }}
+{{- $mode := include "ouroboros.mode" . -}}
+ouroboros has been installed.
+
+Proxy Service:
+  {{ include "ouroboros.proxyFullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+{{ if eq $mode "coredns" }}
+Verify the controller is reconciling CoreDNS:
+  kubectl --namespace {{ .Values.controller.coredns.namespace }} \
+    get configmap {{ .Values.controller.coredns.configmap }} \
+    --output jsonpath='{.data.{{ .Values.controller.coredns.key }}}'
+
+Look for a block delimited by:
+  # === BEGIN ouroboros (do not edit by hand) ===
+  ...
+  # === END ouroboros ===
+{{- else if eq $mode "coredns-import" }}
+Verify the controller is writing to the import ConfigMap:
+  kubectl --namespace {{ .Values.controller.corednsImport.namespace }} \
+    get configmap {{ .Values.controller.corednsImport.configmap }} \
+    --output jsonpath='{.data.{{ .Values.controller.corednsImport.key }}}'
+
+You should see one `rewrite name <host> {{ include "ouroboros.proxyFqdn" . }}` line per
+hairpin'd hostname. CoreDNS picks up the file via its `import` directive, so
+make sure the main Corefile contains:
+  import /etc/coredns/custom/*.override
+and the {{ .Values.controller.corednsImport.configmap }} ConfigMap is mounted into the CoreDNS
+Deployment at /etc/coredns/custom/. Without those, ouroboros writes succeed
+silently but CoreDNS never reads them.
+{{- else if eq $mode "external-dns" }}
+Verify the controller is emitting records (output={{ default "crd" .Values.externalDns.output }}):
+  {{- if eq (default "crd" .Values.externalDns.output) "crd" }}
+  kubectl --namespace {{ include "ouroboros.externalDnsNamespace" . }} \
+    get dnsendpoints.externaldns.k8s.io \
+    --selector=app.kubernetes.io/managed-by=ouroboros
+  {{- else }}
+  kubectl --namespace {{ include "ouroboros.externalDnsNamespace" . }} \
+    get services \
+    --selector=app.kubernetes.io/managed-by=ouroboros
+  {{- end }}
+
+An external-dns instance with the matching --source must publish the records
+upstream.
+{{- else if eq $mode "etc-hosts" }}
+Verify the DaemonSet is writing /etc/hosts entries on each node:
+  kubectl --namespace {{ .Release.Namespace }} \
+    logs --selector=app.kubernetes.io/component=etc-hosts --tail=50
+{{- end }}
+
+Then DNS resolution for hostnames named in any Ingress's spec.tls[].hosts
+{{- if .Values.controller.gatewayApi.enabled }} or any Gateway listener / HTTPRoute hostname{{ end }}
+will resolve to the proxy Service ClusterIP from inside the cluster.
+{{- end }}

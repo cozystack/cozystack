@@ -75,6 +75,76 @@ rules:
     - list
     - watch
   - apiGroups:
+      - batch
+    resources:
+      - cronjobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - etcd.aenix.io
+    resources:
+      - etcdbackups
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - etcd.aenix.io
+    resources:
+      - etcdbackups/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - etcd.aenix.io
+    resources:
+      - etcdbackups/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - etcd.aenix.io
+    resources:
+      - etcdbackupschedules
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - etcd.aenix.io
+    resources:
+      - etcdbackupschedules/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - etcd.aenix.io
+    resources:
+      - etcdbackupschedules/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
       - etcd.aenix.io
     resources:
       - etcdclusters

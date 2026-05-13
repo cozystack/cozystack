@@ -1,5 +1,19 @@
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+{{- $exposeMode := (index .Values._cluster "expose-mode") | default "externalIPs" }}
+{{- $exposeIPsList := list }}
+{{- range splitList "," $exposeExternalIPs }}
+  {{- $ip := . | trim }}
+  {{- if $ip }}
+    {{- $exposeIPsList = append $exposeIPsList $ip }}
+  {{- end }}
+{{- end }}
+{{- if not (has $exposeMode (list "externalIPs" "loadBalancer")) }}
+{{- fail (printf "unknown publishing.exposure mode %q: must be \"externalIPs\" or \"loadBalancer\"" $exposeMode) }}
+{{- end }}
+{{- if and (eq $exposeMode "loadBalancer") (eq $exposeIngress .Release.Namespace) (not $exposeIPsList) }}
+{{- fail "publishing.exposure=loadBalancer requires publishing.externalIPs to contain at least one non-empty address: the CiliumLoadBalancerIPPool has nothing to advertise and the Service would stay in <pending>." }}
+{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -41,9 +55,12 @@ spec:
           enabled: false
         {{- end }}
         service:
-          {{- if and (eq $exposeIngress .Release.Namespace) $exposeExternalIPs }}
+          {{- if and (eq $exposeIngress .Release.Namespace) (eq $exposeMode "loadBalancer") }}
+          type: LoadBalancer
+          externalTrafficPolicy: Local
+          {{- else if and (eq $exposeIngress .Release.Namespace) $exposeIPsList }}
           externalIPs:
-            {{- toYaml (splitList "," $exposeExternalIPs) | nindent 12 }}
+            {{- toYaml $exposeIPsList | nindent 12 }}
           type: ClusterIP
           externalTrafficPolicy: Cluster
           {{- else }}

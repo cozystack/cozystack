@@ -1,0 +1,35 @@
+{{- if .Values.backup.enabled }}
+{{- $endpointURL := required "backup.endpointURL is required when backup.enabled=true" .Values.backup.endpointURL -}}
+{{- $destPath := required "backup.destinationPath is required when backup.enabled=true" .Values.backup.destinationPath -}}
+{{- if not (hasPrefix "s3://" $destPath) }}{{ fail "backup.destinationPath must start with s3://" }}{{- end }}
+{{- $rawPath := $destPath | trimPrefix "s3://" | trimSuffix "/" -}}
+{{- if contains "//" $rawPath }}{{ fail "backup.destinationPath must not contain '//' segments" }}{{- end }}
+{{- $parts := splitList "/" $rawPath -}}
+{{- $bucket := first $parts -}}
+{{- if eq $bucket "" }}{{ fail "backup.destinationPath must contain a bucket (e.g. s3://bucket/path/)" }}{{- end }}
+{{- $key := rest $parts | join "/" -}}
+---
+apiVersion: etcd.aenix.io/v1alpha1
+kind: EtcdBackupSchedule
+metadata:
+  name: etcd
+spec:
+  clusterRef:
+    name: etcd
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit | int }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit | int }}
+  destination:
+    s3:
+      endpoint: {{ $endpointURL | quote }}
+      bucket: {{ $bucket | quote }}
+      {{- with $key }}
+      key: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.backup.region }}
+      region: {{ . | quote }}
+      {{- end }}
+      forcePathStyle: {{ .Values.backup.forcePathStyle }}
+      credentialsSecretRef:
+        name: etcd-s3-creds
+{{- end }}

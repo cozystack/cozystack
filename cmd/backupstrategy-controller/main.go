@@ -40,6 +40,12 @@ import (
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller"
+	"github.com/cozystack/cozystack/internal/backupcontroller/cnpgtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbapp"
+	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
+	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/postgresapp"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	// +kubebuilder:scaffold:imports
 )
@@ -55,6 +61,12 @@ func init() {
 	utilruntime.Must(backupsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(strategyv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(velerov1.AddToScheme(scheme))
+	utilruntime.Must(cnpgtypes.AddToScheme(scheme))
+	utilruntime.Must(postgresapp.AddToScheme(scheme))
+	utilruntime.Must(mariadbtypes.AddToScheme(scheme))
+	utilruntime.Must(mariadbapp.AddToScheme(scheme))
+	utilruntime.Must(foundationdbtypes.AddToScheme(scheme))
+	utilruntime.Must(foundationdbapp.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

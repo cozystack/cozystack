@@ -134,7 +134,6 @@ jobs:
             const cleanTitle = backportMatch ? backportMatch[2] : title;
             if (backportMatch) {
               toAdd.add('area/release');
-              toAdd.add('backport');
             }
 
             // 2. Try Conventional Commits form: type(scope)?(!)?: description

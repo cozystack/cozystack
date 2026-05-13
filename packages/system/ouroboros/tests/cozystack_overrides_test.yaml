@@ -1,0 +1,43 @@
+suite: cozy-ouroboros cozystack-side overrides
+templates:
+  - charts/ouroboros/templates/proxy-deployment.yaml
+  - charts/ouroboros/templates/controller-deployment.yaml
+  - charts/ouroboros/templates/_helpers.tpl
+release:
+  name: ouroboros
+  namespace: cozy-ouroboros
+tests:
+  - it: proxy dials the cozy-ingress-nginx Service via runtime composition (--target-service-namespace override picks the cozystack-specific namespace; cluster-domain auto-detected at proxy startup)
+    template: charts/ouroboros/templates/proxy-deployment.yaml
+    asserts:
+      # cozystack overrides proxy.target.namespace to cozy-ingress-nginx
+      # (the chart-default `ingress-nginx` namespace exists nowhere in
+      # cozystack). The chart-default serviceName matches as-is. The
+      # proxy composes <serviceName>.<namespace>.svc.<auto-detected-domain>
+      # at startup — no chart-time --target-host bake, so the same
+      # values.yaml renders correctly on cozy.local (cozystack tenants),
+      # cluster.local (vanilla kubeadm), or any custom cluster-domain
+      # without operator override. A `helm pull` that bumps the upstream
+      # chart and shifts the values key (e.g. proxy.target.namespace →
+      # proxy.upstream.namespace) would silently skip the cozystack
+      # override and the fix this package exists for would stop working.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --target-service-name=ingress-nginx-controller
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --target-service-namespace=cozy-ingress-nginx
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --target-host=
+
+  - it: controller image is pinned to the digest the values.yaml ships
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      # Image-pin drift is the supply-chain anchor for this package; the
+      # values.yaml comment requires bumping the tag here together with
+      # OUROBOROS_CHART_VERSION in the Makefile. This assertion catches
+      # a Makefile bump that forgets to bump the tag (or vice versa).
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/lexfrei/ouroboros:0.7.2@sha256:1a8479b42ed34640752df2bfe0e9ccf052448c6849826c24cab4c30e10d76393

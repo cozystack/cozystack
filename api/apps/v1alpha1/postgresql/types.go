@@ -24,7 +24,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="micro"
+	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
@@ -65,20 +65,26 @@ type Backup struct {
 	// Enable regular backups.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
+	// Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery. The CNPG backup driver writes this field on restore.
+	// +kubebuilder:default:={}
+	EndpointCA EndpointCA `json:"endpointCA,omitempty"`
 	// S3 endpoint URL for uploads.
 	// +kubebuilder:default:="http://minio-gateway-service:9000"
 	EndpointURL string `json:"endpointURL,omitempty"`
 	// Retention policy (e.g. "30d").
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
-	// Access key for S3 authentication.
+	// Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-access-key>"
 	S3AccessKey string `json:"s3AccessKey,omitempty"`
-	// Secret key for S3 authentication.
+	// Pre-existing Secret with S3 credentials. When set, the chart references this Secret directly instead of materialising one from `s3AccessKey`/`s3SecretKey`. The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.
+	// +kubebuilder:default:={}
+	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
+	// Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-secret-key>"
 	S3SecretKey string `json:"s3SecretKey,omitempty"`
-	// Cron schedule for automated backups.
-	// +kubebuilder:default:="0 2 * * * *"
+	// Legacy. Cron schedule (CNPG 6-field format) for the chart-emitted ScheduledBackup. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. The chart still emits `spec.backup.barmanObjectStore` whenever `backup.enabled=true`, so `archive_command` runs and the BackupClass driver can take ad-hoc / Plan-driven backups against a live WAL archive.
+	// +kubebuilder:default:=""
 	Schedule string `json:"schedule,omitempty"`
 }
 
@@ -92,6 +98,9 @@ type Bootstrap struct {
 	// Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 	// +kubebuilder:default:=""
 	RecoveryTime string `json:"recoveryTime,omitempty"`
+	// Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name.
+	// +kubebuilder:default:=""
+	ServerName string `json:"serverName,omitempty"`
 }
 
 type Database struct {
@@ -108,16 +117,19 @@ type DatabaseRoles struct {
 	Readonly []string `json:"readonly,omitempty"`
 }
 
-type PostgreSQL struct {
-	// PostgreSQL server parameters.
-	// +kubebuilder:default:={}
-	Parameters PostgreSQLParameters `json:"parameters,omitempty"`
+type EndpointCA struct {
+	// Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
+	// +kubebuilder:default:=""
+	Key string `json:"key,omitempty"`
+	// Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
 }
 
-type PostgreSQLParameters struct {
-	// Maximum number of concurrent connections to the database server.
-	// +kubebuilder:default:=100
-	MaxConnections int `json:"max_connections,omitempty"`
+type PostgreSQL struct {
+	// PostgreSQL server parameters. All values must be strings (quote numbers: "100"). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
+	// +kubebuilder:default:={"max_connections":"100"}
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 type Quorum struct {
@@ -136,6 +148,18 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type S3CredentialsSecret struct {
+	// Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.
+	// +kubebuilder:default:=""
+	AccessKeyIDKey string `json:"accessKeyIDKey,omitempty"`
+	// Name of the Secret in the application namespace. Empty means the chart materialises `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+	// Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
+	// +kubebuilder:default:=""
+	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
+}
+
 type User struct {
 	// Password for the user.
 	Password string `json:"password,omitempty"`
@@ -143,7 +167,7 @@ type User struct {
 	Replication bool `json:"replication,omitempty"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
 
 // +kubebuilder:validation:Enum="v18";"v17";"v16";"v15";"v14";"v13"

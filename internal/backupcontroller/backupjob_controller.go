@@ -78,12 +78,35 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileJob(ctx, j, resolved)
 	case strategyv1alpha1.VeleroStrategyKind:
 		return r.reconcileVelero(ctx, j, resolved)
+	case strategyv1alpha1.CNPGStrategyKind:
+		return r.reconcileCNPG(ctx, j, resolved)
+	case strategyv1alpha1.AltinityStrategyKind:
+		return r.reconcileAltinity(ctx, j, resolved)
+	case strategyv1alpha1.MariaDBStrategyKind:
+		return r.reconcileMariaDB(ctx, j, resolved)
+	case strategyv1alpha1.FoundationDBStrategyKind:
+		return r.reconcileFoundationDB(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
 			"kind", strategyRef.Kind,
-			"supported", []string{strategyv1alpha1.JobStrategyKind, strategyv1alpha1.VeleroStrategyKind})
+			"supported", supportedBackupStrategyKinds())
 		return ctrl.Result{}, nil
+	}
+}
+
+// supportedBackupStrategyKinds returns every strategy.Kind the dispatch
+// switch above handles. Centralised so the unsupported-strategy diagnostic
+// can't drift out of sync with the real dispatch table - the unit test
+// TestSupportedBackupStrategyKindsMatchesDispatch locks in this invariant.
+func supportedBackupStrategyKinds() []string {
+	return []string{
+		strategyv1alpha1.JobStrategyKind,
+		strategyv1alpha1.VeleroStrategyKind,
+		strategyv1alpha1.CNPGStrategyKind,
+		strategyv1alpha1.AltinityStrategyKind,
+		strategyv1alpha1.MariaDBStrategyKind,
+		strategyv1alpha1.FoundationDBStrategyKind,
 	}
 }
 
@@ -117,6 +140,15 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// markBackupJobFailed records a terminal Failed phase on the BackupJob.
+//
+// Coupling note: a failure that fires before reconcileCNPG's StartedAt block
+// has set backupJob.Status.StartedAt leaves StartedAt nil. The CNPG path's
+// cnpgDefaultBackupDeadline check only fires once StartedAt is set, so an
+// early-failure retry that reaches the StartedAt block restarts the deadline
+// budget from the retry's StartedAt - intentional, since retries are
+// user-driven and a fresh budget is what users expect after correcting the
+// cause of the previous failure.
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()
@@ -124,13 +156,16 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	backupJob.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
 	backupJob.Status.Message = message
 
-	// Add condition
-	backupJob.Status.Conditions = append(backupJob.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionFalse,
-		Reason:             "BackupFailed",
-		Message:            message,
-		LastTransitionTime: now,
+	// SetStatusCondition keeps Conditions matching the +listType=map +listMapKey=type
+	// CRD contract: a previously-set Ready condition (e.g. from a transient
+	// retry path that flipped through ConditionFalse with a different
+	// Reason) is updated in-place rather than appended, and LastTransitionTime
+	// is preserved unless Status changes.
+	meta.SetStatusCondition(&backupJob.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  metav1.ConditionFalse,
+		Reason:  "BackupFailed",
+		Message: message,
 	})
 
 	if err := r.Status().Update(ctx, backupJob); err != nil {

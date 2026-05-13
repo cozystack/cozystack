@@ -1,0 +1,140 @@
+suite: publishing.proxyProtocol bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: emits no cozystack.ouroboros Package when proxyProtocol is false
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ouroboros
+        not: true
+        documentIndex: -1
+
+  - it: leaves cozystack.ingress-application as the bare default Package when proxyProtocol is false
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.ingress-application
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+      - notExists:
+          path: spec.components
+
+  - it: emits cozystack.ouroboros Package with resource-policy keep when proxyProtocol is true
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.ouroboros
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: spec.variant
+          value: default
+
+  - it: injects three PROXY-protocol nginx config keys into ingress-application when proxyProtocol is true (use-proxy-protocol, real-ip-header, enable-real-ip)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.ingress-application
+    asserts:
+      - equal:
+          path: spec.components.ingress-system.values.ingress-nginx.controller.config.use-proxy-protocol
+          value: "true"
+      - equal:
+          path: spec.components.ingress-system.values.ingress-nginx.controller.config.real-ip-header
+          value: proxy_protocol
+      - equal:
+          path: spec.components.ingress-system.values.ingress-nginx.controller.config.enable-real-ip
+          value: "true"
+      # use-forwarded-headers + compute-full-forwarded-for are
+      # deliberately NOT injected. Without a paired proxy-real-ip-cidr
+      # they let clients spoof X-Forwarded-For; with PROXY-protocol
+      # the L4 proxy header is already the source of truth for
+      # $remote_addr, so the X-Forwarded-* headers from the LB hop
+      # are redundant. Operators with a downstream proxy that adds
+      # X-Forwarded-* legitimately can layer them in via Package
+      # values override with the matching CIDR.
+      - notExists:
+          path: spec.components.ingress-system.values.ingress-nginx.controller.config.use-forwarded-headers
+      - notExists:
+          path: spec.components.ingress-system.values.ingress-nginx.controller.config.compute-full-forwarded-for
+
+  - it: bundles.disabledPackages suppresses cozystack.ouroboros even when proxyProtocol is true
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        disabledPackages:
+          - cozystack.ouroboros
+      publishing:
+        proxyProtocol: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ouroboros
+        not: true
+        documentIndex: -1
+
+  - it: renders cleanly with proxyProtocol=false and proxyProtocolAcknowledgeUnclean=true (operator acknowledged cleanup)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: false
+        proxyProtocolAcknowledgeUnclean: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ouroboros
+        not: true
+        documentIndex: -1
+      - equal:
+          path: kind
+          value: Package
+        documentSelector:
+          path: metadata.name
+          value: cozystack.ingress-application

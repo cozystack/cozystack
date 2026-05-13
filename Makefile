@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check preflight
 
 include hack/common-envs.mk
 
@@ -22,6 +22,7 @@ build: build-deps
 	make -C packages/system/lineage-controller-webhook image
 	make -C packages/system/cilium image
 	make -C packages/system/linstor image
+	make -C packages/system/linstor-gui image
 	make -C packages/system/kubeovn-webhook image
 	make -C packages/system/kubeovn-plunger image
 	make -C packages/system/dashboard image
@@ -40,19 +41,30 @@ build: build-deps
 manifests:
 	mkdir -p _out/assets
 	cat internal/crdinstall/manifests/*.yaml > _out/assets/cozystack-crds.yaml
+	# kubectl-apply install path: render the bare Namespace resource alongside
+	# the operator. bareNamespace=true gates a Namespace cozy-system with PSA +
+	# identity labels (see packages/core/installer/templates/cozy-system-namespace.yaml).
+	# helm install/upgrade users keep the default (false) and use --create-namespace
+	# + the pre-install labeler hook.
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-talos.yaml
 	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
 		--set cozystackOperator.variant=generic \
 		--set cozystack.apiServerHost=REPLACE_ME \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-generic.yaml
 	# Hosted variant (managed Kubernetes)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
 		--set cozystackOperator.variant=hosted \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-hosted.yaml
 
@@ -82,10 +94,17 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
+
+# Pin the resourcesPreset enum in every ApplicationDefinition openAPISchema
+# to the canonical 47-value set (40 instance-type names + 7 legacy aliases).
+# Catches the regression where one chart's Makefile forgets to invoke
+# hack/update-crd.sh and that RD's schema drifts from values.schema.json.
+rd-presets-check:
+	hack/check-rd-presets.sh
 
 # Scoped go test over the cozystack-api surface that this repo owns. Kept
 # narrow intentionally - running `go test ./...` pulls in generated code

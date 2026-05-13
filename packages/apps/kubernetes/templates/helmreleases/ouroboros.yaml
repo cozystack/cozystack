@@ -1,0 +1,177 @@
+{{- /*
+Tenant deployments override the cozy-ouroboros parent defaults:
+
+  * mode flips from coredns to coredns-import — tenants run
+    cozystack-coredns (which adds the `import /etc/coredns/custom/*.override`
+    directive to its Corefile), so the import-CM mode keeps ouroboros
+    out of contention with the chart that re-renders the tenant's
+    Corefile from values.
+
+  * controller.gatewayApi.enabled mirrors the tenant's own
+    addons.gatewayAPI.enabled value. Forcing --gateway-api on a
+    tenant without Gateway-API CRDs would CrashLoopBackOff the
+    controller on WaitForCacheSync (LIST against a non-registered
+    GVR never marks the informer synced).
+*/ -}}
+{{- define "cozystack.defaultOuroborosValues" -}}
+ouroboros:
+  controller:
+    mode: coredns-import
+    gatewayApi:
+      enabled: {{ $.Values.addons.gatewayAPI.enabled }}
+    {{- /* Pin clusterDomain to cluster.local. cozystack tenants bootstrap
+           a Kamaji-managed control plane whose `networkProfile.clusterDomain`
+           is `cluster.local` — that is the domain tenant CoreDNS actually
+           serves. The ouroboros proxy's BackendHost is composed at startup
+           from `<svc>.<ns>.svc.<clusterDomain>` and dialed by /readyz; if
+           it does not match what tenant CoreDNS serves, /readyz returns
+           503 NXDOMAIN forever and the proxy Deployment never reaches
+           Ready, blocking helm install on the tenant.
+
+           Cannot rely on the chart's per-pod `/etc/resolv.conf` auto-detect
+           here: cozystack tenant kubelet injects the host platform's
+           cluster-domain (`cozy.local`) into the pod search list, not
+           cluster.local. The mismatch between kubelet-injected search and
+           Kamaji TCP CoreDNS config is a separate cozystack tenant
+           bootstrap concern; until that is fixed independently, pinning
+           the chart input here keeps ouroboros operational for the
+           default cozystack tenant topology.
+
+           Operators on a non-cluster.local tenant CoreDNS (rare —
+           federations, custom kubelet --cluster-domain, etc.) can
+           override via
+           `addons.ouroboros.valuesOverride.ouroboros.controller.clusterDomain`. */}}
+    clusterDomain: cluster.local
+{{- end }}
+
+{{- /* addons.ouroboros.enabled requires addons.ingressNginx.enabled. The
+       hairpin fix is a no-op without ingress-nginx (nothing to hairpin
+       against), and a no-op addon that quietly does nothing is harder
+       to debug than an explicit render-time error. Fail fast at chart
+       render time so the operator notices the misconfiguration on the
+       same reconcile they introduced it. */ -}}
+{{- if and .Values.addons.ouroboros.enabled (not .Values.addons.ingressNginx.enabled) }}
+{{- fail "addons.ouroboros.enabled requires addons.ingressNginx.enabled — ouroboros is a hairpin-NAT fix for tenant ingress-nginx and has nothing to fix against without it." }}
+{{- end }}
+
+{{- /* Soft enforcement of the documented sharp edge: an operator who
+       enables Gateway-API watching via valuesOverride on a tenant that
+       does NOT install Gateway-API CRDs would CrashLoop the controller
+       on WaitForCacheSync against missing GVRs. Catch it at chart-render
+       time with a clear error rather than letting the failure surface
+       as a CrashLoopBackOff with a cryptic informer log. */}}
+{{- $vo := .Values.addons.ouroboros.valuesOverride | default dict }}
+{{- $voOuroboros := index $vo "ouroboros" | default dict }}
+{{- $voController := index $voOuroboros "controller" | default dict }}
+{{- $voGwApi := index $voController "gatewayApi" | default dict }}
+{{- /* Catch every truthy spelling Helm/YAML accept: bool true, string
+       "true"/"True"/"TRUE"/"yes"/"Yes"/"YES"/"on"/"On"/"ON"/"y"/"Y"
+       (YAML 1.1 emits all of these as bool true), numeric 1.
+       Compare via toString-then-lower rather than direct bool eq
+       because `eq <string> true` errors on type mismatch — toString
+       normalises bool true → "true", numeric 1 → "1"; lowering folds
+       "True"/"TRUE"/"On"/"ON"/"YES" into the matched set so a
+       --set ouroboros.controller.gatewayApi.enabled=on (or =True)
+       does not bypass the guard the way pure-lowercase comparison
+       would. */ -}}
+{{- $voGwApiEnabledStr := $voGwApi.enabled | toString | lower }}
+{{- if and (hasKey $voGwApi "enabled") (or (eq $voGwApiEnabledStr "true") (eq $voGwApiEnabledStr "1") (eq $voGwApiEnabledStr "yes") (eq $voGwApiEnabledStr "on") (eq $voGwApiEnabledStr "y")) (not .Values.addons.gatewayAPI.enabled) }}
+{{- fail "addons.ouroboros.valuesOverride.ouroboros.controller.gatewayApi.enabled=true requires addons.gatewayAPI.enabled=true on the same tenant — Gateway-API CRDs would otherwise be missing and the controller would CrashLoopBackOff on WaitForCacheSync. Either enable addons.gatewayAPI for the tenant, or drop the override and let the wrapper mirror the tenant value." }}
+{{- end }}
+
+{{- /* Tenant disable: flipping addons.ouroboros.enabled false stops
+       this template from rendering the HelmRelease, helm-controller
+       reconciles the parent kubernetes-application chart, sees the
+       child HelmRelease has disappeared from the rendered output,
+       and runs `helm uninstall` on the tenant. The vendored
+       cozy-ouroboros chart ships a pre-delete Helm hook
+       (charts/ouroboros/templates/coredns-cleanup-hook.yaml) that
+       nulls the ouroboros.override data key on the tenant's
+       kube-system/coredns-custom ConfigMap before the controller
+       pod goes away. The whole disable is single-step.
+
+       No render-time guard is wired here: gating on a `lookup` for
+       the leftover HelmRelease would deadlock the routine disable
+       (the parent render runs before helm-controller applies the
+       missing-child diff, so the lookup ALWAYS finds the leftover
+       HR at the very moment the operator flips the flag — fail
+       fires, render fails, helm-controller never gets to uninstall,
+       deadlock until the operator forces an acknowledge gate). If
+       the chart's pre-delete hook fails to land (controller pod
+       stuck CrashLooping, ConfigMap RBAC drift, Job timeout) the
+       symptom is a stale rewrite in the tenant kube-system/coredns-custom
+       ConfigMap pointing at a deleted Service — operators recover
+       manually via:
+
+         kubectl --kubeconfig <tenant-admin-kubeconfig> --namespace kube-system \
+           patch configmap coredns-custom --type merge \
+           --patch '{"data":{"ouroboros.override":null}}'
+
+       That path is documented in cozystack/website docs/networking/hairpin-proxy-protocol
+       under "Tenant cleanup recipe (fallback)". */}}
+
+{{- if and .Values.addons.ouroboros.enabled .Values._namespace.etcd }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-ouroboros
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: ouroboros
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-ouroboros
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-ouroboros
+  storageNamespace: cozy-ouroboros
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    force: true
+    remediation:
+      retries: -1
+  values:
+    {{- /* mergeOverwrite dst src: src wins. With
+           `<override> | mergeOverwrite <defaults>` the piped LHS is
+           the source and the explicit RHS is the destination, so the
+           operator's valuesOverride wins on conflict — same merge
+           order every other tenant addon HelmRelease in this directory
+           uses (cert-manager.yaml, coredns.yaml, ingress-nginx.yaml).
+           defaultOuroborosValues only applies when the operator
+           leaves the corresponding key unset; an explicit override
+           replaces the default. That makes both controller.mode and
+           controller.gatewayApi.enabled operator-overridable, with
+           sharp edges: setting mode=coredns on a tenant collides with
+           the cozystack-coredns chart over data.Corefile (a Flux
+           reconcile flap), and setting gatewayApi.enabled=true while
+           addons.gatewayAPI.enabled=false CrashLoops the controller
+           on WaitForCacheSync against missing GVRs. Both are
+           documented on the OuroborosAddon field. */ -}}
+    {{- toYaml (deepCopy .Values.addons.ouroboros.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultOuroborosValues" .))) | nindent 4 }}
+  dependsOn:
+  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
+  - name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-coredns
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-ingress-nginx
+    namespace: {{ .Release.Namespace }}
+  {{- if .Values.addons.gatewayAPI.enabled }}
+  - name: {{ .Release.Name }}-gateway-api-crds
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+{{- end }}

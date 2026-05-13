@@ -27,7 +27,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="t1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
@@ -53,30 +53,39 @@ type ConfigSpec struct {
 }
 
 type Backup struct {
-	// Retention strategy for cleaning up old backups.
+	// Legacy. Restic retention policy passed to the legacy CronJob (`restic forget …`). Unused by the Altinity strategy.
 	// +kubebuilder:default:="--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
-	CleanupStrategy string `json:"cleanupStrategy"`
-	// Enable regular backups (default: false).
+	CleanupStrategy string `json:"cleanupStrategy,omitempty"`
+	// Enable backup integration. Materialises the chart-emitted `<release>-backup-s3` Secret consumed by the Altinity backup strategy and, when `schedule` is non-empty, also renders the legacy chart-managed CronJob.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Password for Restic backup encryption.
+	// S3 endpoint URL. Stored in the chart-emitted `<release>-backup-s3` Secret and consumed at runtime by the in-Pod `clickhouse-backup` sidecar. Empty means use the AWS default endpoint; in that case the chart also drops `S3_FORCE_PATH_STYLE` from the sidecar env, since AWS public S3 requires vhost-style.
+	// +kubebuilder:default:=""
+	Endpoint string `json:"endpoint,omitempty"`
+	// Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.
 	// +kubebuilder:default:="<password>"
-	ResticPassword string `json:"resticPassword"`
-	// Access key for S3 authentication.
+	ResticPassword string `json:"resticPassword,omitempty"`
+	// Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-access-key>"
 	S3AccessKey string `json:"s3AccessKey"`
 	// S3 bucket used for storing backups.
 	// +kubebuilder:default:="s3.example.org/clickhouse-backups"
 	S3Bucket string `json:"s3Bucket"`
+	// Reference to a pre-existing Secret carrying S3 credentials and bucket coordinates consumed by the chart-emitted `clickhouse-backup` sidecar. When `name` is set, the chart skips materialising `<release>-backup-s3` and the sidecar reads from the referenced Secret instead. The strategy Pod is a curl/jq HTTP client and does not bind to this Secret directly.
+	// +kubebuilder:default:={}
+	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
+	// Object-key prefix the sidecar uses inside `s3Bucket`. Empty (default) scopes backups under the Helm release name so multiple ClickHouse releases sharing one bucket cannot clobber each other. Set this on a to-copy restore destination to point at the source release's prefix.
+	// +kubebuilder:default:=""
+	S3PathOverride string `json:"s3PathOverride,omitempty"`
 	// AWS S3 region where backups are stored.
 	// +kubebuilder:default:="us-east-1"
 	S3Region string `json:"s3Region"`
-	// Secret key for S3 authentication.
+	// Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
 	// +kubebuilder:default:="<your-secret-key>"
 	S3SecretKey string `json:"s3SecretKey"`
-	// Cron schedule for automated backups.
-	// +kubebuilder:default:="0 2 * * *"
-	Schedule string `json:"schedule"`
+	// Legacy. Cron schedule for the chart-emitted CronJob that runs the dump+restic backup. Empty (default) skips the legacy CronJob; recommended when a `BackupClass` + `Plan` from `backups.cozystack.io` already drives backup orchestration via the Altinity strategy.
+	// +kubebuilder:default:=""
+	Schedule string `json:"schedule,omitempty"`
 }
 
 type ClickHouseKeeper struct {
@@ -87,7 +96,7 @@ type ClickHouseKeeper struct {
 	// +kubebuilder:default:=3
 	Replicas int `json:"replicas,omitempty"`
 	// Default sizing preset.
-	// +kubebuilder:default:="micro"
+	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="1Gi"
@@ -101,6 +110,27 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type S3CredentialsSecret struct {
+	// Key in the Secret holding the access key ID. Defaults to `accessKey`.
+	// +kubebuilder:default:=""
+	AccessKeyIDKey string `json:"accessKeyIDKey,omitempty"`
+	// Key in the Secret holding the bucket name. Defaults to `bucketName`.
+	// +kubebuilder:default:=""
+	BucketKey string `json:"bucketKey,omitempty"`
+	// Key in the Secret holding the S3 endpoint URL. Defaults to `endpoint`.
+	// +kubebuilder:default:=""
+	EndpointKey string `json:"endpointKey,omitempty"`
+	// Name of the Secret in the application namespace. Empty means the chart materialises `<release>-backup-s3` from the legacy `s3*` fields.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+	// Key in the Secret holding the S3 region. Defaults to `region`.
+	// +kubebuilder:default:=""
+	RegionKey string `json:"regionKey,omitempty"`
+	// Key in the Secret holding the secret access key. Defaults to `secretKey`.
+	// +kubebuilder:default:=""
+	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
+}
+
 type User struct {
 	// Password for the user.
 	Password string `json:"password,omitempty"`
@@ -108,5 +138,5 @@ type User struct {
 	Readonly bool `json:"readonly,omitempty"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

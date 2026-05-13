@@ -145,8 +145,50 @@
     "resourcesPreset": {
       "description": "Default sizing preset used when `resources` is omitted.",
       "type": "string",
-      "default": "medium",
+      "default": "c1.small",
       "enum": [
+        "t1.nano",
+        "t1.micro",
+        "t1.small",
+        "t1.medium",
+        "t1.large",
+        "t1.xlarge",
+        "t1.2xlarge",
+        "t1.4xlarge",
+        "c1.nano",
+        "c1.micro",
+        "c1.small",
+        "c1.medium",
+        "c1.large",
+        "c1.xlarge",
+        "c1.2xlarge",
+        "c1.4xlarge",
+        "s1.nano",
+        "s1.micro",
+        "s1.small",
+        "s1.medium",
+        "s1.large",
+        "s1.xlarge",
+        "s1.2xlarge",
+        "s1.4xlarge",
+        "u1.nano",
+        "u1.micro",
+        "u1.small",
+        "u1.medium",
+        "u1.large",
+        "u1.xlarge",
+        "u1.2xlarge",
+        "u1.4xlarge",
+        "m1.nano",
+        "m1.micro",
+        "m1.small",
+        "m1.medium",
+        "m1.large",
+        "m1.xlarge",
+        "m1.2xlarge",
+        "m1.4xlarge",
+        "nano",
+        "micro",
         "small",
         "medium",
         "large",
@@ -155,7 +197,7 @@
       ]
     },
     "backup": {
-      "description": "Backup configuration.",
+      "description": "DEPRECATED Backup configuration (use the Cozystack backups framework: BackupClass + FoundationDB strategy).",
       "type": "object",
       "default": {},
       "required": [
@@ -165,17 +207,17 @@
       ],
       "properties": {
         "enabled": {
-          "description": "Enable backups.",
+          "description": "DEPRECATED Enable in-chart backups (superseded by BackupClass + FoundationDB strategy).",
           "type": "boolean",
           "default": false
         },
         "retentionPolicy": {
-          "description": "Retention policy for backups.",
+          "description": "DEPRECATED Retention policy for backups.",
           "type": "string",
           "default": "7d"
         },
         "s3": {
-          "description": "S3 configuration for backups.",
+          "description": "DEPRECATED S3 configuration for backups.",
           "type": "object",
           "default": {},
           "required": [
@@ -186,12 +228,12 @@
           ],
           "properties": {
             "bucket": {
-              "description": "S3 bucket name.",
+              "description": "DEPRECATED S3 bucket name.",
               "type": "string",
               "default": ""
             },
             "credentials": {
-              "description": "S3 credentials.",
+              "description": "DEPRECATED S3 credentials.",
               "type": "object",
               "default": {},
               "required": [
@@ -200,24 +242,24 @@
               ],
               "properties": {
                 "accessKeyId": {
-                  "description": "S3 access key ID.",
+                  "description": "DEPRECATED S3 access key ID.",
                   "type": "string",
                   "default": ""
                 },
                 "secretAccessKey": {
-                  "description": "S3 secret access key.",
+                  "description": "DEPRECATED S3 secret access key.",
                   "type": "string",
                   "default": ""
                 }
               }
             },
             "endpoint": {
-              "description": "S3 endpoint URL.",
+              "description": "DEPRECATED S3 endpoint URL.",
               "type": "string",
               "default": ""
             },
             "region": {
-              "description": "S3 region.",
+              "description": "DEPRECATED S3 region.",
               "type": "string",
               "default": "us-east-1"
             }

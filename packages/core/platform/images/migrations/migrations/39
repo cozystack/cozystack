@@ -1,0 +1,182 @@
+#!/bin/bash
+# Migration 39 --> 40
+# Convert legacy flat resourcesPreset names to instance-type names (t1/c1/s1/u1/m1).
+#
+# The mapping is 1:1 by CPU and memory — every legacy value maps to a single
+# instance-type name with identical resources:
+#
+#   nano    -> t1.nano    (250m / 128Mi)
+#   micro   -> t1.micro   (500m / 256Mi)
+#   small   -> t1.small   (1    / 512Mi)
+#   medium  -> c1.small   (1    / 1Gi)
+#   large   -> c1.medium  (2    / 2Gi)
+#   xlarge  -> c1.large   (4    / 4Gi)
+#   2xlarge -> c1.xlarge  (8    / 8Gi)
+#
+# Same table mirrored in:
+#   - packages/library/cozy-lib/templates/_resourcepresets.tpl (legacy block)
+#   - pkg/apis/apps/presets/legacy.go
+#
+# What this migration touches
+# ---------------------------
+# 1. HelmReleases (helm.toolkit.fluxcd.io/v2) cluster-wide — any spec.values
+#    field named resourcesPreset at any nesting level.
+# 2. Every app CR registered under apps.cozystack.io/v1alpha1 — same field
+#    walk, applied to spec. cozystack-api injects ValuesFrom Secret but the
+#    enum-validated value lives on the app CR; without this patch a later
+#    `kubectl edit` would fail validation against the tightened CRD enum.
+#
+# Behaviour
+# ---------
+# - Idempotent: values already in instance-type form (or in any form
+#   other than the seven legacy names) fall through the `else .` arm of
+#   the jq map_legacy filter unchanged, so re-running the migration on
+#   a converted cluster is a no-op.
+# - Best-effort: failure on one object is logged but does not abort the run.
+#   cozy-lib retains the legacy aliases, so untouched legacy values keep
+#   rendering identical CPU/memory after the migration.
+# - Dry-run: set MIGRATION_DRY_RUN=1 to print the would-be patches without
+#   applying them. The version stamp is also skipped.
+# - Version stamp is only updated when no failures were observed in a real
+#   run; a partial run leaves CURRENT_VERSION at 39 so the next platform
+#   upgrade re-runs the migration.
+
+set -euo pipefail
+
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+FAILURES=0
+PATCHED=0
+SKIPPED=0
+
+JQ_TRANSFORM='
+  def map_legacy:
+    if   . == "nano"    then "t1.nano"
+    elif . == "micro"   then "t1.micro"
+    elif . == "small"   then "t1.small"
+    elif . == "medium"  then "c1.small"
+    elif . == "large"   then "c1.medium"
+    elif . == "xlarge"  then "c1.large"
+    elif . == "2xlarge" then "c1.xlarge"
+    else . end;
+
+  walk(
+    if type == "object" and has("resourcesPreset") and (.resourcesPreset | type) == "string" then
+      .resourcesPreset |= map_legacy
+    else . end
+  )
+'
+
+# patch_object KIND NAMESPACE NAME JQ-FILTER-FOR-FIELD
+#
+# Reads the object as JSON, extracts the named subfield via the given jq
+# selector, transforms it through JQ_TRANSFORM, and applies a merge patch
+# if the result differs.
+patch_object() {
+  local kind="$1" ns="$2" name="$3" selector="$4"
+  local obj current new patch
+
+  obj=$(kubectl get "$kind" --namespace "$ns" "$name" --output json 2>/dev/null || true)
+  if [ -z "$obj" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  current=$(printf '%s' "$obj" | jq -c "$selector // null")
+  if [ "$current" = "null" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  new=$(printf '%s' "$current" | jq -c "$JQ_TRANSFORM")
+  if [ "$current" = "$new" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  # Build a minimal merge patch. selector looks like ".spec.values" or ".spec"
+  # so we strip the leading dot and split into keys.
+  patch=$(jq --null-input --argjson val "$new" --arg path "${selector#.}" '
+    def to_path: split(".");
+    {} | setpath($path | to_path; $val)
+  ')
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] would patch $kind $ns/$name ($selector)"
+    diff <(printf '%s' "$current" | jq --sort-keys .) \
+         <(printf '%s' "$new" | jq --sort-keys .) || true
+    PATCHED=$((PATCHED + 1))
+    return 0
+  fi
+
+  local kubectl_err
+  if kubectl_err=$(printf '%s' "$patch" | kubectl patch "$kind" --namespace "$ns" "$name" \
+       --type merge --patch-file /dev/stdin 2>&1 >/dev/null); then
+    echo "Patched $kind $ns/$name ($selector)"
+    PATCHED=$((PATCHED + 1))
+  else
+    echo "WARN: failed to patch $kind $ns/$name ($selector): ${kubectl_err:-unknown error}" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+# list_objects KIND
+#
+# Print "namespace<TAB>name" for every object of KIND in every namespace.
+# Distinguishes an empty result (kubectl exit 0, no items) from a kubectl
+# error (network down, RBAC stripped, CRD not installed) so a broken
+# cluster cannot look identical to a clean no-op migration.
+list_objects() {
+  local kind="$1"
+  local out
+  if ! out=$(kubectl get "$kind" --all-namespaces \
+       --output 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
+       2>&1); then
+    # Treat "no resources" / "not registered" as empty; everything else
+    # surfaces as a hard error.
+    case "$out" in
+      *"the server doesn't have a resource type"*|*"no matches for kind"*|*"NotFound"*)
+        return 0
+        ;;
+    esac
+    echo "ERROR: kubectl get $kind failed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+echo "==> Migrating HelmRelease spec.values"
+hrs=$(list_objects helmreleases.helm.toolkit.fluxcd.io) || exit 1
+while IFS=$'\t' read -r ns name; do
+  [ -z "$ns" ] && continue
+  patch_object helmrelease.helm.toolkit.fluxcd.io "$ns" "$name" .spec.values
+done <<<"$hrs"
+
+echo "==> Migrating app CRs in apps.cozystack.io"
+APP_KINDS=$(kubectl api-resources --api-group=apps.cozystack.io --no-headers --output name 2>/dev/null || true)
+for kind in $APP_KINDS; do
+  items=$(list_objects "$kind") || exit 1
+  while IFS=$'\t' read -r ns name; do
+    [ -z "$ns" ] && continue
+    patch_object "$kind" "$ns" "$name" .spec
+  done <<<"$items"
+done
+
+# Echo summary on stderr too so an operator watching only stderr (e.g.
+# `kubectl logs ... | grep -E '^WARN'`) sees it next to any failure
+# warnings.
+echo "==> Summary: patched=$PATCHED skipped=$SKIPPED failures=$FAILURES" | tee /dev/stderr
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+if [ "$FAILURES" -gt 0 ]; then
+  echo "WARN: $FAILURES patch(es) failed; cozy-lib legacy aliases keep charts rendering."
+  echo "WARN: leaving CURRENT_VERSION at 39 so the migration retries on next upgrade."
+  exit 0
+fi
+
+kubectl create configmap --namespace cozy-system cozystack-version \
+  --from-literal version=40 --dry-run=client --output yaml \
+  | kubectl apply --filename -

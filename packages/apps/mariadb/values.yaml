@@ -7,6 +7,46 @@
 ## @field {quantity} [memory] - Memory (RAM) available to each replica.
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
 ## @value nano
 ## @value micro
 ## @value small
@@ -21,8 +61,8 @@ replicas: 2
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each MariaDB replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-## @param {ResourcesPreset} resourcesPreset="nano" - Default sizing preset used when `resources` is omitted.
-resourcesPreset: "nano"
+## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.nano"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
@@ -81,20 +121,27 @@ databases: {}
 ##       - user2
 
 ##
-## @section Backup parameters
+## @section Backup parameters (DEPRECATED)
 ##
+## DEPRECATED: the fields below drive the chart's original mariadb-dump+restic
+## CronJob backup mechanism. They are preserved for backward compatibility:
+## existing tenants who already rely on the cronjob can keep using it
+## unchanged. New deployments should use the operator-native backup path
+## via Cozystack's BackupClass / Plan / RestoreJob CRDs and the
+## strategy.backups.cozystack.io/MariaDB driver. See
+## examples/backups/mariadb/ for a full end-to-end walkthrough.
 
-## @typedef {struct} Backup - Backup configuration.
-## @field {bool} enabled - Enable regular backups (default: false).
-## @field {string} s3Region - AWS S3 region where backups are stored.
-## @field {string} s3Bucket - S3 bucket used for storing backups.
-## @field {string} schedule - Cron schedule for automated backups.
-## @field {string} cleanupStrategy - Retention strategy for cleaning up old backups.
-## @field {string} s3AccessKey - Access key for S3 authentication.
-## @field {string} s3SecretKey - Secret key for S3 authentication.
-## @field {string} resticPassword - Password for Restic backup encryption.
+## @typedef {struct} Backup - DEPRECATED: Backup configuration.
+## @field {bool} enabled - DEPRECATED: Enable regular backups (default: false).
+## @field {string} s3Region - DEPRECATED: AWS S3 region where backups are stored.
+## @field {string} s3Bucket - DEPRECATED: S3 bucket used for storing backups.
+## @field {string} schedule - DEPRECATED: Cron schedule for automated backups.
+## @field {string} cleanupStrategy - DEPRECATED: Retention strategy for cleaning up old backups.
+## @field {string} s3AccessKey - DEPRECATED: Access key for S3 authentication.
+## @field {string} s3SecretKey - DEPRECATED: Secret key for S3 authentication.
+## @field {string} resticPassword - DEPRECATED: Password for Restic backup encryption.
 
-## @param {Backup} backup - Backup configuration.
+## @param {Backup} backup - DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
 backup:
   enabled: false
   s3Region: us-east-1

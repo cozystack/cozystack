@@ -24,7 +24,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="nano"
+	// +kubebuilder:default:="t1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
@@ -44,34 +44,34 @@ type ConfigSpec struct {
 	// Databases configuration map.
 	// +kubebuilder:default:={}
 	Databases map[string]Database `json:"databases,omitempty"`
-	// Backup configuration.
+	// DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
 	// +kubebuilder:default:={}
 	Backup Backup `json:"backup"`
 }
 
 type Backup struct {
-	// Retention strategy for cleaning up old backups.
+	// DEPRECATED: Retention strategy for cleaning up old backups.
 	// +kubebuilder:default:="--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
 	CleanupStrategy string `json:"cleanupStrategy"`
-	// Enable regular backups (default: false).
+	// DEPRECATED: Enable regular backups (default: false).
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Password for Restic backup encryption.
+	// DEPRECATED: Password for Restic backup encryption.
 	// +kubebuilder:default:="<password>"
 	ResticPassword string `json:"resticPassword"`
-	// Access key for S3 authentication.
+	// DEPRECATED: Access key for S3 authentication.
 	// +kubebuilder:default:="<your-access-key>"
 	S3AccessKey string `json:"s3AccessKey"`
-	// S3 bucket used for storing backups.
+	// DEPRECATED: S3 bucket used for storing backups.
 	// +kubebuilder:default:="s3.example.org/mariadb-backups"
 	S3Bucket string `json:"s3Bucket"`
-	// AWS S3 region where backups are stored.
+	// DEPRECATED: AWS S3 region where backups are stored.
 	// +kubebuilder:default:="us-east-1"
 	S3Region string `json:"s3Region"`
-	// Secret key for S3 authentication.
+	// DEPRECATED: Secret key for S3 authentication.
 	// +kubebuilder:default:="<your-secret-key>"
 	S3SecretKey string `json:"s3SecretKey"`
-	// Cron schedule for automated backups.
+	// DEPRECATED: Cron schedule for automated backups.
 	// +kubebuilder:default:="0 2 * * *"
 	Schedule string `json:"schedule"`
 }
@@ -102,7 +102,7 @@ type User struct {
 	Password string `json:"password"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
 
 // +kubebuilder:validation:Enum="v11.8";"v11.4";"v10.11";"v10.6"

@@ -1,0 +1,99 @@
+suite: GPU Operator HelmRelease HAMi integration tests
+templates:
+  - templates/helmreleases/gpu-operator.yaml
+values:
+  - values-ci.yaml
+tests:
+  - it: should disable devicePlugin when hami is enabled
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+        hami:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: false
+
+  - it: should not have values when hami is disabled and no overrides
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - notExists:
+          path: spec.values
+
+  - it: should apply hami defaults when valuesOverride key is omitted
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+        hami:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: false
+
+  - it: should allow user overrides to merge with hami defaults
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride:
+            gpu-operator:
+              driver:
+                enabled: false
+        hami:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: false
+      - equal:
+          path: spec.values.gpu-operator.driver.enabled
+          value: false
+
+  - it: should let user explicitly override devicePlugin.enabled to true with hami enabled
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride:
+            gpu-operator:
+              devicePlugin:
+                enabled: true
+              driver:
+                enabled: false
+        hami:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: true
+      - equal:
+          path: spec.values.gpu-operator.driver.enabled
+          value: false
+
+  - it: should not render when gpuOperator is disabled
+    set:
+      addons:
+        gpuOperator:
+          enabled: false
+          valuesOverride: {}
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0

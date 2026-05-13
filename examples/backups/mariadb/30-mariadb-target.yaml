@@ -1,0 +1,36 @@
+# Empty target MariaDB instance for the to-copy restore. The MariaDB
+# driver runs the operator-side Restore CR against this CR's running
+# instance; the operator replays the logical dump straight into the live
+# MariaDB, so the chart spec stays intentionally minimal - the schema
+# and rows come from the dump.
+#
+# Users are NOT part of the logical dump (mariadb-dump skips mysql.user
+# by default), so any account a consumer expects to use against the
+# target must be declared up-front on the target chart spec. The "app"
+# user / "demo" database below mirror the source so a consumer can read
+# the restored marker row with the same credentials it used on
+# mariadb-src; replicate this whenever you want to verify a restore
+# under non-root credentials.
+#
+# Same-namespace to-copy flows are smoke-testable manually by applying
+# this manifest alongside mariadb-src. Cross-tenant restores (target in
+# tenant-test, source's seaweedfs in tenant-root) are blocked by the
+# per-tenant Cilium egress policy and stay a manual / dev-cluster flow.
+# A dedicated bats e2e harness will land in a follow-up PR.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb-target
+spec:
+  replicas: 2
+  size: 1Gi
+  databases:
+    demo:
+      roles:
+        admin:
+          - app
+  users:
+    app:
+      password: REPLACE_WITH_PASSWORD
+      maxUserConnections: 100

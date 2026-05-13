@@ -1,0 +1,17 @@
+# In-place restore. With targetApplicationRef omitted, the driver creates
+# a k8s.mariadb.com/Restore CR with mariaDbRef=mariadb-src; the operator
+# replays the logical dump straight into the live source MariaDB. Existing
+# tables in the restored databases are dropped + re-created from the dump,
+# so any data written between the backup and the restore is lost.
+#
+# Use the to-copy variant (40-restorejob-to-copy.yaml) instead when you
+# want to keep the source running and validate the recovered state on a
+# separate instance before flipping over.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: mariadb-src-in-place
+spec:
+  backupRef:
+    name: mariadb-src-adhoc

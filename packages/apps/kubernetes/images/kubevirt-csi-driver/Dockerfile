@@ -1,4 +1,4 @@
-ARG builder_image=docker.io/library/golang:1.22.5
+ARG builder_image=docker.io/library/golang:1.26
 FROM ${builder_image} AS builder
 
 ARG TARGETOS

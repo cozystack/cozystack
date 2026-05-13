@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: etcd-deployed-version
-data:
-  version: {{ .Chart.Version }}

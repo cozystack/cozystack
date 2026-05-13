@@ -22,7 +22,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	StorageClass string `json:"storageClass"`
 	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"ephemeralStorage":"20Gi","gpus":{},"instanceType":"u1.medium","maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"}}}
+	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
@@ -46,7 +46,7 @@ type APIServer struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
 	// Preset if `resources` omitted.
-	// +kubebuilder:default:="large"
+	// +kubebuilder:default:="c1.medium"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
@@ -69,12 +69,18 @@ type Addons struct {
 	// NVIDIA GPU Operator.
 	// +kubebuilder:default:={}
 	GpuOperator GPUOperatorAddon `json:"gpuOperator"`
+	// HAMi GPU virtualization middleware.
+	// +kubebuilder:default:={}
+	Hami HAMiAddon `json:"hami"`
 	// Ingress-NGINX controller.
 	// +kubebuilder:default:={}
 	IngressNginx IngressNginxAddon `json:"ingressNginx"`
 	// Monitoring agents.
 	// +kubebuilder:default:={}
 	MonitoringAgents MonitoringAgentsAddon `json:"monitoringAgents"`
+	// Hairpin-NAT fix for ingress-nginx with PROXY-protocol.
+	// +kubebuilder:default:={}
+	Ouroboros OuroborosAddon `json:"ouroboros"`
 	// Velero backup/restore addon.
 	// +kubebuilder:default:={}
 	Velero VeleroAddon `json:"velero"`
@@ -121,7 +127,7 @@ type ControllerManager struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
 	// Preset if `resources` omitted.
-	// +kubebuilder:default:="micro"
+	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
@@ -160,6 +166,15 @@ type GatewayAPIAddon struct {
 	Enabled bool `json:"enabled"`
 }
 
+type HAMiAddon struct {
+	// Enable HAMi (requires GPU Operator).
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Custom Helm values overrides.
+	// +kubebuilder:default:={}
+	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
 type Images struct {
 	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 	// +kubebuilder:default:=""
@@ -192,8 +207,25 @@ type KonnectivityServer struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
 	// Preset if `resources` omitted.
-	// +kubebuilder:default:="micro"
+	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+}
+
+type Kubelet struct {
+	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
+	// +kubebuilder:default:="7%"
+	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
+	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
+	// +kubebuilder:default:="10%"
+	EvictionSoftMemory string `json:"evictionSoftMemory,omitempty"`
+	// CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
+	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
+	// CPU reserved for host OS. Auto-computed from instanceType if empty.
+	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
+	// Memory reserved for host OS. Auto-computed from instanceType if empty.
+	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
 }
 
 type MonitoringAgentsAddon struct {
@@ -206,14 +238,16 @@ type MonitoringAgentsAddon struct {
 }
 
 type NodeGroup struct {
-	// Ephemeral storage size.
+	// Persistent disk size for kubelet and containerd data.
 	// +kubebuilder:default:="20Gi"
-	EphemeralStorage resource.Quantity `json:"ephemeralStorage"`
+	DiskSize resource.Quantity `json:"diskSize"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	Gpus []GPU `json:"gpus,omitempty"`
 	// Virtual machine instance type.
 	// +kubebuilder:default:="u1.medium"
 	InstanceType string `json:"instanceType"`
+	// Kubelet resource reservations for this node group.
+	Kubelet Kubelet `json:"kubelet,omitempty"`
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
@@ -224,6 +258,17 @@ type NodeGroup struct {
 	Resources Resources `json:"resources"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
+	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
+	StorageClass string `json:"storageClass,omitempty"`
+}
+
+type OuroborosAddon struct {
+	// Enable ouroboros. Requires addons.ingressNginx.enabled (chart-render fail otherwise). Only useful when PROXY-protocol is wired on the tenant ingress-nginx via valuesOverride.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Custom Helm values overrides. Operator-key wins over cozystack defaults.
+	// +kubebuilder:default:={}
+	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
 type Resources struct {
@@ -238,7 +283,7 @@ type Scheduler struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
 	// Preset if `resources` omitted.
-	// +kubebuilder:default:="micro"
+	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
@@ -260,7 +305,7 @@ type VerticalPodAutoscalerAddon struct {
 // +kubebuilder:validation:Enum="Proxied";"LoadBalancer"
 type IngressNginxExposeMethod string
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
 
 // +kubebuilder:validation:Enum="v1.35";"v1.34";"v1.33";"v1.32";"v1.31";"v1.30"

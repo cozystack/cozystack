@@ -10,6 +10,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.vm-default-images" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.gpu-operator" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.hami" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-bootstrap-kubeadm" $) }}

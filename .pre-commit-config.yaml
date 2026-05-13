@@ -1,6 +1,17 @@
 repos:
 - repo: local
   hooks:
+    - id: run-make-generate-root
+      name: Run 'make generate' at repo root
+      entry: |
+        flock -x .git/pre-commit.lock sh -c '
+          echo "Running make generate at repo root"
+          make generate || exit $?
+          git diff --color=always | cat
+        '
+      language: system
+      files: ^(api/|pkg/apis/|pkg/generated/|internal/crdinstall/manifests/|packages/system/cozystack-controller/definitions/|packages/system/application-definition-crd/definition/|packages/system/backup-controller/definitions/|packages/system/backupstrategy-controller/definitions/|hack/update-codegen\.sh$|hack/boilerplate\.go\.txt$|Makefile$)
+      pass_filenames: false
     - id: run-make-generate
       name: Run 'make generate' in all app directories
       entry: |

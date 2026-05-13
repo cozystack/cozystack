@@ -39,9 +39,12 @@ spec:
       partitions: 1
       replicas: 2
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr kafka-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr kafka-$name --timeout=30s --for=condition=ready
-  kubectl wait kafkas -n tenant-test test --timeout=300s --for=condition=ready
+  timeout 60 sh -ec "until kubectl -n tenant-test get kafkas $name >/dev/null 2>&1; do sleep 2; done"
+  kubectl wait kafkas -n tenant-test $name --timeout=300s --for=condition=ready
   timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0; do sleep 10; done"
   kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-client -o jsonpath='{.spec.ports[0].port}' | grep -q '2181'; do sleep 10; done"

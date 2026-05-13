@@ -104,6 +104,15 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
 spec:
+  {{- if eq $ingress .Release.Namespace }}
+  # Ensure the ingress-nginx admission webhook is ready before creating Ingress resources.
+  # Only when this tenant owns its ingress; sub-tenants inherit ingress from a parent
+  # namespace where ingress-nginx-system already runs, and the dependency would deadlock
+  # because the HR doesn't exist locally.
+  dependsOn:
+  - name: ingress-nginx-system
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
   chartRef:
     kind: ExternalArtifact
     name: cozystack-seaweedfs-application-default-seaweedfs-system
@@ -232,16 +241,28 @@ spec:
         {{- else if eq .Values.topology "MultiZone" }}
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
+        replicas: {{ .Values.filer.replicas }}
         s3:
           domainName: {{ .Values.host | default (printf "s3.%s" $host) }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.filer.resourcesPreset .Values.filer.resources $) | nindent 10 }}
       s3:
+        replicas: {{ .Values.s3.replicas }}
         ingress:
           className: {{ $ingress }}
           host: {{ .Values.host | default (printf "s3.%s" $host) }}
           annotations:
-            nginx.ingress.kubernetes.io/proxy-body-size: "0"
+            # Limit single PUT request to 5GB to enforce multipart uploads for large files.
+            # This prevents issues with large file uploads and reduces support load.
+            # For files >5GB, clients must use S3 multipart upload API.
+            nginx.ingress.kubernetes.io/proxy-body-size: "5g"
+            nginx.ingress.kubernetes.io/proxy-buffering: "off"
+            nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
             nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+            nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+            nginx.ingress.kubernetes.io/client-body-timeout: "3600"
+            nginx.ingress.kubernetes.io/client-header-timeout: "120"
+            nginx.ingress.kubernetes.io/service-upstream: "true"
             {{- if eq $solver "http01" }}
             acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
             {{- end }}

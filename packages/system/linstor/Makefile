@@ -5,7 +5,7 @@ include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
 LINSTOR_VERSION ?= 1.33.2
-LINSTOR_CSI_VERSION ?= v1.10.5
+LINSTOR_CSI_VERSION ?= v1.10.6
 
 image: image-piraeus-server image-linstor-csi
 

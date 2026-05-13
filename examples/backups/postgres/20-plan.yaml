@@ -1,0 +1,16 @@
+# Cron-driven Plan: every 6 hours the core Plan controller materialises a
+# BackupJob referencing this BackupClass.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: Plan
+metadata:
+  name: pg-src-daily
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: pg-src
+  backupClassName: postgres-cnpg
+  schedule:
+    type: cron
+    cron: "0 */6 * * *"

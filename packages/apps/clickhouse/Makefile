@@ -7,6 +7,9 @@ generate:
 	cozyvalues-gen -m 'clickhouse' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/clickhouse/types.go
 	../../../hack/update-crd.sh
 
+test:
+	helm unittest .
+
 image:
 	docker buildx build images/clickhouse-backup \
 		--tag $(REGISTRY)/clickhouse-backup:$(call settag,$(CLICKHOUSE_BACKUP_TAG)) \
@@ -17,3 +20,12 @@ image:
 	echo "$(REGISTRY)/clickhouse-backup:$(call settag,$(CLICKHOUSE_BACKUP_TAG))@$$(yq e '."containerimage.digest"' images/clickhouse-backup.json -o json -r)" \
 		> images/clickhouse-backup.tag
 	rm -f images/clickhouse-backup.json
+	docker buildx build images/altinity-clickhouse-backup \
+		--tag $(REGISTRY)/altinity-clickhouse-backup:$(call settag,$(CLICKHOUSE_BACKUP_TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/altinity-clickhouse-backup:latest \
+		--cache-to type=inline \
+		--metadata-file images/altinity-clickhouse-backup.json \
+		$(BUILDX_ARGS)
+	echo "$(REGISTRY)/altinity-clickhouse-backup:$(call settag,$(CLICKHOUSE_BACKUP_TAG))@$$(yq e '."containerimage.digest"' images/altinity-clickhouse-backup.json -o json -r)" \
+		> images/altinity-clickhouse-backup.tag
+	rm -f images/altinity-clickhouse-backup.json

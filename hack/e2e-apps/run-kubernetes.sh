@@ -58,7 +58,7 @@ spec:
   host: ""
   nodeGroups:
     md0:
-      ephemeralStorage: 20Gi
+      diskSize: 20Gi
       gpus: []
       instanceType: u1.medium
       maxReplicas: 10
@@ -227,6 +227,11 @@ EOF
     exit 1
   fi
 
+  # TODO(e2e-replace-fixed-timeouts): genuine retry loop. This validates an
+  # external HTTP path (MetalLB-advertised LB IP -> in-tenant ingress ->
+  # backend pod) which is not visible to the Kubernetes API as a single
+  # condition, so kubectl wait cannot replace it. The 20x3s = 60s budget is
+  # capped with `lb_ok=false` then asserted below.
   lb_ok=false
   for i in $(seq 1 20); do
     echo "Attempt $i"

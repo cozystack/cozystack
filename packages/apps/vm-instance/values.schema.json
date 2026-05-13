@@ -26,6 +26,11 @@
         "type": "integer"
       }
     },
+    "externalAllowICMP": {
+      "description": "Whether to accept ICMP traffic to the VM in PortList mode (preserves ping and PMTU discovery). No effect in WholeIP mode. Default true so ping behaves as users expect even when port filtering is in effect.",
+      "type": "boolean",
+      "default": true
+    },
     "runStrategy": {
       "description": "Requested running state of the VirtualMachineInstance",
       "type": "string",

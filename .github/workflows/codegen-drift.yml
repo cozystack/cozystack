@@ -1,0 +1,61 @@
+name: Codegen Drift Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'api/**'
+      - 'pkg/apis/**'
+      - 'pkg/generated/**'
+      - 'internal/crdinstall/manifests/**'
+      - 'packages/system/cozystack-controller/definitions/**'
+      - 'packages/system/application-definition-crd/definition/**'
+      - 'packages/system/backup-controller/definitions/**'
+      - 'packages/system/backupstrategy-controller/definitions/**'
+      - 'hack/update-codegen.sh'
+      - 'hack/boilerplate.go.txt'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/codegen-drift.yml'
+
+concurrency:
+  group: codegen-drift-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codegen-drift:
+    name: Verify generated code is up to date
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Pre-fetch k8s.io/code-generator module
+        # hack/update-codegen.sh sources kube_codegen.sh from the Go module cache.
+        # The module is not declared in go.mod, so fetch it explicitly at the
+        # version pinned in the script.
+        run: |
+          version=$(grep -oP 'code-generator@\Kv[0-9.]+' hack/update-codegen.sh)
+          tmpdir=$(mktemp -d)
+          cd "$tmpdir"
+          go mod init codegen-fetch
+          go get "k8s.io/code-generator@${version}"
+
+      - name: Run make generate
+        run: make generate
+
+      - name: Fail on drift
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::'make generate' produced changes. Run 'make generate' locally and commit the result."
+            git status --short
+            git diff --color=always
+            exit 1
+          fi

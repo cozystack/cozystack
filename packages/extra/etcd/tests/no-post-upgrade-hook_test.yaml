@@ -1,0 +1,34 @@
+suite: etcd chart does not ship a destructive post-upgrade cert-regeneration hook
+
+release:
+  name: etcd
+  namespace: tenant-root
+
+templates:
+  - templates/check-release-name.yaml
+  - templates/dashboard-resourcemap.yaml
+  - templates/datastore.yaml
+  - templates/etcd-defrag.yaml
+  - templates/hook/job.yaml
+  - templates/podscrape.yaml
+  - templates/prometheus-rules.yaml
+  - templates/version.yaml
+
+tests:
+  - it: renders no Job named etcd-hook
+    documentSelector:
+      path: metadata.name
+      value: etcd-hook
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no ConfigMap named etcd-deployed-version
+    documentSelector:
+      path: metadata.name
+      value: etcd-deployed-version
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0

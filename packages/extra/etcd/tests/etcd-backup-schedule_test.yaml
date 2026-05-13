@@ -1,0 +1,174 @@
+suite: etcd backup schedule tests
+
+templates:
+  - templates/etcd-backup-schedule.yaml
+
+tests:
+  - it: does not render when backup disabled
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders when backup enabled with valid values
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        schedule: "0 2 * * *"
+        destinationPath: "s3://my-bucket/etcd/prod/"
+        endpointURL: "https://s3.example.com"
+        region: "us-east-1"
+        forcePathStyle: true
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+        successfulJobsHistoryLimit: 3
+        failedJobsHistoryLimit: 1
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: EtcdBackupSchedule
+      - equal:
+          path: metadata.name
+          value: etcd
+      - equal:
+          path: spec.clusterRef.name
+          value: etcd
+      - equal:
+          path: spec.schedule
+          value: "0 2 * * *"
+      - equal:
+          path: spec.destination.s3.endpoint
+          value: "https://s3.example.com"
+      - equal:
+          path: spec.destination.s3.bucket
+          value: "my-bucket"
+      - equal:
+          path: spec.destination.s3.key
+          value: "etcd/prod"
+      - equal:
+          path: spec.destination.s3.region
+          value: "us-east-1"
+      - equal:
+          path: spec.destination.s3.forcePathStyle
+          value: true
+      - equal:
+          path: spec.destination.s3.credentialsSecretRef.name
+          value: etcd-s3-creds
+
+  - it: omits key when destinationPath points at bucket root
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket-only/"
+        endpointURL: "https://s3.example.com"
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+    asserts:
+      - equal:
+          path: spec.destination.s3.bucket
+          value: "bucket-only"
+      - notExists:
+          path: spec.destination.s3.key
+
+  - it: omits region when not set
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        destinationPath: "s3://b/k/"
+        endpointURL: "https://s3.example.com"
+        region: ""
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+    asserts:
+      - notExists:
+          path: spec.destination.s3.region
+
+  - it: fails when destinationPath is empty
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        destinationPath: ""
+        endpointURL: "https://s3.example.com"
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.destinationPath is required when backup.enabled=true"
+
+  - it: fails when endpointURL is empty
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        destinationPath: "s3://b/"
+        endpointURL: ""
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.endpointURL is required when backup.enabled=true"
+
+  - it: fails when destinationPath lacks s3:// prefix
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        destinationPath: "my-bucket/path/"
+        endpointURL: "https://s3.example.com"
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.destinationPath must start with s3://"
+
+  - it: fails when destinationPath contains double slashes
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket//subdir/"
+        endpointURL: "https://s3.example.com"
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.destinationPath must not contain '//' segments"
+
+  - it: fails when destinationPath has no bucket
+    release:
+      name: etcd
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        destinationPath: "s3:///path/"
+        endpointURL: "https://s3.example.com"
+        s3AccessKey: "k"
+        s3SecretKey: "s"
+    asserts:
+      - failedTemplate:
+          errorMessage: "backup.destinationPath must contain a bucket (e.g. s3://bucket/path/)"

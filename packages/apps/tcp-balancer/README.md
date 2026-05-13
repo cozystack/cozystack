@@ -12,14 +12,14 @@ Managed TCP Load Balancer Service efficiently utilizes HAProxy for load balancin
 
 ### Common parameters
 
-| Name               | Description                                                                                                                            | Type       | Value   |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
-| `replicas`         | Number of HAProxy replicas.                                                                                                            | `int`      | `2`     |
-| `resources`        | Explicit CPU and memory configuration for each TCP Balancer replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `resources.cpu`    | CPU available to each replica.                                                                                                         | `quantity` | `""`    |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                                | `quantity` | `""`    |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                | `string`   | `nano`  |
-| `external`         | Enable external access from outside the cluster.                                                                                       | `bool`     | `false` |
+| Name               | Description                                                                                                                            | Type       | Value     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `replicas`         | Number of HAProxy replicas.                                                                                                            | `int`      | `2`       |
+| `resources`        | Explicit CPU and memory configuration for each TCP Balancer replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `resources.cpu`    | CPU available to each replica.                                                                                                         | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                                | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                | `string`   | `t1.nano` |
+| `external`         | Enable external access from outside the cluster.                                                                                       | `bool`     | `false`   |
 
 
 ### Application-specific parameters
@@ -52,12 +52,6 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-| Preset name | CPU    | memory  |
-|-------------|--------|---------|
-| `nano`      | `250m` | `128Mi` |
-| `micro`     | `500m` | `256Mi` |
-| `small`     | `1`    | `512Mi` |
-| `medium`    | `1`    | `1Gi`   |
-| `large`     | `2`    | `2Gi`   |
-| `xlarge`    | `4`    | `4Gi`   |
-| `2xlarge`   | `8`    | `8Gi`   |
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases of their 1:1 instance-type equivalents.
+
+See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.

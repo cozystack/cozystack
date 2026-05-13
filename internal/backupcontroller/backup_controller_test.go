@@ -1,0 +1,264 @@
+// SPDX-License-Identifier: Apache-2.0
+package backupcontroller
+
+import (
+	"context"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
+	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	"github.com/cozystack/cozystack/internal/backupcontroller/cnpgtypes"
+	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+)
+
+// TestBackupCleanup_CNPG_DeletesUnderlyingCNPGBackup locks in the bug fix
+// for review Blocker 2: deleting a CNPG-strategy Backup must also delete
+// the postgresql.cnpg.io/Backup CR the driver created. Before the fix,
+// cleanupVeleroBackup was the only cleanup path and it short-circuited on
+// CNPG Backups (no velero metadata key), leaking the cnpg.io/Backup CR.
+func TestBackupCleanup_CNPG_DeletesUnderlyingCNPGBackup(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "s",
+			},
+			DriverMetadata: map[string]string{
+				cnpgBackupNameKey: "bk-abc123",
+			},
+		},
+	}
+	cnpgBk := &cnpgtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk-abc123"},
+	}
+	c := newBackupTestClient(t, backup, cnpgBk)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+
+	got := &cnpgtypes.Backup{}
+	err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "bk-abc123"}, got)
+	if err == nil {
+		t.Fatalf("expected cnpg.io/Backup to be deleted, but it still exists")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected NotFound, got %v", err)
+	}
+}
+
+// TestBackupCleanup_CNPG_NoMetadataIsNoOp asserts the dispatcher does not
+// fail when a CNPG-strategy Backup carries no driver metadata - e.g. the
+// BackupJob marked itself succeeded but never wrote the cnpg.io/Backup
+// name. Cleanup must silently no-op rather than block finalizer removal.
+func TestBackupCleanup_CNPG_NoMetadataIsNoOp(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "s",
+			},
+		},
+	}
+	c := newBackupTestClient(t, backup)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned unexpected error %v", err)
+	}
+}
+
+// TestBackupCleanup_Velero_DispatchUnchanged guards the Velero path: the
+// dispatcher refactor must still route Velero-strategy Backups through
+// cleanupVeleroBackup and create a DeleteBackupRequest.
+func TestBackupCleanup_Velero_DispatchUnchanged(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	veleroBk := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: veleroNamespace, Name: "vb-1"},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.VeleroStrategyKind, Name: "s",
+			},
+			DriverMetadata: map[string]string{
+				veleroBackupNameMetadataKey:      "vb-1",
+				veleroBackupNamespaceMetadataKey: veleroNamespace,
+			},
+		},
+	}
+	c := newBackupTestClient(t, backup, veleroBk)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+
+	dbrList := &velerov1.DeleteBackupRequestList{}
+	if err := c.List(context.Background(), dbrList, client.InNamespace(veleroNamespace)); err != nil {
+		t.Fatalf("list DeleteBackupRequests: %v", err)
+	}
+	if len(dbrList.Items) != 1 {
+		t.Fatalf("expected 1 DeleteBackupRequest, got %d", len(dbrList.Items))
+	}
+	if dbrList.Items[0].Spec.BackupName != "vb-1" {
+		t.Errorf("DeleteBackupRequest targets unexpected backup: %q", dbrList.Items[0].Spec.BackupName)
+	}
+}
+
+// TestBackupCleanup_Altinity_DoesNotFallThroughToVelero locks in the
+// review-flagged bug fix: the dispatcher must explicitly route Altinity-
+// strategy Backups to a no-op cleanup, not fall through to the Velero
+// default. The Velero cleanup is keyed on a metadata field that never
+// gets set on Altinity Backups, so without an explicit branch the call
+// silently no-ops AND any pre-existing DriverMetadata (e.g. a stray
+// velero-owned key from earlier experiments) would mistakenly trigger a
+// DeleteBackupRequest. The branch makes the contract explicit:
+// clickhouse-backup owns the S3 lifecycle; Cozystack does not delete it.
+func TestBackupCleanup_Altinity_DoesNotFallThroughToVelero(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	veleroBk := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: veleroNamespace, Name: "stale-vb"},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.AltinityStrategyKind, Name: "altinity",
+			},
+			// Intentionally include the velero metadata keys to expose the
+			// bug behaviour: with the old default-fallback dispatch, this
+			// would synthesise a DeleteBackupRequest. The Altinity branch
+			// must short-circuit before that happens.
+			DriverMetadata: map[string]string{
+				veleroBackupNameMetadataKey:      "stale-vb",
+				veleroBackupNamespaceMetadataKey: veleroNamespace,
+			},
+		},
+	}
+	c := newBackupTestClient(t, backup, veleroBk)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+
+	dbrList := &velerov1.DeleteBackupRequestList{}
+	if err := c.List(context.Background(), dbrList, client.InNamespace(veleroNamespace)); err != nil {
+		t.Fatalf("list DeleteBackupRequests: %v", err)
+	}
+	if len(dbrList.Items) != 0 {
+		t.Fatalf("expected no DeleteBackupRequests for Altinity Backup, got %d (Velero fall-through leak)", len(dbrList.Items))
+	}
+	// Velero Backup itself must remain untouched.
+	got := &velerov1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: veleroNamespace, Name: "stale-vb"}, got); err != nil {
+		t.Fatalf("Velero Backup unexpectedly removed: %v", err)
+	}
+}
+
+// TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero locks in the same
+// invariant as the Altinity test above for the MariaDB strategy. The
+// dispatcher must explicitly route MariaDB-strategy Backups to a no-op
+// cleanup rather than fall through to the Velero default - the MariaDB
+// driver does not own the operator-side k8s.mariadb.com/Backup CR or the
+// S3/PVC archive behind it (rbac.yaml grants no delete verb on
+// k8s.mariadb.com/backups for that reason). The test seeds the Velero
+// metadata keys plus a matching velero.io/Backup; with the explicit branch
+// no DeleteBackupRequest is synthesised, and the Velero Backup survives.
+// Without the branch the default falls through to cleanupVeleroBackup,
+// which would observe the metadata key and create a DBR.
+func TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	veleroBk := &velerov1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: veleroNamespace, Name: "stale-vb-mdb"},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk-mdb"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.MariaDBStrategyKind, Name: "mariadb-strategy-default",
+			},
+			// Seed the velero metadata keys so the test would fail with
+			// a DeleteBackupRequest leak if MariaDB ever fell through to
+			// the Velero default branch.
+			DriverMetadata: map[string]string{
+				veleroBackupNameMetadataKey:      "stale-vb-mdb",
+				veleroBackupNamespaceMetadataKey: veleroNamespace,
+			},
+		},
+	}
+	c := newBackupTestClient(t, backup, veleroBk)
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	if err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+
+	dbrList := &velerov1.DeleteBackupRequestList{}
+	if err := c.List(context.Background(), dbrList, client.InNamespace(veleroNamespace)); err != nil {
+		t.Fatalf("list DeleteBackupRequests: %v", err)
+	}
+	if len(dbrList.Items) != 0 {
+		t.Fatalf("expected no DeleteBackupRequests for MariaDB Backup, got %d (Velero fall-through leak)", len(dbrList.Items))
+	}
+	got := &velerov1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: veleroNamespace, Name: "stale-vb-mdb"}, got); err != nil {
+		t.Fatalf("Velero Backup unexpectedly removed: %v", err)
+	}
+}
+
+// TestStrategyKindForBackup mirrors the dispatcher's strategy lookup. Useful
+// in isolation when reasoning about edge cases (empty strategyRef, etc.).
+func TestStrategyKindForBackup(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	cases := []struct {
+		name string
+		kind string
+		want string
+	}{
+		{"velero", strategyv1alpha1.VeleroStrategyKind, strategyv1alpha1.VeleroStrategyKind},
+		{"cnpg", strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.CNPGStrategyKind},
+		{"job", strategyv1alpha1.JobStrategyKind, strategyv1alpha1.JobStrategyKind},
+		{"altinity", strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.AltinityStrategyKind},
+		{"mariadb", strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MariaDBStrategyKind},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &backupsv1alpha1.Backup{
+				Spec: backupsv1alpha1.BackupSpec{
+					StrategyRef: corev1.TypedLocalObjectReference{
+						APIGroup: &apiGroup, Kind: tc.kind, Name: "s",
+					},
+				},
+			}
+			if got := strategyKindForBackup(b); got != tc.want {
+				t.Errorf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func newBackupTestClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = velerov1.AddToScheme(s)
+	_ = cnpgtypes.AddToScheme(s)
+	return clientfake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+}

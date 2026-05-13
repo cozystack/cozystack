@@ -17,6 +17,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
@@ -123,8 +126,18 @@ func (r *REST) Get(
 		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
 
+	// Check if user has access to this namespace
+	hasAccess, err := r.hasAccessToNamespace(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if !hasAccess {
+		// Return Forbidden to follow standard K8s RBAC behavior
+		return nil, apierrors.NewForbidden(r.gvr.GroupResource(), name, fmt.Errorf("access denied"))
+	}
+
 	ns := &corev1.Namespace{}
-	err := r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
 	if err != nil {
 		return nil, err
 	}
@@ -143,11 +156,33 @@ func (r *REST) Get(
 // -----------------------------------------------------------------------------
 
 func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
+	// Extract user identity once for the lifetime of the watch — it does not
+	// change between events and rebuilding it per event is wasteful.
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewUnauthorized("user missing in context")
+	}
+	username := u.GetName()
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
+	}
+
 	nsList := &corev1.NamespaceList{}
-	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: &metav1.ListOptions{
+
+	// Build upstream watch options with field and label selectors
+	rawOpts := &metav1.ListOptions{
 		Watch:           true,
 		ResourceVersion: opts.ResourceVersion,
-	}})
+	}
+	if opts.FieldSelector != nil {
+		rawOpts.FieldSelector = opts.FieldSelector.String()
+	}
+	if opts.LabelSelector != nil {
+		rawOpts.LabelSelector = opts.LabelSelector.String()
+	}
+
+	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: rawOpts})
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +221,30 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 			ns, ok := ev.Object.(*corev1.Namespace)
 			if !ok || !strings.HasPrefix(ns.Name, prefix) {
+				continue
+			}
+
+			// Apply defensive filtering for field and label selectors
+			if opts.FieldSelector != nil {
+				if !opts.FieldSelector.Matches(fields.Set{"metadata.name": ns.Name}) {
+					continue
+				}
+			}
+			if opts.LabelSelector != nil {
+				if !opts.LabelSelector.Matches(labels.Set(ns.Labels)) {
+					continue
+				}
+			}
+
+			// Check if user has access to this namespace using the cached
+			// identity — avoids re-extracting user/groups on every event.
+			hasAccess, err := r.hasAccessToNamespaceForUser(ctx, ns.Name, username, groups)
+			if err != nil {
+				klog.ErrorS(err, "Failed to check access for namespace in watch", "namespace", ns.Name)
+				continue
+			}
+			if !hasAccess {
+				// User doesn't have access, skip this event
 				continue
 			}
 
@@ -309,6 +368,26 @@ func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alph
 	return out
 }
 
+// matchesSubject checks if a RoleBinding subject matches the user's identity.
+// It handles Group, User, and ServiceAccount subjects with proper namespace fallback.
+func matchesSubject(subj rbacv1.Subject, bindingNamespace, username string, groups map[string]struct{}) bool {
+	switch subj.Kind {
+	case "Group":
+		_, ok := groups[subj.Name]
+		return ok
+	case "User":
+		return subj.Name == username
+	case "ServiceAccount":
+		saNamespace := subj.Namespace
+		if saNamespace == "" {
+			saNamespace = bindingNamespace
+		}
+		return username == fmt.Sprintf("system:serviceaccount:%s:%s", saNamespace, subj.Name)
+	default:
+		return false
+	}
+}
+
 func (r *REST) filterAccessible(
 	ctx context.Context,
 	names []string,
@@ -347,22 +426,9 @@ func (r *REST) filterAccessible(
 	subjectLoop:
 		for j := range rbs.Items[i].Subjects {
 			subj := rbs.Items[i].Subjects[j]
-			switch subj.Kind {
-			case "Group":
-				if _, ok = groups[subj.Name]; ok {
-					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
-					break subjectLoop
-				}
-			case "User":
-				if subj.Name == u.GetName() {
-					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
-					break subjectLoop
-				}
-			case "ServiceAccount":
-				if u.GetName() == fmt.Sprintf("system:serviceaccount:%s:%s", subj.Namespace, subj.Name) {
-					allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
-					break subjectLoop
-				}
+			if matchesSubject(subj, rbs.Items[i].Namespace, u.GetName(), groups) {
+				allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+				break subjectLoop
 			}
 		}
 	}
@@ -371,6 +437,60 @@ func (r *REST) filterAccessible(
 		allowed = append(allowed, name)
 	}
 	return allowed, nil
+}
+
+// hasAccessToNamespace checks if the user has access to a single namespace.
+// This is optimized for Get/Watch operations where we check one namespace at a time.
+// It lists RoleBindings only in the target namespace instead of all cluster RoleBindings.
+func (r *REST) hasAccessToNamespace(
+	ctx context.Context,
+	namespace string,
+) (bool, error) {
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return false, fmt.Errorf("user missing in context")
+	}
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
+	}
+	return r.hasAccessToNamespaceForUser(ctx, namespace, u.GetName(), groups)
+}
+
+// hasAccessToNamespaceForUser is the inner check that does not re-extract user
+// identity from context. Use this in hot paths (e.g. the Watch loop) where the
+// caller has already cached the user name and groups.
+func (r *REST) hasAccessToNamespaceForUser(
+	ctx context.Context,
+	namespace, username string,
+	groups map[string]struct{},
+) (bool, error) {
+	// Check privileged groups
+	if _, ok := groups["system:masters"]; ok {
+		return true, nil
+	}
+	if _, ok := groups["cozystack-cluster-admin"]; ok {
+		return true, nil
+	}
+
+	// List RoleBindings only in the target namespace
+	rbs := &rbacv1.RoleBindingList{}
+	err := r.c.List(ctx, rbs, client.InNamespace(namespace))
+	if err != nil {
+		return false, fmt.Errorf("failed to list rolebindings in %s: %w", namespace, err)
+	}
+
+	// Check if user is in any RoleBinding subjects
+	for i := range rbs.Items {
+		for j := range rbs.Items[i].Subjects {
+			subj := rbs.Items[i].Subjects[j]
+			if matchesSubject(subj, rbs.Items[i].Namespace, username, groups) {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
 }
 
 // -----------------------------------------------------------------------------

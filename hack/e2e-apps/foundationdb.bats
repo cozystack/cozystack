@@ -42,7 +42,9 @@ spec:
   imageType: "unified"
   automaticReplacements: true
 EOF
-  sleep 15
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr foundationdb-$name >/dev/null 2>&1; do sleep 2; done"
 
   # Wait for HelmRelease to be ready
   kubectl -n tenant-test wait hr foundationdb-$name --timeout=300s --for=condition=ready

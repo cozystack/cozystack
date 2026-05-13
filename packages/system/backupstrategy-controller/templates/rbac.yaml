@@ -37,6 +37,11 @@ rules:
 - apiGroups: ["apps.cozystack.io"]
   resources: ["*"]
   verbs: ["get", "list", "watch"]
+# CNPG restore patches the Postgres app spec (.spec.bootstrap, .spec.backup)
+# so the chart re-renders the cnpg.io Cluster with bootstrap.recovery.
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["postgreses"]
+  verbs: ["patch", "update"]
 # KubeVirt: pre-restore halts VMs and checks VMI shutdown
 - apiGroups: ["kubevirt.io"]
   resources: ["virtualmachines"]
@@ -80,3 +85,53 @@ rules:
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["get", "list", "watch", "create", "update", "patch"]
+# CNPG strategy: SSA-patch the live Cluster (spec.backup.barmanObjectStore),
+# create one-shot Backup CRs, observe their status, and clean them up on
+# RestoreJob purge.
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters"]
+  verbs: ["get", "list", "watch", "patch", "delete"]
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["backups"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+# Note: the controller does NOT need cluster-scoped Secret read. The CNPG
+# restore path forwards the operator-supplied credentials Secret name into
+# spec.backup.s3CredentialsSecret on the Postgres app, which the chart then
+# wires into barmanObjectStore.s3Credentials. The Secret bytes never flow
+# through this controller.
+# Altinity strategy: drives clickhouse-backup as a one-shot batch/v1.Job
+# per BackupJob / RestoreJob. The controller renders the strategy
+# PodTemplateSpec into a Job in the application namespace and watches the
+# Job's terminal condition (Complete/Failed) to drive Cozystack Backup /
+# RestoreJob status transitions.
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+# MariaDB strategy: read the operator-side MariaDB CR to surface "not yet
+# rendered" preconditions, create one-shot k8s.mariadb.com/Backup CRs on
+# the BackupJob path, and create k8s.mariadb.com/Restore CRs on the
+# RestoreJob path. The driver only ever Creates/Lists/Gets these objects -
+# it does not patch or delete them; their lifecycle is owned by
+# mariadb-operator and (for cleanup) by tenants / explicit teardown flows,
+# never by this controller.
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["mariadbs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["backups", "restores"]
+  verbs: ["get", "list", "watch", "create"]
+# FoundationDB strategy: read the operator-side FoundationDBCluster CR to
+# surface "not yet rendered" preconditions, create per-BackupJob
+# FoundationDBBackup CRs and per-RestoreJob FoundationDBRestore CRs.
+# Patch is required so the driver can flip backupState=Stopped on a prior
+# BackupJob's FoundationDBBackup before starting a new one - the operator
+# only permits one running backup directory per cluster.
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbclusters"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbbackups"]
+  verbs: ["get", "list", "watch", "create", "patch"]
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbrestores"]
+  verbs: ["get", "list", "watch", "create"]
