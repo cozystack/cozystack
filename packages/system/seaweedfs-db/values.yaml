@@ -1,0 +1,18 @@
+##
+## @section Database parameters
+##
+
+## @typedef {struct} Resources - Resource configuration.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @typedef {struct} DB - Database configuration.
+## @field {int} [replicas] - Number of database replicas.
+## @field {quantity} [size] - Persistent Volume size.
+## @field {string} [storageClass] - StorageClass used to store the data.
+
+## @param {DB} db - Database configuration.
+db:
+  replicas: 2
+  size: 10Gi
+  storageClass: ""
