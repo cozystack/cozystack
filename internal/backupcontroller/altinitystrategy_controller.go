@@ -209,7 +209,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 	}
 
 	rendered, err := renderJobTemplate(
-		strategy.Spec.JobTemplate,
+		strategy.Spec.Template,
 		app,
 		j.Spec.ApplicationRef.Name,
 		j.Namespace,
@@ -616,7 +616,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 	}
 
 	rendered, err := renderJobTemplate(
-		strategy.Spec.JobTemplate,
+		strategy.Spec.Template,
 		app,
 		targetAppName,
 		targetNamespace,
