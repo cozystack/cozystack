@@ -109,43 +109,18 @@ cluster-autoscaler:
             priorityClassName: system-node-critical
             initContainers:
               - name: set-provider-id
-                image: alpine:3.21
-                command:
-                  - /bin/sh
-                  - -ec
-                  - |
-                    apk add --no-cache curl jq >/dev/null 2>&1
-                    IMDS_URL="http://169.254.169.254/openstack/latest/meta_data.json"
-                    UUID=$(curl -sf "$IMDS_URL" | jq -r '.uuid')
-                    if [ -z "$UUID" ] || [ "$UUID" = "null" ]; then
-                      echo "ERROR: could not retrieve Nova UUID from IMDS" >&2
-                      exit 1
-                    fi
-                    PROVIDER_ID="openstack:///$UUID"
-                    K8S_API="https://kubernetes.default.svc"
-                    SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-                    CA_CERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-                    CURRENT=$(curl -sf \
-                      --cacert "$CA_CERT" \
-                      --header "Authorization: Bearer $SA_TOKEN" \
-                      "$K8S_API/api/v1/nodes/$NODE_NAME" | jq -r '.spec.providerID // ""')
-                    if [ "$CURRENT" = "$PROVIDER_ID" ]; then
-                      echo "providerID already set to $PROVIDER_ID, nothing to do"
-                      exit 0
-                    fi
-                    echo "Patching node $NODE_NAME providerID=$PROVIDER_ID"
-                    curl -sf \
-                      --cacert "$CA_CERT" \
-                      --header "Authorization: Bearer $SA_TOKEN" \
-                      --header "Content-Type: application/merge-patch+json" \
-                      --request PATCH \
-                      --data "{\"spec\":{\"providerID\":\"$PROVIDER_ID\"}}" \
-                      "$K8S_API/api/v1/nodes/$NODE_NAME"
+                image: ghcr.io/aenix-org/cluster-autoscaler-switchcloud:latest
+                command: ["/provider-id-setter"]
                 env:
                   - name: NODE_NAME
                     valueFrom:
                       fieldRef:
                         fieldPath: spec.nodeName
+                securityContext:
+                  readOnlyRootFilesystem: true
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: [ALL]
             containers:
               - name: pause
                 image: registry.k8s.io/pause:3.10
