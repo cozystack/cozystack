@@ -41,6 +41,8 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller"
 	"github.com/cozystack/cozystack/internal/backupcontroller/cnpgtypes"
+	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbapp"
+	"github.com/cozystack/cozystack/internal/backupcontroller/foundationdbtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
 	"github.com/cozystack/cozystack/internal/backupcontroller/postgresapp"
@@ -63,6 +65,8 @@ func init() {
 	utilruntime.Must(postgresapp.AddToScheme(scheme))
 	utilruntime.Must(mariadbtypes.AddToScheme(scheme))
 	utilruntime.Must(mariadbapp.AddToScheme(scheme))
+	utilruntime.Must(foundationdbtypes.AddToScheme(scheme))
+	utilruntime.Must(foundationdbapp.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

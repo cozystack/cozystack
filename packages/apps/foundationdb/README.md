@@ -54,20 +54,25 @@ resources:
   memory: "4Gi"
 ```
 
-### Backup (Optional)
+### Backups
 
-```yaml
-backup:
-  enabled: true
-  s3:
-    bucket: "my-fdb-backups"
-    endpoint: "https://s3.amazonaws.com"
-    region: "us-east-1"
-    credentials:
-      accessKeyId: "AKIA..."
-      secretAccessKey: "..."
-  retentionPolicy: "7d"
-```
+The recommended backup flow uses the Cozystack backups framework: a
+cluster-scoped `BackupClass` binds `apps.cozystack.io/FoundationDB` to a
+`strategy.backups.cozystack.io/FoundationDB` strategy, and tenants drive
+runs via `BackupJob` / `RestoreJob`. See
+[`examples/backups/foundationdb/`](../../../examples/backups/foundationdb/)
+for an end-to-end walkthrough (admin setup, backup, in-place restore,
+to-copy restore).
+
+The legacy in-chart `backup.*` values (`backup.enabled`, `backup.s3`,
+`backup.retentionPolicy`) are **DEPRECATED** but still render the
+original `FoundationDBBackup` CR unchanged when `backup.enabled=true`,
+for backward compatibility. New deployments should leave
+`backup.enabled=false` (the default) and use the BackupClass flow above.
+Mixing the two on the same cluster is unsupported — the FoundationDB
+operator only permits one running backup directory per cluster, and the
+backup driver fails fast with `Ready=False/ConflictingInChartBackup`
+when it sees a chart-rendered Running backup against the same target.
 
 ### Advanced Configuration
 
@@ -168,16 +173,16 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 | `resources.cpu`                            | CPU available to each instance.                                                                                                         | `quantity` | `""`                     |
 | `resources.memory`                         | Memory (RAM) available to each instance.                                                                                                | `quantity` | `""`                     |
 | `resourcesPreset`                          | Default sizing preset used when `resources` is omitted.                                                                                 | `string`   | `c1.small`               |
-| `backup`                                   | Backup configuration.                                                                                                                   | `object`   | `{}`                     |
-| `backup.enabled`                           | Enable backups.                                                                                                                         | `bool`     | `false`                  |
-| `backup.s3`                                | S3 configuration for backups.                                                                                                           | `object`   | `{}`                     |
-| `backup.s3.bucket`                         | S3 bucket name.                                                                                                                         | `string`   | `""`                     |
-| `backup.s3.endpoint`                       | S3 endpoint URL.                                                                                                                        | `string`   | `""`                     |
-| `backup.s3.region`                         | S3 region.                                                                                                                              | `string`   | `us-east-1`              |
-| `backup.s3.credentials`                    | S3 credentials.                                                                                                                         | `object`   | `{}`                     |
-| `backup.s3.credentials.accessKeyId`        | S3 access key ID.                                                                                                                       | `string`   | `""`                     |
-| `backup.s3.credentials.secretAccessKey`    | S3 secret access key.                                                                                                                   | `string`   | `""`                     |
-| `backup.retentionPolicy`                   | Retention policy for backups.                                                                                                           | `string`   | `7d`                     |
+| `backup`                                   | DEPRECATED Backup configuration (use the Cozystack backups framework: BackupClass + FoundationDB strategy).                             | `object`   | `{}`                     |
+| `backup.enabled`                           | DEPRECATED Enable in-chart backups (superseded by BackupClass + FoundationDB strategy).                                                 | `bool`     | `false`                  |
+| `backup.s3`                                | DEPRECATED S3 configuration for backups.                                                                                                | `object`   | `{}`                     |
+| `backup.s3.bucket`                         | DEPRECATED S3 bucket name.                                                                                                              | `string`   | `""`                     |
+| `backup.s3.endpoint`                       | DEPRECATED S3 endpoint URL.                                                                                                             | `string`   | `""`                     |
+| `backup.s3.region`                         | DEPRECATED S3 region.                                                                                                                   | `string`   | `us-east-1`              |
+| `backup.s3.credentials`                    | DEPRECATED S3 credentials.                                                                                                              | `object`   | `{}`                     |
+| `backup.s3.credentials.accessKeyId`        | DEPRECATED S3 access key ID.                                                                                                            | `string`   | `""`                     |
+| `backup.s3.credentials.secretAccessKey`    | DEPRECATED S3 secret access key.                                                                                                        | `string`   | `""`                     |
+| `backup.retentionPolicy`                   | DEPRECATED Retention policy for backups.                                                                                                | `string`   | `7d`                     |
 | `monitoring`                               | Monitoring configuration.                                                                                                               | `object`   | `{}`                     |
 | `monitoring.enabled`                       | Enable WorkloadMonitor integration.                                                                                                     | `bool`     | `true`                   |
 

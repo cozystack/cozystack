@@ -120,3 +120,18 @@ rules:
 - apiGroups: ["k8s.mariadb.com"]
   resources: ["backups", "restores"]
   verbs: ["get", "list", "watch", "create"]
+# FoundationDB strategy: read the operator-side FoundationDBCluster CR to
+# surface "not yet rendered" preconditions, create per-BackupJob
+# FoundationDBBackup CRs and per-RestoreJob FoundationDBRestore CRs.
+# Patch is required so the driver can flip backupState=Stopped on a prior
+# BackupJob's FoundationDBBackup before starting a new one - the operator
+# only permits one running backup directory per cluster.
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbclusters"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbbackups"]
+  verbs: ["get", "list", "watch", "create", "patch"]
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbrestores"]
+  verbs: ["get", "list", "watch", "create"]
