@@ -21,11 +21,6 @@ spec:
   automationOptions:
     replacements:
       enabled: {{ .Values.automaticReplacements }}
-    faultDomain:
-      key: {{ .Values.cluster.faultDomain.key }}
-      {{- if .Values.cluster.faultDomain.valueFrom }}
-      valueFrom: {{ .Values.cluster.faultDomain.valueFrom }}
-      {{- end }}
     imageType: {{ .Values.imageType }}
     labels:
       filterOnOwnerReference: false
@@ -36,6 +31,15 @@ spec:
       processGroupIDLabels:
         - foundationdb.org/fdb-process-group-id
     minimumUptimeSecondsForBounce: 60
+
+  # faultDomain is a sibling of automationOptions per the FoundationDBCluster
+  # CRD schema. Flux v2.7 silently dropped the misplaced field under
+  # automationOptions; v2.8's Server-Side Apply rejects unknown fields.
+  faultDomain:
+    key: {{ .Values.cluster.faultDomain.key }}
+    {{- if .Values.cluster.faultDomain.valueFrom }}
+    valueFrom: {{ .Values.cluster.faultDomain.valueFrom }}
+    {{- end }}
   
   processes:
     general:
