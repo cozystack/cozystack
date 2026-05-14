@@ -72,6 +72,16 @@
 {{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
 {{- $talosVersion := $.Values.talos.version }}
 {{- $talosSchematic := $.Values.talos.schematicID }}
+{{- /*
+  Cluster pod/service CIDRs MUST match between the CAPI Cluster
+  spec.clusterNetwork below and the Talos worker machineconfig's
+  cluster.network — Talos surfaces overlaps against the host pod CIDR
+  as a diagnostic at boot, and divergence between CAPI and Talos would
+  manifest as silently broken kube-proxy / Cilium routing. Keep them
+  in one place here.
+*/}}
+{{- $podCIDR := "10.243.0.0/16" }}
+{{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $kubevirtmachinetemplateNames := list }}
@@ -212,10 +222,10 @@ spec:
   clusterNetwork:
     pods:
       cidrBlocks:
-      - 10.243.0.0/16
+      - {{ $podCIDR }}
     services:
       cidrBlocks:
-      - 10.95.0.0/16
+      - {{ $serviceCIDR }}
   controlPlaneRef:
     namespace: {{ .Release.Namespace }}
     apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
@@ -616,9 +626,9 @@ spec:
           network:
             dnsDomain: {{ include "kubernetes.tenantClusterDomain" . }}
             podSubnets:
-              - 10.243.0.0/16
+              - {{ $podCIDR }}
             serviceSubnets:
-              - 10.95.0.0/16
+              - {{ $serviceCIDR }}
           token: {{ $bootstrapToken | quote }}
           ca:
             crt: {{ $k8sCACrt | quote }}
