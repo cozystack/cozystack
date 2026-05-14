@@ -163,6 +163,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      checks: write
     needs: ["build", "resolve_assets"]
     if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
 
@@ -317,6 +318,55 @@ jobs:
         with:
           name: image-list
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+
+      # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
+      #   inspect Talos/Cozystack state and resume with `breakpoint resume`.
+      #
+      #   Gated by the `debug` or `release` label (release PRs are bot-created,
+      #   so their presence implies maintainer authorship). authorized-users is
+      #   kept as a second defense layer at the breakpoint level.
+      #
+      #   Uses cozystack/breakpoint-action (fork of namespacelabs/breakpoint-action)
+      #   pinned by SHA. The fork adds: pause-idle mode (initial grace period for
+      #   the first SSH connection, idle-aware exit afterwards), endpoint output
+      #   and ::notice:: annotation, and a dedicated Check Run "Breakpoint Open"
+      #   that carries the SSH endpoint in output.summary while the breakpoint is
+      #   paused (conclusion=failure → standard ✗ in `gh pr checks`; updated to
+      #   conclusion=success when the breakpoint exits).
+      #
+      #   Configured via the BREAKPOINT_ENDPOINT repository variable — in fork
+      #   PRs repository variables are not exposed, so the step is skipped and
+      #   forks cannot reach the self-hosted rendezvous server.
+      - name: Breakpoint on E2E failure
+        if: |
+          failure() &&
+          vars.BREAKPOINT_ENDPOINT != '' &&
+          (contains(github.event.pull_request.labels.*.name, 'debug')
+            || contains(github.event.pull_request.labels.*.name, 'release'))
+        # cozystack/breakpoint-action v2-cozy.1
+        # mode: pause-idle defaults: grace-period=20m, idle-timeout=10m
+        uses: cozystack/breakpoint-action@a6f3a6f87be398ad63b6577351e3398e53f578e4
+        with:
+          mode: pause-idle
+          endpoint: ${{ vars.BREAKPOINT_ENDPOINT }}
+          authorized-users: kvaps, gecube, kingdonb, lllamnyp, aobort, tym83, klinch0, nbykov0, matthieu-robin, mattia-eleuteri
+          check-run-name: "Breakpoint Open"
+          github-token: ${{ github.token }}
+          check-run-summary-template: |
+            ## 🔴 SSH breakpoint open — paused for debug
+
+            ```
+            {endpoint}
+            ```
+
+            Enter the e2e sandbox after SSH:
+            ```
+            docker exec -ti $(docker ps --filter name=cozy-e2e-sandbox -q | head -1) bash
+            export KUBECONFIG=/workspace/kubeconfig
+            ```
+
+            Resume from inside: `breakpoint resume`. Otherwise the breakpoint
+            exits 10 minutes after the last SSH session disconnects.
 
       # ▸ Tear down environment (always runs)
       - name: Tear down sandbox
