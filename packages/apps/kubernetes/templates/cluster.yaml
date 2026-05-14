@@ -237,7 +237,7 @@ spec:
            cert so Talos's internal controllers don't trip on TLS. */}}
     certSANs:
       - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
-      - {{ printf "%s.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
+      - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
       {{- $kcpSvcForSANs := lookup "v1" "Service" .Release.Namespace .Release.Name }}
       {{- if and $kcpSvcForSANs $kcpSvcForSANs.spec.clusterIP }}
       - {{ $kcpSvcForSANs.spec.clusterIP }}
@@ -588,7 +588,7 @@ spec:
             endpoint: https://{{ $apiEndpoint }}
           clusterName: {{ $.Release.Name | quote }}
           network:
-            dnsDomain: cluster.local
+            dnsDomain: {{ include "kubernetes.tenantClusterDomain" . }}
             podSubnets:
               - 10.243.0.0/16
             serviceSubnets:
