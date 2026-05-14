@@ -642,7 +642,7 @@ spec:
             endpoint: https://{{ $apiEndpoint }}
           clusterName: {{ $.Release.Name | quote }}
           network:
-            dnsDomain: {{ include "kubernetes.tenantClusterDomain" . }}
+            dnsDomain: {{ include "kubernetes.tenantClusterDomain" $ }}
             podSubnets:
               - {{ $podCIDR }}
             serviceSubnets:
