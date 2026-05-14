@@ -72,7 +72,7 @@ spec:
     - server auth
   dnsNames:
     - {{ .Release.Name }}.{{ .Release.Namespace }}.svc
-    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.cluster.local
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "kubernetes.tenantClusterDomain" . }}
   {{- /* Workers contact trustd via the Kamaji Service ClusterIP (the
          same address used for the apiserver), so the cert must cover
          that IP too. */}}
