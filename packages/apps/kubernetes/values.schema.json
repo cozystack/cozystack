@@ -884,6 +884,11 @@
           "type": "string",
           "default": ""
         },
+        "talosCsrSigner": {
+          "description": "Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.",
+          "type": "string",
+          "default": ""
+        },
         "waitForKubeconfig": {
           "description": "Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.",
           "type": "string",
