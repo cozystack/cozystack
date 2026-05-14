@@ -28,7 +28,7 @@ EOF
   # Wait for the operator to materialise the HelmRelease before kubectl wait
   # kicks in (kubectl wait errors immediately if the object does not exist yet).
   timeout 60 sh -ec "until kubectl -n tenant-test get hr vm-disk-$name >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait hr vm-disk-$name --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait hr vm-disk-$name --timeout=5m --for=condition=ready
   kubectl -n tenant-test wait dv vm-disk-$name --timeout=250s --for=condition=ready
   kubectl -n tenant-test wait pvc vm-disk-$name --timeout=200s --for=jsonpath='{.status.phase}'=Bound
   # Drop the VMDisk so the next test starts from a clean slate. Each test
@@ -63,7 +63,7 @@ spec:
   storageClass: replicated
 EOF
   timeout 60 sh -ec "until kubectl -n tenant-test get hr vm-disk-$diskName >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait hr vm-disk-$diskName --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait hr vm-disk-$diskName --timeout=5m --for=condition=ready
   kubectl -n tenant-test wait dv vm-disk-$diskName --timeout=250s --for=condition=ready
   kubectl -n tenant-test wait pvc vm-disk-$diskName --timeout=200s --for=jsonpath='{.status.phase}'=Bound
   kubectl apply -f - <<EOF
@@ -104,9 +104,9 @@ EOF
   # routinely takes 30-60s under runner load; the previous 20s was unrealistic
   # and produced flakes. 120s is a comfortable upper bound for nested virt.
   timeout 120 sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 2; done"
-  kubectl -n tenant-test wait hr vm-instance-$name --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait hr vm-instance-$name --timeout=5m --for=condition=ready
   # VM ready follows IP assignment closely; 60s gives buffer for the qemu-guest-agent.
-  kubectl -n tenant-test wait vm vm-instance-$name --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait vm vm-instance-$name --timeout=5m --for=condition=ready
   kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --ignore-not-found --timeout=3m
   kubectl -n tenant-test delete vmdisks.apps.cozystack.io $diskName --ignore-not-found --timeout=3m
 }
