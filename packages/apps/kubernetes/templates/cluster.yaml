@@ -570,6 +570,11 @@ spec:
           install:
             disk: /dev/vda
             image: factory.talos.dev/installer/{{ $talosSchematic }}:{{ $talosVersion }}
+            {{- /* Workers boot from the openstack raw image (see the
+                  dataVolumeTemplates url above) which already lays down a
+                  running Talos system on /dev/vda. wipe:false keeps that
+                  disk intact so the installer just records its presence
+                  instead of reformatting and re-imaging on every boot. */}}
             wipe: false
           features:
             rbac: true
