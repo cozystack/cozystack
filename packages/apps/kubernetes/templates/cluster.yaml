@@ -1,3 +1,19 @@
+{{- /*
+  Talos -> Kubernetes support matrix. Each Talos minor release supports a
+  bounded window of Kubernetes minor versions; running a kubelet outside
+  that window produces a silently broken Talos+kubelet combination that
+  HelmRelease cannot detect. Fail the chart render instead, so the operator
+  sees the mismatch in Flux/dashboards before workers roll over.
+  Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+*/}}
+{{- $talosK8sSupportMatrix := dict
+      "v1.13.0" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
+}}
+{{- $chartTalosVersion := "v1.13.0" }}
+{{- $supportedK8s := index $talosK8sSupportMatrix $chartTalosVersion }}
+{{- if not (has .Values.version $supportedK8s) }}
+{{-   fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump tenant 'version' (or this chart's Talos image)." .Values.version $chartTalosVersion $supportedK8s) }}
+{{- end }}
 {{- $etcd := .Values._namespace.etcd }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated

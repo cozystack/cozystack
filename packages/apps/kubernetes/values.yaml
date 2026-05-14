@@ -110,7 +110,6 @@ nodeGroups:
 ## @value v1.33
 ## @value v1.32
 ## @value v1.31
-## @value v1.30
 
 ## @param {Version} version - Kubernetes major.minor version to deploy
 version: "v1.35"
