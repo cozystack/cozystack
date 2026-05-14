@@ -38,7 +38,11 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
-  backoffLimit: 30
+  # backoffLimit + restartPolicy: OnFailure gives the Job up to 6 attempts at
+  # the tenant apiserver with exponential backoff (capped at 6 min between
+  # restarts). Worst case ~10 min, after which Flux surfaces the failure
+  # instead of accumulating retries silently for hours.
+  backoffLimit: 5
   ttlSecondsAfterFinished: 600
   template:
     spec:
@@ -70,16 +74,11 @@ spec:
             - sh
             - -ec
             - |
-              # Wait until the tenant apiserver is reachable. Kamaji may
-              # still be initialising the konnectivity plane when this Job
-              # first runs.
-              for i in $(seq 1 60); do
-                if kubectl version --request-timeout=5s >/dev/null 2>&1; then
-                  break
-                fi
-                echo "[$(date -u +%H:%M:%S)] waiting for tenant apiserver ($i/60)"
-                sleep 5
-              done
+              # The kubectl apply calls below fail with a non-zero exit when
+              # the tenant apiserver is unreachable, which restarts the pod
+              # under backoffLimit. No internal retry loop needed — Job-level
+              # backoff handles the transient unreadiness window after Kamaji
+              # bootstraps the konnectivity plane.
               kubectl version --request-timeout=10s
 
               cat <<EOF | kubectl apply -f -
