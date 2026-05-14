@@ -273,3 +273,16 @@ controlPlane:
 images:
   waitForKubeconfig: ""
   kubectl: ""
+
+##
+## @section Talos Worker Image
+##
+
+## @typedef {struct} Talos - Talos worker image configuration.
+## @field {string} version - Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+## @field {string} schematicID - Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+
+## @param {Talos} talos - Talos worker image configuration.
+talos:
+  version: "v1.13.0"
+  schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
