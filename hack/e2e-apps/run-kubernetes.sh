@@ -470,6 +470,18 @@ EOF
       delete ingress hairpin-probe --ignore-not-found 2>/dev/null || true
   fi
 
+  # Wait for the parent kubernetes-${test_name} HR to be Ready before the
+  # remediation guard runs. The guard reads `.status.history`, which is empty
+  # until the helm install action completes — under Flux v2.8 kstatus the
+  # parent's helm install can still be "Running 'install'" after every child
+  # HR (cilium, coredns, csi, vsnap-crd, ingress-nginx) is already Ready,
+  # because kstatus walks all applied resources before flipping the parent
+  # Ready. kubernetes-latest gets enough buffer from the ~10m ouroboros
+  # assertions for the parent to complete; kubernetes-previous (no
+  # ouroboros) reaches the guard with the parent still installing and the
+  # history check trips "empty .status.history on a Ready HelmRelease".
+  kubectl wait hr -n tenant-test "kubernetes-${test_name}" --timeout=5m --for=condition=ready
+
   # Guard: parent HelmRelease must not have entered an install/upgrade remediation cycle.
   # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
   # admin-kubeconfig was still being provisioned, which would trigger uninstall remediation

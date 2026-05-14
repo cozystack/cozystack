@@ -100,11 +100,16 @@ EOF
   # Wait for the operator to materialise the HelmRelease before downstream
   # waits proceed (kubectl wait errors immediately if the HR does not exist).
   timeout 60 sh -ec "until kubectl -n tenant-test get hr vm-instance-$name >/dev/null 2>&1; do sleep 2; done"
-  # Nested KubeVirt VM startup (virt-launcher + libvirt + cloud-init DHCP)
-  # routinely takes 30-60s under runner load; the previous 20s was unrealistic
-  # and produced flakes. 120s is a comfortable upper bound for nested virt.
-  timeout 120 sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 2; done"
+  # Wait for the parent HR Ready before polling for the VMI. Under Flux v2.8
+  # kstatus the helm install can be still dispatching when the previous
+  # ordering assumed it had already applied the VirtualMachine CR — without
+  # this the next poll for `vmi vm-instance-$name` returned NotFound for
+  # its entire 120s budget because kubevirt hadn't seen the VM yet.
   kubectl -n tenant-test wait hr vm-instance-$name --timeout=5m --for=condition=ready
+  # Nested KubeVirt VM startup (virt-launcher + libvirt + cloud-init DHCP)
+  # routinely takes 30-60s under runner load. 5m is a comfortable upper
+  # bound for nested virt + slow runner I/O after the HR-Ready gate.
+  timeout 5m sh -ec "until kubectl -n tenant-test get vmi vm-instance-$name -o jsonpath='{.status.interfaces[0].ipAddress}' | grep -q '[0-9]'; do sleep 2; done"
   # VM ready follows IP assignment closely; 60s gives buffer for the qemu-guest-agent.
   kubectl -n tenant-test wait vm vm-instance-$name --timeout=5m --for=condition=ready
   kubectl -n tenant-test delete vminstances.apps.cozystack.io $name --ignore-not-found --timeout=3m
