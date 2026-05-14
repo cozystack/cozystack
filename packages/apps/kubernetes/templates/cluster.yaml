@@ -30,6 +30,48 @@
   flux marks the HelmRelease Ready and retries its 5m reconcile loop until
   the Tenant chart catches up.
 */}}
+{{- /*
+  Hoist all lookups that are independent of the per-nodeGroup loop body.
+  Without this, every entry in .Values.nodeGroups triggered 4+ live apiserver
+  reads per render (and three of them were duplicates of each other).
+  Gated on $etcd so the awaiting-etcd short-circuit below does not pay for
+  reads it would only throw away.
+*/}}
+{{- $apiSvc := dict }}
+{{- $apiSvcIP := "" }}
+{{- $talosSecrets := dict }}
+{{- $talosCA := dict }}
+{{- $k8sCA := dict }}
+{{- $talosReady := false }}
+{{- $talosToken := "" }}
+{{- $clusterId := "" }}
+{{- $clusterSecret := "" }}
+{{- $bootstrapToken := "" }}
+{{- $talosCACrt := "" }}
+{{- $k8sCACrt := "" }}
+{{- if $etcd }}
+{{-   $apiSvc = lookup "v1" "Service" $.Release.Namespace $.Release.Name }}
+{{-   if $apiSvc }}
+{{-     $apiSvcIP = $apiSvc.spec.clusterIP }}
+{{-   end }}
+{{-   $talosSecrets = lookup "v1" "Secret" $.Release.Namespace (printf "%s-talos-secrets" $.Release.Name) }}
+{{-   $talosCA = lookup "v1" "Secret" $.Release.Namespace (printf "%s-talos-ca" $.Release.Name) }}
+{{-   $k8sCA = lookup "v1" "Secret" $.Release.Namespace (printf "%s-ca" $.Release.Name) }}
+{{-   $talosReady = and (and $talosSecrets $talosCA) (and (index ($talosCA.data | default dict) "tls.crt" | default "") (and $k8sCA (index ($k8sCA.data | default dict) "ca.crt" | default ""))) }}
+{{-   $talosReady = and $talosReady $apiSvcIP }}
+{{-   if $talosReady }}
+{{-     $talosToken = index $talosSecrets.data "token" | b64dec }}
+{{-     $clusterId = index $talosSecrets.data "clusterId" | b64dec }}
+{{-     $clusterSecret = index $talosSecrets.data "clusterSecret" | b64dec }}
+{{-     $bootstrapToken = index $talosSecrets.data "bootstrapToken" | b64dec }}
+{{-     $talosCACrt = index $talosCA.data "tls.crt" }}
+{{-     $k8sCACrt = index $k8sCA.data "ca.crt" }}
+{{-   end }}
+{{- end }}
+{{- $apiEndpoint := printf "%s:6443" $apiSvcIP }}
+{{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
+{{- $talosVersion := $.Values.talos.version }}
+{{- $talosSchematic := $.Values.talos.schematicID }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $kubevirtmachinetemplateNames := list }}
@@ -239,9 +281,8 @@ spec:
     certSANs:
       - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
-      {{- $kcpSvcForSANs := lookup "v1" "Service" .Release.Namespace .Release.Name }}
-      {{- if and $kcpSvcForSANs $kcpSvcForSANs.spec.clusterIP }}
-      - {{ $kcpSvcForSANs.spec.clusterIP }}
+      {{- if $apiSvcIP }}
+      - {{ $apiSvcIP }}
       {{- end }}
   deployment:
     podAdditionalMetadata:
@@ -502,33 +543,15 @@ metadata:
   re-reconciled and all Secrets are ready, TCT is created and CAPI
   picks up. Flux re-reconciles every interval.
 */}}
-{{- $talosSecrets := lookup "v1" "Secret" $.Release.Namespace (printf "%s-talos-secrets" $.Release.Name) }}
-{{- $talosCA := lookup "v1" "Secret" $.Release.Namespace (printf "%s-talos-ca" $.Release.Name) }}
-{{- $k8sCA := lookup "v1" "Secret" $.Release.Namespace (printf "%s-ca" $.Release.Name) }}
-{{- $talosReady := and (and $talosSecrets $talosCA) (and (index $talosCA.data "tls.crt" | default "") (and $k8sCA (index $k8sCA.data "ca.crt" | default ""))) }}
-{{- /* Also gate on the apiserver Service existing so we can embed its
-       ClusterIP into the worker machineconfig. */}}
-{{- $apiSvcLookup := lookup "v1" "Service" $.Release.Namespace $.Release.Name }}
-{{- $talosReady = and $talosReady (and $apiSvcLookup $apiSvcLookup.spec.clusterIP) }}
+{{- /* All lookup-derived variables ($apiSvc, $apiSvcIP, $apiEndpoint,
+       $talosSecrets, $talosCA, $k8sCA, $talosReady, $talosToken,
+       $clusterId, $clusterSecret, $bootstrapToken, $talosCACrt,
+       $k8sCACrt, $kubeletVersion, $talosVersion, $talosSchematic) are
+       hoisted to the top of this template, above the nodeGroups loop.
+       The Talos boot order means the worker machineconfig's
+       controlPlane.endpoint must be the apiserver Service ClusterIP,
+       not a DNS name — Talos comes up before any cluster DNS exists. */}}
 {{- if $talosReady }}
-{{- $talosToken := index $talosSecrets.data "token" | b64dec }}
-{{- $clusterId := index $talosSecrets.data "clusterId" | b64dec }}
-{{- $clusterSecret := index $talosSecrets.data "clusterSecret" | b64dec }}
-{{- $bootstrapToken := index $talosSecrets.data "bootstrapToken" | b64dec }}
-{{- $talosCACrt := index $talosCA.data "tls.crt" }}
-{{- $k8sCACrt := index $k8sCA.data "ca.crt" }}
-{{- /* Talos boots before any cluster DNS exists, so the apiserver
-       endpoint cannot depend on Kubernetes/CoreDNS resolution. Use the
-       ClusterIP of the Kamaji-managed apiserver Service directly. */}}
-{{- $apiSvc := lookup "v1" "Service" $.Release.Namespace $.Release.Name }}
-{{- $apiSvcIP := "" }}
-{{- if $apiSvc }}
-{{-   $apiSvcIP = $apiSvc.spec.clusterIP }}
-{{- end }}
-{{- $apiEndpoint := printf "%s:6443" $apiSvcIP }}
-{{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
-{{- $talosVersion := $.Values.talos.version }}
-{{- $talosSchematic := $.Values.talos.schematicID }}
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
 metadata:
