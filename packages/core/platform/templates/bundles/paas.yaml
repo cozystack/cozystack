@@ -9,6 +9,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.rabbitmq-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.redis-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.mongodb-operator" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.opensearch-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.clickhouse-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.foundationdb-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.harbor-application" $) }}
@@ -17,6 +18,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.mongodb-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.nats-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.openbao-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.opensearch-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.postgres-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.qdrant-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.rabbitmq-application" $) }}
