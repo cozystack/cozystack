@@ -1,0 +1,17 @@
+image:
+  pullPolicy: Always
+  tag: edge
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+
+logVerbosityLevel: 4
+
+enabledControllers:
+  - cloud-node
+  - cloud-node-lifecycle

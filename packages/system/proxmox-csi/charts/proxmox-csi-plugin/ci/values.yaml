@@ -1,0 +1,22 @@
+
+node:
+  nodeSelector:
+    node.cloudprovider.kubernetes.io/platform: nocloud
+  tolerations:
+    - operator: Exists
+
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    effect: NoSchedule
+
+storageClass:
+  - name: proxmox-data-xfs
+    storage: data
+    reclaimPolicy: Delete
+    fstype: xfs
+  - name: proxmox-data
+    storage: data
+    reclaimPolicy: Delete
+    ssd: true

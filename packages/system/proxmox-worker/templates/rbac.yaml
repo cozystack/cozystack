@@ -1,0 +1,44 @@
+{{- if .Values.security.rbac.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-role
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods", "pods/log", "pods/status", "pods/exec"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["daemonsets", "deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["extensions"]
+  resources: ["daemonsets", "deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["policy"]
+  resources: ["podsecuritypolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-rolebinding
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "proxmox-worker.fullname" . }}-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "proxmox-worker.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

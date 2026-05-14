@@ -1,0 +1,175 @@
+# Example values for Proxmox Worker Helm Chart
+# This chart manages adding Proxmox server as Kubernetes worker node via kubeadm
+
+# Global configuration
+global:
+  imageRegistry: "ghcr.io"
+  imagePullSecrets: []
+  storageClass: ""
+
+# Proxmox server configuration
+proxmox:
+  # Server details
+  server:
+    host: "proxmox.example.com"
+    port: 8006
+    insecure: false
+  
+  # Credentials (use secrets in production)
+  credentials:
+    secretName: "proxmox-credentials"
+    username: "root@pam"
+    password: "your-secure-password"
+
+# Kubernetes cluster configuration
+kubernetes:
+  # Control plane endpoint
+  controlPlaneEndpoint: "k8s-api.example.com:6443"
+  
+  # Cluster configuration
+  clusterName: "cozystack"
+  
+  # Kubeadm configuration
+  kubeadm:
+    # Token for joining the cluster
+    token: "your-join-token"
+    tokenTTL: "24h"
+    
+    # CA certificate hash
+    caCertHash: "sha256:your-ca-cert-hash"
+    
+    # Join configuration
+    joinConfig:
+      # Node name (defaults to hostname)
+      nodeName: "proxmox-worker"
+      
+      # Node labels
+      labels:
+        node-role.kubernetes.io/worker: ""
+        node.kubernetes.io/instance-type: "proxmox"
+        topology.kubernetes.io/zone: "zone-1"
+      
+      # Node taints
+      taints: []
+      
+      # Kubelet configuration
+      kubeletExtraArgs:
+        node-ip: "192.168.1.100"
+        container-runtime: "containerd"
+        container-runtime-endpoint: "unix:///run/containerd/containerd.sock"
+        pod-infra-container-image: "registry.k8s.io/pause:3.9"
+        max-pods: "110"
+        kube-reserved: "cpu=200m,memory=512Mi,ephemeral-storage=1Gi"
+        system-reserved: "cpu=200m,memory=512Mi,ephemeral-storage=1Gi"
+
+# Container runtime configuration
+containerd:
+  # Containerd configuration
+  config:
+    # Registry mirrors
+    registryMirrors:
+      - "https://mirror.gcr.io"
+      - "https://registry.k8s.io"
+    
+    # Insecure registries
+    insecureRegistries:
+      - "proxmox.example.com:5000"
+
+# Network configuration
+networking:
+  # CNI plugin
+  cni: "cilium"
+  
+  # Pod CIDR
+  podCIDR: "10.244.0.0/16"
+  
+  # Service CIDR
+  serviceCIDR: "10.96.0.0/12"
+  
+  # DNS configuration
+  dns:
+    domain: "cluster.local"
+    nameservers:
+      - "8.8.8.8"
+      - "8.8.4.4"
+      - "1.1.1.1"
+
+# Security configuration
+security:
+  # RBAC
+  rbac:
+    enabled: true
+  
+  # Network policies
+  networkPolicies:
+    enabled: true
+  
+  # Pod security standards
+  podSecurityStandards:
+    enabled: true
+    level: "restricted"
+
+# Monitoring configuration
+monitoring:
+  # Node exporter
+  nodeExporter:
+    enabled: true
+    port: 9100
+  
+  # Kubelet metrics
+  kubeletMetrics:
+    enabled: true
+    port: 10250
+
+# Resource configuration
+resources:
+  # Default resource requests and limits
+  default:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  
+  # Kubelet resources
+  kubelet:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# Installation configuration
+installation:
+  # Pre-installation checks
+  preChecks:
+    enabled: true
+    
+    # System requirements
+    systemRequirements:
+      minMemory: "2Gi"
+      minCPU: "2"
+      minDisk: "20Gi"
+    
+    # Network connectivity
+    networkChecks:
+      enabled: true
+      testEndpoints:
+        - "kubernetes.io"
+        - "registry.k8s.io"
+        - "proxmox.example.com"
+  
+  # Post-installation verification
+  postVerification:
+    enabled: true
+    
+    # Node readiness check
+    nodeReadiness:
+      timeout: "5m"
+    
+    # Pod scheduling test
+    podSchedulingTest:
+      enabled: true
+      testImage: "nginx:1.25"

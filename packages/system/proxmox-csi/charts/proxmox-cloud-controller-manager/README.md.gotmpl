@@ -1,0 +1,76 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+The Cloud Controller Manager (CCM) is responsible for managing node resources in cloud-based Kubernetes environments.
+
+Key functions of the Cloud Controller Manager:
+- `Node Management`: It manages nodes by initializing new nodes when they join the cluster (e.g., during scaling up) and removing nodes when they are no longer needed (e.g., during scaling down).
+- `Cloud-Specific Operations`: The CCM ensures that the cloud provider's API is integrated into the Kubernetes cluster to control and automate tasks like load balancing, storage provisioning, and node lifecycle management.
+
+{{ template "chart.homepageLine" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+## Requirements
+
+You need to set `--cloud-provider=external` in the kubelet argument for all nodes in the cluster.
+
+## Proxmox permissions
+
+```shell
+# Create role CCM
+pveum role add CCM -privs "VM.Audit"
+# Create user and grant permissions
+pveum user add kubernetes@pve
+pveum aclmod / -user kubernetes@pve -role CCM
+pveum user token add kubernetes@pve ccm -privsep 0
+```
+
+## Helm values example
+
+```yaml
+# proxmox-ccm.yaml
+
+config:
+  clusters:
+    - url: https://cluster-api-1.exmple.com:8006/api2/json
+      insecure: false
+      token_id: "kubernetes@pve!csi"
+      token_secret: "key"
+      region: cluster-1
+
+enabledControllers:
+  # Remove `cloud-node` if you use it with Talos CCM
+  - cloud-node
+  - cloud-node-lifecycle
+
+# Deploy CCM only on control-plane nodes
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    effect: NoSchedule
+```
+
+Deploy chart:
+
+```shell
+helm upgrade -i --namespace=kube-system -f proxmox-ccm.yaml \
+    proxmox-cloud-controller-manager oci://ghcr.io/sergelogvinov/charts/proxmox-cloud-controller-manager
+```
+
+{{ template "chart.valuesSection" . }}

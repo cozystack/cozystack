@@ -1,0 +1,92 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+The Container Storage Interface (CSI) plugin is a specification designed to standardize the way container orchestration systems like Kubernetes, interact with different storage systems. The CSI plugin abstracts the underlying storage, enabling the seamless integration of different storage solutions (such as local block devices, file systems, or cloud-based storage) with containerized applications.
+
+This plugin allows Kubernetes to use `Proxmox VE` storage as a persistent storage solution for stateful applications.
+Supported storage types:
+- Directory
+- LVM
+- LVM-thin
+- ZFS
+- NFS
+- Ceph
+
+{{ template "chart.homepageLine" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+## Proxmox permissions
+
+```shell
+# Create role CSI
+pveum role add CSI -privs "VM.Audit VM.Config.Disk Datastore.Allocate Datastore.AllocateSpace Datastore.Audit"
+# Create user and grant permissions
+pveum user add kubernetes-csi@pve
+pveum aclmod / -user kubernetes-csi@pve -role CSI
+pveum user token add kubernetes-csi@pve csi -privsep 0
+```
+
+## Helm values example
+
+```yaml
+# proxmox-csi.yaml
+
+config:
+  clusters:
+    - url: https://cluster-api-1.exmple.com:8006/api2/json
+      insecure: false
+      token_id: "kubernetes-csi@pve!csi"
+      token_secret: "key"
+      region: cluster-1
+
+# Deploy Node CSI driver only on proxmox nodes
+node:
+  nodeSelector:
+    # It will work only with Talos CCM, remove it overwise
+    node.cloudprovider.kubernetes.io/platform: nocloud
+  tolerations:
+    - operator: Exists
+
+# Deploy CSI controller only on control-plane nodes
+nodeSelector:
+  node-role.kubernetes.io/control-plane: ""
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    effect: NoSchedule
+
+# Define storage classes
+# See https://pve.proxmox.com/wiki/Storage
+storageClass:
+  - name: proxmox-data-xfs
+    storage: data
+    reclaimPolicy: Delete
+    fstype: xfs
+  - name: proxmox-data
+    storage: data
+    reclaimPolicy: Delete
+    fstype: ext4
+    cache: writethrough
+```
+
+## Deploy
+
+```shell
+# Prepare namespace
+kubectl create ns csi-proxmox
+kubectl label ns csi-proxmox pod-security.kubernetes.io/enforce=privileged
+# Install Proxmox CSI plugin
+helm upgrade -i --namespace=csi-proxmox -f proxmox-csi.yaml \
+    proxmox-csi-plugin oci://ghcr.io/sergelogvinov/charts/proxmox-csi-plugin
+```
+
+{{ template "chart.valuesSection" . }}

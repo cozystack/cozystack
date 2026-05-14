@@ -1,0 +1,67 @@
+{{- if .Values.security.networkPolicies.enabled }}
+# Basic network policies for Proxmox VE integration
+# These policies provide basic security for Proxmox-related components
+
+# Default deny all network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: default
+  labels:
+    app.kubernetes.io/name: {{ include "proxmox-ve.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+# Allow DNS network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: default
+  labels:
+    app.kubernetes.io/name: {{ include "proxmox-ve.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+---
+# Allow Proxmox API access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-proxmox-api
+  namespace: default
+  labels:
+    app.kubernetes.io/name: {{ include "proxmox-ve.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxmox
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: {{ .Values.proxmox.server.port }}
+{{- end }}

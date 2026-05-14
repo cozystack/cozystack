@@ -1,0 +1,9 @@
+{
+  "host": "proxmox.example.com",
+  "username": "root@pam",
+  "password": "your-secure-password",
+  "port": 8006,
+  "verify_ssl": false,
+  "test_timeout": 30,
+  "test_node": "proxmox-node1"
+}

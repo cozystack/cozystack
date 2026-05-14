@@ -1,0 +1,107 @@
+{{- if .Values.security.networkPolicies.enabled }}
+# Default deny all network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-default-deny-all
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+# Allow DNS network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-allow-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+---
+# Allow Proxmox API access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-allow-proxmox-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxmox-worker
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: {{ .Values.proxmox.server.port }}
+---
+# Allow Kubernetes API access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-allow-k8s-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxmox-worker
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 6443
+---
+# Allow containerd access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "proxmox-worker.fullname" . }}-allow-containerd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxmox-worker.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policies
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxmox-worker
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 5000
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+{{- end }}

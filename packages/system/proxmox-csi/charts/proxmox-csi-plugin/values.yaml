@@ -1,0 +1,308 @@
+# Default values for proxmox-csi-plugin.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Create namespace.
+# Very useful when using helm template.
+createNamespace: false
+
+# -- Controller pods priorityClassName.
+priorityClassName: system-cluster-critical
+
+# -- Pods Service Account.
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# -- CSI Driver provisioner name.
+# Currently, cannot be customized.
+provisionerName: csi.proxmox.sinextra.dev
+
+# -- Cluster name.
+# Currently, cannot be customized.
+clusterID: kubernetes
+
+# -- Log verbosity level. See https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md
+# for description of individual verbosity levels.
+logVerbosityLevel: 5
+
+# -- Connection timeout between sidecars.
+timeout: 3m
+
+# -- Proxmox cluster config stored in secrets.
+existingConfigSecret: ~
+# -- Proxmox cluster config stored in secrets key.
+existingConfigSecretKey: config.yaml
+
+# -- Proxmox cluster config path.
+configFile: /etc/proxmox/config.yaml
+
+# -- Proxmox cluster config.
+config:
+  clusters: []
+  #   - url: https://cluster-api-1.exmple.com:8006/api2/json
+  #     insecure: false
+  #     token_id: "login!name"
+  #     token_secret: "secret"
+  #     region: cluster-1
+
+# -- Storage class definition.
+storageClass: []
+  # - name: proxmox-data-xfs
+  #   storage: data
+  #   reclaimPolicy: Delete
+  #   fstype: ext4|xfs
+  #
+  #   # https://pve.proxmox.com/wiki/Performance_Tweaks
+  #   cache: directsync|none|writeback|writethrough
+  #   ssd: true
+  #   extraParameters:
+  #     # https://kubernetes-csi.github.io/docs/secrets-and-credentials-storage-class.html
+  #     csi.storage.k8s.io/node-stage-secret-name: "proxmox-csi-secret"
+  #     csi.storage.k8s.io/node-stage-secret-namespace: "kube-system"
+  #     csi.storage.k8s.io/node-expand-secret-name: "proxmox-csi-secret"
+  #     csi.storage.k8s.io/node-expand-secret-namespace: "kube-system"
+  #
+  #   mountOptions:
+  #     - discard
+  #
+  #   # I am not recommending to use this option, but it is possible.
+  #   # You should use region and zone topology keys together.
+  #   allowedTopologies:
+  #   - matchLabelExpressions:
+  #     - key: topology.kubernetes.io/region
+  #       values:
+  #       - Region-1
+  #     - key: topology.kubernetes.io/zone
+  #       values:
+  #       - pve-1
+  #       - pve-3
+
+controller:
+  # -- Annotations for controller pod.
+  # ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+  podAnnotations: {}
+    # prometheus.io/scrape: "true"
+    # prometheus.io/port: "8080"
+
+  plugin:
+    # -- Controller CSI Driver.
+    image:
+      repository: ghcr.io/sergelogvinov/proxmox-csi-controller
+      pullPolicy: IfNotPresent
+      # Overrides the image tag whose default is the chart appVersion.
+      tag: ""
+    # -- Controller resource requests and limits.
+    # ref: https://kubernetes.io/docs/user-guide/compute-resources/
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+  attacher:
+    # -- CSI Attacher.
+    image:
+      repository: registry.k8s.io/sig-storage/csi-attacher
+      pullPolicy: IfNotPresent
+      tag: v4.4.4
+    # -- Attacher resource requests and limits.
+    # ref: https://kubernetes.io/docs/user-guide/compute-resources/
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+  provisioner:
+    # -- CSI Provisioner.
+    image:
+      repository: registry.k8s.io/sig-storage/csi-provisioner
+      pullPolicy: IfNotPresent
+      tag: v3.6.4
+    # -- Provisioner resource requests and limits.
+    # ref: https://kubernetes.io/docs/user-guide/compute-resources/
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+  resizer:
+    # -- CSI Resizer.
+    image:
+      repository: registry.k8s.io/sig-storage/csi-resizer
+      pullPolicy: IfNotPresent
+      tag: v1.9.4
+    # -- Resizer resource requests and limits.
+    # ref: https://kubernetes.io/docs/user-guide/compute-resources/
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+
+node:
+  plugin:
+    # -- Node CSI Driver.
+    image:
+      repository: ghcr.io/sergelogvinov/proxmox-csi-node
+      pullPolicy: IfNotPresent
+      # Overrides the image tag whose default is the chart appVersion.
+      tag: ""
+    # -- Node CSI Driver resource requests and limits.
+    # ref: https://kubernetes.io/docs/user-guide/compute-resources/
+    resources: {}
+  driverRegistrar:
+    # -- Node CSI driver registrar.
+    image:
+      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+      pullPolicy: IfNotPresent
+      tag: v2.9.4
+    # -- Node registrar resource requests and limits.
+    # ref: https://kubernetes.io/docs/user-guide/compute-resources/
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+
+  # -- Location of the /var/lib/kubelet directory as some k8s distribution differ from the standard.
+  kubeletDir: /var/lib/kubelet
+
+  # -- Node labels for node-plugin assignment.
+  # ref: https://kubernetes.io/docs/user-guide/node-selection/
+  nodeSelector: {}
+
+  # -- Tolerations for node-plugin assignment.
+  # ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
+  tolerations:
+    - key: node.kubernetes.io/unschedulable
+      operator: Exists
+      effect: NoSchedule
+    - key: node.kubernetes.io/disk-pressure
+      operator: Exists
+      effect: NoSchedule
+
+livenessprobe:
+  # -- Common livenessprobe sidecar.
+  image:
+    repository: registry.k8s.io/sig-storage/livenessprobe
+    pullPolicy: IfNotPresent
+    tag: v2.11.0
+  # -- Failure threshold for livenessProbe
+  failureThreshold: 5
+  # -- Initial delay seconds for livenessProbe
+  initialDelaySeconds: 10
+  # -- Timeout seconds for livenessProbe
+  timeoutSeconds: 10
+  # -- Period seconds for livenessProbe
+  periodSeconds: 60
+  # -- Liveness probe resource requests and limits.
+  # ref: https://kubernetes.io/docs/user-guide/compute-resources/
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+
+# -- Add additional init containers for the CSI controller pods.
+# ref: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/
+initContainers: []
+  # - name: loadbalancer
+  #   restartPolicy: Always
+  #   image: ghcr.io/sergelogvinov/haproxy:2.8.3-alpine3.18
+  #   imagePullPolicy: IfNotPresent
+  #   env:
+  #     - name: SVC
+  #       value: "proxmox.domain.com"
+  #     - name: PORT
+  #       value: "8006"
+  #   securityContext:
+  #     runAsUser: 99
+  #     runAsGroup: 99
+  #   resources:
+  #     limits:
+  #       cpu: 50m
+  #       memory: 64Mi
+  #     requests:
+  #       cpu: 50m
+  #       memory: 32Mi
+
+# -- hostAliases Deployment pod host aliases
+# ref: https://kubernetes.io/docs/tasks/network/customize-hosts-file-for-pods/
+hostAliases: []
+  # - ip: 127.0.0.1
+  #   hostnames:
+  #     - proxmox.domain.com
+
+# -- Annotations for controller pod.
+# ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+
+# -- Controller Security Context.
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+
+# -- Controller Container Security Context.
+# ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  seccompProfile:
+    type: RuntimeDefault
+  readOnlyRootFilesystem: true
+
+# -- Controller deployment update strategy type.
+# ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#updating-a-deployment
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# -- Prometheus metrics
+metrics:
+  # -- Enable Prometheus metrics.
+  enabled: false
+  # -- Prometheus metrics port.
+  port: 8080
+
+  type: annotation
+
+
+# -- Node labels for controller assignment.
+# ref: https://kubernetes.io/docs/user-guide/node-selection/
+nodeSelector: {}
+  # node-role.kubernetes.io/control-plane: ""
+
+# -- Tolerations for controller assignment.
+# ref: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/
+tolerations: []
+  # - key: node-role.kubernetes.io/control-plane
+  #   effect: NoSchedule
+
+# -- Affinity for controller assignment.
+# ref: https://kubernetes.io/docs/concepts/configuration/assign-pod-node/#affinity-and-anti-affinity
+affinity: {}
+
+# -- Additional volumes for Pods
+extraVolumes: []
+# - name: ca
+#   secret:
+#     secretName: my-ca
+# -- Additional volume mounts for Pods
+
+extraVolumeMounts: []
+# - mountPath: /etc/ssl/certs/ca-certificates.crt
+#   name: ca
+#   subPath: ca.crt
