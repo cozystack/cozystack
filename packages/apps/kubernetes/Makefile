@@ -18,22 +18,7 @@ update:
 	hack/update-versions.sh
 	make generate
 
-image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
-
-image-ubuntu-container-disk:
-	$(foreach ver,$(KUBERNETES_VERSIONS), \
-		docker buildx build images/ubuntu-container-disk \
-			--build-arg KUBERNETES_VERSION=$(ver) \
-			--tag $(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG) \
-			$(if $(filter 1,$(PUBLISH_VERSIONED)),--tag $(REGISTRY)/ubuntu-container-disk:$(ver)) \
-			--cache-from type=registry,ref=$(CACHE_REGISTRY)/ubuntu-container-disk:$(ver) \
-			--cache-to type=inline \
-			--metadata-file images/ubuntu-container-disk-$(ver).json \
-			$(BUILDX_ARGS) && \
-		echo "$(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk-$(ver).json -o json -r)" \
-			> images/ubuntu-container-disk-$(ver).tag && \
-		rm -f images/ubuntu-container-disk-$(ver).json; \
-	)
+image: image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
 
 image-kubevirt-cloud-provider:
 	docker buildx build images/kubevirt-cloud-provider \
