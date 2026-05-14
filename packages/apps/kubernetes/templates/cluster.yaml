@@ -231,7 +231,7 @@ spec:
       - {{ $serviceCIDR }}
   controlPlaneRef:
     namespace: {{ .Release.Namespace }}
-    apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
     kind: KamajiControlPlane
     name: {{ .Release.Name }}
   infrastructureRef:
@@ -240,7 +240,7 @@ spec:
     name: {{ .Release.Name }}
     namespace: {{ .Release.Namespace }}
 ---
-apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha2
 kind: KamajiControlPlane
 metadata:
   name: {{ .Release.Name }}
