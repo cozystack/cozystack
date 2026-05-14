@@ -18,7 +18,19 @@ update:
 	hack/update-versions.sh
 	make generate
 
-image: image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
+image: image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler image-talos-csr-signer
+
+image-talos-csr-signer:
+	docker buildx build images/talos-csr-signer \
+		--tag $(REGISTRY)/talos-csr-signer:$(call settag,$(KUBERNETES_PKG_TAG)) \
+		--tag $(REGISTRY)/talos-csr-signer:$(call settag,$(KUBERNETES_PKG_TAG)-$(TAG)) \
+		--cache-from type=registry,ref=$(REGISTRY)/talos-csr-signer:latest \
+		--cache-to type=inline \
+		--metadata-file images/talos-csr-signer.json \
+		$(BUILDX_ARGS)
+	echo "$(REGISTRY)/talos-csr-signer:$(call settag,$(KUBERNETES_PKG_TAG))@$$(yq e '."containerimage.digest"' images/talos-csr-signer.json -o json -r)" \
+		> images/talos-csr-signer.tag
+	rm -f images/talos-csr-signer.json
 
 image-kubevirt-cloud-provider:
 	docker buildx build images/kubevirt-cloud-provider \

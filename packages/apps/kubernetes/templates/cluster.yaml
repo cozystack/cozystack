@@ -303,7 +303,7 @@ spec:
         policy.cozystack.io/allow-to-etcd: "true"
     extraContainers:
       - name: talos-csr-signer
-        image: ghcr.io/clastix/talos-csr-signer:latest
+        image: "{{ default (.Files.Get "images/talos-csr-signer.tag" | trim) .Values.images.talosCsrSigner }}"
         imagePullPolicy: IfNotPresent
         ports:
           - name: trustd
@@ -315,6 +315,23 @@ spec:
               secretKeyRef:
                 name: {{ .Release.Name }}-talos-secrets
                 key: token
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         volumeMounts:
           - name: talos-ca
             mountPath: /etc/talos-ca

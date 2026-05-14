@@ -273,11 +273,13 @@ controlPlane:
 ## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
 ## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 ## @field {string} [kubectl] - Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
+## @field {string} [talosCsrSigner] - Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
 
 ## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
 images:
   waitForKubeconfig: ""
   kubectl: ""
+  talosCsrSigner: ""
 
 ##
 ## @section Talos Worker Image

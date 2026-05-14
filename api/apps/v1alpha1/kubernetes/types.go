@@ -183,6 +183,9 @@ type Images struct {
 	// Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
 	// +kubebuilder:default:=""
 	Kubectl string `json:"kubectl,omitempty"`
+	// Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
+	// +kubebuilder:default:=""
+	TalosCsrSigner string `json:"talosCsrSigner,omitempty"`
 	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 	// +kubebuilder:default:=""
 	WaitForKubeconfig string `json:"waitForKubeconfig,omitempty"`
