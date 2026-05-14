@@ -14,9 +14,6 @@ spec:
     spec:
       backoffLimit: 2
       template:
-        spec:
-          restartPolicy: OnFailure
-      template:
         metadata:
           annotations:
             checksum/config: {{ include (print $.Template.BasePath "/backup-script.yaml") . | sha256sum }}
