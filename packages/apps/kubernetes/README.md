@@ -168,33 +168,34 @@ See the reference for components utilized in this service:
 
 ### Kubernetes Control Plane Configuration
 
-| Name                                                | Description                                                                                   | Type       | Value       |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------- | ----------- |
-| `controlPlane`                                      | Kubernetes control-plane configuration.                                                       | `object`   | `{}`        |
-| `controlPlane.replicas`                             | Number of control-plane replicas.                                                             | `int`      | `2`         |
-| `controlPlane.apiServer`                            | API Server configuration.                                                                     | `object`   | `{}`        |
-| `controlPlane.apiServer.resources`                  | CPU and memory resources for API Server.                                                      | `object`   | `{}`        |
-| `controlPlane.apiServer.resources.cpu`              | CPU available.                                                                                | `quantity` | `""`        |
-| `controlPlane.apiServer.resources.memory`           | Memory (RAM) available.                                                                       | `quantity` | `""`        |
-| `controlPlane.apiServer.resourcesPreset`            | Preset if `resources` omitted.                                                                | `string`   | `c1.medium` |
-| `controlPlane.controllerManager`                    | Controller Manager configuration.                                                             | `object`   | `{}`        |
-| `controlPlane.controllerManager.resources`          | CPU and memory resources for Controller Manager.                                              | `object`   | `{}`        |
-| `controlPlane.controllerManager.resources.cpu`      | CPU available.                                                                                | `quantity` | `""`        |
-| `controlPlane.controllerManager.resources.memory`   | Memory (RAM) available.                                                                       | `quantity` | `""`        |
-| `controlPlane.controllerManager.resourcesPreset`    | Preset if `resources` omitted.                                                                | `string`   | `t1.micro`  |
-| `controlPlane.scheduler`                            | Scheduler configuration.                                                                      | `object`   | `{}`        |
-| `controlPlane.scheduler.resources`                  | CPU and memory resources for Scheduler.                                                       | `object`   | `{}`        |
-| `controlPlane.scheduler.resources.cpu`              | CPU available.                                                                                | `quantity` | `""`        |
-| `controlPlane.scheduler.resources.memory`           | Memory (RAM) available.                                                                       | `quantity` | `""`        |
-| `controlPlane.scheduler.resourcesPreset`            | Preset if `resources` omitted.                                                                | `string`   | `t1.micro`  |
-| `controlPlane.konnectivity`                         | Konnectivity configuration.                                                                   | `object`   | `{}`        |
-| `controlPlane.konnectivity.server`                  | Konnectivity Server configuration.                                                            | `object`   | `{}`        |
-| `controlPlane.konnectivity.server.resources`        | CPU and memory resources for Konnectivity.                                                    | `object`   | `{}`        |
-| `controlPlane.konnectivity.server.resources.cpu`    | CPU available.                                                                                | `quantity` | `""`        |
-| `controlPlane.konnectivity.server.resources.memory` | Memory (RAM) available.                                                                       | `quantity` | `""`        |
-| `controlPlane.konnectivity.server.resourcesPreset`  | Preset if `resources` omitted.                                                                | `string`   | `t1.micro`  |
-| `images`                                            | Optional image overrides for air-gapped or rate-limited registries.                           | `object`   | `{}`        |
-| `images.waitForKubeconfig`                          | Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag. | `string`   | `""`        |
+| Name                                                | Description                                                                                     | Type       | Value   |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `controlPlane`                                      | Kubernetes control-plane configuration.                                                         | `object`   | `{}`    |
+| `controlPlane.replicas`                             | Number of control-plane replicas.                                                               | `int`      | `2`     |
+| `controlPlane.apiServer`                            | API Server configuration.                                                                       | `object`   | `{}`    |
+| `controlPlane.apiServer.resources`                  | CPU and memory resources for API Server.                                                        | `object`   | `{}`    |
+| `controlPlane.apiServer.resources.cpu`              | CPU available.                                                                                  | `quantity` | `""`    |
+| `controlPlane.apiServer.resources.memory`           | Memory (RAM) available.                                                                         | `quantity` | `""`    |
+| `controlPlane.apiServer.resourcesPreset`            | Preset if `resources` omitted.                                                                  | `string`   | `large` |
+| `controlPlane.controllerManager`                    | Controller Manager configuration.                                                               | `object`   | `{}`    |
+| `controlPlane.controllerManager.resources`          | CPU and memory resources for Controller Manager.                                                | `object`   | `{}`    |
+| `controlPlane.controllerManager.resources.cpu`      | CPU available.                                                                                  | `quantity` | `""`    |
+| `controlPlane.controllerManager.resources.memory`   | Memory (RAM) available.                                                                         | `quantity` | `""`    |
+| `controlPlane.controllerManager.resourcesPreset`    | Preset if `resources` omitted.                                                                  | `string`   | `micro` |
+| `controlPlane.scheduler`                            | Scheduler configuration.                                                                        | `object`   | `{}`    |
+| `controlPlane.scheduler.resources`                  | CPU and memory resources for Scheduler.                                                         | `object`   | `{}`    |
+| `controlPlane.scheduler.resources.cpu`              | CPU available.                                                                                  | `quantity` | `""`    |
+| `controlPlane.scheduler.resources.memory`           | Memory (RAM) available.                                                                         | `quantity` | `""`    |
+| `controlPlane.scheduler.resourcesPreset`            | Preset if `resources` omitted.                                                                  | `string`   | `micro` |
+| `controlPlane.konnectivity`                         | Konnectivity configuration.                                                                     | `object`   | `{}`    |
+| `controlPlane.konnectivity.server`                  | Konnectivity Server configuration.                                                              | `object`   | `{}`    |
+| `controlPlane.konnectivity.server.resources`        | CPU and memory resources for Konnectivity.                                                      | `object`   | `{}`    |
+| `controlPlane.konnectivity.server.resources.cpu`    | CPU available.                                                                                  | `quantity` | `""`    |
+| `controlPlane.konnectivity.server.resources.memory` | Memory (RAM) available.                                                                         | `quantity` | `""`    |
+| `controlPlane.konnectivity.server.resourcesPreset`  | Preset if `resources` omitted.                                                                  | `string`   | `micro` |
+| `images`                                            | Optional image overrides for air-gapped or rate-limited registries.                             | `object`   | `{}`    |
+| `images.waitForKubeconfig`                          | Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.   | `string`   | `""`    |
+| `images.kubectl`                                    | Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag. | `string`   | `""`    |
 
 
 ## Parameter examples and reference
@@ -213,9 +214,15 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases of their 1:1 instance-type equivalents.
-
-See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
+| Preset name | CPU    | memory  |
+|-------------|--------|---------|
+| `nano`      | `250m` | `128Mi` |
+| `micro`     | `500m` | `256Mi` |
+| `small`     | `1`    | `512Mi` |
+| `medium`    | `1`    | `1Gi`   |
+| `large`     | `2`    | `2Gi`   |
+| `xlarge`    | `4`    | `4Gi`   |
+| `2xlarge`   | `8`    | `8Gi`   |
 
 ### instanceType Resources
 
