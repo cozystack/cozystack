@@ -1,9 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  # Must match `spec.version` in templates/providers.yaml so the
-  # ControlPlaneProvider operator selects this bundle.
-  name: master-e52ee00
+  name: v0.16.0-cp-talos-csr-signer.1
   labels:
     cp-components: cozy
   annotations:
