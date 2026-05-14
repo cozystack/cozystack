@@ -37,7 +37,7 @@ spec:
     name: cozystack-tenant-application-default-tenant
     namespace: cozy-system
   interval: 1m0s
-  timeout: 5m0s
+  timeout: 15m0s
   valuesFrom:
     - kind: Secret
       name: cozystack-values
