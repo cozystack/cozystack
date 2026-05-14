@@ -4,11 +4,7 @@ metadata:
   name: kamaji
 spec:
   # https://github.com/clastix/cluster-api-control-plane-provider-kamaji
-  # TODO: pin to a tagged release SHA once upstream cuts v0.20.0 (this is
-  #       master HEAD because the AdditionalServicePorts feature is not in
-  #       v0.19.0 yet). Bump `version` to match `images/.../Dockerfile`'s
-  #       ARG COMMIT and rerun `make update` to refresh the bundled manifests.
-  version: master-e52ee00
+  version: v0.16.0-cp-talos-csr-signer.1
   fetchConfig:
     selector:
       matchLabels:
