@@ -19,6 +19,7 @@ metadata:
   name: cozy-system
   labels:
     cozystack.io/system: "true"
+    platform.cozystack.io/no-delete: "true"
     pod-security.kubernetes.io/enforce: privileged
   annotations:
     helm.sh/resource-policy: keep
