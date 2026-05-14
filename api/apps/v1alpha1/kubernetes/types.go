@@ -40,6 +40,9 @@ type ConfigSpec struct {
 	// Optional image overrides for air-gapped or rate-limited registries.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
+	// Talos worker image configuration.
+	// +kubebuilder:default:={}
+	Talos Talos `json:"talos"`
 }
 
 type APIServer struct {
@@ -289,6 +292,15 @@ type Scheduler struct {
 	// Preset if `resources` omitted.
 	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+}
+
+type Talos struct {
+	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+	SchematicID string `json:"schematicID"`
+	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+	// +kubebuilder:default:="v1.13.0"
+	Version string `json:"version"`
 }
 
 type VeleroAddon struct {

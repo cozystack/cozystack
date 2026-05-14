@@ -908,6 +908,27 @@
           "default": ""
         }
       }
+    },
+    "talos": {
+      "description": "Talos worker image configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "schematicID",
+        "version"
+      ],
+      "properties": {
+        "schematicID": {
+          "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",
+          "type": "string",
+          "default": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+        },
+        "version": {
+          "description": "Talos release used for worker OS image and installer. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version`.",
+          "type": "string",
+          "default": "v1.13.0"
+        }
+      }
     }
   }
 }

@@ -4,15 +4,19 @@
   that window produces a silently broken Talos+kubelet combination that
   HelmRelease cannot detect. Fail the chart render instead, so the operator
   sees the mismatch in Flux/dashboards before workers roll over.
+
+  The matrix only fires for Talos versions it knows about; operators who
+  override talos.version to something outside this list take responsibility
+  for compatibility themselves (extend the dict or upstream a PR).
   Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
 */}}
 {{- $talosK8sSupportMatrix := dict
       "v1.13.0" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
 }}
-{{- $chartTalosVersion := "v1.13.0" }}
-{{- $supportedK8s := index $talosK8sSupportMatrix $chartTalosVersion }}
-{{- if not (has .Values.version $supportedK8s) }}
-{{-   fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump tenant 'version' (or this chart's Talos image)." .Values.version $chartTalosVersion $supportedK8s) }}
+{{- with index $talosK8sSupportMatrix .Values.talos.version }}
+{{-   if not (has $.Values.version .) }}
+{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump tenant 'version' or set talos.version explicitly." $.Values.version $.Values.talos.version .) }}
+{{-   end }}
 {{- end }}
 {{- $etcd := .Values._namespace.etcd }}
 {{- /*
@@ -63,7 +67,7 @@ spec:
                 ignores configdrive and never applies the machineconfig. */}}
           source:
             http:
-              url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.0/openstack-amd64.raw.xz
+              url: https://factory.talos.dev/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}
@@ -526,8 +530,8 @@ metadata:
 {{- end }}
 {{- $apiEndpoint := printf "%s:6443" $apiSvcIP }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
-{{- $talosVersion := "v1.13.0" }}
-{{- $talosSchematic := "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515" }}
+{{- $talosVersion := $.Values.talos.version }}
+{{- $talosSchematic := $.Values.talos.schematicID }}
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
 kind: TalosConfigTemplate
 metadata:

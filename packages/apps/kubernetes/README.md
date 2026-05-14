@@ -198,6 +198,15 @@ See the reference for components utilized in this service:
 | `images.kubectl`                                    | Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag. | `string`   | `""`    |
 
 
+### Talos Worker Image
+
+| Name                | Description                                                                                                                                                             | Type     | Value                                                              |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------ |
+| `talos`             | Talos worker image configuration.                                                                                                                                       | `object` | `{}`                                                               |
+| `talos.version`     | Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.                          | `string` | `v1.13.0`                                                          |
+| `talos.schematicID` | Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here. | `string` | `ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515` |
+
+
 ## Parameter examples and reference
 
 ### resources and resourcesPreset
