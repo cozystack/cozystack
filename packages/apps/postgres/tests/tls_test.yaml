@@ -1,0 +1,397 @@
+suite: postgres TLS cert-manager chain
+
+# Covers the tri-state tls.enabled field:
+#   - external: false, tls.enabled unset  → TLS off (default)
+#   - external: true,  tls.enabled unset  → TLS auto-on
+#   - tls.enabled: true  (explicit)       → TLS on regardless of external
+#   - tls.enabled: false (explicit)       → TLS off regardless of external
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+###############################################################################
+# certmanager.yaml tests
+###############################################################################
+
+templates:
+  - templates/certmanager.yaml
+
+tests:
+  - it: renders no resources when tls is off by default (external false, tls.enabled unset)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: tls.enabled null behaves as unset when external false (no TLS)
+    set:
+      tls:
+        enabled: null
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: tls.enabled null behaves as unset when external true (auto-on)
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: null
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders no resources when tls explicitly disabled even with external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders 4 cert-manager resources when tls auto-on via external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders 4 cert-manager resources when tls explicitly enabled
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: first document is selfsigned Issuer
+    set:
+      tls:
+        enabled: true
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: spec.selfSigned
+          value: {}
+      - equal:
+          path: metadata.name
+          value: pg-test-selfsigned
+
+  - it: second document is CA Certificate with isCA true
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretName
+          value: pg-test-ca
+      - equal:
+          path: spec.issuerRef.name
+          value: pg-test-selfsigned
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+      - equal:
+          path: spec.commonName
+          value: pg-test-ca
+
+  - it: CA cert has correct usages (no key encipherment, signing + cert sign only)
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - contains:
+          path: spec.usages
+          content: signing
+      - contains:
+          path: spec.usages
+          content: cert sign
+      - lengthEqual:
+          path: spec.usages
+          count: 2
+
+  - it: third document is CA Issuer referencing the CA secret
+    set:
+      tls:
+        enabled: true
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.name
+          value: pg-test-ca
+      - equal:
+          path: spec.ca.secretName
+          value: pg-test-ca
+
+  - it: fourth document is leaf Certificate with server and CA secret names
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.secretName
+          value: pg-test-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: pg-test-ca
+
+  - it: leaf cert includes three DNS forms for each CNPG service
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-rw
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-rw.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-rw.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-ro
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-ro.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-ro.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-r
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-r.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: pg-test-r.tenant-test.svc.cozy.local
+
+  - it: leaf cert includes external DNS SAN when external true (auto-on)
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: pg-test.example.cozy.local
+
+  - it: leaf cert has exactly 9 SANs (3 services x 3 forms) when external false
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 9
+
+  - it: leaf cert has 10 SANs and includes external DNS SAN when external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 10
+      - contains:
+          path: spec.dnsNames
+          content: pg-test.example.cozy.local
+
+  - it: leaf cert has 10 SANs when tls explicitly enabled and external true
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 10
+      - contains:
+          path: spec.dnsNames
+          content: pg-test.example.cozy.local
+
+  - it: leaf cert includes server auth usage
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+
+  - it: leaf cert does NOT include client auth (server-only cert)
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: client auth
+
+  - it: leaf cert includes signing usage (required for TLS 1.3 handshake)
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: signing
+
+  - it: leaf cert does NOT include cert sign and has exactly 3 usages
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: cert sign
+      - lengthEqual:
+          path: spec.usages
+          count: 3
+
+  - it: missing tls key entirely defaults to TLS off
+    asserts:
+      - hasDocuments:
+          count: 0
+
+---
+###############################################################################
+# db.yaml tests: spec.certificates block in CNPG Cluster
+###############################################################################
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  - it: Cluster has no spec.certificates when tls is off by default
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: Cluster has no spec.certificates when tls explicitly disabled with external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: Cluster has spec.certificates with serverCASecret and serverTLSSecret when tls auto-on
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.certificates.serverCASecret
+          value: pg-test-ca
+      - equal:
+          path: spec.certificates.serverTLSSecret
+          value: pg-test-tls
+
+  - it: Cluster has spec.certificates when tls explicitly enabled
+    set:
+      tls:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.certificates.serverCASecret
+          value: pg-test-ca
+      - equal:
+          path: spec.certificates.serverTLSSecret
+          value: pg-test-tls
+
+  - it: Cluster has no spec.certificates when tls.enabled null and external false
+    set:
+      tls:
+        enabled: null
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: Cluster has spec.certificates when tls.enabled null and external true
+    set:
+      tls:
+        enabled: null
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.certificates.serverCASecret
+          value: pg-test-ca
+      - equal:
+          path: spec.certificates.serverTLSSecret
+          value: pg-test-tls
