@@ -5,6 +5,9 @@ metadata:
 spec:
   #nodeSelector:
   #  node-role.kubernetes.io/linstor: ""
+  {{- if (lookup "v1" "Secret" .Release.Namespace "linstor-passphrase") }}
+  linstorPassphraseSecret: "linstor-passphrase"
+  {{- end }}
   internalTLS:
     certManager:
       name: linstor-internal-ca
