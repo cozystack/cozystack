@@ -73,3 +73,13 @@ storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
+
+##
+## @section TLS parameters
+##
+
+## @typedef {struct} TLS - TLS configuration for Qdrant.
+## @field {*bool} enabled - Enable TLS. When unset, inherits the value of `external` (TLS is on when external access is enabled). Set explicitly to `true` or `false` to override.
+
+## @param {TLS} [tls] - TLS configuration. When omitted, the effective TLS state follows the value of `external`.
+tls: {}
