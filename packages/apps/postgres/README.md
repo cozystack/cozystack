@@ -158,6 +158,8 @@ See:
 
 - <https://cloudnative-pg.io/documentation/1.15/rolling_update/#manual-updates-supervised>
 
+> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+
 ## Parameters
 
 ### Common parameters

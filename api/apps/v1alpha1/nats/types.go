@@ -29,6 +29,7 @@ type ConfigSpec struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable after creation"
 	StorageClass string `json:"storageClass"`
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false

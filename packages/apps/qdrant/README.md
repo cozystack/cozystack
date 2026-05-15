@@ -9,6 +9,8 @@ Service deploys Qdrant as a StatefulSet with automatic cluster mode when multipl
 - Docs: https://qdrant.tech/documentation/
 - GitHub: https://github.com/qdrant/qdrant
 
+> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+
 ## Parameters
 
 ### Common parameters

@@ -47,6 +47,7 @@ type Kafka struct {
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the Kafka data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable after creation"
 	StorageClass string `json:"storageClass"`
 }
 
@@ -83,6 +84,7 @@ type ZooKeeper struct {
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the ZooKeeper data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable after creation"
 	StorageClass string `json:"storageClass"`
 }
 

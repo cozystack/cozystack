@@ -36,6 +36,7 @@ cluster:
 ## @typedef {struct} Storage - Storage configuration.
 ## @field {quantity} size - Size of persistent volumes for each instance.
 ## @field {string} storageClass - Storage class (if not set, uses cluster default).
+## @immutable
 
 ## @param {Storage} storage - Storage configuration.
 storage:

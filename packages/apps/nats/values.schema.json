@@ -97,7 +97,13 @@
     "storageClass": {
       "description": "StorageClass used to store the data.",
       "type": "string",
-      "default": ""
+      "default": "",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "storageClass is immutable after creation"
+        }
+      ]
     },
     "external": {
       "description": "Enable external access from outside the cluster.",
