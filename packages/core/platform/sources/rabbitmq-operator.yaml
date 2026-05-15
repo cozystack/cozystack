@@ -13,6 +13,7 @@ spec:
   - name: default
     dependsOn:
     - cozystack.networking
+    - cozystack.cert-manager
     components:
     - name: rabbitmq-operator
       path: system/rabbitmq-operator
