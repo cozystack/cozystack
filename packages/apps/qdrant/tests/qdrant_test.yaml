@@ -1,0 +1,291 @@
+suite: qdrant HelmRelease TLS tests
+
+templates:
+  - templates/qdrant.yaml
+
+tests:
+  #####################
+  # Baseline          #
+  #####################
+
+  - it: renders HelmRelease
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+
+  ###########################
+  # TLS disabled            #
+  ###########################
+
+  - it: does not set service enable_tls when tls.enabled is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.service.enable_tls
+          value: false
+
+  - it: does not set p2p enable_tls when tls.enabled is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.cluster.p2p.enable_tls
+          value: false
+
+  - it: does not mount TLS volume when tls.enabled is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - isEmpty:
+          path: spec.values.qdrant.additionalVolumes
+      - isEmpty:
+          path: spec.values.qdrant.additionalVolumeMounts
+
+  ###########################
+  # TLS enabled             #
+  ###########################
+
+  - it: sets service enable_tls to true when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.service.enable_tls
+          value: true
+
+  - it: sets p2p enable_tls to true when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.cluster.p2p.enable_tls
+          value: true
+
+  - it: sets tls.cert path when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.tls.cert
+          value: /qdrant/tls/tls.crt
+
+  - it: sets tls.key path when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.tls.key
+          value: /qdrant/tls/tls.key
+
+  - it: sets tls.ca_cert path when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.tls.ca_cert
+          value: /qdrant/tls/ca.crt
+
+  ###########################
+  # Volume mounts           #
+  ###########################
+
+  - it: mounts tls volume when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.values.qdrant.additionalVolumes
+          content:
+            name: tls
+            secret:
+              secretName: test-qdrant-tls
+
+  - it: adds tls volumeMount when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.values.qdrant.additionalVolumeMounts
+          content:
+            name: tls
+            mountPath: /qdrant/tls
+            readOnly: true
+
+  #######################################################
+  # Canonical tri-state cases                           #
+  #######################################################
+
+  # (a) external: false, tls.enabled unset -> TLS OFF
+  - it: "(a) TLS is OFF when external is false and tls.enabled is unset"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.service.enable_tls
+          value: false
+      - equal:
+          path: spec.values.qdrant.config.cluster.p2p.enable_tls
+          value: false
+      - isEmpty:
+          path: spec.values.qdrant.additionalVolumes
+      - isEmpty:
+          path: spec.values.qdrant.additionalVolumeMounts
+
+  # (b) external: true, tls.enabled unset -> TLS ON
+  - it: "(b) TLS is ON when external is true and tls.enabled is unset"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.service.enable_tls
+          value: true
+      - equal:
+          path: spec.values.qdrant.config.cluster.p2p.enable_tls
+          value: true
+      - contains:
+          path: spec.values.qdrant.additionalVolumes
+          content:
+            name: tls
+            secret:
+              secretName: test-qdrant-tls
+
+  # (c) external: true, tls.enabled: false -> TLS OFF (explicit off wins)
+  - it: "(c) TLS is OFF when external is true but tls.enabled is explicitly false"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.service.enable_tls
+          value: false
+      - equal:
+          path: spec.values.qdrant.config.cluster.p2p.enable_tls
+          value: false
+      - isEmpty:
+          path: spec.values.qdrant.additionalVolumes
+      - isEmpty:
+          path: spec.values.qdrant.additionalVolumeMounts
+
+  # (d) external: false, tls.enabled: true -> TLS ON (explicit on wins)
+  - it: "(d) TLS is ON when external is false but tls.enabled is explicitly true"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.service.enable_tls
+          value: true
+      - equal:
+          path: spec.values.qdrant.config.cluster.p2p.enable_tls
+          value: true
+      - contains:
+          path: spec.values.qdrant.additionalVolumes
+          content:
+            name: tls
+            secret:
+              secretName: test-qdrant-tls
+
+  ###########################
+  # External service type   #
+  ###########################
+
+  - it: sets LoadBalancer service type when external is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.service.type
+          value: LoadBalancer
+
+  - it: does not set LoadBalancer when external is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - notExists:
+          path: spec.values.qdrant.service.type
+
+  ###########################
+  # Standalone mode (replicas=1) #
+  ###########################
+
+  # Qdrant silently ignores cluster.p2p config in standalone mode, so
+  # emitting enable_tls: true with replicas=1 is harmless but intentional —
+  # the value is computed from tls.enabled alone, regardless of replica count.
+  - it: p2p enable_tls is emitted even for replicas=1 (cluster config ignored by Qdrant in standalone mode)
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.values.qdrant.config.cluster.p2p.enable_tls
+          value: true
