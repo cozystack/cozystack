@@ -74,6 +74,12 @@ storageClass: ""
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @typedef {struct} TLS - TLS configuration for RabbitMQ.
+## @field {*bool} enabled - Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.
+
+## @param {TLS} [tls] - TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.
+tls: {}
+
 ##
 ## @enum {string} Version
 ## @value v4.2
