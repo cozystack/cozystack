@@ -63,11 +63,12 @@ metadata:
     namespace.cozystack.io/ingress: {{ $ingress | quote }}
     namespace.cozystack.io/monitoring: {{ $monitoring | quote }}
     namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
-    namespace.cozystack.io/host: {{ $computedHost | quote }}
     {{- with $schedulingClass }}
     scheduler.cozystack.io/scheduling-class: {{ . | quote }}
     {{- end }}
     alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
+  annotations:
+    namespace.cozystack.io/host: {{ $computedHost | quote }}
   ownerReferences:
   - apiVersion: v1
     blockOwnerDeletion: true
