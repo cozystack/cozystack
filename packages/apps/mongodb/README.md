@@ -24,6 +24,16 @@ Each shard is a replica set, and mongos routers handle query routing.
 
 ## Notes
 
+### TLS Mode
+
+TLS is configured in `preferTLS` mode, which means the MongoDB server accepts both TLS and non-TLS connections.
+
+> **Note:** `preferTLS` is intentional because the operator's backup CronJob does not yet support TLS. Strict enforcement (`requireTLS`) will be added in a follow-up once the backup workflow supports it. To enforce TLS at the network layer in the meantime, restrict client access via NetworkPolicy.
+
+### Sharding and TLS
+
+> **Warning:** When `sharding: true`, TLS coverage is incomplete — the leaf certificate covers only replica set member SANs (`rs0`). The `mongos` service hostnames are not included in the certificate. This means TLS connections to `mongos` routers will fail certificate validation. Adding `mongos` SANs to the certificate is tracked as a follow-up improvement.
+
 ### External Access
 
 When `external: true` is enabled:
@@ -111,7 +121,15 @@ kubectl --namespace <namespace> delete secret percona-server-mongodb-users
 | `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`     |
 | `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`       |
 | `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`    |
-| `version`          | MongoDB major version to deploy.                                                                                                  | `string`   | `v8`       |
+
+
+### TLS configuration
+
+| Name          | Description                                                                                                                                                                                                         | Type     | Value  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`         | TLS configuration for server connections.                                                                                                                                                                           | `object` | `{}`   |
+| `tls.enabled` | Tri-state TLS switch. When omitted (null), TLS is enabled automatically if `external` is true and disabled otherwise. Set explicitly to `true` to force TLS on or `false` to force it off regardless of `external`. | `*bool`  | `null` |
+| `version`     | MongoDB major version to deploy.                                                                                                                                                                                    | `string` | `v8`   |
 
 
 ### Sharding configuration

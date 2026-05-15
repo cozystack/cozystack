@@ -35,6 +35,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// TLS configuration for server connections.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// MongoDB major version to deploy.
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
@@ -135,6 +138,11 @@ type ShardingConfig struct {
 	// List of shard configurations.
 	// +kubebuilder:default:={{"name":"rs0","replicas":3,"size":"10Gi"}}
 	Shards []Shard `json:"shards,omitempty"`
+}
+
+type TLS struct {
+	// Tri-state TLS switch. When omitted (null), TLS is enabled automatically if `external` is true and disabled otherwise. Set explicitly to `true` to force TLS on or `false` to force it off regardless of `external`.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type User struct {
