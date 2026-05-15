@@ -1,3 +1,4 @@
+{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: MariaDB
@@ -91,5 +92,19 @@ spec:
 
   #secondaryService:
   #  type: LoadBalancer
+
+  {{- if $tlsEnabled }}
+  {{- $tlsMap := default (dict) .Values.tls }}
+  {{- $tlsRequired := index $tlsMap "required" }}
+  tls:
+    enabled: true
+    # required: true enforces require_secure_transport=ON (strict TLS for all connections).
+    # The operator manages TLS for its own internal agents (replication, health-checks).
+    # Set tls.required: false only during migration when legacy clients cannot use TLS yet.
+    # `kindIs "invalid"` guards against unset field; explicit false is preserved.
+    required: {{ if kindIs "invalid" $tlsRequired }}true{{ else }}{{ $tlsRequired }}{{ end }}
+    serverCertSecretRef:
+      name: {{ .Release.Name }}-tls
+  {{- end }}
 
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
