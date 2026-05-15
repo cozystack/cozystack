@@ -22,8 +22,6 @@ rules:
   - get
   - list
   - watch
-  resourceNames:
-  - {{ .Values.ovnCentralName }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
