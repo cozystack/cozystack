@@ -6,7 +6,7 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ .Values.kafka.resourcesPreset | quote }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: {{ .Values.kafka.replicas }}
   minReplicas: 1
   kind: kafka
   type: kafka
@@ -24,7 +24,7 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ .Values.zookeeper.resourcesPreset | quote }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: {{ .Values.zookeeper.replicas }}
   minReplicas: 1
   kind: kafka
   type: zookeeper
