@@ -104,3 +104,62 @@ tests:
           path: roleRef.apiGroup
           value: rbac.authorization.k8s.io
         documentIndex: 1
+
+  # TLS RBAC: tri-state coverage for rules[1].resourceNames (secrets rule)
+
+  - it: Role includes TLS secrets when tls explicitly enabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ca
+        documentIndex: 0
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ssl
+        documentIndex: 0
+
+  - it: Role excludes TLS secrets when TLS is off (default)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ca
+        documentIndex: 0
+      - notContains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ssl
+        documentIndex: 0
+
+  - it: Role includes TLS secrets when external=true (auto-on tri-state)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ca
+        documentIndex: 0
+
+  - it: Role excludes TLS secrets when external=true but tls.enabled=false (override)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ca
+        documentIndex: 0

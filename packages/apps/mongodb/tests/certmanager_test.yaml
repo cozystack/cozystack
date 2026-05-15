@@ -1,0 +1,298 @@
+suite: mongodb TLS cert-manager chain
+
+# Covers the tri-state tls.enabled field:
+#   - external: false, tls.enabled unset  → TLS off (default)
+#   - external: true,  tls.enabled unset  → TLS auto-on
+#   - tls.enabled: true  (explicit)       → TLS on regardless of external
+#   - tls.enabled: false (explicit)       → TLS off regardless of external
+
+release:
+  name: mg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+###############################################################################
+# certmanager.yaml tests
+###############################################################################
+
+templates:
+  - templates/certmanager.yaml
+
+tests:
+  - it: renders no resources when tls is off by default (external false, tls.enabled unset)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: explicit null tls.enabled with external=false stays off
+    set:
+      tls:
+        enabled: null
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no resources when tls explicitly disabled even with external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders 4 cert-manager resources when tls auto-on via external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders 4 cert-manager resources when tls explicitly enabled
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: first document is selfsigned Issuer
+    set:
+      tls:
+        enabled: true
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: spec.selfSigned
+          value: {}
+      - equal:
+          path: metadata.name
+          value: mg-test-selfsigned
+
+  - it: second document is CA Certificate with isCA true
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretName
+          value: mg-test-ca
+      - equal:
+          path: spec.issuerRef.name
+          value: mg-test-selfsigned
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+      - contains:
+          path: spec.usages
+          content: cert sign
+      - contains:
+          path: spec.usages
+          content: signing
+      - notContains:
+          path: spec.usages
+          content: server auth
+      - notContains:
+          path: spec.usages
+          content: client auth
+
+  - it: third document is CA Issuer referencing the CA secret
+    set:
+      tls:
+        enabled: true
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.name
+          value: mg-test-ca
+      - equal:
+          path: spec.ca.secretName
+          value: mg-test-ca
+
+  - it: fourth document is leaf Certificate signed by CA Issuer
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.secretName
+          value: mg-test-ssl
+      - equal:
+          path: spec.issuerRef.name
+          value: mg-test-ca
+
+  - it: leaf cert includes ClusterIP service SAN forms
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0.tenant-test.svc.cozy.local
+
+  - it: leaf cert includes per-pod internal SANs for default 3 replicas
+    set:
+      tls:
+        enabled: true
+      replicas: 3
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-0.mg-test-rs0.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-1.mg-test-rs0.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-2.mg-test-rs0.tenant-test.svc.cozy.local
+
+  - it: leaf cert includes per-pod internal SANs for 5 replicas
+    set:
+      tls:
+        enabled: true
+      replicas: 5
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-0.mg-test-rs0.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-1.mg-test-rs0.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-2.mg-test-rs0.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-3.mg-test-rs0.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-4.mg-test-rs0.tenant-test.svc.cozy.local
+
+  - it: leaf cert does NOT include pod index 3 when replicas is 3
+    set:
+      tls:
+        enabled: true
+      replicas: 3
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: mg-test-rs0-3.mg-test-rs0.tenant-test.svc.cozy.local
+
+  - it: leaf cert includes external per-pod SANs when external true (auto-on)
+    set:
+      external: true
+      replicas: 3
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-0.example.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-1.example.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: mg-test-rs0-2.example.cozy.local
+
+  - it: leaf cert does NOT include external SANs when external false
+    set:
+      tls:
+        enabled: true
+      replicas: 3
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: mg-test-rs0-0.example.cozy.local
+
+  - it: sharding mode does not include mongos SANs (known limitation - mongos not covered by cert)
+    # KNOWN LIMITATION: When sharding is enabled, the leaf certificate covers
+    # only the rs0 replica set SANs. The mongos service hostnames are not
+    # included because the certmanager.yaml template does not enumerate shards
+    # or mongos endpoints when sharding is true. This is tracked as a
+    # follow-up: mongos SANs should be added to the cert when sharding+TLS.
+    set:
+      tls:
+        enabled: true
+      sharding: true
+    documentIndex: 3
+    asserts:
+      - notMatchRegex:
+          path: spec.secretName
+          pattern: ".*mongos.*"
+      - notContains:
+          path: spec.dnsNames
+          content: mg-test-mongos
+      - notContains:
+          path: spec.dnsNames
+          content: mg-test-mongos.tenant-test.svc
+
+  - it: leaf cert includes usages server auth, client auth, and digital signature
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: client auth
+      - contains:
+          path: spec.usages
+          content: digital signature
+      - lengthEqual:
+          path: spec.usages
+          count: 4
+
+  - it: leaf cert does not contain signing or cert sign EKUs (CA-only usages)
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: signing
+      - notContains:
+          path: spec.usages
+          content: cert sign
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: key encipherment
