@@ -423,6 +423,11 @@ fluent-bit:
           Name modify
           Match *
           Add cluster root-cluster
+      [FILTER]
+          Name modify
+          Match kube.*
+          Remove kubernetes_node_name
+          Remove kubernetes_host
 scrapeRules:
   etcd:
     enabled: false
