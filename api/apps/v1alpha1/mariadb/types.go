@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// TLS configuration. When omitted, TLS is enabled automatically when `external` is true.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls,omitempty"`
 	// MariaDB major.minor version to deploy
 	// +kubebuilder:default:="v11.8"
 	Version Version `json:"version"`
@@ -94,6 +97,13 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type TLS struct {
+	// Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet.
+	Required bool `json:"required,omitempty"`
 }
 
 type User struct {
