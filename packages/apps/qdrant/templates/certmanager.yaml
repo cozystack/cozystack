@@ -1,0 +1,78 @@
+{{- $clusterDomain := "cozy.local" }}
+{{- if .Values._cluster }}
+{{- $clusterDomain = (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- end }}
+{{- $tlsMap := default (dict) .Values.tls -}}
+{{- $tlsEnabled := false -}}
+{{- if hasKey $tlsMap "enabled" -}}
+  {{- $tlsEnabled = index $tlsMap "enabled" -}}
+{{- else -}}
+  {{- $tlsEnabled = .Values.external | default false -}}
+{{- end -}}
+{{- if $tlsEnabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-ca
+  duration: 43800h
+  commonName: {{ .Release.Name }}-ca
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  isCA: false
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+  commonName: {{ .Release.Name }}
+  # server auth: required for REST (6333) and gRPC (6334) TLS endpoints.
+  # client auth: required for p2p mTLS — Qdrant uses ca_cert for peer
+  # verification when cluster.p2p.enable_tls is true (see qdrant.yaml).
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  dnsNames:
+    - {{ .Release.Name }}
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    - {{ .Release.Name }}-headless
+    - {{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc
+    - {{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    - "*.{{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}"
+    {{- if .Values.external }}
+    - {{ .Release.Name }}.{{ .Values._namespace.host }}
+    {{- end }}
+{{- end }}
