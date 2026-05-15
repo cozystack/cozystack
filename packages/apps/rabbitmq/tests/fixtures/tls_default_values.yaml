@@ -1,0 +1,5 @@
+# Fixture that reproduces the default values.yaml state for tls.enabled.
+# tls.enabled is intentionally omitted here so that helm-unittest does not
+# inject any value and the template falls back to the tri-state default
+# (i.e. TLS follows the value of .Values.external).
+tls: {}
