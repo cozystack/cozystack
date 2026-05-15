@@ -1,0 +1,89 @@
+{{- $tlsEnabled := include "mongodb.tls.enabled" . | eq "true" -}}
+{{- if $tlsEnabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $ns := .Release.Namespace }}
+{{- $name := .Release.Name }}
+---
+# Self-signed bootstrap Issuer — used only to sign the CA Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $name }}-selfsigned
+spec:
+  selfSigned: {}
+---
+# CA Certificate. rotationPolicy: Never keeps the CA stable so existing
+# client trust bundles remain valid across cert-manager renewals.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-ca
+spec:
+  secretName: {{ $name }}-ca
+  duration: 87600h  # 10 years
+  isCA: true
+  commonName: {{ $name }}-ca
+  usages:
+    - signing
+    - key encipherment
+    - cert sign
+  privateKey:
+    rotationPolicy: Never
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: {{ $name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+# CA Issuer — used to sign the leaf server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $name }}-ca
+spec:
+  ca:
+    secretName: {{ $name }}-ca
+---
+# Leaf TLS Certificate passed to PSMDB via spec.secrets.ssl.
+# The SAN list covers the replica set ClusterIP service, each pod's
+# inter-member DNS name, and (when external is true) each pod's
+# external LoadBalancer hostname.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-ssl
+spec:
+  secretName: {{ $name }}-ssl
+  duration: 8760h    # 1 year
+  renewBefore: 720h  # renew 30 days before expiry
+  isCA: false
+  usages:
+    - server auth
+    - client auth
+    - digital signature
+    - key encipherment
+  dnsNames:
+    # Replica set ClusterIP service — short, namespace-qualified, and FQDN forms
+    - {{ $name }}-rs0
+    - {{ $name }}-rs0.{{ $ns }}.svc
+    - {{ $name }}-rs0.{{ $ns }}.svc.{{ $clusterDomain }}
+    # Per-pod inter-member DNS (used for intra-replica-set TLS handshakes)
+    {{- range $i, $_ := untilStep 0 (int .Values.replicas) 1 }}
+    - {{ $name }}-rs0-{{ $i }}.{{ $name }}-rs0.{{ $ns }}.svc.{{ $clusterDomain }}
+    {{- end }}
+    {{- if .Values.external }}
+    # Per-pod external hostnames — one LoadBalancer per pod in RS expose mode
+    {{- range $i, $_ := untilStep 0 (int $.Values.replicas) 1 }}
+    - {{ $name }}-rs0-{{ $i }}.{{ index $.Values._namespace "host" }}
+    {{- end }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: {{ $name }}-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}

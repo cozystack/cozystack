@@ -1,4 +1,5 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $tlsEnabled := include "mongodb.tls.enabled" . | eq "true" -}}
 ---
 apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
@@ -12,8 +13,18 @@ spec:
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
   secrets:
     users: {{ .Release.Name }}-percona-server-mongodb-users
+    {{- if $tlsEnabled }}
+    ssl: {{ .Release.Name }}-ssl
+    {{- end }}
   pause: false
   unmanaged: false
+
+  {{- if $tlsEnabled }}
+  tls:
+    # preferTLS keeps non-TLS clients working during rollout, so the
+    # backup CronJob is not disrupted when TLS is first enabled.
+    mode: preferTLS
+  {{- end }}
   image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
   imagePullPolicy: IfNotPresent
 
