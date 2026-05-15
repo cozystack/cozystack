@@ -1,12 +1,12 @@
 {{- if .Values.external }}
-{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $extHost := required "external is true but _namespace.host is not set" .Values._namespace.host }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}-external
   annotations:
-    external-dns.alpha.kubernetes.io/hostname: {{ .Release.Name }}.{{ .Release.Namespace }}.{{ $clusterDomain }}
+    external-dns.alpha.kubernetes.io/hostname: {{ printf "%s.%s" .Release.Name $extHost }}
 spec:
   type: LoadBalancer
   selector:
@@ -24,7 +24,7 @@ kind: Service
 metadata:
   name: {{ .Release.Name }}-dashboards-external
   annotations:
-    external-dns.alpha.kubernetes.io/hostname: {{ .Release.Name }}-dashboards.{{ .Release.Namespace }}.{{ $clusterDomain }}
+    external-dns.alpha.kubernetes.io/hostname: {{ printf "%s-dashboards.%s" .Release.Name $extHost }}
 spec:
   type: LoadBalancer
   selector:

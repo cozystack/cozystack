@@ -3,6 +3,10 @@
 {{- if eq $topologyMode "hard" }}
 {{- $whenUnsatisfiable = "DoNotSchedule" }}
 {{- end }}
+{{- /*
+Transport mTLS is always operator-managed and is not affected by tls.enabled.
+*/}}
+{{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
 ---
 apiVersion: opensearch.opster.io/v1
 kind: OpenSearchCluster
@@ -26,7 +30,12 @@ spec:
         generate: true
         perNode: true
       http:
+        {{- if $tlsEnabled }}
+        secret:
+          name: {{ .Release.Name }}-http-cert
+        {{- else }}
         generate: true
+        {{- end }}
     config:
       securityConfigSecret:
         name: {{ .Release.Name }}-security-config
@@ -39,7 +48,12 @@ spec:
     replicas: {{ .Values.dashboards.replicas | default 1 }}
     tls:
       enable: true
+      {{- if $tlsEnabled }}
+      secret:
+        name: {{ .Release.Name }}-http-cert
+      {{- else }}
       generate: true
+      {{- end }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list (.Values.dashboards.resourcesPreset | default "c1.small") .Values.dashboards.resources $) | nindent 6 }}
   {{- end }}
   nodePools:

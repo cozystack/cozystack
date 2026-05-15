@@ -1,0 +1,99 @@
+{{- /*
+NOTE: Transport mTLS is always operator-managed (spec.security.tls.transport.generate: true
+with perNode: true). This file covers HTTP layer (port 9200) and Dashboards HTTPS only.
+Setting tls.enabled: false does NOT disable transport mTLS — the operator enforces it
+regardless, as it is required by the OpenSearch security plugin.
+
+Design: ONE combined leaf Certificate covers both the HTTP API (port 9200) and Dashboards
+(port 5601) SANs. This keeps the chain at 4 resources and avoids duplicating the CA Issuer.
+*/}}
+{{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
+{{- if $tlsEnabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+---
+# Self-signed bootstrap Issuer — used only to sign the CA Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+spec:
+  selfSigned: {}
+---
+# CA Certificate. rotationPolicy: Never keeps the CA stable so existing
+# client trust bundles remain valid across cert-manager renewals.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  secretName: {{ .Release.Name }}-ca
+  duration: 87600h  # 10 years
+  isCA: true
+  commonName: {{ .Release.Name }}-ca
+  usages:
+    - signing
+    - key encipherment
+    - cert sign
+  privateKey:
+    rotationPolicy: Never
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+# CA Issuer — used to sign the leaf server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca
+---
+# Combined leaf TLS Certificate for HTTP API (port 9200) and Dashboards (port 5601).
+# A single cert with a combined SAN list is used so both services share the same
+# CA Issuer and the chain stays at exactly 4 resources.
+# The secret name ({{ .Release.Name }}-http-cert) is passed to both:
+#   spec.security.tls.http.secret.name  (OpenSearch HTTP API)
+#   spec.dashboards.tls.secret.name     (Dashboards HTTPS, when enabled)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-http-cert
+spec:
+  secretName: {{ .Release.Name }}-http-cert
+  duration: 8760h    # 1 year
+  renewBefore: 720h  # renew 30 days before expiry
+  isCA: false
+  usages:
+    - server auth
+    - signing
+    - key encipherment
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $name := .Release.Name }}
+    # OpenSearch HTTP API service (operator-created ClusterIP)
+    - {{ $name }}
+    - {{ $name }}.{{ $ns }}.svc
+    - {{ $name }}.{{ $ns }}.svc.{{ $clusterDomain }}
+    # Dashboards service (operator-created ClusterIP)
+    - {{ $name }}-dashboards
+    - {{ $name }}-dashboards.{{ $ns }}.svc
+    - {{ $name }}-dashboards.{{ $ns }}.svc.{{ $clusterDomain }}
+    {{- if .Values.external | default false }}
+    {{- $extHost := required "external is true but _namespace.host is not set" .Values._namespace.host }}
+    # External LoadBalancer DNS name (used by external-dns)
+    - {{ printf "%s.%s" $name $extHost }}
+    - {{ printf "%s-dashboards.%s" $name $extHost }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}
