@@ -160,6 +160,36 @@ See:
 
 > `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
 
+### TLS for server connections
+
+When TLS is enabled (either explicitly via `tls.enabled: true` or automatically when `external: true`), the chart creates four cert-manager resources under the release name:
+
+- `<release>-selfsigned` — a self-signed `Issuer` used only to bootstrap the CA
+- `<release>-ca` — a `Certificate` with `isCA: true`; the resulting Secret holds `ca.crt`, `tls.crt`, and `tls.key`
+- `<release>-ca` (Issuer) — a CA `Issuer` that signs the leaf certificate
+- `<release>-tls` — the leaf server `Certificate` covering all three CNPG ClusterIP services (`-rw`, `-ro`, `-r`) plus, when `external: true`, the external DNS name `<release>.<_namespace.host>`
+
+The CNPG Cluster CR references these secrets via `spec.certificates.serverCASecret` and `spec.certificates.serverTLSSecret`.
+
+**Retrieving the CA bundle** for client verification:
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get secret <release>-ca \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode
+```
+
+**Connecting with full verification** (psql example):
+
+```bash
+psql "host=<host> port=5432 dbname=app user=app \
+  sslmode=verify-full sslrootcert=ca.crt"
+```
+
+For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved to `ca.crt`. Without it, use `sslmode=require` (encrypts but does not verify the server certificate).
+
+**External SAN:** when `external: true`, the leaf cert includes `<release>.<_namespace.host>` as an additional DNS SAN so external clients can verify the hostname of the LoadBalancer endpoint.
+
 ## Parameters
 
 ### Common parameters
@@ -174,7 +204,15 @@ See:
 | `size`             | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`     |
 | `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`       |
 | `external`         | Enable external access from outside the cluster.                                                                                     | `bool`     | `false`    |
-| `version`          | PostgreSQL major version to deploy                                                                                                   | `string`   | `v18`      |
+
+
+### TLS configuration
+
+| Name          | Description                                                                                                                                                                                                         | Type     | Value  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`         | TLS configuration for server connections.                                                                                                                                                                           | `object` | `{}`   |
+| `tls.enabled` | Tri-state TLS switch. When omitted (null), TLS is enabled automatically if `external` is true and disabled otherwise. Set explicitly to `true` to force TLS on or `false` to force it off regardless of `external`. | `*bool`  | `null` |
+| `version`     | PostgreSQL major version to deploy                                                                                                                                                                                  | `string` | `v18`  |
 
 
 ### Application-specific parameters
