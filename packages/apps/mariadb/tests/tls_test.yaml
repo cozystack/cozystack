@@ -1,0 +1,610 @@
+suite: TLS configuration for MariaDB
+
+# Tests cover the tri-state tls.enabled logic:
+#   1. external=false, tls.enabled unset  → TLS disabled
+#   2. external=true,  tls.enabled unset  → TLS enabled (inherits external)
+#   3. external=true,  tls.enabled=false  → TLS disabled (explicit overrides)
+#   4. external=false, tls.enabled=true   → TLS enabled (explicit overrides)
+
+release:
+  name: my-mariadb
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+tests:
+  # -------------------------------------------------------------------
+  # Case 1: external=false, tls.enabled unset → no TLS resources
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders no documents when external=false and tls.enabled is unset"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "mariadb.yaml does not have spec.tls when external=false and tls.enabled is unset"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  # -------------------------------------------------------------------
+  # Case 2: external=true, tls.enabled unset → TLS enabled via external
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders 4 documents (selfsigned Issuer, CA Cert, CA Issuer, leaf Cert) when external=true and tls.enabled is unset"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "first document is a selfsigned Issuer when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: my-mariadb-selfsigned
+      - exists:
+          path: spec.selfSigned
+
+  - it: "second document is the CA Certificate when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: my-mariadb-ca
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-ca-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: my-mariadb-selfsigned
+
+  - it: "third document is the CA Issuer when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: my-mariadb-ca
+      - equal:
+          path: spec.ca.secretName
+          value: my-mariadb-ca-tls
+
+  - it: "fourth document is the leaf Certificate when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: my-mariadb-tls
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-tls
+      - equal:
+          path: spec.isCA
+          value: false
+      - equal:
+          path: spec.issuerRef.name
+          value: my-mariadb-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+
+  - it: "leaf Certificate SAN list contains internal primary and secondary service names when external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary.tenant-test.svc.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary.tenant-test.svc.cluster.local"
+
+  - it: "leaf Certificate SAN list includes external hostname when external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.example.com"
+
+  - it: "mariadb.yaml has spec.tls.enabled=true and serverCertSecretRef pointing to leaf cert secret when external=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: true
+      - equal:
+          path: spec.tls.serverCertSecretRef.name
+          value: my-mariadb-tls
+      - notExists:
+          path: spec.tls.serverCertIssuerRef
+
+  # -------------------------------------------------------------------
+  # Case 3: external=true, tls.enabled=false → explicit override wins
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders no documents when tls.enabled=false even if external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "mariadb.yaml has no spec.tls when tls.enabled=false even if external=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  # -------------------------------------------------------------------
+  # Case 4: external=false, tls.enabled=true → explicit override wins
+  # -------------------------------------------------------------------
+  - it: "certmanager.yaml renders 4 documents when tls.enabled=true even if external=false"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "leaf Certificate SAN list does NOT include external hostname when external=false but tls.enabled=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: "my-mariadb.example.com"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary"
+
+  - it: "mariadb.yaml has spec.tls.enabled=true and serverCertSecretRef when tls.enabled=true even if external=false"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: true
+      - equal:
+          path: spec.tls.serverCertSecretRef.name
+          value: my-mariadb-tls
+      - notExists:
+          path: spec.tls.serverCertIssuerRef
+
+  # -------------------------------------------------------------------
+  # Naming: resource names are derived from release name
+  # -------------------------------------------------------------------
+  - it: "selfsigned Issuer name uses release name as prefix"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 0
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: "^my-mariadb-"
+
+  - it: "CA Certificate duration is set to 5 years"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.duration
+          value: "43800h"
+
+  - it: "CA Certificate privateKey.rotationPolicy is Never"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: "leaf Certificate privateKey.rotationPolicy is Always"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+
+  - it: "leaf Certificate has renewBefore set"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.renewBefore
+          value: "720h"
+
+  # -------------------------------------------------------------------
+  # NB6: dashboard-resourcemap.yaml tri-state behavior
+  # -------------------------------------------------------------------
+  - it: "RBAC does not include TLS secrets when external=false and tls.enabled unset"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: false
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  - it: "RBAC includes TLS secrets when external=true and tls.enabled unset"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  - it: "RBAC does not include TLS secrets when tls.enabled=false even if external=true"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+      tls:
+        enabled: false
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  - it: "RBAC includes TLS secrets when tls.enabled=true even if external=false"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  # -------------------------------------------------------------------
+  # B2: tri-state must survive explicit tls=null without panic
+  # -------------------------------------------------------------------
+  - it: "tri-state survives explicit tls=null without panic (certmanager renders 0 docs)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls: null
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "tri-state survives explicit tls=null with external=true (inherits external)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls: null
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  # -------------------------------------------------------------------
+  # B1: CA cert usages — signing + cert sign only, no key encipherment
+  # -------------------------------------------------------------------
+  - it: "CA cert has correct usages (signing + cert sign only)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - contains:
+          path: spec.usages
+          content: signing
+      - contains:
+          path: spec.usages
+          content: cert sign
+      - lengthEqual:
+          path: spec.usages
+          count: 2
+
+  # -------------------------------------------------------------------
+  # NB7: TLS secret names are consistent between cert-manager and RBAC
+  # -------------------------------------------------------------------
+  - it: "leaf cert secretName matches RBAC resourceNames entry for TLS secret"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-tls
+
+  - it: "CA cert secretName matches RBAC resourceNames entry for CA TLS secret"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: my-mariadb-ca-tls
+
+  - it: "RBAC resourceNames contains my-mariadb-tls matching leaf cert secretName"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+
+  - it: "RBAC resourceNames contains my-mariadb-ca-tls matching CA cert secretName"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+
+  # -------------------------------------------------------------------
+  # tls.required default and user override
+  # Default is true (strict TLS) — operator manages its own internal
+  # connections. User may opt out by setting tls.required: false for
+  # migration scenarios where legacy clients cannot use TLS yet.
+  # -------------------------------------------------------------------
+  - it: "spec.tls.required defaults to true when TLS is enabled"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: true
+
+  - it: "spec.tls.required can be overridden to false for migration scenarios"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        enabled: true
+        required: false
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: false
+
+  # -------------------------------------------------------------------
+  # B4: external absent (no value set) must not append an external SAN
+  # The guard `| default false` ensures omitted external never produces
+  # a malformed entry like "my-mariadb." in the SAN list.
+  # -------------------------------------------------------------------
+  - it: "leaf cert SAN list has no external entry when external is not set"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: "my-mariadb.example.com"
+
+  # -------------------------------------------------------------------
+  # B2: explicit tls.enabled=null falls through to external (tri-state)
+  # hasKey returns true but index gives nil; kindIs "invalid" catches it.
+  # -------------------------------------------------------------------
+  - it: "explicit tls.enabled=null with external=true enables TLS (auto-on path)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: null
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "explicit tls.enabled=null with external=false keeps TLS off"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: null
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # -------------------------------------------------------------------
+  # NB: leaf cert usages are server auth + client auth + key encipherment
+  # Absence of CA-only EKUs (cert sign, signing) is also verified.
+  # -------------------------------------------------------------------
+  - it: "leaf cert usages are server auth, client auth, key encipherment only"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: client auth
+      - contains:
+          path: spec.usages
+          content: key encipherment
+      - notContains:
+          path: spec.usages
+          content: cert sign
+      - notContains:
+          path: spec.usages
+          content: signing
+      - lengthEqual:
+          path: spec.usages
+          count: 3
+
+  # -------------------------------------------------------------------
+  # Integer tls.enabled edge case
+  # The JSON schema enforces type ["boolean","null"] for tls.enabled, so
+  # integer values (e.g. 1) are rejected by schema validation before the
+  # helper even runs. The `$enabled | toString | eq "true"` path in
+  # _tls.tpl would silently treat "1" as false if schema were absent, but
+  # schema-level validation makes that path unreachable for valid inputs.
+  # Only explicit bool true or null are accepted.
+  # -------------------------------------------------------------------
+  - it: "string true for tls.enabled enables TLS (toString round-trip is safe for bool)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
