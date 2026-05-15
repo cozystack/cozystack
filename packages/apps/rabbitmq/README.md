@@ -23,6 +23,8 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 | `size`             | Persistent Volume Claim size available for application data.                                                                       | `quantity` | `10Gi`    |
 | `storageClass`     | StorageClass used to store the data.                                                                                               | `string`   | `""`      |
 | `external`         | Enable external access from outside the cluster.                                                                                   | `bool`     | `false`   |
+| `tls`              | TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.                            | `object`   | `{}`      |
+| `tls.enabled`      | Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.                       | `*bool`    | `null`    |
 | `version`          | RabbitMQ major.minor version to deploy                                                                                             | `string`   | `v4.2`    |
 
 
@@ -37,6 +39,15 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 | `vhosts[name].roles.admin`    | List of admin users.             | `[]string`          | `[]`  |
 | `vhosts[name].roles.readonly` | List of readonly users.          | `[]string`          | `[]`  |
 
+
+## TLS scope
+
+This chart enables TLS for AMQP (port 5671) and the management HTTPS interface
+(port 15671) using cert-manager. Intra-cluster Erlang distribution (port 25672)
+remains plaintext even when TLS is enabled. The RabbitMQ operator supports
+`spec.tls.disableNonTLSListeners` and inter-node mTLS via `spec.tls.caSecretName`;
+enabling Erlang distribution TLS is tracked as a follow-up and is not yet wired
+by this chart.
 
 ## Parameter examples and reference
 
