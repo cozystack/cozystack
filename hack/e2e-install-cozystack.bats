@@ -24,16 +24,18 @@
   # skipped. Writing to a file makes `set -e` trip on a render failure
   # without using `var=$(helm template ...)` captures, which `set -x`
   # would expand into the trace and balloon CI logs.
-  local kubeovn_yaml linstor_yaml
+  local kubeovn_yaml linstor_yaml certmanager_yaml
   kubeovn_yaml=$(mktemp)
   linstor_yaml=$(mktemp)
+  certmanager_yaml=$(mktemp)
   helm template packages/system/kubeovn > "$kubeovn_yaml"
   helm template packages/system/linstor > "$linstor_yaml"
-  cat "$kubeovn_yaml" "$linstor_yaml" | yq -N '
+  helm template packages/system/cert-manager > "$certmanager_yaml"
+  cat "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" | yq -N '
       (..|select(has("containers"))|.containers[]|.image),
       (..|select(has("initContainers"))|.initContainers[]|.image)
     ' | hack/e2e-prepull-images.sh
-  rm -f "$kubeovn_yaml" "$linstor_yaml"
+  rm -f "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml"
 }
 
 @test "Install Cozystack" {
