@@ -95,28 +95,40 @@ type REST struct {
 	specSchema    *structuralschema.Structural
 }
 
+// buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
+// structural-schema form used for defaulting. Returns (nil, nil) when raw
+// is empty after trimming. Returns (nil, error) for malformed JSON,
+// v1→internal conversion failures, or structural-schema construction
+// errors — callers can decide whether to log-and-continue (NewREST does)
+// or fail hard (tests do).
+func buildSpecSchema(raw string) (*structuralschema.Structural, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var v1js apiextv1.JSONSchemaProps
+	if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
+		return nil, fmt.Errorf("unmarshal v1 OpenAPI schema: %w", err)
+	}
+	scheme := runtime.NewScheme()
+	_ = internalapiext.AddToScheme(scheme)
+	_ = apiextv1.AddToScheme(scheme)
+	var ijs internalapiext.JSONSchemaProps
+	if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
+		return nil, fmt.Errorf("convert v1->internal JSONSchemaProps: %w", err)
+	}
+	s, err := structuralschema.NewStructural(&ijs)
+	if err != nil {
+		return nil, fmt.Errorf("build structural schema: %w", err)
+	}
+	return s, nil
+}
+
 // NewREST creates a new REST storage for Application with specific configuration
 func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST {
-	var specSchema *structuralschema.Structural
-
-	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
-		var v1js apiextv1.JSONSchemaProps
-		if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
-			klog.Errorf("Failed to unmarshal v1 OpenAPI schema: %v", err)
-		} else {
-			scheme := runtime.NewScheme()
-			_ = internalapiext.AddToScheme(scheme)
-			_ = apiextv1.AddToScheme(scheme)
-
-			var ijs internalapiext.JSONSchemaProps
-			if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
-				klog.Errorf("Failed to convert v1->internal JSONSchemaProps: %v", err)
-			} else if s, err := structuralschema.NewStructural(&ijs); err != nil {
-				klog.Errorf("Failed to create structural schema: %v", err)
-			} else {
-				specSchema = s
-			}
-		}
+	specSchema, err := buildSpecSchema(config.Application.OpenAPISchema)
+	if err != nil {
+		klog.Errorf("Failed to build spec schema: %v", err)
 	}
 
 	return &REST{

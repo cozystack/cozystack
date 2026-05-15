@@ -3,6 +3,7 @@
 ##
 
 ## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
 storageClass: replicated
 
 ##
@@ -78,7 +79,7 @@ storageClass: replicated
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
 ## @field {string} instanceType="u1.medium" - Virtual machine instance type.
 ## @field {quantity} diskSize="20Gi" - Persistent disk size for kubelet and containerd data.
-## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
+## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 ## @field {[]string} roles - List of node roles.
 ## @field {Resources} resources - CPU and memory resources for each worker node.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).

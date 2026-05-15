@@ -160,7 +160,13 @@
         "storageClass": {
           "description": "StorageClass used to store the Kafka data.",
           "type": "string",
-          "default": ""
+          "default": "",
+          "x-kubernetes-validations": [
+            {
+              "rule": "self == oldSelf",
+              "message": "storageClass is immutable"
+            }
+          ]
         }
       }
     },
@@ -284,7 +290,13 @@
         "storageClass": {
           "description": "StorageClass used to store the ZooKeeper data.",
           "type": "string",
-          "default": ""
+          "default": "",
+          "x-kubernetes-validations": [
+            {
+              "rule": "self == oldSelf",
+              "message": "storageClass is immutable"
+            }
+          ]
         }
       }
     }

@@ -97,6 +97,8 @@ The previous namespace-shared secret `percona-server-mongodb-users` is no longer
 kubectl --namespace <namespace> delete secret percona-server-mongodb-users
 ```
 
+> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+
 ## Parameters
 
 ### Common parameters

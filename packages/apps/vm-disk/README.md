@@ -2,6 +2,8 @@
 
 A Virtual Machine Disk
 
+> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+
 ## Parameters
 
 ### Common parameters
