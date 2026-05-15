@@ -1,3 +1,12 @@
+{{- $tlsMap := .Values.tls | default dict -}}
+{{- $tlsEnabledExplicit := hasKey $tlsMap "enabled" -}}
+{{- $tlsEnabled := false -}}
+{{- if $tlsEnabledExplicit -}}
+  {{- $tlsEnabled = index $tlsMap "enabled" -}}
+{{- else -}}
+  {{- $tlsEnabled = .Values.external | default false -}}
+{{- end -}}
+{{- $showExternal := or .Values.external (and $tlsEnabledExplicit $tlsEnabled) -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -9,7 +18,7 @@ rules:
   - services
   resourceNames:
   - {{ .Release.Name }}-kafka-bootstrap
-  {{- if .Values.external }}
+  {{- if $showExternal }}
   - {{ .Release.Name }}-kafka-external-bootstrap
   {{- end }}
   verbs: ["get", "list", "watch"]
@@ -18,7 +27,8 @@ rules:
   resources:
   - secrets
   resourceNames:
-  - {{ .Release.Name }}-clients-ca
+  - {{ .Release.Name }}-clients-ca-cert
+  - {{ .Release.Name }}-cluster-ca-cert
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
