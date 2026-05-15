@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// HTTP-layer TLS configuration.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// How strictly to enforce pod distribution across nodes and zones.
 	// +kubebuilder:default:="soft"
 	TopologySpreadPolicy TopologySpreadPolicy `json:"topologySpreadPolicy"`
@@ -97,6 +100,11 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each node.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type TLS struct {
+	// Tri-state TLS switch. When omitted (null), TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type User struct {
