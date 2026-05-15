@@ -16,6 +16,8 @@ It provides a data layer for cloud native applications, IoT messaging, and micro
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                        | `string`   | `t1.nano` |
 | `storageClass`     | StorageClass used to store the data.                                                                                           | `string`   | `""`      |
 | `external`         | Enable external access from outside the cluster.                                                                               | `bool`     | `false`   |
+| `tls`              | TLS configuration. When omitted, TLS follows the `external` flag.                                                              | `object`   | `{}`      |
+| `tls.enabled`      | Enable TLS. When omitted, TLS is enabled automatically when `external` is true.                                                | `boolean (optional)` | `null`    |
 
 
 ### Application-specific parameters
