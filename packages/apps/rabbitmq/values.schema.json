@@ -127,6 +127,21 @@
       "type": "boolean",
       "default": false
     },
+    "tls": {
+      "description": "TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "version": {
       "description": "RabbitMQ major.minor version to deploy",
       "type": "string",
