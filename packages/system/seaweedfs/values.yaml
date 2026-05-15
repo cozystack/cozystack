@@ -30,6 +30,21 @@ seaweedfs:
         type: "persistentVolumeClaim"
         size: "10Gi"
         maxVolumes: 0
+    sidecars: |-
+      - name: exporter
+        image: mdoubez/filestat_exporter:latest
+        ports:
+        - containerPort: 9943
+          name: filemetrics
+        args:
+        - "-config.file"
+        - "none"
+        - "-path.cwd"
+        - "/data1"
+        - "bucket-*.dat"
+        volumeMounts:
+        - mountPath: /data1/
+          name: data1
   filer:
     replicas: 2
     #  replication type is XYZ:
