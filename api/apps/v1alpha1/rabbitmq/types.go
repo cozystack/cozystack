@@ -36,6 +36,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls,omitempty"`
 	// RabbitMQ major.minor version to deploy
 	// +kubebuilder:default:="v4.2"
 	Version Version `json:"version"`
@@ -59,6 +62,11 @@ type Roles struct {
 	Admin []string `json:"admin,omitempty"`
 	// List of readonly users.
 	Readonly []string `json:"readonly,omitempty"`
+}
+
+type TLS struct {
+	// Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type User struct {
