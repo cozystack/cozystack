@@ -24,22 +24,16 @@
   # skipped. Writing to a file makes `set -e` trip on a render failure
   # without using `var=$(helm template ...)` captures, which `set -x`
   # would expand into the trace and balloon CI logs.
-  # cert-manager: every operator that mounts a cert-manager-issued webhook
-  # Secret blocks on the controller; a cold bootstrap can blow progressDeadline.
-  # cozytest.sh runs @test bodies under /bin/sh (POSIX), so no bash arrays.
-  local charts="packages/system/kubeovn packages/system/linstor packages/system/cert-manager"
-  local rendered=""
-  local chart f
-  for chart in $charts; do
-    f=$(mktemp)
-    helm template "$chart" > "$f"
-    rendered="$rendered $f"
-  done
-  cat $rendered | yq -N '
+  local kubeovn_yaml linstor_yaml
+  kubeovn_yaml=$(mktemp)
+  linstor_yaml=$(mktemp)
+  helm template packages/system/kubeovn > "$kubeovn_yaml"
+  helm template packages/system/linstor > "$linstor_yaml"
+  cat "$kubeovn_yaml" "$linstor_yaml" | yq -N '
       (..|select(has("containers"))|.containers[]|.image),
       (..|select(has("initContainers"))|.initContainers[]|.image)
     ' | hack/e2e-prepull-images.sh
-  rm -f $rendered
+  rm -f "$kubeovn_yaml" "$linstor_yaml"
 }
 
 @test "Install Cozystack" {
