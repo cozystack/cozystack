@@ -78,15 +78,29 @@ tests:
           content: test-kafka-kafka-external-bootstrap
         documentIndex: 0
 
-  # Role grants access to CA secret
-  - it: grants access to clients CA secret
+  # Role grants access to CA secrets
+  - it: grants access to clients CA cert secret
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
       - contains:
           path: rules[1].resourceNames
+          content: test-kafka-clients-ca-cert
+        documentIndex: 0
+      - notContains:
+          path: rules[1].resourceNames
           content: test-kafka-clients-ca
+        documentIndex: 0
+
+  - it: grants access to cluster CA cert secret
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-kafka-cluster-ca-cert
         documentIndex: 0
 
   # Role grants access to workloadmonitors
@@ -102,6 +116,36 @@ tests:
       - equal:
           path: rules[2].apiGroups[0]
           value: cozystack.io
+        documentIndex: 0
+
+  # External bootstrap service present when tls.enabled=true and external=false ($showExternal is true)
+  - it: grants access to external bootstrap service when tls.enabled=true and external=false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - contains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-external-bootstrap
+        documentIndex: 0
+
+  # External bootstrap service absent when both external=false and tls.enabled=false
+  - it: does not grant access to external bootstrap when tls.enabled is explicitly false and external is false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - notContains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-external-bootstrap
         documentIndex: 0
 
   # RoleBinding references correct Role

@@ -1,0 +1,138 @@
+suite: Kafka TLS tests
+
+templates:
+  - templates/kafka.yaml
+
+tests:
+  ########################################
+  # External listener TLS — tri-state    #
+  ########################################
+
+  # Case 1: external=true, tls.enabled unset → listener TLS inherits external (true)
+  - it: enables TLS on external listener when external is true and tls.enabled is unset
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
+
+  # Case 2: external=false, tls.enabled unset → no external listener at all
+  - it: does not create external listener when external is false and tls.enabled is unset
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 2
+
+  # Case 3: external=true, tls.enabled=false → explicit override disables TLS on listener
+  - it: disables TLS on external listener when tls.enabled is explicitly false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+      tls.enabled: false
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: false
+
+  # Case 4: external=true, tls.enabled=true → explicit TLS on listener
+  - it: enables TLS on external listener when tls.enabled is explicitly true
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+      tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
+
+  # Case 5b: external=false, tls.enabled=false → no external listener (both explicitly false)
+  - it: does not create external listener when both external and tls.enabled are explicitly false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 2
+
+  # Case 5: external=false, tls.enabled=true → external listener is created with TLS enabled
+  - it: creates external listener with TLS when tls.enabled is true even if external is false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+      tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
+
+  ########################################
+  # Internal listeners unaffected by TLS #
+  ########################################
+
+  - it: plain internal listener is never affected by tls.enabled
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+      tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: plain
+            port: 9092
+            type: internal
+            tls: false
+
+  - it: tls internal listener is never affected by tls.enabled
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+      tls.enabled: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: tls
+            port: 9093
+            type: internal
+            tls: true
