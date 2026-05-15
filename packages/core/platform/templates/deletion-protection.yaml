@@ -16,6 +16,8 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
   name: cozystack-no-delete-guardrail
+  labels:
+    platform.cozystack.io/no-delete: "true"
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -36,6 +38,8 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
   name: cozystack-no-delete-guardrail
+  labels:
+    platform.cozystack.io/no-delete: "true"
 spec:
   policyName: cozystack-no-delete-guardrail
   validationActions: [Deny]
