@@ -4,18 +4,32 @@
 
 ### Common parameters
 
-| Name                   | Description                                                                                                                       | Type       | Value       |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------- |
-| `replicas`             | Number of OpenSearch nodes in the cluster.                                                                                        | `int`      | `3`         |
-| `resources`            | Explicit CPU and memory configuration for each OpenSearch node. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`        |
-| `resources.cpu`        | CPU available to each node.                                                                                                       | `quantity` | `""`        |
-| `resources.memory`     | Memory (RAM) available to each node.                                                                                              | `quantity` | `""`        |
-| `resourcesPreset`      | Default sizing preset used when `resources` is omitted. OpenSearch requires minimum 2Gi memory.                                   | `string`   | `c1.medium` |
-| `size`                 | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`      |
-| `storageClass`         | StorageClass used to store the data.                                                                                              | `string`   | `""`        |
-| `external`             | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`     |
-| `topologySpreadPolicy` | How strictly to enforce pod distribution across nodes and zones.                                                                  | `string`   | `soft`      |
-| `version`              | OpenSearch major version to deploy.                                                                                               | `string`   | `v2`        |
+| Name               | Description                                                                                                                       | Type       | Value       |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------- |
+| `replicas`         | Number of OpenSearch nodes in the cluster.                                                                                        | `int`      | `3`         |
+| `resources`        | Explicit CPU and memory configuration for each OpenSearch node. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`        |
+| `resources.cpu`    | CPU available to each node.                                                                                                       | `quantity` | `""`        |
+| `resources.memory` | Memory (RAM) available to each node.                                                                                              | `quantity` | `""`        |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted. OpenSearch requires minimum 2Gi memory.                                   | `string`   | `c1.medium` |
+| `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`      |
+| `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`        |
+| `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`     |
+
+
+### TLS configuration
+
+| Name          | Description                                                                                                                                              | Type     | Value  |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`         | HTTP-layer TLS configuration.                                                                                                                            | `object` | `{}`   |
+| `tls.enabled` | Tri-state TLS switch. When omitted (null), TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override. | `*bool`  | `null` |
+
+
+### Common parameters
+
+| Name                   | Description                                                      | Type     | Value  |
+| ---------------------- | ---------------------------------------------------------------- | -------- | ------ |
+| `topologySpreadPolicy` | How strictly to enforce pod distribution across nodes and zones. | `string` | `soft` |
+| `version`              | OpenSearch major version to deploy.                              | `string` | `v2`   |
 
 
 ### Image configuration
