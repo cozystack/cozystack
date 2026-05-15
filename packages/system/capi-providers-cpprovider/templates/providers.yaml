@@ -4,7 +4,7 @@ metadata:
   name: kamaji
 spec:
   # https://github.com/clastix/cluster-api-control-plane-provider-kamaji
-  version: v0.16.0-cp
+  version: v0.16.0-cp-talos-csr-signer.1
   fetchConfig:
     selector:
       matchLabels:

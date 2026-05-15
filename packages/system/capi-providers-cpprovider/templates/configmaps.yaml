@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: v0.16.0-cp
+  name: v0.16.0-cp-talos-csr-signer.1
   labels:
     cp-components: cozy
   annotations:
