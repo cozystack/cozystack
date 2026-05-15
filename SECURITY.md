@@ -26,10 +26,15 @@ Supported versions may change over time as new release lines are cut. The author
 
 Please do **not** report security vulnerabilities through public GitHub issues, discussions, pull requests, Telegram, Slack, or other public community channels.
 
-At the moment, this repository does not publish a dedicated private security mailbox in-tree. If you need to report a vulnerability:
+The preferred way to report a vulnerability is through **GitHub Private Vulnerability Reporting**:
 
-1. Contact one of the project maintainers listed in `CODEOWNERS` using an existing private channel you already have.
-2. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
+1. Go to the **Security** tab of the affected repository (or use [this link for the main repository](https://github.com/cozystack/cozystack/security/advisories/new)).
+2. Click **"Report a vulnerability"** and fill in the details.
+3. The report will be visible only to the repository maintainers.
+
+Alternatively, you can email the security team directly at **cncf-cozystack-security@lists.cncf.io**. This is a private mailing list monitored by project maintainers.
+
+If neither GitHub nor email works for you, you may contact a project maintainer listed in `CODEOWNERS` through an existing private channel. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
 
 Please do not include exploit details, credentials, tokens, private keys, customer data, or other sensitive material in any public message.
 
@@ -77,6 +82,11 @@ Security is part of the normal Cozystack development and release process. Curren
 - automated pull request checks, including pre-commit validation, unit tests, builds, and end-to-end testing
 - release automation with patch releases, release branches, and backport workflows
 - ongoing maintenance of packaged dependencies and platform integrations across supported release lines
+- automated vulnerability scanning of all organization repositories and container images using Trivy
+- GitHub Private Vulnerability Reporting enabled on all public repositories
+- GitHub Secret Scanning and Push Protection enabled on all repositories
+- two-factor authentication required for all organization members
+- monthly public security summaries covering triaged findings
 
 Because Cozystack is an integration-heavy platform, some vulnerabilities may require coordination across multiple repositories or with upstream maintainers before a public fix can be released.
 
