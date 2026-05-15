@@ -7,6 +7,20 @@
       "type": "boolean",
       "default": false
     },
+    "tls": {
+      "description": "TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
     "topics": {
       "description": "Topics configuration.",
       "type": "array",
