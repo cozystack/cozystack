@@ -3,11 +3,14 @@
   platform.cozystack.io/no-delete=true label. Native, in-process CEL eval —
   no webhook DaemonSet, no Service, no TLS, no image to maintain.
 
-  Requires Kubernetes 1.30+ (admissionregistration.k8s.io/v1 GA).
+  Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). The capability
+  gate below keeps the template renderable on clusters that pre-date 1.30
+  (the install simply skips the guardrail there).
 
   Bypass: remove the label, then delete.
     kubectl label <kind> <name> platform.cozystack.io/no-delete-
 */}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -40,3 +43,4 @@ spec:
     objectSelector:
       matchLabels:
         platform.cozystack.io/no-delete: "true"
+{{- end }}
