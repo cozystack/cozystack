@@ -29,7 +29,7 @@ type ConfigSpec struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Kubernetes affinity configuration for Redis and Sentinel pods.
 	// +kubebuilder:default:={}
-	Affinity Affinity `json:"affinity"`
+	Affinity Affinity `json:"affinity,omitempty"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="1Gi"
 	Size resource.Quantity `json:"size"`

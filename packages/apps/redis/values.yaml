@@ -68,7 +68,7 @@ resourcesPreset: "t1.nano"
 ## @field {object} [redis] - Affinity rules for Redis pods.
 ## @field {object} [sentinel] - Affinity rules for Sentinel pods.
 
-## @param {Affinity} affinity - Kubernetes affinity configuration for Redis and Sentinel pods.
+## @param {Affinity} [affinity] - Kubernetes affinity configuration for Redis and Sentinel pods.
 affinity:
   redis: {}
   sentinel: {}
