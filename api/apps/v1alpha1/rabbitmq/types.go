@@ -7,6 +7,7 @@ package rabbitmq
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:object:root=true
@@ -35,6 +36,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// Affinity scheduling rules applied to RabbitMQ pods.
+	// +kubebuilder:default:={}
+	Affinity *k8sRuntime.RawExtension `json:"affinity,omitempty"`
 	// RabbitMQ major.minor version to deploy
 	// +kubebuilder:default:="v4.2"
 	Version Version `json:"version"`

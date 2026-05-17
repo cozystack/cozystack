@@ -118,6 +118,12 @@
       "type": "boolean",
       "default": false
     },
+    "affinity": {
+      "description": "Affinity scheduling rules applied to RabbitMQ pods.",
+      "type": "object",
+      "default": {},
+      "x-kubernetes-preserve-unknown-fields": true
+    },
     "version": {
       "description": "RabbitMQ major.minor version to deploy",
       "type": "string",
