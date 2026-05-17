@@ -13,17 +13,20 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 
 ### Common parameters
 
-| Name               | Description                                                                                                                     | Type       | Value     |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
-| `replicas`         | Number of Redis replicas.                                                                                                       | `int`      | `2`       |
-| `resources`        | Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
-| `resources.cpu`    | CPU available to each replica.                                                                                                  | `quantity` | `""`      |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                         | `quantity` | `""`      |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                         | `string`   | `t1.nano` |
-| `size`             | Persistent Volume Claim size available for application data.                                                                    | `quantity` | `1Gi`     |
-| `storageClass`     | StorageClass used to store the data.                                                                                            | `string`   | `""`      |
-| `external`         | Enable external access from outside the cluster.                                                                                | `bool`     | `false`   |
-| `version`          | Redis major version to deploy                                                                                                   | `string`   | `v8`      |
+| Name                | Description                                                                                                                     | Type       | Value     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `replicas`          | Number of Redis replicas.                                                                                                       | `int`      | `2`       |
+| `resources`         | Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `resources.cpu`     | CPU available to each replica.                                                                                                  | `quantity` | `""`      |
+| `resources.memory`  | Memory (RAM) available to each replica.                                                                                         | `quantity` | `""`      |
+| `resourcesPreset`   | Default sizing preset used when `resources` is omitted.                                                                         | `string`   | `t1.nano` |
+| `affinity`          | Kubernetes affinity configuration for Redis and Sentinel pods.                                                                  | `object`   | `{}`      |
+| `affinity.redis`    | Affinity rules for Redis pods.                                                                                                  | `object`   | `{}`      |
+| `affinity.sentinel` | Affinity rules for Sentinel pods.                                                                                               | `object`   | `{}`      |
+| `size`              | Persistent Volume Claim size available for application data.                                                                    | `quantity` | `1Gi`     |
+| `storageClass`      | StorageClass used to store the data.                                                                                            | `string`   | `""`      |
+| `external`          | Enable external access from outside the cluster.                                                                                | `bool`     | `false`   |
+| `version`           | Redis major version to deploy                                                                                                   | `string`   | `v8`      |
 
 
 ### Application-specific parameters

@@ -94,6 +94,25 @@
         "2xlarge"
       ]
     },
+    "affinity": {
+      "description": "Kubernetes affinity configuration for Redis and Sentinel pods.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "redis": {
+          "description": "Affinity rules for Redis pods.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        },
+        "sentinel": {
+          "description": "Affinity rules for Sentinel pods.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        }
+      }
+    },
     "size": {
       "description": "Persistent Volume Claim size available for application data.",
       "default": "1Gi",

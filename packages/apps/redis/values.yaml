@@ -64,6 +64,15 @@ resources: {}
 ## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "t1.nano"
 
+## @typedef {struct} Affinity - Kubernetes affinity configuration.
+## @field {object} [redis] - Affinity rules for Redis pods.
+## @field {object} [sentinel] - Affinity rules for Sentinel pods.
+
+## @param {Affinity} affinity - Kubernetes affinity configuration for Redis and Sentinel pods.
+affinity:
+  redis: {}
+  sentinel: {}
+
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 1Gi
 
