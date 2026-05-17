@@ -93,7 +93,7 @@ tests:
   # Listeners              #
   ##########################
 
-  - it: configures internal listeners by default
+  - it: configures internal listeners by default and omits external
     release:
       name: test-kafka
       namespace: tenant-test
@@ -110,20 +110,23 @@ tests:
       - equal:
           path: spec.kafka.listeners[1].type
           value: internal
-      - equal:
-          path: spec.kafka.listeners[2].name
-          value: external
-      - equal:
-          path: spec.kafka.listeners[2].type
-          value: internal
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 2
 
-  - it: sets external listener to loadbalancer when external is true
+  - it: adds loadbalancer external listener when external is true
     release:
       name: test-kafka
       namespace: tenant-test
     set:
       external: true
     asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 3
+      - equal:
+          path: spec.kafka.listeners[2].name
+          value: external
       - equal:
           path: spec.kafka.listeners[2].type
           value: loadbalancer

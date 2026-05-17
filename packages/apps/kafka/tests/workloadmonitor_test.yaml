@@ -5,52 +5,70 @@ templates:
 
 tests:
   ##################################
-  # Combined pool (new instance)   #
+  # Pool layout (always separated) #
   ##################################
 
-  - it: creates only kafka WorkloadMonitor for new instance
+  - it: renders broker and controller WorkloadMonitors
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
       - hasDocuments:
-          count: 1
+          count: 2
       - isKind:
           of: WorkloadMonitor
+        documentIndex: 0
+      - isKind:
+          of: WorkloadMonitor
+        documentIndex: 1
+
+  - it: names broker monitor as the release and controller monitor with -controller suffix
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
       - equal:
           path: metadata.name
           value: test-kafka
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-kafka-controller
+        documentIndex: 1
 
-  - it: sets type kafka for combined pool
+  - it: sets broker monitor type to kafka-broker with pool-name selector
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
       - equal:
           path: spec.type
-          value: kafka
-
-  - it: does not add pool-name selector for combined pool
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - notExists:
+          value: kafka-broker
+        documentIndex: 0
+      - equal:
           path: spec.selector["strimzi.io/pool-name"]
+          value: test-kafka-broker
+        documentIndex: 0
 
-  - it: sets correct kafka monitor fields
+  - it: sets controller monitor type to kafka-controller with pool-name selector
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
       - equal:
-          path: spec.kind
-          value: kafka
+          path: spec.type
+          value: kafka-controller
+        documentIndex: 1
       - equal:
-          path: spec.minReplicas
-          value: 1
+          path: spec.selector["strimzi.io/pool-name"]
+          value: test-kafka-controller
+        documentIndex: 1
 
-  - it: sets replicas from kafka.replicas
+  ##################################
+  # Replicas                       #
+  ##################################
+
+  - it: broker monitor replicas track kafka.replicas
     release:
       name: test-kafka
       namespace: tenant-test
@@ -61,23 +79,64 @@ tests:
       - equal:
           path: spec.replicas
           value: 5
+        documentIndex: 0
 
-  - it: sets correct selector labels
+  - it: controller monitor has 3 replicas when kafka.replicas >= 2
     release:
-      name: my-kafka
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+        documentIndex: 1
+
+  - it: controller monitor falls back to 1 replica when kafka.replicas <= 1
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 1
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentIndex: 1
+
+  ##################################
+  # Common fields                  #
+  ##################################
+
+  - it: sets kind=kafka and minReplicas=1 on both monitors
+    release:
+      name: test-kafka
       namespace: tenant-test
     asserts:
       - equal:
-          path: spec.selector["app.kubernetes.io/instance"]
-          value: my-kafka
-      - equal:
-          path: spec.selector["app.kubernetes.io/name"]
+          path: spec.kind
           value: kafka
+        documentIndex: 0
+      - equal:
+          path: spec.minReplicas
+          value: 1
+        documentIndex: 0
+      - equal:
+          path: spec.kind
+          value: kafka
+        documentIndex: 1
+      - equal:
+          path: spec.minReplicas
+          value: 1
+        documentIndex: 1
 
-  - it: does not create zookeeper WorkloadMonitor for new instance
+  - it: does not render a zookeeper WorkloadMonitor
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
       - hasDocuments:
-          count: 1
+          count: 2

@@ -36,20 +36,6 @@
 | `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).                | `quantity` | `5Gi`      |
 
 
-### ZooKeeper configuration
-
-| Name                         | Description                                                                                              | Type       | Value      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
-| `zookeeper`                  | ZooKeeper configuration (only used for existing instances migrating from ZooKeeper to KRaft).            | `object`   | `{}`       |
-| `zookeeper.replicas`         | Number of ZooKeeper replicas.                                                                            | `int`      | `3`        |
-| `zookeeper.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
-| `zookeeper.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`       |
-| `zookeeper.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
-| `zookeeper.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
-| `zookeeper.size`             | Persistent Volume size for ZooKeeper.                                                                    | `quantity` | `5Gi`      |
-| `zookeeper.storageClass`     | StorageClass used to store the ZooKeeper data.                                                           | `string`   | `""`       |
-
-
 ## Parameter examples and reference
 
 ### resources and resourcesPreset
@@ -91,22 +77,45 @@ topics:
 
 ## ZooKeeper to KRaft Migration
 
-New Kafka instances deploy directly in KRaft (Kafka Raft) mode. Existing
-ZooKeeper-based instances are migrated automatically using Strimzi's built-in
-migration state machine.
+The chart itself is now pure KRaft — it ships a Kafka CR with
+`strimzi.io/kraft: enabled` and separate broker + controller `KafkaNodePool`
+resources, with no `spec.zookeeper` block.
+
+Existing ZooKeeper-based instances are migrated automatically on the next chart
+upgrade by a Helm `pre-upgrade` Job, gated by a `<release>-kafka-deployed-version`
+ConfigMap shipped with the chart.
 
 ### How it works
 
-1. On upgrade, existing ZooKeeper instances receive the `strimzi.io/kraft: migration` annotation.
-2. Strimzi creates a dedicated KRaft controller pool alongside the existing brokers (separate pool layout).
-3. The migration progresses through these states:
-   `ZooKeeper` -> `KRaftMigration` -> `KRaftDualWriting` -> `KRaftPostMigration` -> `KRaft`
-4. Once the state reaches `KRaft`, ZooKeeper pods are removed automatically.
-5. Broker data is preserved throughout the migration — the existing broker pool is kept intact.
+1. The Job renders only when the version ConfigMap is missing or stamped below `"1"`.
+2. On upgrade, it inspects the existing Kafka CR's `status.kafkaMetadataState`:
+   - If the CR is absent (fresh install) or already in `KRaft`, it exits immediately.
+   - Otherwise (typically `ZooKeeper` state), it creates the broker + controller
+     `KafkaNodePool` resources matching the chart's values and annotates the
+     Kafka CR with `strimzi.io/node-pools=enabled` and `strimzi.io/kraft=migration`.
+3. The Job polls `status.kafkaMetadataState` and waits for the migration to
+   reach `KRaftPostMigration | PreKRaft | KRaft`.
+4. It then flips the annotation to `strimzi.io/kraft=enabled` and waits until
+   the state reaches `KRaft`.
+5. When the Job succeeds, Helm applies the chart's KRaft manifests (which match
+   the post-migration state) and stamps the ConfigMap to `"1"`. Subsequent
+   reconciles see the ConfigMap and skip the Job entirely.
+6. If the Job fails or times out, Helm aborts the upgrade — the ConfigMap stays
+   below the threshold, so the next reconcile re-runs the same Job.
+
+### Observability and escape hatches
+
+- Tail the Job logs to follow migration progress:
+  `kubectl logs -n <namespace> job/<release>-kafka-migration`
+- Monitor `status.kafkaMetadataState` on the Kafka CR directly.
+- If migration gets stuck before `KRaftPostMigration`, Strimzi's `rollback`
+  annotation stays available as a manual escape hatch:
+  `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite`,
+  then delete the failed Job and retry.
 
 ### Important notes
 
-- **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi releases will only support KRaft.
-- The migration is fully automated — no manual intervention is required.
-- Monitor progress by checking `status.kafkaMetadataState` on the Kafka CR.
-- The `kafka.controllerStorageSize` parameter controls PV size for the new KRaft controller nodes (default: 5Gi).
+- **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi
+  releases only support KRaft.
+- The `kafka.controllerStorageSize` parameter controls PV size for the new
+  KRaft controller nodes (default: `5Gi`).

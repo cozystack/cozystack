@@ -18,7 +18,7 @@ tests:
           of: RoleBinding
         documentIndex: 1
 
-  - it: allows access to kafka-bootstrap service
+  - it: allows access to internal kafka-bootstrap service
     release:
       name: test-kafka
       namespace: tenant-test
@@ -26,6 +26,30 @@ tests:
       - contains:
           path: rules[0].resourceNames
           content: test-kafka-kafka-bootstrap
+        documentIndex: 0
+
+  - it: omits external kafka bootstrap service when external is false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - notContains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-external-bootstrap
+        documentIndex: 0
+
+  - it: allows access to external kafka bootstrap service when external is true
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-external-bootstrap
         documentIndex: 0
 
   - it: allows access to clients-ca secret
@@ -38,7 +62,7 @@ tests:
           content: test-kafka-clients-ca
         documentIndex: 0
 
-  - it: allows access to kafka workloadmonitor for new instance
+  - it: allows access to broker and controller workloadmonitors
     release:
       name: test-kafka
       namespace: tenant-test
@@ -47,8 +71,12 @@ tests:
           path: rules[2].resourceNames
           content: test-kafka
         documentIndex: 0
+      - contains:
+          path: rules[2].resourceNames
+          content: test-kafka-controller
+        documentIndex: 0
 
-  - it: does not reference zookeeper or controller monitors for new instance
+  - it: does not reference zookeeper workloadmonitor
     release:
       name: test-kafka
       namespace: tenant-test
@@ -56,8 +84,4 @@ tests:
       - notContains:
           path: rules[2].resourceNames
           content: test-kafka-zookeeper
-        documentIndex: 0
-      - notContains:
-          path: rules[2].resourceNames
-          content: test-kafka-controller
         documentIndex: 0

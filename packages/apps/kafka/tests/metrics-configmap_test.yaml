@@ -26,7 +26,7 @@ tests:
           path: data["kafka-metrics-config.yml"]
           pattern: raft-metrics
 
-  - it: does not include zookeeper metrics for new instance
+  - it: does not include zookeeper metrics
     release:
       name: test-kafka
       namespace: tenant-test
