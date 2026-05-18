@@ -11,6 +11,77 @@ this file explains the *why* and the *how they fit together*.
 
 ---
 
+## Executive Summary
+
+By **May 2028**, Cozystack should be a credible candidate for the open standard
+platform layer for building clouds — recognized inside the CNCF ecosystem,
+adopted in production by organizations across multiple geographies and verticals,
+and governed openly by a community wider than any single company. Linux
+illustrates what "open standard for a category" looks like over decades; the
+two-year window covered here is the *starting condition* for that long arc, not
+the destination.
+
+Concretely, success by the end of the horizon means all of the following are
+true at once:
+
+- **CNCF maturity.** Project is **Incubating** (achieved 2026 Q3) with a
+  Graduated application drafted (2028 Q1). Third-party security audit complete
+  and findings remediated.
+- **Open specifications.** **Eight Cozystack-authored specifications** —
+  CP-API (Package), CT-API (Tenant), Host OS Contract, GitOps Engine
+  Interface, Fleet API, Cloud Native AI Inference Gateway, Block Replication
+  CSI Extension, Tenant FinOps API — are in or through the relevant standards
+  body process. At least one is ratified, and at least four have a second
+  independent implementation.
+- **Security posture.** OpenSSF Best Practices **Gold**, OSPS Baseline **L3**,
+  OpenSSF Scorecard **≥ 9.0**, **SLSA Build L3**, CSAF VEX disclosure
+  pipeline, EU CRA-compliant reporting, all-green CLOMonitor checks.
+- **Storage independence.** **blockstor** as the production-default replicated
+  block storage in Cozystack 3.0, with LINSTOR maintained as a legacy opt-in.
+  blockstor itself a CNCF-hosted independent project.
+- **AI/ML platform.** **Inference Gateway GA**, GPU FinOps tenant view,
+  managed model registry, multi-tenant GPU sharing (MIG/vGPU/time-slicing),
+  agentic and multi-modal workload support — all production-grade and
+  documented as reference for NVIDIA NCP-aligned deployments.
+- **Multi-cluster.** **Fleet API v1.0 GA**. Federation across ≥ 100 clusters
+  in publicly attested production deployments.
+- **Marketplace.** **≥ 100 certified applications** across sub-categories
+  (AI/ML, Databases, Messaging, Observability, Security, Networking, DevTools).
+  Third-party publisher program operating. Signed packages, SBOM-attested
+  artifacts, vulnerability gates.
+- **Conformance Program.** **Certified Cozystack Provider / App / Storage
+  Backend / Host OS** all operating, with multiple certified entities per
+  category.
+- **Governance and community.** ≥ 10 active SIGs · ≥ 10 maintainers from
+  ≥ 5 different organizations · ≥ 30 public production adopters · public
+  vendor-neutrality dashboard live and maintained.
+- **Adoption channels.** "Tested on Cozystack" hardware program with ≥ 20
+  certified configurations across ≥ 3 vendors · co-published host OS profiles
+  with ≥ 4 Linux distributions · managed Cozystack offerings from European
+  service providers · ≥ 12 conference talks per calendar year · **Cozystack
+  Admin Certification (CCA) GA** with measurable labor-market presence.
+- **Documentation and materials.** Versioned docs per supported release line ·
+  auto-generated API reference per release · 11 published reference
+  architectures · technical whitepaper · security whitepaper · TCO calculator
+  · vendor lock-in analysis · ≥ 5 published case studies · migration
+  playbooks from VMware / OpenStack / Proxmox / KVM · Cozystack Academy with
+  four courses live.
+- **Compliance enablers for downstream.** PCI DSS v4.0.1 reference
+  architecture · SOC 2 Type II evidence pack · ISO/IEC 5230 (OpenChain)
+  self-certified · EU CRA shared-responsibility matrix · CIS Kubernetes
+  Benchmark profile · Threat Model published.
+
+None of these outcomes is achievable by code alone. Each requires sustained,
+coordinated work across **twelve strategic tracks** (§5), the **Standardization
+Strategy** (§8), and the **Conformance Program** (§6). The remainder of this
+document is the breakdown of how each commitment above is delivered.
+
+The single fastest way to derail this plan is to remain a single-vendor
+project. Maintainer diversity (§5 Track 11) is the highest-priority risk
+mitigation in the entire roadmap.
+
+---
+
 ## 1. Vision
 
 Cozystack aims to become the open standard platform layer for building clouds —
