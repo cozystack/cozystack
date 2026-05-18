@@ -1,0 +1,17 @@
+diff --git a/packages/system/kamaji/charts/kamaji/controller-gen/validating-webhook.yaml b/packages/system/kamaji/charts/kamaji/controller-gen/validating-webhook.yaml
+index 0000000..0000001 100644
+--- a/charts/kamaji/controller-gen/validating-webhook.yaml
++++ b/charts/kamaji/controller-gen/validating-webhook.yaml
+@@ -1,3 +1,4 @@
++{{- if not .Values.telemetry.disabled }}
+ - admissionReviewVersions:
+     - v1
+   clientConfig:
+@@ -19,6 +20,7 @@
+       resources:
+         - tenantcontrolplanes
+   sideEffects: None
++{{- end }}
+ - admissionReviewVersions:
+     - v1
+   clientConfig:
