@@ -1,0 +1,19 @@
+diff --git a/packages/system/kubevirt-cdi-operator/templates/cdi-operator.yaml b/packages/system/kubevirt-cdi-operator/templates/cdi-operator.yaml
+index f46ba09e6..03ac3b3a2 100644
+--- a/packages/system/kubevirt-cdi-operator/templates/cdi-operator.yaml
++++ b/packages/system/kubevirt-cdi-operator/templates/cdi-operator.yaml
+@@ -5782,6 +5782,14 @@ spec:
+             scheme: HTTP
+           initialDelaySeconds: 5
+           timeoutSeconds: 10
++        startupProbe:
++          httpGet:
++            path: /healthz
++            port: 8444
++            scheme: HTTP
++          periodSeconds: 5
++          failureThreshold: 30
++          timeoutSeconds: 10
+         resources:
+           requests:
+             cpu: 100m
