@@ -118,9 +118,9 @@ The two-year plan brings these tracks into the public roadmap.
 
 | Half | Primary Goal | Headline Outcomes |
 |---|---|---|
-| H2 2026 (Jun–Dec) | Incubation push + enterprise foundations | CNCF Incubation, OSPS Baseline L2, OpenSSF Passing badge, public release-train policy, Marketplace alpha, host-OS contract documented. |
-| H1 2027 (Jan–Jun) | AI platform v1 + multi-cluster GA | Cozystack 2.0, blockstor alpha, Fleet beta, AI Platform MVP, SOC 2 Type I readiness, OSPS Baseline L3, OpenSSF Silver. |
-| H2 2027 (Jul–Dec) | Enterprise scale + Marketplace mature | Public scale envelope, blockstor beta, AI Platform GA, certified-apps program, SLSA Build L3, SOC 2 Type II evidence collection, OpenSSF Gold. |
+| H2 2026 (Jun–Dec) | Incubation push + enterprise foundations | CNCF Incubation, OSPS Baseline L2, OpenSSF Passing badge, public release-train policy, Marketplace alpha, host-OS contract documented, Argo CD experimental, GitLab integration alpha. |
+| H1 2027 (Jan–Jun) | AI platform v1 + multi-cluster GA | Cozystack 2.0, blockstor alpha, Fleet beta, AI Platform MVP, SOC 2 Type I readiness, OSPS Baseline L3, OpenSSF Silver, Argo CD beta, GitLab CI integration. |
+| H2 2027 (Jul–Dec) | Enterprise scale + Marketplace mature | Public scale envelope, blockstor beta, AI Platform GA, certified-apps program, SLSA Build L3, SOC 2 Type II evidence collection, OpenSSF Gold, Argo CD GA, GitLab integration GA. |
 | H1 2028 (Jan–May) | Graduated-tier prep + standard play | Cozystack Conformance Program, certified providers/apps/storage/OS, third-party security audit completed, EU CRA compliance posture, Graduated application drafted. |
 
 ## 5. Tracks
@@ -135,11 +135,12 @@ contract.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | Close in-flight items #1246 #1247 #1262 #1265. Cut `v1.5.0`. Publish `API Stability Policy` (alpha/beta/stable lanes, deprecation window). |
-| 2026 Q4 | Distroless images (#1261). Automated platform updates (#1266). Public **Release Trains** policy: `stable`, `fast`, `LTS`. Public support matrix for Kubernetes / host OS / Cilium / KubeVirt / storage backends. |
-| 2027 Q1 | **Cozystack 2.0** — backwards-compatibility contract published; major API revision based on production feedback; HA control-plane improvements (stretched control plane, multi-AZ, etcd backup automation). |
-| 2027 Q2 | `Platform Health API` covering operator, packages, Flux, storage, networking, backups, ingress, auth. Explicit lifecycle states for apps, backups, restores, VMs, tenant clusters. |
-| 2027 Q3 | Performance optimizations based on H1 2027 benchmarks. Per-tenant resource isolation hardening (full cgroup v2 adoption, memory.high pressure). |
+| 2026 Q3 | Close in-flight items #1246 #1247 #1262 #1265. Cut `v1.5.0`. Publish `API Stability Policy` (alpha/beta/stable lanes, deprecation window). Scope the **GitOps Engine Abstraction** CzEP — decouple package delivery from the underlying engine so Flux remains the default while a second engine becomes feasible. |
+| 2026 Q4 | Distroless images (#1261). Automated platform updates (#1266). Public **Release Trains** policy: `stable`, `fast`, `LTS`. Public support matrix for Kubernetes / host OS / Cilium / KubeVirt / storage backends / **GitOps engines**. **Argo CD experimental support** as an alternative GitOps engine — package model adapts `Package` / `PackageSource` to `Application` / `ApplicationSet` semantics; documented as `experimental` and opt-in at install time. |
+| 2027 Q1 | **Cozystack 2.0** — backwards-compatibility contract published; major API revision based on production feedback; HA control-plane improvements (stretched control plane, multi-AZ, etcd backup automation). **Argo CD support reaches alpha** — supported install path for greenfield clusters; not yet a migration target for existing Flux-based deployments. |
+| 2027 Q2 | `Platform Health API` covering operator, packages, GitOps engine (Flux or Argo CD), storage, networking, backups, ingress, auth. Explicit lifecycle states for apps, backups, restores, VMs, tenant clusters. **Argo CD support reaches beta** — feature parity with Flux for tenant app delivery, including `ApplicationSet` patterns for multi-tenant fan-out. |
+| 2027 Q3 | Performance optimizations based on H1 2027 benchmarks. Per-tenant resource isolation hardening (full cgroup v2 adoption, memory.high pressure). **Argo CD support reaches GA** as a fully-supported alternative engine; Flux→Argo CD migration tooling enters alpha. |
+| 2027 Q4 | Documented Flux↔Argo CD migration paths for existing deployments. Both engines remain first-class. |
 | 2028 Q1 | **Cozystack 3.0** — second major API revision. Deprecation of legacy `v1` surfaces on a documented timeline. |
 
 ### Track 2 — Testing & Conformance (SIG-Testing)
@@ -461,12 +462,12 @@ vertical.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | Reference architectures published as `reference-architectures/`: GPU cloud provider, hosting provider, telco (5G CNF), fintech (PCI-aligned), research/HPC. |
-| 2026 Q4 | **`cozystack` CLI 2.0** — single entry point replacing `make` + `kubectl` + `helm` patchwork. |
-| 2027 Q1 | Backstage plugin for Cozystack. Crossplane Provider for Cozystack. |
-| 2027 Q2 | OpenTofu/Terraform provider. DORA metrics dashboard for tenants. |
-| 2027 Q3 | Sustainability/carbon metrics (Kepler integration). |
-| 2027 Q4 | Migration playbooks: from OpenStack, from VMware, from legacy KVM. |
+| 2026 Q3 | Reference architectures published as `reference-architectures/`: GPU cloud provider, hosting provider, telco (5G CNF), fintech (PCI-aligned), research/HPC. **GitLab integration alpha** — GitLab as a first-class repository source for `Package` / `PackageSource` and tenant Helm releases (private repos, deploy tokens, group-level credentials). |
+| 2026 Q4 | **`cozystack` CLI 2.0** — single entry point replacing `make` + `kubectl` + `helm` patchwork. **GitLab OAuth handshake** at tenant level for self-service onboarding alongside the existing OIDC flow. |
+| 2027 Q1 | Backstage plugin for Cozystack. Crossplane Provider for Cozystack. **GitLab CI integration**: a managed-app **GitLab Runner** that tenants can deploy into their namespace for build pipelines, with per-tenant runner registration tokens and quota integration. |
+| 2027 Q2 | OpenTofu/Terraform provider. DORA metrics dashboard for tenants. **GitLab Container Registry and GitLab Helm Registry** supported as first-class sources for Marketplace `ApplicationDefinitions`, alongside OCI registries. |
+| 2027 Q3 | Sustainability/carbon metrics (Kepler integration). **Cozystack GitLab plugin** — GitLab CI components for `cozystack-deploy` and `cozystack-promote`, plus a GitLab-native view of tenant deployments. Symmetric work for GitHub Actions. |
+| 2027 Q4 | Migration playbooks: from OpenStack, from VMware, from legacy KVM. GitLab integration reaches GA. |
 
 ### Track 11 — Ecosystem Standardization & Community (SIG-Governance)
 
@@ -579,3 +580,7 @@ goal:
 - [PCI DSS v4.0.1](https://www.pcisecuritystandards.org/document_library/)
 - [ISO/IEC 5230 (OpenChain)](https://www.openchainproject.org/)
 - [CSAF VEX](https://docs.oasis-open.org/csaf/csaf/v2.0/csaf-v2.0.html)
+- [Argo CD](https://argo-cd.readthedocs.io/)
+- [Flux CD](https://fluxcd.io/)
+- [GitLab Runner](https://docs.gitlab.com/runner/)
+- [GitLab Container Registry](https://docs.gitlab.com/ee/user/packages/container_registry/)
