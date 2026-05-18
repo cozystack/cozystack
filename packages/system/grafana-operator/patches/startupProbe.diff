@@ -1,0 +1,17 @@
+diff --git a/charts/grafana-operator/templates/deployment.yaml b/charts/grafana-operator/templates/deployment.yaml
+--- a/charts/grafana-operator/templates/deployment.yaml
++++ b/charts/grafana-operator/templates/deployment.yaml
+@@ -79,6 +79,13 @@ spec:
+             httpGet:
+               path: /readyz
+               port: 8081
++          startupProbe:
++            httpGet:
++              path: /healthz
++              port: 8081
++            periodSeconds: 5
++            failureThreshold: 30
++            timeoutSeconds: 10
+           {{- with .Values.resources }}
+           resources:
+             {{- toYaml . | nindent 12 }}
