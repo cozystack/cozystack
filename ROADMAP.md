@@ -626,7 +626,532 @@ Each SIG owns an area of the roadmap, holds a public weekly or biweekly
 meeting, maintains a charter in `community/sigs/<sig-name>/charter.md`, and
 reports to the maintainer group quarterly.
 
-## 8. Risks and Anti-Goals
+## 8. Standardization Strategy
+
+Cozystack's long-term ambition — to become the open standard platform layer
+for building clouds — cannot be achieved by writing better software alone.
+Categories are defined by **specifications, not implementations**. Linux
+became Linux because of POSIX, LSB, FHS, and stable kernel ABIs that allowed
+distributions to multiply. Kubernetes became Kubernetes because of OCI,
+CRI, CSI, CNI, the Operator pattern, and a Conformance Program that
+distinguished compliant distributions from incompatible ones. Docker had a
+superb reference implementation but lost the runtime category because the
+governance over the interface (OCI/CRI) was opened to the community while
+the reference implementation stayed closed. The lesson is consistent: own
+the specification, let the ecosystem own the implementations.
+
+This section enumerates the specifications Cozystack should define and own,
+the specifications Cozystack should adopt and champion, the bodies it should
+engage with, the distinguishing artifacts that should become the
+"Cozystack way," and the adoption playbook required for any of this to
+matter.
+
+The work in this section is **cross-cutting** — it touches every track in
+§5. SIG-Governance is the primary owner, with each named SIG taking
+co-ownership of the spec relevant to its area.
+
+### 8.1 Specifications Cozystack Should Define and Own
+
+These are interfaces where no widely adopted standard exists today and where
+Cozystack is well positioned to draft, publish, and shepherd one through a
+standards body. Each spec is intended to follow this lifecycle: **CzEP
+draft → published spec in `cozystack/community/specs/` → submitted to a
+standards body → adopted by at least two independent implementations →
+ratified**.
+
+#### 8.1.1 Cozystack Package API (`CP-API`)
+
+**What.** A formal, vendor-neutral specification for cloud-native managed
+applications, formalizing the `Package`, `PackageSource`, and
+`ApplicationDefinition` constructs that already exist in Cozystack core.
+Covers schema, lifecycle hooks, compatibility metadata, SBOM references,
+signature requirements, version channels, dependency declarations, and
+upgrade semantics.
+
+**Why a standard is needed.** Helm Charts solve the templating problem but
+not the lifecycle problem; Operators solve the lifecycle problem but not
+the catalog problem. The Marketplace category is fragmented across
+ApplicationDefinitions, OperatorHub, Helm Hub, and proprietary catalogs.
+A unified, signed, conformance-testable application manifest is a missing
+layer.
+
+**Reference implementation.** Cozystack core (`cozystack-operator`,
+`cozystack-controller`, `cozyhr`).
+
+**Target venue.** CNCF TAG App Delivery as a draft spec; long-term, a
+CNCF-hosted sub-project (sibling to OCI / SLSA).
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2026 Q4 | First public CzEP draft of CP-API v0.1. |
+| 2027 Q1 | Submit to CNCF TAG App Delivery for community review. |
+| 2027 Q2 | Conformance test suite for CP-API published. |
+| 2027 Q4 | Second independent implementation lands (target: a Marketplace partner). |
+| 2028 Q2 | CP-API v1.0 ratified. |
+
+#### 8.1.2 Cloud Tenant API (`CT-API`)
+
+**What.** A specification for what it means to be an isolated tenant on a
+Kubernetes-based platform. Defines the composition of namespace,
+NetworkPolicy, RBAC, ResourceQuota, scheduling boundaries, audit context,
+and identity binding required to constitute a "tenant" with explicit
+isolation guarantees.
+
+**Why a standard is needed.** Every multi-tenant platform — vCluster,
+Kamaji, Capsule, HNC, Rancher Projects, OpenShift Projects — defines
+tenancy slightly differently. There is no portable answer to "is workload
+X isolated from workload Y in tenant Z." Cross-platform tenancy assurances
+matter for compliance auditors, for regulated industries, and for service
+providers who need to express tenant boundaries in contracts.
+
+**Reference implementation.** Cozystack `tenant` core package plus
+Cilium-based network isolation.
+
+**Target venue.** Kubernetes SIG Multi-Tenancy and CNCF TAG App Delivery
+co-sponsorship.
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2027 Q1 | First public CzEP draft of CT-API v0.1. |
+| 2027 Q2 | Engagement with SIG Multi-Tenancy upstream. |
+| 2027 Q3 | Conformance assertions integrated into the Cozystack Conformance Suite. |
+| 2028 Q1 | Second independent implementation lands. |
+
+#### 8.1.3 Host OS Contract (`HOC`)
+
+**What.** A specification of what a platform requires from its host
+operating system: kernel modules, container runtime, kubelet configuration,
+sysctl set, secure-boot expectations, AppArmor/SELinux/seccomp posture,
+networking stack (eBPF features, kernel version floor), storage drivers
+(DRBD, ZFS, LVM), GPU drivers and CDI compliance, observability surface
+(`/proc`, `/sys` access), and bootstrapping interface.
+
+**Why a standard is needed.** Today every Kubernetes platform implicitly
+ties to one or two host OS distributions. A formal contract enables
+**multi-OS support** as a first-class property, not a porting project. It
+also allows host OS distributions (Talos, Flatcar, Bottlerocket, Ubuntu
+Server, openSUSE MicroOS) to validate themselves against the contract.
+
+**Reference implementation.** Cozystack host OS profiles (Talos Tier-1;
+Ubuntu/Debian/Flatcar Tier-2).
+
+**Target venue.** CNCF TAG Runtime; engagement with Sidero (Talos),
+Kinvolk (Flatcar), Amazon (Bottlerocket), and Canonical (Ubuntu) for
+co-authorship.
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2026 Q3 | `HOST-OS-CONTRACT.md` v0.1 published in-repo (paired with Track 5). |
+| 2026 Q4 | Host Conformance Suite v0.1. |
+| 2027 Q1 | Co-author engagement with at least two host OS vendor projects. |
+| 2027 Q3 | Submit as a draft CNCF specification. |
+| 2028 Q1 | First non-Cozystack platform adopts HOC. |
+
+#### 8.1.4 GitOps Engine Interface (`GEI`)
+
+**What.** An abstraction layer above specific GitOps engines (Flux, Argo
+CD), modeled on how CRI abstracted Kubernetes from container runtimes.
+Defines the contract a platform expects from its GitOps engine: package
+reconciliation, drift detection, source authentication, signed-manifest
+verification, dependency ordering, status reporting, and upgrade semantics.
+
+**Why a standard is needed.** Enterprises standardize on one GitOps engine
+and rarely switch. A platform locked to one engine forces a binary
+adoption decision. GEI allows platforms (Cozystack, OpenShift GitOps,
+Rancher Fleet, kubectl-only deployments) to express the same intent across
+engines, and lets engines evolve independently.
+
+**Reference implementation.** Cozystack's planned GitOps Engine Abstraction
+CzEP (Track 1, 2026 Q3).
+
+**Target venue.** OpenGitOps Working Group (CNCF App Delivery), with
+co-authorship from Flux and Argo maintainers.
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2026 Q3 | CzEP draft of GEI v0.1 (paired with Track 1). |
+| 2026 Q4 | Engagement with Flux and Argo maintainer groups. |
+| 2027 Q2 | GEI v0.1 supports both Flux and Argo CD as Cozystack engines. |
+| 2027 Q4 | Submit to OpenGitOps WG as a community spec. |
+
+#### 8.1.5 Fleet API (Multi-Cluster Federation)
+
+**What.** A federation API that abstracts multi-cluster lifecycle, identity,
+networking, policy, and observability into a single declarative surface.
+Tenant boundaries traverse clusters; applications declare cluster placement
+constraints; policies federate; observability federates.
+
+**Why a standard is needed.** Multi-cluster solutions today (Karmada, Open
+Cluster Management, Liqo, KubeFed legacy, Rancher Fleet, ArgoCD
+ApplicationSets) overlap in scope but do not interoperate. A federation
+landscape with no shared interface forces enterprises to commit to one
+vendor's multi-cluster vision.
+
+**Reference implementation.** Cozystack `Fleet API` planned for Track 9
+(2027 Q1 alpha → 2027 Q4 GA).
+
+**Target venue.** Kubernetes SIG Multicluster co-sponsored with CNCF TAG
+App Delivery.
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2027 Q1 | Fleet API v0.1 alpha published; CzEP draft. |
+| 2027 Q2 | Engagement with Karmada, OCM, and Liqo maintainer groups for harmonization. |
+| 2027 Q3 | Submit to Kubernetes SIG Multicluster. |
+| 2028 Q1 | Fleet API v1.0 — Cozystack GA implementation plus one other independent implementation. |
+
+#### 8.1.6 Cloud-Native AI Inference Gateway (`CN-AI-Inference`)
+
+**What.** A specification for an AI inference gateway abstracting model
+serving engines (vLLM, SGLang, TensorRT-LLM, Dynamo, Triton) behind a
+unified API surface. Includes OpenAI-compatible endpoints, token-level
+metering, multi-model routing, model-registry binding, and FinOps metric
+emission.
+
+**Why a standard is needed.** Every AI inference service today
+re-implements the same gateway: rate limiting, token counting, model
+selection, routing to the appropriate engine. There is no portable
+contract for what "an inference endpoint" means at platform level.
+
+**Reference implementation.** Cozystack Inference Gateway (Track 6, planned
+2027 Q2).
+
+**Target venue.** CNCF CNAI Working Group, MLCommons engagement.
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2026 Q4 | Engagement with CNAI WG; submit Cozystack to CNAI Landscape (Track 6 2026 Q3). |
+| 2027 Q2 | CN-AI-Inference v0.1 alpha spec published. |
+| 2027 Q3 | Working group draft submitted to CNCF CNAI WG. |
+| 2027 Q4 | Reference implementation GA in Cozystack. |
+| 2028 Q2 | Second independent implementation lands. |
+
+#### 8.1.7 Block Replication CSI Extension (`BR-CSI`)
+
+**What.** An extension to the CSI specification covering replicated block
+storage semantics: replication topology, peer discovery, failover, quorum,
+split-brain resolution, snapshot replication, and disaster recovery
+coordination. blockstor's LINSTOR-compatible REST API is a starting point;
+a portable CSI extension is the destination.
+
+**Why a standard is needed.** Replicated block storage today is
+vendor-specific (LINSTOR/DRBD, Portworx, OpenEBS Mayastor, Ceph RBD with
+mirroring). Migration between storage vendors requires re-architecting
+the application's storage assumptions. A CSI extension lets platforms
+express replication requirements portably.
+
+**Reference implementation.** Cozystack `blockstor` (paired with Track 4).
+
+**Target venue.** Kubernetes SIG Storage, CSI specification sub-project.
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2027 Q2 | First public BR-CSI v0.1 draft. |
+| 2027 Q3 | Engagement with Ceph CSI, Portworx, OpenEBS, LINBIT maintainer groups. |
+| 2027 Q4 | Submit to SIG Storage as a CSI extension proposal. |
+| 2028 Q2 | First non-blockstor implementation lands. |
+
+#### 8.1.8 Tenant FinOps API
+
+**What.** A specification for per-tenant resource accounting and chargeback,
+including CPU-seconds, memory-byte-seconds, storage-IOPS-seconds,
+network-bytes, GPU-time, AI token-time, KV-cache hits, image-pull bytes,
+and other dimensions relevant for multi-tenant platforms. Schema is
+emit-friendly (OpenTelemetry-compatible) and consumption-friendly
+(OpenCost-compatible).
+
+**Why a standard is needed.** FinOps in multi-tenant Kubernetes is
+fragmented: OpenCost handles workload-level cost, Kubecost overlays UI,
+but per-tenant attribution at the AI-inference and GPU-time level is
+unspecified. Service providers each invent a metering schema.
+
+**Reference implementation.** Cozystack S3 metering (1.3) plus planned
+Tenant FinOps view (Track 6 2027 Q2).
+
+**Target venue.** FinOps Foundation Open Source Working Group, OpenCost
+sub-project.
+
+**Timeline.**
+
+| Quarter | Milestone |
+|---|---|
+| 2027 Q2 | First public Tenant FinOps API v0.1 draft. |
+| 2027 Q3 | Engagement with OpenCost, Kubecost, and FinOps Foundation. |
+| 2027 Q4 | Submit as a working draft to FinOps Foundation OSS WG. |
+| 2028 Q1 | Reference implementation in Cozystack GA. |
+
+### 8.2 Specifications Cozystack Adopts and Champions
+
+These are existing standards where Cozystack's role is to be a visible,
+high-fidelity adopter and a vocal advocate. Adoption signals that the
+standards are production-ready; advocacy ensures the standards continue to
+evolve in a direction Cozystack benefits from.
+
+| Standard | Domain | Status in Cozystack | Engagement Action |
+|---|---|---|---|
+| **OCI (Image, Distribution, Runtime, Artifacts)** | Container packaging | Adopted via container ecosystem | Use OCI Artifacts for `ApplicationDefinition` packaging. |
+| **CSI** (Container Storage Interface) | Storage | Adopted; extended via BR-CSI (§8.1.7) | Active SIG Storage participation. |
+| **CNI** (Container Network Interface) | Networking | Adopted via Cilium | Cilium maintainer engagement. |
+| **CDI** (Container Device Interface) | Device sharing | Adopted via Talos 1.13 default | Use for first-class GPU device sharing. |
+| **Kubernetes Gateway API** | Ingress next-gen | `gateway-api-crds` in `packages/system`; needs roll-out | Move tenant ingress to Gateway API as default by 2027 Q2. |
+| **MCS-API** (Multi-Cluster Services) | Cross-cluster services | Available via Cilium 1.20 | Adopt as soon as Cilium 1.20 upgrade completes. |
+| **OpenAPI 3.1** | API specs | Adopted for `cozystack-api` | Auto-publish per release (paired with Track 12.2). |
+| **OpenTelemetry** | Observability | Partially adopted (metrics) | Extend to traces and logs by 2027 Q1. |
+| **CloudEvents** | Event-driven workflows | Not adopted | Adopt for Marketplace lifecycle hooks by 2027 Q1. |
+| **PROXY protocol v2** | Reverse-proxy passthrough | Adopted via `ouroboros` | Maintain. |
+| **SLSA** (Build Levels) | Supply-chain integrity | Roadmap Track 3.4 | Target Build L3 by 2027 Q3. |
+| **OSPS Baseline** | Security maturity | Roadmap Track 3.2 | Target L3 by 2027 Q2. |
+| **CSAF VEX** | Vulnerability disclosure | Roadmap Track 3.7 | Adopt by 2026 Q3. |
+| **SPDX + CycloneDX** | SBOM formats | Roadmap Track 3.11 | Publish both per release. |
+| **Sigstore (cosign, Rekor, Fulcio)** | Signing & transparency | Adopted for releases | Extend to all `ApplicationDefinitions`. |
+| **OpenSSF Best Practices Badge** | Security hygiene | Roadmap Track 3.1 | Target Gold by 2027 Q2. |
+| **OpenSSF Scorecard** | Automated security | Roadmap Track 3.3 | Target ≥ 9.0 by 2027 Q4. |
+| **OpenChain ISO/IEC 5230** | License compliance | Roadmap Track 3.10 | Self-certify 2026 Q4. |
+| **DCO** (Developers Certificate of Origin) | Contribution licensing | Adopted | Maintain. |
+| **OpenAI API compatibility** | AI inference endpoints | Roadmap Track 6 | Inference Gateway target compatibility level Q2 2027. |
+| **MLCommons Inference benchmarks** | AI workload measurement | Not adopted | Publish Cozystack benchmark profiles by 2027 Q4. |
+| **CIS Kubernetes Benchmark** | Hardening | Partial via Talos defaults | Publish Cozystack-specific CIS profile by 2027 Q1. |
+| **CRA reporting timelines** | Vulnerability response | Roadmap Track 3.7 | Operate by 2026 Q3. |
+
+### 8.3 Industry Bodies, Working Groups, and Engagement Plan
+
+Standards engagement is people work. Each body listed below needs a
+designated Cozystack representative who attends meetings, contributes
+proposals, and reports back to the maintainer group.
+
+#### Tier 1 — Engage immediately (H2 2026)
+
+| Body / Group | Why | Cozystack role |
+|---|---|---|
+| **CNCF TAG App Delivery** | Owns App Delivery WG and OpenGitOps WG; CP-API, GEI, CT-API venues. | Submit proposals; nominate a Cozystack representative. |
+| **CNCF TAG Security** | Owns self-assessments, third-party audit framework. | Run self-assessment; engage on threat-model reviews. |
+| **CNCF TAG Storage** | Owns CSI sub-project evolution. | Engage on BR-CSI (§8.1.7) and blockstor sub-project. |
+| **CNCF TAG Network** | Owns CNI, Gateway API, multi-cluster networking. | Engage via Cilium and kilo-clustermesh-operator. |
+| **CNCF CNAI Working Group** | Owns Cloud Native AI landscape and standards. | CN-AI-Inference (§8.1.6); submit to CNAI landscape (Track 6 Q3 2026). |
+| **CNCF Multicluster SIG** | Owns multi-cluster harmonization. | Fleet API (§8.1.5); harmonization with Karmada/OCM/Liqo. |
+| **OpenSSF** | Owns Best Practices, Scorecard, OSPS Baseline. | Cozystack as OpenSSF-member project; quarterly status reports. |
+| **OpenChain Project** | Owns ISO/IEC 5230 license compliance. | Self-certify (Track 3.10 2026 Q4). |
+| **Kubernetes SIG Multi-Tenancy** | Owns tenancy patterns. | CT-API (§8.1.2) engagement. |
+
+#### Tier 2 — Engage from H1 2027
+
+| Body / Group | Why | Cozystack role |
+|---|---|---|
+| **Kubernetes SIG Storage** | Owns CSI specification evolution. | BR-CSI extension proposal. |
+| **Kubernetes SIG Release** | Owns Kubernetes release / deprecation cadence. | Track upstream deprecations affecting Cozystack support matrix. |
+| **OpenGitOps Working Group** | Owns GitOps principles and patterns. | GEI (§8.1.4); engage with Flux and Argo maintainers. |
+| **FinOps Foundation OSS WG** | Owns OpenCost; vendor-neutral FinOps. | Tenant FinOps API (§8.1.8). |
+| **MLCommons** | Owns AI/ML benchmarks. | Inference benchmark publication. |
+| **OASIS CSAF Technical Committee** | Owns CSAF / VEX format. | Adopt and contribute back. |
+| **Sigstore Community / Cosign WG** | Owns signing primitives. | Cozystack as visible adopter; SLSA Build L3 work. |
+| **CNCF TAG Sustainability** | Owns green-cloud-native posture. | Carbon metrics (Track 10 2027 Q3); Kepler integration. |
+
+#### Tier 3 — Engage from H2 2027
+
+| Body / Group | Why | Cozystack role |
+|---|---|---|
+| **IETF** | Owns network protocols (if BR-CSI or Fleet API touch network protocols). | Conditional on standards needing protocol drafts. |
+| **NIST** (U.S.) | Cloud security frameworks (SP 800-53, 800-190). | Cozystack-specific guidance documents. |
+| **ENISA / BSI (EU and Germany)** | EU CRA, sovereign cloud, C5. | Engagement around EU CRA compliance posture (Track 3.7). |
+| **DMTF** | Data center management standards (Redfish, etc.). | Conditional on hardware integration depth. |
+
+### 8.4 Distinguishing Artifacts — The "Cozystack Way"
+
+A category is also defined by a few visible artifacts that become
+synonymous with the category. Linux has `/etc`, `ELF`, `Makefile`,
+`grep | awk | sed`. Kubernetes has `kubectl apply -f`, `Pod`, `Service`,
+`Operator`. Docker had `Dockerfile`. Cozystack needs three to five such
+recognizable artifacts.
+
+Candidate artifacts:
+
+| Artifact | What it stands for | Why it differentiates |
+|---|---|---|
+| **`ApplicationDefinition`** | The Cozystack equivalent of "what a managed cloud-native app is." | If CP-API succeeds, "ApplicationDefinition" enters industry vocabulary as the signed, conformance-tested app manifest. |
+| **`Package` / `PackageSource`** | The Cozystack package model, decoupled from Helm rendering. | Eliminates the `helm template lookup` race-condition class. Recognizable as "the Cozystack package model." |
+| **`Tenant`** as a first-class CRD | The Cozystack tenancy model with explicit isolation guarantees. | If CT-API succeeds, "tenant" gains a portable meaning. |
+| **`cozystack` CLI** | The primary user surface — single entry point. | Replaces `kubectl + helm + make` patchwork; recognizable Cozystack-ism. |
+| **`cozydoctor`** | Built-in AI-assisted diagnostics. | Distinctive UX; pairs Cozystack with AI-assisted operations narrative. |
+| **Cozystack Certified badges** | Visible certification marks: Certified Provider / App / Storage / OS. | Forces ecosystem to express "Cozystack-compatible" as a verifiable claim. |
+| **Cozystack Federation** | Single control plane across many clusters, via Fleet API. | If Fleet API succeeds, "federation" gains a portable meaning. |
+
+Each artifact should be referenced consistently across:
+
+- The website (`cozystack.io`).
+- The documentation site.
+- All conference talks.
+- All whitepapers, briefs, and case studies.
+- The brand kit (Track 12.7) — visual treatment of `cozystack` typography
+  and badge marks.
+
+### 8.5 Adoption Playbook
+
+Specifications without adopters are paper. Without an adoption playbook,
+the work in §8.1–8.4 produces well-written documents that no one
+implements. This playbook covers the marketing, partner, and ecosystem
+work required for the specifications to be picked up.
+
+#### 8.5.1 Conference and event circuit
+
+| Event | Cadence | Target Cozystack presence |
+|---|---|---|
+| KubeCon + CloudNativeCon North America | Annual (Nov) | Minimum 2 accepted talks; sponsor booth from 2027. |
+| KubeCon + CloudNativeCon Europe | Annual (Mar) | Minimum 2 accepted talks. |
+| CloudFest (Europe) | Annual (Mar) | Hosting/service-provider audience; minimum 1 talk. |
+| CloudFest Americas | Annual (Nov) | Service-provider audience; minimum 1 talk. |
+| Open Source Summit Europe / NA | Annual | Standards-track engagement. |
+| FOSDEM | Annual (Feb) | Maintainer-track talks. |
+| SREcon | Annual | Operations-narrative engagement. |
+| KubeVirt Summit | Annual | VM workload narrative. |
+| AI Infra Summit / NeurIPS systems track | Annual | AI Platform narrative; AI inference benchmarks. |
+| Cozystack Conference | Annual (first event 2027 Q1, Track 11) | Project's own flagship event. |
+
+Target: **a minimum of 12 accepted talks per calendar year** across the
+above events, across diverse contributor organizations.
+
+#### 8.5.2 Hardware vendor program
+
+A "Tested on Cozystack" certification program for hardware platforms.
+Modeled on the Linux Foundation's "Tested with Linux" certifications and
+the Red Hat Certified Hardware program.
+
+| Quarter | Deliverables |
+|---|---|
+| 2027 Q1 | Hardware Compatibility Lab established (initially a Cozystack-hosted lab; eventually federated). Test profiles for bare-metal servers, network switches, GPUs. |
+| 2027 Q2 | Initial vendor engagements: Dell PowerEdge, HPE ProLiant, Supermicro, Lenovo ThinkSystem, GIGABYTE. NVIDIA NCP Reference Platform validation pipeline. |
+| 2027 Q3 | Public Hardware Compatibility List (HCL). |
+| 2027 Q4 | At least 20 certified hardware configurations across 3+ vendors. |
+| 2028 Q1+ | Storage vendor certifications (VAST, WEKA, DDN, Pure) and network vendor certifications (Arista, Cisco Nexus, Broadcom, Mellanox/NVIDIA Networking). |
+
+#### 8.5.3 Host OS distribution program
+
+Co-publish Host OS profiles with major Linux distributions, validating
+against the Host OS Contract (§8.1.3).
+
+| Quarter | Deliverables |
+|---|---|
+| 2026 Q4 | Talos profile co-signed with Sidero. Initial engagement with Flatcar (Kinvolk / Microsoft), Ubuntu (Canonical), openSUSE MicroOS, Bottlerocket (Amazon). |
+| 2027 Q2 | Ubuntu 26.04 LTS profile co-published with Canonical. |
+| 2027 Q3 | Flatcar profile co-published. openSUSE MicroOS profile. |
+| 2027 Q4 | Bottlerocket profile (if engagement with Amazon succeeds). |
+
+#### 8.5.4 Hyperscaler and provider engagement
+
+Long-term, "Linux of platforms" requires managed Cozystack instances from
+multiple service providers — analogous to managed Kubernetes from every
+cloud.
+
+| Quarter | Deliverables |
+|---|---|
+| 2027 Q3 | Engagement with European service providers (Hetzner, OVH, Scaleway, IONOS) for managed Cozystack offerings. |
+| 2027 Q4 | Hyperscaler engagement: AWS Marketplace listing; GCP Marketplace listing; Azure Marketplace listing. |
+| 2028 Q1+ | First managed Cozystack from a hyperscaler (target: a sovereign-cloud focused European provider). |
+
+#### 8.5.5 Certification and labor market
+
+Certified Kubernetes Administrator (CKA) created the K8s skill labor
+market. Cozystack Admin Certification (CCA) does the same for Cozystack.
+
+| Quarter | Deliverables |
+|---|---|
+| 2027 Q3 | CCA beta (paired with Track 11 and Track 12.6). |
+| 2027 Q4 | CCA GA. Recruiter outreach: include "Cozystack" in keyword sets used by major IT recruiters. |
+| 2028 Q1+ | Cozystack Certified Developer (CCD) and Cozystack Certified Architect (CCAr) exam tracks. |
+| 2028 Q2 | Job-board partnerships: LinkedIn / Indeed / Stack Overflow Talent recognized skill tags. |
+
+#### 8.5.6 Academic and research engagement
+
+| Quarter | Deliverables |
+|---|---|
+| 2027 Q1 | Academic partnership: at least one university course incorporates Cozystack. |
+| 2027 Q3 | First peer-reviewed paper using Cozystack as research substrate (private cloud, sovereign cloud, or AI infrastructure research). |
+| 2028 Q1+ | Cozystack Research Grants — small grants (community-funded) for academic projects on Cozystack. |
+
+#### 8.5.7 Regulatory and government engagement
+
+| Quarter | Deliverables |
+|---|---|
+| 2027 Q2 | EU CRA dialogue engagement via OpenSSF policy WG. |
+| 2027 Q3 | GAIA-X / IPCEI-CIS alignment statement — Cozystack as candidate sovereign-cloud platform. |
+| 2027 Q4 | US FedRAMP pre-readiness assessment for downstream commercial offerings. |
+| 2028 Q1+ | Engage with national clouds: Spain ENS, Germany BSI C5, France SecNumCloud, Italy AGID, India MeitY empanelment criteria. |
+
+#### 8.5.8 Vendor-neutrality transparency
+
+Standards adoption is undermined by perceived single-vendor concentration.
+The vendor-neutrality dashboard (Track 11 2028 Q2) must launch as a
+**public** artifact, not an internal metric.
+
+| Metric | Source | Cadence |
+|---|---|---|
+| Commits by organization | GitHub API | Monthly |
+| Maintainers by organization | `MAINTAINERS.md` | Per change |
+| Releases by organization (release lead) | Release tagging | Per release |
+| Working group chairs by organization | SIG charters | Per change |
+| Conference talks by organization | Talk tracker | Quarterly |
+| External adopters in production | `ADOPTERS.md` | Per change |
+
+### 8.6 Annual Standardization Review
+
+Each Q1, the maintainer group conducts a public **Standardization Review**:
+
+- For each spec in §8.1: status (draft / submitted / under review /
+  adopted / second-implementation), blockers, owner SIG.
+- For each Tier 1/2/3 body in §8.3: engagement state, designated
+  representative, last activity, action items.
+- For each distinguishing artifact in §8.4: visibility check (does it
+  appear in talks, docs, brand assets?).
+- For the adoption playbook in §8.5: progress on hardware program, OS
+  program, hyperscaler engagement, certification numbers, academic and
+  regulatory traction.
+
+Output: a public **Standardization Review YYYY** document published
+alongside the Annual Report (Track 12.4). The first review lands in
+**2027 Q1**.
+
+### 8.7 Summary: What Determines Whether Cozystack Becomes a Standard
+
+The single hardest question in this document. The honest answer is that
+no list of activities guarantees standardhood. What the evidence from
+Linux, Kubernetes, and the OCI/CRI transition does suggest:
+
+1. **Specifications are owned by neutral bodies, not by the project.**
+   Cozystack must be willing to relinquish the specs in §8.1 to CNCF or
+   another standards body, even at the cost of slower iteration.
+2. **Multiple independent implementations are required.** A spec with one
+   implementation is documentation; a spec with two is a standard. The
+   roadmap targets a second implementation for each major spec by 2028.
+3. **Conformance distinguishes "compatible" from "claimed-compatible."**
+   The Conformance Program (§6) is the enforcement mechanism.
+4. **The labor market is the deepest moat.** A pool of CCA-certified
+   engineers, university courses using Cozystack, and recruiters listing
+   "Cozystack" skills create demand pressure on enterprises.
+5. **Vendor neutrality is non-negotiable.** Apparent single-vendor
+   concentration kills standardhood faster than technical flaws. The
+   transparency artifacts in §8.5.8 must be public, frequent, and
+   maintained.
+
+The two-year roadmap is a starting condition, not the destination. By the
+end of the horizon (May 2028), Cozystack should be **plausible** as a
+category standard. Actual category-standard status will be earned, if at
+all, over the following five to ten years, through sustained execution of
+the principles above.
+
+## 9. Risks and Anti-Goals
 
 Acknowledging what could derail the plan or push the project away from its
 goal:
@@ -655,7 +1180,7 @@ goal:
   risk is contributor concentration in one organization. Track 11 directly
   addresses this; the maintainer-diversity work must succeed.
 
-## 9. How This Roadmap Is Maintained
+## 10. How This Roadmap Is Maintained
 
 - Each track has an owning SIG (see §7).
 - Each quarter, the maintainers conduct a public roadmap review and update
@@ -667,7 +1192,7 @@ goal:
   [cozystack/community/design-proposals](https://github.com/cozystack/community/tree/main/design-proposals).
 - The document is versioned in `git` history; major revisions are tagged.
 
-## 10. References
+## 11. References
 
 - [Cozystack Project V2 Roadmap board](https://github.com/orgs/cozystack/projects/1)
 - [Cozystack Governance](./GOVERNANCE.md)
