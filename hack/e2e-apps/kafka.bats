@@ -18,7 +18,7 @@ spec:
     replicas: 2
     storageClass: ""
     resources: {}
-    resourcesPreset: "nano"
+    resourcesPreset: "small"
   topics:
     - name: testResults
       partitions: 1
