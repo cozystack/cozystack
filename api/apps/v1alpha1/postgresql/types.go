@@ -43,6 +43,9 @@ type ConfigSpec struct {
 	// TLS configuration for server connections.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls"`
+	// PostgreSQL image flavor. `postgresql` (default) uses the standard CloudNativePG image. `postgis` switches to the CloudNativePG PostGIS image, which ships PostGIS and companion extensions (postgis_topology, postgis_raster, pgrouting, address_standardizer) precompiled. Declare the needed extensions in `databases.<name>.extensions` to enable them per database.
+	// +kubebuilder:default:="postgresql"
+	Flavor Flavor `json:"flavor"`
 	// PostgreSQL server configuration.
 	// +kubebuilder:default:={}
 	Postgresql PostgreSQL `json:"postgresql"`
@@ -179,6 +182,9 @@ type User struct {
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="postgresql";"postgis"
+type Flavor string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
