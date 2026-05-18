@@ -1,6 +1,33 @@
 kamaji:
   etcd:
     deploy: false
+  # HA-safe default: two replicas serve admission webhooks behind the
+  # kamaji-webhook-service Service. --leader-elect is already enabled
+  # upstream, so only one replica reconciles tenant control planes — the
+  # follower's CPU is fully available for webhook handlers, eliminating the
+  # CPU contention that pushes p99 admission latency from ~10ms (kamaji
+  # handler) up to ~90ms (apiserver-observed) on single-replica deployments.
+  replicaCount: 2
+  # Drop the telemetry handler and its admission webhook. With
+  # telemetry.disabled=true, the controller is started with
+  # --disable-telemetry AND the corresponding webhook entry is omitted
+  # from the ValidatingWebhookConfiguration (see patches/1.diff), so the
+  # apiserver no longer pays a round-trip to a no-op handler on every
+  # TenantControlPlane CREATE/UPDATE/DELETE.
+  telemetry:
+    disabled: true
+  # Soft anti-affinity: spread the kamaji controller replicas across nodes
+  # when possible. preferredDuringScheduling means single-node clusters
+  # still schedule both pods (just colocated, which is acceptable).
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: kamaji
+            topologyKey: kubernetes.io/hostname
   image:
     pullPolicy: IfNotPresent
     tag: v1.4.0-rc.2@sha256:e78ec08dd84eb2ee13b84b304da09ca866b6714af6dcf8b80635cae8c15f1628

@@ -10,6 +10,10 @@ update:
 	curl -sSL https://github.com/clastix/kamaji/archive/refs/tags/$${tag}.tar.gz | \
 	tar -xzvf - --strip 1 kamaji-$${tag}/charts && \
 	sed -i "/ARG VERSION/ s|=.*|=$${tag}|g" images/kamaji/Dockerfile
+	# Re-apply Cozystack-side patches over the freshly extracted chart so
+	# `make update` stays reproducible. Mirrors the pattern used by
+	# packages/system/fluxcd-operator and packages/system/ingress-nginx.
+	patch --no-backup-if-mismatch -p1 < patches/1.diff
 
 image:
 	docker buildx build images/kamaji \
