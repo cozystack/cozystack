@@ -118,14 +118,14 @@ The two-year plan brings these tracks into the public roadmap.
 
 | Half | Primary Goal | Headline Outcomes |
 |---|---|---|
-| H2 2026 (Jun–Dec) | Incubation push + enterprise foundations | CNCF Incubation, OSPS Baseline L2, OpenSSF Passing badge, public release-train policy, Marketplace alpha, host-OS contract documented, Argo CD experimental, GitLab integration alpha. |
-| H1 2027 (Jan–Jun) | AI platform v1 + multi-cluster GA | Cozystack 2.0, blockstor alpha, Fleet beta, AI Platform MVP, SOC 2 Type I readiness, OSPS Baseline L3, OpenSSF Silver, Argo CD beta, GitLab CI integration. |
-| H2 2027 (Jul–Dec) | Enterprise scale + Marketplace mature | Public scale envelope, blockstor beta, AI Platform GA, certified-apps program, SLSA Build L3, SOC 2 Type II evidence collection, OpenSSF Gold, Argo CD GA, GitLab integration GA. |
-| H1 2028 (Jan–May) | Graduated-tier prep + standard play | Cozystack Conformance Program, certified providers/apps/storage/OS, third-party security audit completed, EU CRA compliance posture, Graduated application drafted. |
+| H2 2026 (Jun–Dec) | Incubation push + enterprise foundations | CNCF Incubation, OSPS Baseline L2, OpenSSF Passing badge, public release-train policy, Marketplace alpha, host-OS contract documented, Argo CD experimental, GitLab integration alpha, refreshed website + brand kit + technical whitepaper v1, first five reference architectures published. |
+| H1 2027 (Jan–Jun) | AI platform v1 + multi-cluster GA | Cozystack 2.0, blockstor alpha, Fleet beta, AI Platform MVP, SOC 2 Type I readiness, OSPS Baseline L3, OpenSSF Silver, Argo CD beta, GitLab CI integration, Academy fundamentals + administrator courses, first five published case studies. |
+| H2 2027 (Jul–Dec) | Enterprise scale + Marketplace mature | Public scale envelope, blockstor beta, AI Platform GA, certified-apps program, SLSA Build L3, SOC 2 Type II evidence collection, OpenSSF Gold, Argo CD GA, GitLab integration GA, CCA certification beta, threat model and third-party audit published. |
+| H1 2028 (Jan–May) | Graduated-tier prep + standard play | Cozystack Conformance Program, certified providers/apps/storage/OS, third-party security audit completed, EU CRA compliance posture, Graduated application drafted, full Academy + CCA GA, distribution program landing live. |
 
 ## 5. Tracks
 
-The roadmap is organized into eleven tracks. Each track lists deliverables by
+The roadmap is organized into twelve tracks. Each track lists deliverables by
 quarter and an indicative owning SIG (see §7 for SIG formation timeline).
 
 ### Track 1 — Platform Core (SIG-Platform)
@@ -490,6 +490,110 @@ without which the "Linux of platforms" goal cannot land.
 | 2028 Q1 | Begin work on **CNCF Graduation application**. |
 | 2028 Q2 | First public **vendor-neutrality dashboard** — commits-by-org, maintainers-by-org, releases-by-org transparency. |
 
+### Track 12 — Documentation, Website & Community Materials (SIG-Docs)
+
+**Goal.** A documentation, website, and content portfolio that matches the
+ambitions of the platform. Adopters, downstream commercial vendors, TOC
+reviewers, and conference attendees must each find what they need in less
+than two minutes.
+
+This track consolidates work across the [cozystack/website](https://github.com/cozystack/website)
+repository, in-tree documentation, reference architectures, compliance
+documents, marketing assets, training content, and event materials.
+
+#### 12.1 Website (cozystack.io)
+
+| Quarter | Deliverables |
+|---|---|
+| 2026 Q3 | Refresh top-level **information architecture**: clear paths for *adopters*, *contributors*, *commercial vendors*, *researchers*. Public `/roadmap` page that renders this `ROADMAP.md` plus a live view of Project V2 status. Project status badges (CNCF lifecycle, OpenSSF, OSPS Baseline, Scorecard, SLSA, CLOMonitor) in README and on site landing page. Lighthouse / Core Web Vitals audit, target ≥ 90 across categories. WCAG 2.2 AA accessibility audit. |
+| 2026 Q4 | **Adopters page** rendered from `ADOPTERS.md` with logo permissions tracked. **Resource library** section: whitepapers, reference architectures, case studies, comparison docs. Public **events / talks** calendar. **Search** powered by Algolia DocSearch (free for OSS) or self-hosted Meilisearch. Multi-language scaffolding (EN canonical; RU + DE + ZH-CN as community-driven translations). |
+| 2027 Q1 | **Marketplace storefront preview** — public-facing read-only view of the Marketplace catalog with filters, ratings, SBOM/signature badges. **Compliance & Security** dedicated section linking OSPS Baseline self-assessment, CNCF self-assessment, third-party audit results, EU CRA posture, SBOM downloads. |
+| 2027 Q2 | **Newsletter** with quarterly project updates. SEO programme — target Tier-1 keyword set (private cloud, Kubernetes-native PaaS, GitOps platform, AI infrastructure). Press / media kit at `/press`. |
+| 2027 Q3 | **Cozystack Academy** site (`learn.cozystack.io` or `/academy`) — free training tier launches here (paired with Track 11). |
+| 2027 Q4 | **Annual Report 2027** as a website-native experience, not just a PDF. Architecture-rebuild assessment — if Docsy is showing limits, prepare a migration plan. |
+| 2028 Q1+ | **Distribution Program** landing page with verified distribution list (paired with Track 2 Conformance). |
+
+#### 12.2 Technical Documentation
+
+| Quarter | Deliverables |
+|---|---|
+| 2026 Q3 | **Documentation Information Architecture v2** — reorganize around user journeys: *Get Started*, *Operate*, *Develop*, *Administer*, *Reference*, *Tutorials*, *Migrate*. **Versioned docs** per supported release line (current: v1.2, v1.3, v1.4-rc; future: stable / LTS / fast). |
+| 2026 Q3 | **Install & upgrade docs** brought to production quality for every supported host OS profile (Talos Tier-1; Ubuntu / Debian / Flatcar Tier-2). |
+| 2026 Q4 | **Auto-generated API reference** from CRDs and `cozystack-api` OpenAPI spec, published per release. Tested code samples — every code block in docs runs in CI against a live cluster, broken samples block release. |
+| 2026 Q4 | **Operator's Handbook** — production-grade runbook collection for common operations: cluster upgrades, tenant onboarding, backup restore, DR exercises, storage migration, network troubleshooting. |
+| 2027 Q1 | **Tutorials track** — minimum 15 narrated tutorials covering: first install, first tenant, deploying Postgres, deploying a VM, GPU workload, multi-cluster setup, OIDC integration, backup & restore drill, upgrading. Each tutorial is owned by an SME and reviewed quarterly. |
+| 2027 Q1 | **API Stability Policy** doc (referenced from Track 1) lands in `/docs/contributors/api-stability-policy`. |
+| 2027 Q2 | **Developer Guide** for Cozystack contributors: package authoring (`Package` / `PackageSource`), `ApplicationDefinition` authoring for Marketplace, controller-runtime patterns, testing patterns, release engineering. |
+| 2027 Q2 | **Troubleshooting Atlas** — visual decision tree mapping symptoms → likely causes → diagnostic commands → resolutions. Integrates with `cozydoctor` AI assistant (Track 7). |
+| 2027 Q3 | **Migration playbooks** in `/docs/migrate/`: from OpenStack, from VMware vSphere, from legacy KVM/libvirt, from Proxmox, from bare Kubernetes installations. Each playbook is end-to-end runnable and gated by integration tests. |
+| 2027 Q4 | **Docs translation pipeline** — community translation workflow with translation memory, glossary, and freshness tracking. Languages: RU, DE, ZH-CN (initial). |
+| 2028 Q1+ | Docs versioning consolidation: stable, LTS, and current; deprecated docs archived but discoverable. |
+
+#### 12.3 Reference Architectures (RAs)
+
+Reference architectures live in `reference-architectures/` and are published
+both in-repo and on the website. They are paired with each vertical defined
+in Track 10.
+
+| Quarter | Deliverables |
+|---|---|
+| 2026 Q3 | RA: **GPU Cloud Provider** (NCP-aligned). RA: **Hosting Provider** (multi-tenant with billing). RA: **Telco / 5G CNF**. RA: **Fintech / PCI-aligned**. RA: **Research & HPC**. Each RA includes architecture diagram, deployment YAMLs, scale envelope, security posture, total-cost-of-ownership notes. |
+| 2026 Q4 | RA: **Edge** (small clusters, intermittent connectivity, lightweight host OS). RA: **Government / Sovereign Cloud** (air-gap, audit, encryption-at-rest mandatory). |
+| 2027 Q1 | RA: **AI Inference Service Provider** (GPU pools, Inference Gateway, FinOps tenant view). RA: **Multi-Region Active-Passive**. |
+| 2027 Q2 | RA: **PCI DSS v4.0.1 CDE Deployment** (paired with Track 3.9). |
+| 2027 Q3 | RA: **Carbon-Optimized Workload Placement** (paired with Sustainability metrics in Track 10). |
+| 2027 Q4 | RA gallery refresh — case-study links and adopter testimonials per RA. |
+
+#### 12.4 Compliance & Process Documents
+
+Documents that ship in-repo and are kept current as Track 3 progresses.
+
+| Quarter | Deliverables |
+|---|---|
+| 2026 Q3 | `ROADMAP.md` (this document). `OSPS-BASELINE.md` self-assessment. `CNCF-SELF-ASSESSMENT.md`. `CRA-COMPLIANCE.md`. `HOST-OS-CONTRACT.md` (paired with Track 5). Update `SECURITY.md` with private mailbox and Vulnerability SLA. |
+| 2026 Q4 | `LICENSE-COMPLIANCE.md` for OpenChain. `SBOM/` directory with SPDX + CycloneDX per release. **Cozystack Annual Report 2026** as PDF and web-native page. **Documented Release Engineering Handbook** for maintainers. |
+| 2027 Q1 | `SOC2-EVIDENCE/` evidence pack (paired with Track 3.8). **Shared Responsibility Matrix** for CRA compliance between maintainers and downstream commercial vendors. |
+| 2027 Q2 | `PCI-DSS.md` reference architecture doc with QSA-readability check. **Cozystack Enhancement Proposal (CzEP)** process documented in `community/design-proposals/process.md`. |
+| 2027 Q3 | **Threat Model** document published (`THREAT-MODEL.md`) — required for OpenSSF Gold and OSPS L3. |
+| 2027 Q4 | Third-party security audit findings published in `audits/` with remediation status. **Annual Report 2027**. |
+| 2028 Q1 | CNCF Graduation application drafted (paired with Track 11). |
+
+#### 12.5 Marketing & Sales-Enablement Materials
+
+Materials oriented to adopters, downstream commercial vendors, and TOC
+reviewers. Vendor-neutral language throughout.
+
+| Quarter | Deliverables |
+|---|---|
+| 2026 Q3 | **Technical whitepaper v1** — "Cozystack Platform Architecture" (~30 pages). **Comparison briefs**: vs OpenStack, vs VMware vCloud Director, vs OpenShift, vs Rancher, vs vanilla Kubernetes — each ~6 pages, factual and balanced. |
+| 2026 Q4 | **Security whitepaper** — "Securing Cozystack Deployments" covering hardening, supply chain, secrets, audit, tenant isolation. **TCO calculator** (interactive web page) with documented assumptions. **Vendor lock-in analysis** briefing. |
+| 2027 Q1 | **First case studies** — minimum five published case studies covering distinct verticals. Each ≥ 2,000 words, with adopter approval. **Pitch deck** template that adopters can reuse internally. |
+| 2027 Q2 | **AI Platform whitepaper** — "Cozystack as an AI/ML Platform" tied to Track 6 GA. **Multi-Cluster whitepaper** — tied to Track 9 Fleet beta. |
+| 2027 Q3 | **Cozystack Solution Guides** per vertical — GPU cloud, hosting, telco, fintech, research; each a polished web/PDF asset. |
+| 2027 Q4 | **Migration whitepapers** — "Migrating from VMware to Cozystack", "Migrating from OpenStack to Cozystack". Includes runtime/cost/risk comparisons. |
+| 2028 Q1+ | **Annual marketing review** — refresh whitepapers, retire stale comparisons, add Graduated-tier-relevant content. |
+
+#### 12.6 Cozystack Academy & Certification Content (with SIG-Governance)
+
+| Quarter | Deliverables |
+|---|---|
+| 2027 Q1 | **Academy curriculum design**: course tracks (Fundamentals, Administrator, Developer, Architect). Define learning objectives per track. |
+| 2027 Q2 | **Fundamentals course** GA — free tier. Video + text + interactive labs (using something like Killercoda or self-hosted equivalents). |
+| 2027 Q3 | **Administrator course** GA. **Cozystack Admin Certification (CCA) beta** — exam blueprint, sample questions, proctoring vendor selection. |
+| 2027 Q4 | **Developer course** GA. CCA exam delivery infrastructure live. |
+| 2028 Q1 | **Architect course** GA. CCA certification GA. Discussion on a Foundation-recognized credential program (parallel to CKA/CKAD/CKS). |
+
+#### 12.7 Press, Brand & Visual Identity
+
+| Quarter | Deliverables |
+|---|---|
+| 2026 Q3 | **Brand kit** published at `/press` — logo variants (light/dark/mono), color palette, typography, usage guidelines, downloadable in SVG/PNG/PDF. Approved-use cases for downstream distributions documented. **Trademark policy** clarified in line with CNCF norms. |
+| 2026 Q4 | **Press kit** — boilerplate, leadership bios, fact sheet, contact channels. Press release templates for releases and milestones. |
+| 2027 Q1 | **Conference materials pack** — booth backdrop, slide decks, one-pagers, demo flow scripts, swag-design guidelines (community-funded swag). |
+| 2027 Q2 | **Video assets**: 2-minute project explainer, 5-minute architecture deep-dive, vertical demo videos (one per RA). |
+| 2027 Q3 | **Style guide v2** — synchronized brand evolution as the project enters Marketplace GA and AI Platform GA phases. |
+| 2027 Q4 | **Annual Report 2027** visuals — infographic-quality summary of project metrics, contributor growth, adopter logos. |
+
 ## 6. Cozystack Conformance Program
 
 The capstone deliverable of the two-year plan. Run by SIG-Testing and
@@ -514,7 +618,7 @@ Initial public versions land in 2028 Q1–Q2.
 SIGs are formed in two waves:
 
 - **Wave 1 (2026 Q3):** SIG-Platform, SIG-Security, SIG-Testing,
-  SIG-Storage. These are mandatory for Incubation review.
+  SIG-Storage, SIG-Docs. These are mandatory for Incubation review.
 - **Wave 2 (2026 Q4):** SIG-Network, SIG-AI, SIG-Apps, SIG-DX, SIG-OS,
   SIG-Governance.
 
