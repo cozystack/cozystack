@@ -279,6 +279,12 @@ EOF
   kubectl delete deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test
   kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test
 
+  # Block until csi.kubevirt.io is registered on the tenant worker CSINode.
+  # Otherwise the NFS pod schedules while kubevirt-csi-node DaemonSet is
+  # still rolling out, eats ~1m on FailedAttachVolume retries, and trips
+  # the 5m pod-Succeeded budget when containerd's CreateContainer stalls.
+  kubectl wait hr -n tenant-test "kubernetes-${test_name}-csi" --timeout=10m --for=condition=ready
+
   # Clean up NFS test resources from any previous failed attempt
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
     -n tenant-test --ignore-not-found --timeout=60s || true
