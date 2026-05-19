@@ -261,12 +261,19 @@ jobs:
           cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
-      # ▸ Run E2E tests
+      # ▸ Run E2E tests (fail-fast)
+      #
+      # Bail on the first failing bats so the remaining apps do not run.
+      # Previously the loop continued through every app and reported the
+      # full list at the end, which kept the job alive for another 30-60min
+      # of wall-clock spend with no useful added signal: one failed bats is
+      # already enough to block the PR. Diagnostics for the failing app are
+      # dumped before exit; the always-run Collect report / image list /
+      # Tear down steps below still execute because of `if: always()`.
       - name: Run E2E tests
         id: e2e_tests
         run: |
           cd /tmp/$SANDBOX_NAME
-          failed_tests=""
           for app in $(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1); do
             echo "::group::Testing $app"
             if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
@@ -274,18 +281,14 @@ jobs:
               echo "✅ Test $app completed successfully"
             else
               echo "::endgroup::"
-              echo "❌ Test $app failed (no retry — see diagnostics below)"
-              failed_tests="$failed_tests $app"
+              echo "❌ Test $app failed — cancelling remaining e2e apps"
               echo "::group::Diagnostics for $app"
               docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
               docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
               echo "::endgroup::"
+              exit 1
             fi
           done
-          if [ -n "$failed_tests" ]; then
-            echo "❌ Failed tests:$failed_tests"
-            exit 1
-          fi
           echo "✅ All E2E tests passed"
 
       # ▸ Collect debug information (always runs)
