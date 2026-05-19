@@ -246,6 +246,8 @@ jobs:
       contents: write
       pull-requests: write
     if: needs.prepare-release.result == 'success'
+    # Non-blocking: failure here must not prevent update-website-docs from running.
+    continue-on-error: true
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -445,7 +447,9 @@ jobs:
     name: Update Website Docs
     runs-on: [self-hosted]
     needs: [generate-changelog, prepare-release]
-    if: needs.generate-changelog.result == 'success' && needs.prepare-release.outputs.skip != 'true'
+    # generate-changelog is non-blocking — run as long as prepare-release succeeded.
+    # `always()` is needed so this job runs even if generate-changelog failed/skipped.
+    if: always() && needs.prepare-release.result == 'success' && needs.prepare-release.outputs.skip != 'true'
     permissions:
       contents: read
     steps:
