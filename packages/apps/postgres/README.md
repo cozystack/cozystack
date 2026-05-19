@@ -158,21 +158,49 @@ See:
 
 - <https://cloudnative-pg.io/documentation/1.15/rolling_update/#manual-updates-supervised>
 
+### How to enable PostGIS
+
+Set `flavor: postgis` to bootstrap the cluster from the CloudNativePG
+PostGIS image (`ghcr.io/cloudnative-pg/postgis`) instead of the standard
+PostgreSQL image. The variant ships PostGIS and its companion extensions
+(`postgis_topology`, `postgis_raster`, `pgrouting`,
+`address_standardizer`) precompiled, so they can be activated per
+database via `databases.<name>.extensions`:
+
+```yaml
+spec:
+  flavor: postgis
+  version: v17
+  databases:
+    gis:
+      extensions:
+        - postgis
+        - postgis_topology
+```
+
+`flavor` is a bootstrap-time choice. Switching it on an existing release
+swaps the cluster image and CNPG will fail to restart the existing pods
+if the on-disk format does not match — plan a fresh release (with
+`bootstrap.recovery` from a backup if needed) when changing `flavor`.
+PostgreSQL v18 is not yet covered by the PostGIS image; pick a version
+in `[v13, v17]` when `flavor: postgis`.
+
 ## Parameters
 
 ### Common parameters
 
-| Name               | Description                                                                                                                          | Type       | Value      |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ---------- |
-| `replicas`         | Number of Postgres replicas.                                                                                                         | `int`      | `2`        |
-| `resources`        | Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
-| `resources.cpu`    | CPU available to each replica.                                                                                                       | `quantity` | `""`       |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                              | `quantity` | `""`       |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                              | `string`   | `t1.micro` |
-| `size`             | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`     |
-| `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`       |
-| `external`         | Enable external access from outside the cluster.                                                                                     | `bool`     | `false`    |
-| `version`          | PostgreSQL major version to deploy                                                                                                   | `string`   | `v18`      |
+| Name               | Description                                                                                                                                                                                                                                                                                                                                                             | Type       | Value        |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------ |
+| `replicas`         | Number of Postgres replicas.                                                                                                                                                                                                                                                                                                                                            | `int`      | `2`          |
+| `resources`        | Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied.                                                                                                                                                                                                                                    | `object`   | `{}`         |
+| `resources.cpu`    | CPU available to each replica.                                                                                                                                                                                                                                                                                                                                          | `quantity` | `""`         |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                                                                                                                                                                                                                                                                 | `quantity` | `""`         |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                                                                                                                                                                                                                                                 | `string`   | `t1.micro`   |
+| `size`             | Persistent Volume Claim size available for application data.                                                                                                                                                                                                                                                                                                            | `quantity` | `10Gi`       |
+| `storageClass`     | StorageClass used to store the data.                                                                                                                                                                                                                                                                                                                                    | `string`   | `""`         |
+| `external`         | Enable external access from outside the cluster.                                                                                                                                                                                                                                                                                                                        | `bool`     | `false`      |
+| `version`          | PostgreSQL major version to deploy                                                                                                                                                                                                                                                                                                                                      | `string`   | `v18`        |
+| `flavor`           | PostgreSQL image flavor. `postgresql` (default) uses the standard CloudNativePG image. `postgis` switches to the CloudNativePG PostGIS image, which ships PostGIS and companion extensions (postgis_topology, postgis_raster, pgrouting, address_standardizer) precompiled. Declare the needed extensions in `databases.<name>.extensions` to enable them per database. | `string`   | `postgresql` |
 
 
 ### Application-specific parameters

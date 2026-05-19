@@ -85,6 +85,14 @@ external: false
 ## @param {Version} version - PostgreSQL major version to deploy
 version: v18
 
+##
+## @enum {string} Flavor
+## @value postgresql
+## @value postgis
+
+## @param {Flavor} flavor - PostgreSQL image flavor. `postgresql` (default) uses the standard CloudNativePG image. `postgis` switches to the CloudNativePG PostGIS image, which ships PostGIS and companion extensions (postgis_topology, postgis_raster, pgrouting, address_standardizer) precompiled. Declare the needed extensions in `databases.<name>.extensions` to enable them per database.
+flavor: postgresql
+
 ## @section Application-specific parameters
 ##
 
