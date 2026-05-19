@@ -17,7 +17,7 @@ It provides a data layer for cloud native applications, IoT messaging, and micro
 | `storageClass`     | StorageClass used to store the data.                                                                                           | `string`   | `""`      |
 | `external`         | Enable external access from outside the cluster.                                                                               | `bool`     | `false`   |
 | `tls`              | TLS configuration. When omitted, TLS follows the `external` flag.                                                              | `object`   | `{}`      |
-| `tls.enabled`      | Enable TLS. When omitted, TLS is enabled automatically when `external` is true.                                                | `boolean (optional)` | `null`    |
+| `tls.enabled`      | Enable TLS. When omitted, TLS is enabled automatically when `external` is true.                                                | `*bool`    | `null`    |
 
 
 ### Application-specific parameters
