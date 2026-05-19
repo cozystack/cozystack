@@ -10,5 +10,5 @@ COZYRDS="$REPO_ROOT/packages/system/kafka-rd/cozyrds/kafka.yaml"
   # The openAPISchema value is a single-line JSON string after "openAPISchema: |-"
   SCHEMA_JSON="$(grep -A1 'openAPISchema: |-' "$COZYRDS" | tail -n1 | sed 's/^[[:space:]]*//')"
   [ -n "$SCHEMA_JSON" ] || { echo "Could not extract openAPISchema from $COZYRDS" >&2; exit 1; }
-  echo "$SCHEMA_JSON" | jq -e '.properties.tls.properties.enabled.type == ["boolean", "null"]'
+  printf '%s' "$SCHEMA_JSON" | jq -e '.properties.tls.properties.enabled.type == ["boolean", "null"]'
 }
