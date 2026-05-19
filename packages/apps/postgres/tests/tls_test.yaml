@@ -1,0 +1,130 @@
+suite: postgres TLS configuration
+
+# Covers the tri-state tls.enabled field for the operator-managed CNPG TLS mode:
+#   - external: false, tls.enabled unset  → TLS off (default)
+#   - external: true,  tls.enabled unset  → TLS auto-on
+#   - tls.enabled: true  (explicit)       → TLS on regardless of external
+#   - tls.enabled: false (explicit)       → TLS off regardless of external
+#
+# In TLS-on mode the chart sets spec.certificates with serverAltDNSNames so the
+# operator's own CA signs server certs. CNPG auto-derives SANs for the three
+# built-in services (rw/r/ro) in four DNS forms each; the chart only appends
+# the external hostname when external=true.
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+templates:
+  - templates/db.yaml
+
+tests:
+  - it: Cluster has no spec.certificates when tls is off by default
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: Cluster has no spec.certificates when tls explicitly disabled with external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: Cluster has no spec.certificates when tls explicitly enabled but external false
+    # In operator-managed mode the chart only emits spec.certificates when it
+    # has at least one extra SAN to inject (currently only the external host).
+    # With external false there is nothing to inject — let the operator use
+    # its auto-derived SAN set for the three built-in services.
+    set:
+      tls:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: Cluster has spec.certificates.serverAltDNSNames with external hostname when tls auto-on via external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - exists:
+          path: spec.certificates
+      - notExists:
+          path: spec.certificates.serverCASecret
+      - notExists:
+          path: spec.certificates.serverTLSSecret
+      - contains:
+          path: spec.certificates.serverAltDNSNames
+          content: pg-test.example.cozy.local
+      - lengthEqual:
+          path: spec.certificates.serverAltDNSNames
+          count: 1
+
+  - it: Cluster has spec.certificates.serverAltDNSNames with external hostname when tls explicitly enabled and external true
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains:
+          path: spec.certificates.serverAltDNSNames
+          content: pg-test.example.cozy.local
+      - lengthEqual:
+          path: spec.certificates.serverAltDNSNames
+          count: 1
+
+  - it: Cluster has no spec.certificates when tls.enabled null and external false
+    set:
+      tls:
+        enabled: null
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: Cluster has spec.certificates when tls.enabled null and external true
+    set:
+      tls:
+        enabled: null
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - exists:
+          path: spec.certificates
+      - contains:
+          path: spec.certificates.serverAltDNSNames
+          content: pg-test.example.cozy.local
