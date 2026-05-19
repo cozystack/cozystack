@@ -1,0 +1,210 @@
+suite: NATS HelmRelease TLS configuration tests
+
+templates:
+  - templates/nats.yaml
+
+release:
+  name: my-nats
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.cozy.local
+
+tests:
+  ###################################################
+  # tls.enabled = false: no TLS in HelmRelease      #
+  ###################################################
+
+  - it: does not set nats tls when tls.enabled is explicitly false
+    set:
+      tls:
+        enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - isNull:
+          path: spec.values.nats.config.nats.tls
+
+  - it: does not set cluster tls when tls.enabled is explicitly false
+    set:
+      tls:
+        enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - isNull:
+          path: spec.values.nats.config.cluster.tls
+
+  ###################################################
+  # tls.enabled = true: TLS in HelmRelease          #
+  ###################################################
+
+  - it: sets nats tls enabled when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.nats.tls.enabled
+          value: true
+
+  - it: sets nats tls secretName to release-tls when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.nats.tls.secretName
+          value: my-nats-tls
+
+  - it: sets cluster tls enabled when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.cluster.tls.enabled
+          value: true
+
+  - it: sets cluster tls secretName to release-tls when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.cluster.tls.secretName
+          value: my-nats-tls
+
+  ###################################################
+  # Tri-state: nil defaults to external             #
+  ###################################################
+
+  - it: enables TLS in HelmRelease when tls.enabled is unset and external is true
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.nats.tls.enabled
+          value: true
+
+  - it: disables TLS in HelmRelease when tls.enabled is unset and external is false
+    set:
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - isNull:
+          path: spec.values.nats.config.nats.tls
+
+  ###################################################
+  # Explicit true overrides external=false          #
+  ###################################################
+
+  - it: enables TLS when tls.enabled is true even if external is false
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.nats.tls.enabled
+          value: true
+
+  ###################################################
+  # Explicit false overrides external=true          #
+  ###################################################
+
+  - it: disables TLS when tls.enabled is false even if external is true
+    set:
+      tls:
+        enabled: false
+      external: true
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - isNull:
+          path: spec.values.nats.config.nats.tls
+
+  ###################################################
+  # tlsCA block is present when TLS is enabled      #
+  ###################################################
+
+  - it: tlsCA is enabled when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.tlsCA.enabled
+          value: true
+
+  - it: tlsCA secretName points to release-ca when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.tlsCA.secretName
+          value: my-nats-ca
+
+  - it: tlsCA is absent when tls.enabled is false
+    set:
+      tls:
+        enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - isNull:
+          path: spec.values.nats.tlsCA
+
+  - it: tlsCA is enabled when tls.enabled unset and external is true
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.tlsCA.enabled
+          value: true
