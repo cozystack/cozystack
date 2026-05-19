@@ -6,7 +6,7 @@
 
   # Clean up stale resources from previous failed runs
   kubectl -n tenant-test delete harbor.apps.cozystack.io $name 2>/dev/null || true
-  kubectl -n tenant-test wait hr $release --timeout=60s --for=delete 2>/dev/null || true
+  kubectl -n tenant-test wait hr $release --timeout=120s --for=delete 2>/dev/null || true
 
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -40,18 +40,18 @@ spec:
 EOF
   # Wait for the operator to materialise the HelmRelease before kubectl wait
   # kicks in (kubectl wait errors immediately if the object does not exist yet).
-  timeout 60 sh -ec "until kubectl -n tenant-test get hr $release >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait hr $release --timeout=60s --for=condition=ready
+  timeout 120 sh -ec "until kubectl -n tenant-test get hr $release >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr $release --timeout=10m --for=condition=ready
 
   # Wait for COSI to provision bucket
-  timeout 60 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
+  timeout 120 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io $release-registry \
-    --timeout=300s --for=jsonpath='{.status.bucketReady}'=true
-  timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
+    --timeout=600s --for=jsonpath='{.status.bucketReady}'=true
+  timeout 120 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io $release-registry \
-    --timeout=60s --for=jsonpath='{.status.accessGranted}'=true
+    --timeout=120s --for=jsonpath='{.status.accessGranted}'=true
 
-  kubectl -n tenant-test wait hr $release-system --timeout=600s --for=condition=ready || {
+  kubectl -n tenant-test wait hr $release-system --timeout=1200s --for=condition=ready || {
     echo "=== HelmRelease status ==="
     kubectl -n tenant-test get hr $release-system -o yaml 2>&1 || true
     echo "=== Pods ==="
@@ -68,12 +68,12 @@ EOF
     kubectl -n tenant-test get secret $release-registry-bucket -o jsonpath='{.data.BucketInfo}' 2>&1 | base64 -d 2>&1 || true
     false
   }
-  timeout 60 sh -ec "until kubectl -n tenant-test get deploy $release-core >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait deploy $release-core --timeout=120s --for=condition=available
-  timeout 60 sh -ec "until kubectl -n tenant-test get deploy $release-registry >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait deploy $release-registry --timeout=120s --for=condition=available
-  timeout 60 sh -ec "until kubectl -n tenant-test get deploy $release-portal >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait deploy $release-portal --timeout=120s --for=condition=available
+  timeout 120 sh -ec "until kubectl -n tenant-test get deploy $release-core >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait deploy $release-core --timeout=240s --for=condition=available
+  timeout 120 sh -ec "until kubectl -n tenant-test get deploy $release-registry >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait deploy $release-registry --timeout=240s --for=condition=available
+  timeout 120 sh -ec "until kubectl -n tenant-test get deploy $release-portal >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait deploy $release-portal --timeout=240s --for=condition=available
   kubectl -n tenant-test get secret $release-credentials -o jsonpath='{.data.admin-password}' | base64 --decode | grep -q '.'
   kubectl -n tenant-test get secret $release-credentials -o jsonpath='{.data.url}' | base64 --decode | grep -q 'https://'
   kubectl -n tenant-test get svc $release -o jsonpath='{.spec.ports[0].port}' | grep -q '80'

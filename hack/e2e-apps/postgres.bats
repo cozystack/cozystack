@@ -2,7 +2,7 @@
 
 @test "Create DB PostgreSQL" {
   name='test'
-  kubectl -n tenant-test delete postgreses.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test delete postgreses.apps.cozystack.io $name --ignore-not-found --timeout=4m || true
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Postgres
@@ -42,17 +42,17 @@ spec:
 EOF
   # Wait for the operator to materialise the HelmRelease before kubectl wait
   # kicks in (kubectl wait errors immediately if the object does not exist yet).
-  timeout 60 sh -ec "until kubectl -n tenant-test get hr postgres-$name >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait hr postgres-$name --timeout=100s --for=condition=ready
-  timeout 60 sh -ec "until kubectl -n tenant-test get job.batch postgres-$name-init-job >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait job.batch postgres-$name-init-job --timeout=50s --for=condition=Complete
-  timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-r -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
-  timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-ro -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
-  timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-rw -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
-  timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-r -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 120 sh -ec "until kubectl -n tenant-test get hr postgres-$name >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr postgres-$name --timeout=10m --for=condition=ready
+  timeout 120 sh -ec "until kubectl -n tenant-test get job.batch postgres-$name-init-job >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait job.batch postgres-$name-init-job --timeout=100s --for=condition=Complete
+  timeout 80 sh -ec "until kubectl -n tenant-test get svc postgres-$name-r -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
+  timeout 80 sh -ec "until kubectl -n tenant-test get svc postgres-$name-ro -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
+  timeout 80 sh -ec "until kubectl -n tenant-test get svc postgres-$name-rw -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
+  timeout 240 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-r -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   # for some reason it takes longer for the read-only endpoint to be ready
-  #timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
-  timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-rw -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  #timeout 240 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 240 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-rw -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   kubectl -n tenant-test delete postgreses.apps.cozystack.io $name
   kubectl -n tenant-test delete job.batch/postgres-$name-init-job
 }

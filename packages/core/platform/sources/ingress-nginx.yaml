@@ -14,6 +14,7 @@ spec:
     dependsOn:
     - cozystack.networking
     - cozystack.prometheus-operator-crds
+    - cozystack.cert-manager
     components:
     - name: ingress-nginx
       path: system/ingress-nginx

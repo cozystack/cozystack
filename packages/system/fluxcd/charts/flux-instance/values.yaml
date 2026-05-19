@@ -4,20 +4,21 @@ nameOverride: ""
 fullnameOverride: "flux"
 
 instance:
-  # -- Distribution https://fluxcd.control-plane.io/operator/fluxinstance/#distribution-configuration
+  # -- Distribution https://fluxoperator.dev/docs/crd/fluxinstance/#distribution-configuration
   distribution: # @schema required: true
     version: "2.x" # @schema required: true
     registry: "ghcr.io/fluxcd" # @schema required: true
     artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest"
     artifactPullSecret: ""
     imagePullSecret: ""
-  # -- Components https://fluxcd.control-plane.io/operator/fluxinstance/#components-configuration
+    variant: "" # @schema enum:['',upstream-alpine,enterprise-alpine,enterprise-distroless,enterprise-distroless-fips]
+  # -- Components https://fluxoperator.dev/docs/crd/fluxinstance/#components-configuration
   components: # @schema item: string; uniqueItems: true; itemEnum: [source-controller,kustomize-controller,helm-controller,notification-controller,image-reflector-controller,image-automation-controller,source-watcher]
     - source-controller
     - kustomize-controller
     - helm-controller
     - notification-controller
-  # -- Cluster https://fluxcd.control-plane.io/operator/fluxinstance/#cluster-configuration
+  # -- Cluster https://fluxoperator.dev/docs/crd/fluxinstance/#cluster-configuration
   cluster: # @schema required: true
     type: kubernetes # @schema enum:[kubernetes,openshift,aws,azure,gcp]
     size: "" # @schema enum:['',small,medium,large]
@@ -25,19 +26,19 @@ instance:
     networkPolicy: true
     multitenant: false
     tenantDefaultServiceAccount: "default"
-  # -- Common metadata https://fluxcd.control-plane.io/operator/fluxinstance/#common-metadata
+  # -- Common metadata https://fluxoperator.dev/docs/crd/fluxinstance/#common-metadata
   commonMetadata: # @schema required: false
     labels: { }
     annotations: { }
-  # -- Storage https://fluxcd.control-plane.io/operator/fluxinstance/#storage-configuration
+  # -- Storage https://fluxoperator.dev/docs/crd/fluxinstance/#storage-configuration
   storage: # @schema required: false
     class: ""
     size: ""
-  # -- Sharding https://fluxcd.control-plane.io/operator/fluxinstance/#sharding-configuration
+  # -- Sharding https://fluxoperator.dev/docs/crd/fluxinstance/#sharding-configuration
   sharding: # @schema required: false
     key: "sharding.fluxcd.io/key"
     shards: [ ] # @schema item: string
-  # -- Sync https://fluxcd.control-plane.io/operator/fluxinstance/#sync-configuration
+  # -- Sync https://fluxoperator.dev/docs/crd/fluxinstance/#sync-configuration
   sync: # @schema required: false
     interval: 1m
     kind: "GitRepository" # @schema enum:[GitRepository,OCIRepository,Bucket]
@@ -48,7 +49,7 @@ instance:
     name: ""
     provider: ""
   kustomize: # @schema required: false
-    # -- Kustomize patches https://fluxcd.control-plane.io/operator/fluxinstance/#kustomize-patches
+    # -- Kustomize patches https://fluxoperator.dev/docs/crd/fluxinstance/#kustomize-patches
     patches: [ ] # @schema item: object
 
 # -- Common annotations to add to all deployed objects including pods.

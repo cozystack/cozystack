@@ -1,0 +1,37 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "db": {
+      "description": "Database configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "replicas": {
+          "description": "Number of database replicas.",
+          "type": "integer",
+          "default": 2
+        },
+        "size": {
+          "description": "Persistent Volume size.",
+          "default": "10Gi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "storageClass": {
+          "description": "StorageClass used to store the data.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    }
+  }
+}

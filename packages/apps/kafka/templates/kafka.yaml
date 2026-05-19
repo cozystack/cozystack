@@ -84,9 +84,13 @@ spec:
     topicOperator: {}
     userOperator: {}
     template:
+      # `pod` accepts metadata + a flat set of pod-spec fields
+      # (enableServiceLinks, securityContext, affinity, …) directly.
+      # The previous file nested enableServiceLinks under a phantom
+      # `template.spec` key — Flux v2.7 dropped it silently, v2.8 SSA
+      # rejects it with "field not declared in schema".
       pod:
         metadata:
-         labels:
-           policy.cozystack.io/allow-to-apiserver: "true"
-      spec:
+          labels:
+            policy.cozystack.io/allow-to-apiserver: "true"
         enableServiceLinks: false
