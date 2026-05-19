@@ -137,13 +137,16 @@
       "default": {},
       "properties": {
         "parameters": {
-          "description": "PostgreSQL server parameters. All values must be strings (quote numbers: \"100\"). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.",
+          "description": "PostgreSQL server parameters. String values are preferred (quote numbers: \"100\"); integer values are also accepted and converted to strings automatically. BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.",
           "type": "object",
           "default": {
             "max_connections": "100"
           },
           "additionalProperties": {
-            "type": "string"
+            "anyOf": [
+              {"type": "string"},
+              {"type": "integer"}
+            ]
           }
         }
       }
