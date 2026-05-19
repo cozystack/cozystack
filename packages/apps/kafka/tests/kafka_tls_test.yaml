@@ -84,8 +84,8 @@ tests:
           path: spec.kafka.listeners
           count: 2
 
-  # Case 5: external=false, tls.enabled=true → external listener is created with TLS enabled
-  - it: creates external listener with TLS when tls.enabled is true even if external is false
+  # Case 5: external=false, tls.enabled=true → no external listener (external gate wins)
+  - it: does not create external listener when external is false even if tls.enabled is true
     release:
       name: test-kafka
       namespace: tenant-test
@@ -93,13 +93,9 @@ tests:
       external: false
       tls.enabled: true
     asserts:
-      - contains:
+      - lengthEqual:
           path: spec.kafka.listeners
-          content:
-            name: external
-            port: 9094
-            type: loadbalancer
-            tls: true
+          count: 2
 
   ########################################
   # Internal listeners unaffected by TLS #
