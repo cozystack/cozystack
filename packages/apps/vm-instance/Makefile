@@ -6,4 +6,5 @@ generate:
 	#  && yq -i -o json ".properties.instanceType.enum = $${INSTANCE_TYPES}" values.schema.json
 	PREFERENCES=$$(yq e '.metadata.name' -o=json -r ../../system/kubevirt-instancetypes/templates/preferences.yaml | yq 'split(" ") | . + [""]' -o json) \
 	  && yq -i -o json ".properties.instanceProfile.enum = $${PREFERENCES}" values.schema.json
+	yq -i -o json '.properties.fullnameOverride = {"description": "Override the VirtualMachine resource name. Used by vm-adoption-controller to match imported VM names.", "type": "string"}' values.schema.json
 	../../../hack/update-crd.sh

@@ -70,6 +70,8 @@ type ConfigSpec struct {
 type Disk struct {
 	// Disk bus type (e.g. "sata").
 	Bus string `json:"bus,omitempty"`
+	// Explicit DataVolume name to reference. If set, used instead of the default vm-disk-<name> convention.
+	DvName string `json:"dvName,omitempty"`
 	// Disk name.
 	Name string `json:"name"`
 }
