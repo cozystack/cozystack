@@ -66,6 +66,9 @@ spec:
   dnsNames:
     {{- $ns := .Release.Namespace }}
     {{- $name := .Release.Name }}
+    - localhost
+    - {{ printf "*.%s-internal.%s.svc" $name $ns | quote }}
+    - {{ printf "*.%s-internal.%s.svc.%s" $name $ns $clusterDomain | quote }}
     {{- range $svc := list (printf "%s-primary" $name) (printf "%s-secondary" $name) }}
     - {{ $svc }}
     - {{ $svc }}.{{ $ns }}.svc
