@@ -1,3 +1,25 @@
+{{- /*
+  Tri-state TLS logic for the external listener (port 9094):
+  - .Values.external is the sole gate for the external LoadBalancer listener.
+    The listener is rendered if and only if external is true.
+  - tls.enabled controls TLS *on the external listener* (independent of whether
+    the listener exists):
+    - If tls.enabled is explicitly set (true or false), that value wins.
+    - If tls.enabled is unset (nil), TLS inherits from .Values.external
+      (auto-on when external is true, off otherwise).
+  - tls.enabled does NOT control whether the external listener is created.
+    Setting tls.enabled=true with external=false has no effect on listeners.
+  Internal TLS listener (port 9093) is always on; Strimzi manages the PKI.
+*/ -}}
+{{- $tlsMap := .Values.tls | default dict -}}
+{{- $tlsEnabledExplicit := hasKey $tlsMap "enabled" -}}
+{{- $tlsEnabled := false -}}
+{{- if $tlsEnabledExplicit -}}
+  {{- $tlsEnabled = index $tlsMap "enabled" -}}
+{{- else -}}
+  {{- $tlsEnabled = .Values.external | default false -}}
+{{- end -}}
+{{- $showExternal := .Values.external -}}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -18,11 +40,11 @@ spec:
         port: 9093
         type: internal
         tls: true
-      {{- if .Values.external }}
+      {{- if $showExternal }}
       - name: external
         port: 9094
         type: loadbalancer
-        tls: false
+        tls: {{ $tlsEnabled }}
       {{- end }}
     config:
       {{- if eq (int .Values.kafka.replicas) 1 }}

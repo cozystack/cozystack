@@ -61,7 +61,7 @@ tests:
   # External listener  #
   #####################
 
-  - it: does not create external listener when external is false
+  - it: does not create external listener when external is false and tls.enabled is unset
     release:
       name: test-kafka
       namespace: tenant-test
@@ -75,6 +75,13 @@ tests:
             port: 9094
             type: loadbalancer
             tls: false
+      - notContains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
 
   - it: creates external loadbalancer listener when external is true
     release:
@@ -89,7 +96,7 @@ tests:
             name: external
             port: 9094
             type: loadbalancer
-            tls: false
+            tls: true
 
   - it: has exactly 2 listeners when external is false
     release:
