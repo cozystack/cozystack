@@ -1,0 +1,162 @@
+suite: cozystack-managed kuberture shim
+release:
+  name: kuberture
+  namespace: cozy-kuberture
+
+tests:
+  - it: fails fast when operator does not declare any output
+    template: charts/kuberture/templates/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: config.outputs must contain at least one output entry
+
+  - it: enables ServiceMonitor by default so the platform Prometheus scrapes metrics
+    template: charts/kuberture/templates/servicemonitor.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: external-dns.alpha.kubernetes.io/
+          serviceName: kuberture-public
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: metadata.name
+          value: kuberture
+
+  - it: keeps source pinned to default/kubernetes EndpointSlice unless overridden
+    template: charts/kuberture/templates/configmap.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: external-dns.alpha.kubernetes.io/
+          serviceName: kuberture-public
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'source:\s+namespace: default\s+serviceName: kubernetes'
+
+  - it: renders every operator-supplied output with its annotationPrefix so each external-dns instance is addressable
+    template: charts/kuberture/templates/configmap.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: external-dns.alpha.kubernetes.io/
+          serviceName: kuberture-public
+        - name: internal
+          hostname: [api.internal.example]
+          annotationPrefix: internal-dns.io/
+          serviceName: kuberture-internal
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'annotationPrefix: external-dns\.alpha\.kubernetes\.io/'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'annotationPrefix: internal-dns\.io/'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'serviceName: kuberture-public'
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: 'serviceName: kuberture-internal'
+
+  - it: rejects an empty annotationPrefix at install time so the comment about omission is the only documented zero-prefix path
+    template: charts/kuberture/templates/configmap.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: ""
+          serviceName: kuberture-public
+    asserts:
+      - failedTemplate:
+          errorPattern: "annotationPrefix.*does not match pattern '/\\$'"
+
+  - it: omits annotationPrefix from the rendered config when the operator omits it so the controller applies its default
+    template: charts/kuberture/templates/configmap.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          serviceName: kuberture-public
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: 'annotationPrefix:'
+
+  - it: mounts the rendered ConfigMap into the controller so config changes propagate
+    template: charts/kuberture/templates/deployment.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: external-dns.alpha.kubernetes.io/
+          serviceName: kuberture-public
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: config
+            configMap:
+              name: kuberture
+
+  - it: pins the controller image to a tag+sha256 digest so an upstream tag republish cannot silently swap the binary
+    template: charts/kuberture/templates/deployment.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: external-dns.alpha.kubernetes.io/
+          serviceName: kuberture-public
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/lexfrei/kuberture:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: keeps the controller Role permitting full Service lifecycle on its release namespace so the operator can reconcile output Services
+    template: charts/kuberture/templates/role.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: external-dns.alpha.kubernetes.io/
+          serviceName: kuberture-public
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["services"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - it: pins the container metrics port to the value derived from config.metricsBindAddress so a future schema tightening or upstream refactor cannot silently break Prometheus scraping
+    # The vendored chart derives containerPort via `last (splitList ":"
+    # .Values.config.metricsBindAddress) | int`, which renders the integer
+    # part after the final colon. The chart's values.schema.json validates
+    # metricsBindAddress only as a free-form string today; tracked as an
+    # upstream tightening request — for cozystack the right move is to pin
+    # the current contract here so an upstream refactor that changes the
+    # derivation (or our own future override of metricsBindAddress) is
+    # surfaced by a failing test.
+    template: charts/kuberture/templates/deployment.yaml
+    set:
+      kuberture.config.outputs:
+        - name: public
+          hostname: [api.example.com]
+          annotationPrefix: external-dns.alpha.kubernetes.io/
+          serviceName: kuberture-public
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 8080
+            protocol: TCP
