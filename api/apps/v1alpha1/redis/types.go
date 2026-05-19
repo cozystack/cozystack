@@ -7,6 +7,7 @@ package redis
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:object:root=true
@@ -26,6 +27,9 @@ type ConfigSpec struct {
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="t1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+	// Kubernetes affinity configuration for Redis and Sentinel pods.
+	// +kubebuilder:default:={}
+	Affinity Affinity `json:"affinity,omitempty"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="1Gi"
 	Size resource.Quantity `json:"size"`
@@ -41,6 +45,15 @@ type ConfigSpec struct {
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
+}
+
+type Affinity struct {
+	// Affinity rules for Redis pods.
+	// +kubebuilder:default:={}
+	Redis k8sRuntime.RawExtension `json:"redis,omitempty"`
+	// Affinity rules for Sentinel pods.
+	// +kubebuilder:default:={}
+	Sentinel k8sRuntime.RawExtension `json:"sentinel,omitempty"`
 }
 
 type Resources struct {
