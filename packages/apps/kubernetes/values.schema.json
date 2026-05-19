@@ -5,7 +5,13 @@
     "storageClass": {
       "description": "StorageClass used to store the data.",
       "type": "string",
-      "default": "replicated"
+      "default": "replicated",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "storageClass is immutable after creation"
+        }
+      ]
     },
     "nodeGroups": {
       "description": "Worker nodes configuration map.",
@@ -152,7 +158,7 @@
             }
           },
           "storageClass": {
-            "description": "StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).",
+            "description": "StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately NOT @immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.",
             "type": "string"
           }
         }

@@ -22,6 +22,7 @@ type ConfigSpec struct {
 	Host string `json:"host,omitempty"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable after creation"
 	StorageClass string `json:"storageClass"`
 	// Core API server configuration.
 	// +kubebuilder:default:={}

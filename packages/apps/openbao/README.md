@@ -3,6 +3,8 @@
 OpenBAO is an open-source secrets management solution forked from HashiCorp Vault.
 It provides identity-based secrets and encryption management for cloud infrastructure.
 
+> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+
 ## Parameters
 
 ### Common parameters

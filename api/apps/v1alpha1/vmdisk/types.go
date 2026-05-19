@@ -28,6 +28,7 @@ type ConfigSpec struct {
 	Storage resource.Quantity `json:"storage"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:="replicated"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable after creation"
 	StorageClass string `json:"storageClass"`
 }
 

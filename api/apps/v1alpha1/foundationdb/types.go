@@ -152,6 +152,7 @@ type Storage struct {
 	Size resource.Quantity `json:"size"`
 	// Storage class (if not set, uses cluster default).
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable after creation"
 	StorageClass string `json:"storageClass"`
 }
 

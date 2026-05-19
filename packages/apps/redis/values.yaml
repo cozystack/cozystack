@@ -68,6 +68,7 @@ resourcesPreset: "t1.nano"
 size: 1Gi
 
 ## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
 storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.

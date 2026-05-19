@@ -6,6 +6,7 @@
 host: ""
 
 ## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
 storageClass: ""
 
 ##
