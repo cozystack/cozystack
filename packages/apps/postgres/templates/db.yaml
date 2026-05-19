@@ -6,13 +6,22 @@ metadata:
   name: {{ .Release.Name }}
 spec:
   instances: {{ .Values.replicas }}
-  {{- if $tlsEnabled }}
-  # cert-manager-issued secrets for CNPG server TLS.
-  # serverCASecret holds ca.crt; serverTLSSecret holds tls.crt + tls.key.
-  # serverAltDNSNames is omitted because we include all SANs in the leaf cert.
+  {{- if and $tlsEnabled .Values.external }}
+  # Operator-managed TLS. CNPG auto-generates its own self-signed CA and signs
+  # server + client + replication certs from it. The operator's default SAN list
+  # already covers the three built-in services (rw/r/ro) in four DNS forms each
+  # (bare, .ns, .ns.svc, .ns.svc.<cluster-domain>); only the external hostname
+  # needs to be appended via serverAltDNSNames.
+  #
+  # serverAltDNSNames is mutually exclusive with serverTLSSecret per the CNPG
+  # admission webhook, which is why the chart no longer renders a cert-manager
+  # chain — the operator owns the chain end-to-end.
+  #
+  # Trust anchor for clients: the operator-managed Opaque Secret <release>-ca
+  # (key: ca.crt). Mount that key into client pods to verify TLS.
   certificates:
-    serverCASecret: {{ .Release.Name }}-ca
-    serverTLSSecret: {{ .Release.Name }}-tls
+    serverAltDNSNames:
+      - {{ printf "%s.%s" .Release.Name .Values._namespace.host }}
   {{- end }}
   {{/*
     s3Credentials points at the operator-supplied Secret when
