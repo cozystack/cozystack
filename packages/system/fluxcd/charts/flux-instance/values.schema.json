@@ -350,6 +350,16 @@
                         "registry": {
                             "type": "string"
                         },
+                        "variant": {
+                            "type": "string",
+                            "enum": [
+                                "",
+                                "upstream-alpine",
+                                "enterprise-alpine",
+                                "enterprise-distroless",
+                                "enterprise-distroless-fips"
+                            ]
+                        },
                         "version": {
                             "type": "string"
                         }

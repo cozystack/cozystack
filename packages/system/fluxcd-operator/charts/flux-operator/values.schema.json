@@ -425,6 +425,115 @@
             "items": {
                 "type": "object"
             }
+        },
+        "web": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object"
+                },
+                "configSecretName": {
+                    "default": "",
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "httpRoute": {
+                    "default": {
+                        "annotations": {},
+                        "enabled": false,
+                        "hostnames": [],
+                        "parentRefs": []
+                    },
+                    "type": "object",
+                    "properties": {
+                        "annotations": {
+                            "type": "object"
+                        },
+                        "enabled": {
+                            "default": false,
+                            "type": "boolean"
+                        },
+                        "hostnames": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "parentRefs": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "ingress": {
+                    "default": {
+                        "annotations": {},
+                        "className": "",
+                        "enabled": false
+                    },
+                    "type": "object",
+                    "properties": {
+                        "annotations": {
+                            "type": "object"
+                        },
+                        "className": {
+                            "type": "string"
+                        },
+                        "enabled": {
+                            "default": false,
+                            "type": "boolean"
+                        },
+                        "hosts": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "object"
+                            }
+                        },
+                        "tls": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "networkPolicy": {
+                    "type": "object",
+                    "properties": {
+                        "create": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "rbac": {
+                    "type": "object",
+                    "properties": {
+                        "createAggregation": {
+                            "default": false,
+                            "type": "boolean"
+                        },
+                        "createRoles": {
+                            "default": true,
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "serverOnly": {
+                    "type": "boolean"
+                },
+                "serverReplicas": {
+                    "default": 1,
+                    "type": "integer"
+                }
+            }
         }
     }
 }
