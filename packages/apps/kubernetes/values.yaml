@@ -105,7 +105,6 @@ nodeGroups:
 ## @value v1.33
 ## @value v1.32
 ## @value v1.31
-## @value v1.30
 
 ## @param {Version} version - Kubernetes major.minor version to deploy
 version: "v1.35"
@@ -268,7 +267,24 @@ controlPlane:
 
 ## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
 ## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+## @field {string} [kubectl] - Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
+## @field {string} [talosCsrSigner] - Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
 
 ## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
 images:
   waitForKubeconfig: ""
+  kubectl: ""
+  talosCsrSigner: ""
+
+##
+## @section Talos Worker Image
+##
+
+## @typedef {struct} Talos - Talos worker image configuration.
+## @field {string} version - Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+## @field {string} schematicID - Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+
+## @param {Talos} talos - Talos worker image configuration.
+talos:
+  version: "v1.13.0"
+  schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"

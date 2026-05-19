@@ -1,0 +1,151 @@
+{{- /*
+  Job that materialises a long-lived kubeadm-format bootstrap-token Secret
+  inside the tenant kube-system namespace, so that Talos workers can use
+  cluster.token from their machineconfig to perform kubelet CSR.
+
+  Why a Job and not a kube-native Secret on the management cluster:
+  bootstrap-token-<id> Secrets must live in the tenant apiserver's
+  kube-system, which the management cluster can only reach via the
+  Kamaji-issued admin kubeconfig stored as <release>-admin-kubeconfig.
+
+  The Job runs as a Helm post-install/post-upgrade hook so it executes
+  after the KamajiControlPlane has reconciled and the admin kubeconfig
+  Secret exists. It is idempotent (kubectl apply) and re-runs harmlessly
+  on every upgrade.
+*/}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-bootstrap-token-tenant
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-bootstrap-token-tenant
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  # backoffLimit + restartPolicy: OnFailure gives the Job up to 6 attempts at
+  # the tenant apiserver with exponential backoff (capped at 6 min between
+  # restarts). Worst case ~10 min, after which Flux surfaces the failure
+  # instead of accumulating retries silently for hours.
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Release.Name }}-bootstrap-token-tenant
+      containers:
+        - name: kubectl
+          image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
+          env:
+            - name: TENANT_KUBECONFIG
+              value: /tenant-admin/super-admin.svc
+            - name: KUBECONFIG
+              value: /tenant-admin/super-admin.svc
+            - name: TOKEN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-talos-secrets
+                  key: bootstrapTokenId
+            - name: TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-talos-secrets
+                  key: bootstrapTokenSecret
+          volumeMounts:
+            - name: tenant-admin
+              mountPath: /tenant-admin
+              readOnly: true
+          command:
+            - sh
+            - -ec
+            - |
+              # The kubectl apply calls below fail with a non-zero exit when
+              # the tenant apiserver is unreachable, which restarts the pod
+              # under backoffLimit. No internal retry loop needed — Job-level
+              # backoff handles the transient unreadiness window after Kamaji
+              # bootstraps the konnectivity plane.
+              kubectl version --request-timeout=10s
+
+              cat <<EOF | kubectl apply -f -
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: bootstrap-token-${TOKEN_ID}
+                namespace: kube-system
+              type: bootstrap.kubernetes.io/token
+              stringData:
+                token-id: ${TOKEN_ID}
+                token-secret: ${TOKEN_SECRET}
+                description: "Talos worker bootstrap token, managed by cozystack kubernetes chart"
+                usage-bootstrap-authentication: "true"
+                usage-bootstrap-signing: "true"
+                auth-extra-groups: "system:bootstrappers:kubeadm:default-node-token"
+              EOF
+
+              echo "[$(date -u +%H:%M:%S)] bootstrap-token-${TOKEN_ID} ensured"
+
+              # Grant system:nodes the ability to watch the kubernetes
+              # Endpoint/EndpointSlice in the default namespace. Talos
+              # workers run an internal k8s.EndpointController (apiserver
+              # failover discovery) that otherwise spams
+              # "endpointslices forbidden" warnings.
+              # Note: resourceNames intentionally omitted — Talos's
+              # informer issues unbounded list/watch and Kubernetes RBAC
+              # only honours resourceNames on list/watch when the client
+              # restricts via a field selector, which Talos does not.
+              # The Role is namespace-scoped to default, where only the
+              # built-in "kubernetes" endpoint lives.
+              cat <<'EOF' | kubectl apply -f -
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: Role
+              metadata:
+                name: talos:node-apiserver-endpoint-discovery
+                namespace: default
+              rules:
+                - apiGroups: [""]
+                  resources: ["endpoints"]
+                  verbs: ["get", "list", "watch"]
+                - apiGroups: ["discovery.k8s.io"]
+                  resources: ["endpointslices"]
+                  verbs: ["get", "list", "watch"]
+              ---
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: RoleBinding
+              metadata:
+                name: talos:node-apiserver-endpoint-discovery
+                namespace: default
+              roleRef:
+                apiGroup: rbac.authorization.k8s.io
+                kind: Role
+                name: talos:node-apiserver-endpoint-discovery
+              subjects:
+                - kind: Group
+                  apiGroup: rbac.authorization.k8s.io
+                  name: system:nodes
+              EOF
+
+              # Drop the previous ClusterRole/Binding incarnation if it
+              # exists from earlier deploys of this chart.
+              kubectl delete clusterrole talos:node-apiserver-endpoint-discovery --ignore-not-found
+              kubectl delete clusterrolebinding talos:node-apiserver-endpoint-discovery --ignore-not-found
+
+              echo "[$(date -u +%H:%M:%S)] talos:node-apiserver-endpoint-discovery RBAC ensured"
+      volumes:
+        - name: tenant-admin
+          secret:
+            secretName: {{ .Release.Name }}-admin-kubeconfig

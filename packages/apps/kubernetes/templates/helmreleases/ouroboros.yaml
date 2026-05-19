@@ -41,7 +41,7 @@ ouroboros:
            federations, custom kubelet --cluster-domain, etc.) can
            override via
            `addons.ouroboros.valuesOverride.ouroboros.controller.clusterDomain`. */}}
-    clusterDomain: cluster.local
+    clusterDomain: {{ include "kubernetes.tenantClusterDomain" $ }}
 {{- end }}
 
 {{- /* addons.ouroboros.enabled requires addons.ingressNginx.enabled. The

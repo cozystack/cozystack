@@ -39,6 +39,9 @@ type ConfigSpec struct {
 	// Optional image overrides for air-gapped or rate-limited registries.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
+	// Talos worker image configuration.
+	// +kubebuilder:default:={}
+	Talos Talos `json:"talos"`
 }
 
 type APIServer struct {
@@ -176,6 +179,12 @@ type HAMiAddon struct {
 }
 
 type Images struct {
+	// Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
+	// +kubebuilder:default:=""
+	Kubectl string `json:"kubectl,omitempty"`
+	// Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
+	// +kubebuilder:default:=""
+	TalosCsrSigner string `json:"talosCsrSigner,omitempty"`
 	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 	// +kubebuilder:default:=""
 	WaitForKubeconfig string `json:"waitForKubeconfig,omitempty"`
@@ -287,6 +296,15 @@ type Scheduler struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
+type Talos struct {
+	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+	SchematicID string `json:"schematicID"`
+	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+	// +kubebuilder:default:="v1.13.0"
+	Version string `json:"version"`
+}
+
 type VeleroAddon struct {
 	// Enable Velero.
 	// +kubebuilder:default:=false
@@ -308,5 +326,5 @@ type IngressNginxExposeMethod string
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
 
-// +kubebuilder:validation:Enum="v1.35";"v1.34";"v1.33";"v1.32";"v1.31";"v1.30"
+// +kubebuilder:validation:Enum="v1.35";"v1.34";"v1.33";"v1.32";"v1.31"
 type Version string
