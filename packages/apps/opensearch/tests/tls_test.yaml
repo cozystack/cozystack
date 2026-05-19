@@ -94,7 +94,7 @@ tests:
           value: {}
       - equal:
           path: metadata.name
-          value: os-test-selfsigned
+          value: os-test-http-selfsigned
 
   - it: second document is CA Certificate with isCA true and rotationPolicy Never
     set:
@@ -109,10 +109,10 @@ tests:
           value: true
       - equal:
           path: spec.secretName
-          value: os-test-ca
+          value: os-test-http-ca
       - equal:
           path: spec.issuerRef.name
-          value: os-test-selfsigned
+          value: os-test-http-selfsigned
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Never
@@ -127,10 +127,10 @@ tests:
           of: Issuer
       - equal:
           path: metadata.name
-          value: os-test-ca
+          value: os-test-http-ca
       - equal:
           path: spec.ca.secretName
-          value: os-test-ca
+          value: os-test-http-ca
 
   - it: fourth document is leaf Certificate referencing the CA Issuer
     set:
@@ -145,7 +145,7 @@ tests:
           value: os-test-http-cert
       - equal:
           path: spec.issuerRef.name
-          value: os-test-ca
+          value: os-test-http-ca
 
   # --- SAN coverage for HTTP services ---
 
