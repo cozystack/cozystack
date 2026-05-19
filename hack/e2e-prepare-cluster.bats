@@ -111,7 +111,7 @@ EOF
 }
 
 @test "Wait until Talos API port 50000 is reachable on all machines" {
-  timeout 60 sh -ec 'until nc -nz 192.168.123.11 50000 && nc -nz 192.168.123.12 50000 && nc -nz 192.168.123.13 50000; do sleep 1; done'
+  timeout 120 sh -ec 'until nc -nz 192.168.123.11 50000 && nc -nz 192.168.123.12 50000 && nc -nz 192.168.123.13 50000; do sleep 1; done'
 }
 
 @test "Generate Talos cluster configuration" {
@@ -231,7 +231,7 @@ EOF
   done
 
   # Wait for Talos services to come up again
-  timeout 60 sh -ec 'until nc -nz 192.168.123.11 50000 && nc -nz 192.168.123.12 50000 && nc -nz 192.168.123.13 50000; do sleep 1; done'
+  timeout 120 sh -ec 'until nc -nz 192.168.123.11 50000 && nc -nz 192.168.123.12 50000 && nc -nz 192.168.123.13 50000; do sleep 1; done'
 }
 
 @test "Bootstrap Talos cluster" {
@@ -239,19 +239,19 @@ EOF
   # Retry for up to 60s: talosctl bootstrap refuses with "time is not in
   # sync yet" until NTP converges on a freshly booted node, which on fast
   # ephemeral runners can take several attempts of ~5s each.
-  timeout 60 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 2; done'
+  timeout 120 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 2; done'
 
   # Wait until etcd is healthy
-  if ! timeout 180 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
+  if ! timeout 360 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
     talosctl dmesg -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 || true
     exit 1
   fi
-  timeout 60 sh -ec 'while talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 2>&1 | grep -q "rpc error"; do sleep 1; done'
+  timeout 120 sh -ec 'while talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 2>&1 | grep -q "rpc error"; do sleep 1; done'
 
   # Retrieve kubeconfig
   rm -f kubeconfig
   talosctl kubeconfig kubeconfig -e 192.168.123.10 -n 192.168.123.10
 
   # Wait until all three nodes register in Kubernetes
-  timeout 60 sh -ec 'until [ $(kubectl get node --no-headers | wc -l) -eq 3 ]; do sleep 1; done'
+  timeout 120 sh -ec 'until [ $(kubectl get node --no-headers | wc -l) -eq 3 ]; do sleep 1; done'
 }

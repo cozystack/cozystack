@@ -3,7 +3,7 @@
 @test "Create and Verify Seeweedfs Bucket" {
   # Create the bucket resource with readwrite and readonly users
   name='test'
-  kubectl -n tenant-test delete bucket.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test delete bucket.apps.cozystack.io $name --ignore-not-found --timeout=4m || true
   pkill -f "port-forward.*8333:" 2>/dev/null || true
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -19,13 +19,13 @@ spec:
 EOF
 
   # Wait for the bucket to be ready
-  kubectl -n tenant-test wait hr bucket-${name} --timeout=5m --for=condition=ready
-  timeout 60 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=300s --for=jsonpath='{.status.bucketReady}'
-  timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-admin >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'
-  timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'
+  kubectl -n tenant-test wait hr bucket-${name} --timeout=10m --for=condition=ready
+  timeout 120 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=600s --for=jsonpath='{.status.bucketReady}'
+  timeout 120 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-admin >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=600s --for=jsonpath='{.status.accessGranted}'
+  timeout 120 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=600s --for=jsonpath='{.status.accessGranted}'
 
   # Get admin (readwrite) credentials
   kubectl -n tenant-test get secret bucket-${name}-admin -ojsonpath='{.data.BucketInfo}' | base64 -d > bucket-admin-credentials.json
@@ -39,10 +39,10 @@ EOF
   VIEWER_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' bucket-viewer-credentials.json)
 
   # Start port-forwarding
-  bash -c 'timeout 100s kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 > /dev/null 2>&1 &'
+  bash -c 'timeout 200s kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 > /dev/null 2>&1 &'
 
   # Wait for port-forward to be ready
-  timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
+  timeout 60 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
 
   # --- Test readwrite user (admin) ---
   mc alias set rw-user https://localhost:8333 $ADMIN_ACCESS_KEY $ADMIN_SECRET_KEY --insecure

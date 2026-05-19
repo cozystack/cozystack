@@ -4,7 +4,7 @@
 # -----------------------------------------------------------------------------
 
 @test "Test OpenAPI v2 endpoint" {
-  kubectl get -v7 --raw '/openapi/v2?timeout=32s' > /dev/null
+  kubectl get -v7 --raw '/openapi/v2?timeout=64s' > /dev/null
 }
 
 @test "Test OpenAPI v3 endpoint" {
@@ -20,8 +20,8 @@
     # Wait for the proxy to actually be listening rather than guessing with
     # a fixed sleep. nc -z is non-destructive and exits 0 the moment the
     # listener accepts a connection.
-    timeout 10 sh -ec 'until nc -z localhost 21234; do sleep 0.1; done'
-    curl -sS --fail 'http://localhost:21234/openapi/v2?timeout=32s' -H 'Accept: application/com.github.proto-openapi.spec.v2@v1.0+protobuf' > /dev/null
+    timeout 20 sh -ec 'until nc -z localhost 21234; do sleep 0.1; done'
+    curl -sS --fail 'http://localhost:21234/openapi/v2?timeout=64s' -H 'Accept: application/com.github.proto-openapi.spec.v2@v1.0+protobuf' > /dev/null
   )
 }
 

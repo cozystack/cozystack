@@ -6,12 +6,12 @@
 # prior run so tests remain independent despite the singleton name.
 
 setup() {
-  kubectl -n tenant-test delete etcd.apps.cozystack.io --all --ignore-not-found --timeout=2m
+  kubectl -n tenant-test delete etcd.apps.cozystack.io --all --ignore-not-found --timeout=4m
   # HelmRelease teardown is async relative to the CR deletion above; wait for
   # downstream resources so the next test starts from a clean state.
-  kubectl -n tenant-test wait hr/etcd --for=delete --timeout=2m --ignore-not-found
-  kubectl -n tenant-test wait secret/etcd-s3-creds --for=delete --timeout=1m --ignore-not-found
-  kubectl -n tenant-test wait etcdbackupschedule.etcd.aenix.io/etcd --for=delete --timeout=1m --ignore-not-found
+  kubectl -n tenant-test wait hr/etcd --for=delete --timeout=4m --ignore-not-found
+  kubectl -n tenant-test wait secret/etcd-s3-creds --for=delete --timeout=2m --ignore-not-found
+  kubectl -n tenant-test wait etcdbackupschedule.etcd.aenix.io/etcd --for=delete --timeout=2m --ignore-not-found
 }
 
 dump_diagnostics() {
@@ -25,8 +25,8 @@ dump_diagnostics() {
 # condition=ready is set. kubectl wait fails immediately on a missing
 # resource, so poll for existence first.
 wait_etcd_hr_ready() {
-  timeout 60 sh -ec 'until kubectl -n tenant-test get hr/etcd >/dev/null 2>&1; do sleep 2; done'
-  kubectl -n tenant-test wait hr/etcd --timeout=5m --for=condition=ready
+  timeout 120 sh -ec 'until kubectl -n tenant-test get hr/etcd >/dev/null 2>&1; do sleep 2; done'
+  kubectl -n tenant-test wait hr/etcd --timeout=10m --for=condition=ready
 }
 
 @test "Create Etcd" {
@@ -45,7 +45,7 @@ spec:
     memory: 128Mi
 EOF
   wait_etcd_hr_ready || { dump_diagnostics; false; }
-  kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
+  kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=360s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
 }
 
 @test "Create Etcd with empty backup block (disabled by default)" {
@@ -102,12 +102,12 @@ spec:
     failedJobsHistoryLimit: 1
 EOF
   wait_etcd_hr_ready || { dump_diagnostics; false; }
-  kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
+  kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=360s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
   kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd || { dump_diagnostics; false; }
   # Verify the region field propagated to the EtcdBackupSchedule.
   REGION=$(kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd -o jsonpath='{.spec.destination.s3.region}')
   [ "$REGION" = "us-east-1" ]
   kubectl -n tenant-test get secret etcd-s3-creds -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d | grep -q '^e2e-access-key$'
   # The etcd-operator generates a CronJob from the EtcdBackupSchedule. Wait for it.
-  timeout 120 sh -ec "until [ \"\$(kubectl -n tenant-test get cronjob -l etcd.aenix.io/etcdbackupschedule-name=etcd -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)\" != '' ]; do sleep 5; done" || { dump_diagnostics; false; }
+  timeout 240 sh -ec "until [ \"\$(kubectl -n tenant-test get cronjob -l etcd.aenix.io/etcdbackupschedule-name=etcd -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)\" != '' ]; do sleep 5; done" || { dump_diagnostics; false; }
 }

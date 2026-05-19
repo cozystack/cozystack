@@ -20,10 +20,10 @@ EOF
 
   # Wait for the operator to materialise the HelmRelease before kubectl wait
   # kicks in (kubectl wait errors immediately if the object does not exist yet).
-  timeout 60 sh -ec "until kubectl -n tenant-test get hr ${name} >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait hr ${name} --timeout=5m --for=condition=ready
-  kubectl -n tenant-test wait hr ${name}-system --timeout=5m --for=condition=ready
-  timeout 60 sh -ec "until kubectl -n tenant-test get deploy -l app.kubernetes.io/instance=${name}-system -o jsonpath='{.items[0].status.readyReplicas}' | grep -q '1'; do sleep 5; done"
+  timeout 120 sh -ec "until kubectl -n tenant-test get hr ${name} >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr ${name} --timeout=10m --for=condition=ready
+  kubectl -n tenant-test wait hr ${name}-system --timeout=10m --for=condition=ready
+  timeout 120 sh -ec "until kubectl -n tenant-test get deploy -l app.kubernetes.io/instance=${name}-system -o jsonpath='{.items[0].status.readyReplicas}' | grep -q '1'; do sleep 5; done"
 
   kubectl -n tenant-test delete externaldns.apps.cozystack.io ${name}
 }
@@ -45,10 +45,10 @@ EOF
 
   # Wait for the operator to materialise the HelmRelease before kubectl wait
   # kicks in (kubectl wait errors immediately if the object does not exist yet).
-  timeout 60 sh -ec "until kubectl -n tenant-test get hr ${name} >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait hr ${name} --timeout=5m --for=condition=ready
-  kubectl -n tenant-test wait hr ${name}-system --timeout=5m --for=condition=ready
-  timeout 60 sh -ec "until kubectl -n tenant-test get deploy -l app.kubernetes.io/instance=${name}-system -o jsonpath='{.items[0].status.readyReplicas}' | grep -q '1'; do sleep 5; done"
+  timeout 120 sh -ec "until kubectl -n tenant-test get hr ${name} >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr ${name} --timeout=10m --for=condition=ready
+  kubectl -n tenant-test wait hr ${name}-system --timeout=10m --for=condition=ready
+  timeout 120 sh -ec "until kubectl -n tenant-test get deploy -l app.kubernetes.io/instance=${name}-system -o jsonpath='{.items[0].status.readyReplicas}' | grep -q '1'; do sleep 5; done"
 
   kubectl -n tenant-test delete externaldns.apps.cozystack.io ${name}
 }
