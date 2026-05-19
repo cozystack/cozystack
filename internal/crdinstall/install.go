@@ -89,6 +89,17 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 		}
 	}
 
+	// Stamp the deletion-protection label so the platform VAP guards every
+	// Cozystack CRD against accidental kubectl delete.
+	for _, obj := range objects {
+		labels := obj.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		labels["platform.cozystack.io/no-delete"] = "true"
+		obj.SetLabels(labels)
+	}
+
 	logger.Info("Applying Cozystack CRDs", "count", len(objects))
 	for _, obj := range objects {
 		patchOptions := &client.PatchOptions{
