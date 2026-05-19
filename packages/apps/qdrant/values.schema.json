@@ -117,6 +117,17 @@
       "description": "Enable external access from outside the cluster.",
       "type": "boolean",
       "default": false
+    },
+    "tls": {
+      "description": "TLS configuration. When omitted, the effective TLS state follows the value of `external`.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Enable TLS. When unset, inherits the value of `external` (TLS is on when external access is enabled). Set explicitly to `true` or `false` to override.",
+          "type": "boolean"
+        }
+      }
     }
   }
 }

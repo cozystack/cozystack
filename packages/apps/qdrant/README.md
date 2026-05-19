@@ -25,6 +25,14 @@ Service deploys Qdrant as a StatefulSet with automatic cluster mode when multipl
 | `external`         | Enable external access from outside the cluster.                                                                                 | `bool`     | `false`    |
 
 
+### TLS parameters
+
+| Name          | Description                                                                                                                                            | Type     | Value  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------ |
+| `tls`         | TLS configuration. When omitted, the effective TLS state follows the value of `external`.                                                              | `object` | `{}`   |
+| `tls.enabled` | Enable TLS. When unset, inherits the value of `external` (TLS is on when external access is enabled). Set explicitly to `true` or `false` to override. | `*bool`  | `null` |
+
+
 ## Parameter examples and reference
 
 ### resources and resourcesPreset
