@@ -97,12 +97,12 @@ more details:
 
 ### TLS parameters
 
-| Name           | Description                                                                                                                                                               | Type     | Value   |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
-| `tls`          | TLS configuration. When omitted, TLS is enabled automatically when `external` is true.                                                                                    | `object` | `{}`    |
-| `tls.enabled`  | Enable TLS for MariaDB connections. Accepts `true`, `false`, or omitted (null). When omitted, inherits the value of `external`. (`*bool` — nullable boolean tri-state.)   | `*bool`  | `null`  |
-| `tls.required` | Enforce TLS for all connections (`require_secure_transport=ON`). Defaults to `true` when TLS is enabled. Set to `false` only during migration from non-TLS deployments.   | `bool`   | `true`  |
-| `version`      | MariaDB major.minor version to deploy                                                                                                                                     | `string` | `v11.8` |
+| Name           | Description                                                                                                                                                                                  | Type     | Value   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `tls`          | TLS configuration. When omitted, TLS is enabled automatically when `external` is true.                                                                                                       | `object` | `{}`    |
+| `tls.enabled`  | Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.                                                                                                       | `*bool`  | `null`  |
+| `tls.required` | Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet. | `bool`   | `false` |
+| `version`      | MariaDB major.minor version to deploy                                                                                                                                                        | `string` | `v11.8` |
 
 
 ### Application-specific parameters
