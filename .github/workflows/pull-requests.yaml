@@ -349,7 +349,7 @@ jobs:
         with:
           mode: pause-idle
           endpoint: ${{ vars.BREAKPOINT_ENDPOINT }}
-          authorized-users: kvaps, gecube, kingdonb, lllamnyp, aobort, tym83, klinch0, nbykov0, matthieu-robin, mattia-eleuteri
+          authorized-users: androndo, Arsolitt, IvanHunters, kvaps, lexfrei, lllamnyp, mattia-eleuteri, matthieu-robin, myasnikovdaniil, sircthulhu, tym83
           check-run-name: "Breakpoint Open"
           github-token: ${{ github.token }}
           check-run-summary-template: |
