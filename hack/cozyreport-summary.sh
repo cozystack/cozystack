@@ -1,8 +1,14 @@
-#!/bin/sh
+#!/bin/bash
 # Emit a human-readable summary of "what is broken" to a single file.
 # Reads the live cluster (not the report dir) so it can use kubectl JSONPath.
 # Usage: cozyreport-summary.sh > summary.txt
-set -eu
+#
+# bash, not /bin/sh: we rely on `set -o pipefail` to surface failed kubectl
+# calls in `kubectl ... | awk ...` chains as missing sections instead of
+# silently-empty ones, and the e2e-sandbox image's /bin/sh (Ubuntu dash)
+# does not implement pipefail. The call site wraps this script in `|| true`
+# so a hard pipeline failure still produces a (truncated) summary.txt.
+set -euo pipefail
 
 echo "# Cozystack E2E Diagnostic Summary"
 echo "Generated: $(date -Iseconds)"
@@ -32,8 +38,24 @@ echo
 
 echo "## Recent OOMKilled events (last 20)"
 echo
+# Catches kernel-OOM events emitted by kubelet at the node level. Misses
+# cgroup-only container kills that exit 137 without escalating to a node
+# OOMKilling event — those show up in the container-state section below.
 kubectl get events -A --field-selector reason=OOMKilling --sort-by=.lastTimestamp 2>/dev/null \
   | tail -20
+echo
+
+echo "## Containers with OOMKilled lastState"
+echo
+# Complements the OOMKilling-event section above. Container statuses retain
+# the lastState even when no node-level OOMKilling event was emitted (e.g.
+# cgroup-only kills with no kernel memory-pressure broadcast), so this
+# catches the silent-restart cases. Use go-template (not jsonpath) so the
+# inner range can still reach pod-level metadata via the outer-scope $pod.
+kubectl get pod -A -o go-template='{{range .items}}{{$pod := .}}{{range .status.containerStatuses}}{{if and .lastState.terminated (eq .lastState.terminated.reason "OOMKilled")}}  {{$pod.metadata.namespace}}/{{$pod.metadata.name}} container={{.name}} exitCode={{.lastState.terminated.exitCode}} finishedAt={{.lastState.terminated.finishedAt}}
+{{end}}{{end}}{{range .status.initContainerStatuses}}{{if and .lastState.terminated (eq .lastState.terminated.reason "OOMKilled")}}  {{$pod.metadata.namespace}}/{{$pod.metadata.name}} initContainer={{.name}} exitCode={{.lastState.terminated.exitCode}} finishedAt={{.lastState.terminated.finishedAt}}
+{{end}}{{end}}{{end}}' 2>/dev/null \
+  | head -40
 echo
 
 echo "## Recent Warning events (top 30)"
