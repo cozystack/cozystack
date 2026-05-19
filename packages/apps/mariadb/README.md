@@ -93,7 +93,16 @@ more details:
 | `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`    |
 | `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`      |
 | `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`   |
-| `version`          | MariaDB major.minor version to deploy                                                                                             | `string`   | `v11.8`   |
+
+
+### TLS parameters
+
+| Name           | Description                                                                                                                                                                                  | Type     | Value   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `tls`          | TLS configuration. When omitted, TLS is enabled automatically when `external` is true.                                                                                                       | `object` | `{}`    |
+| `tls.enabled`  | Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.                                                                                                       | `*bool`  | `null`  |
+| `tls.required` | Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet. | `bool`   | `false` |
+| `version`      | MariaDB major.minor version to deploy                                                                                                                                                        | `string` | `v11.8` |
 
 
 ### Application-specific parameters
