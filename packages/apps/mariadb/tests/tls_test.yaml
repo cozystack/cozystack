@@ -160,6 +160,15 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "my-mariadb-secondary.tenant-test.svc.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "localhost"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
 
   - it: "leaf Certificate SAN list includes external hostname when external=true"
     templates:
@@ -172,7 +181,7 @@ tests:
           path: spec.dnsNames
           content: "my-mariadb.example.com"
 
-  - it: "mariadb.yaml has spec.tls.enabled=true and serverCertSecretRef pointing to leaf cert secret when external=true"
+  - it: "mariadb.yaml has spec.tls.enabled=true and serverCertSecretRef + serverCASecretRef pointing to chart secrets when external=true"
     templates:
       - templates/mariadb.yaml
     set:
@@ -187,6 +196,9 @@ tests:
       - equal:
           path: spec.tls.serverCertSecretRef.name
           value: my-mariadb-tls
+      - equal:
+          path: spec.tls.serverCASecretRef.name
+          value: my-mariadb-ca-tls
       - notExists:
           path: spec.tls.serverCertIssuerRef
 
@@ -247,8 +259,17 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "my-mariadb-secondary"
+      - contains:
+          path: spec.dnsNames
+          content: "localhost"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
 
-  - it: "mariadb.yaml has spec.tls.enabled=true and serverCertSecretRef when tls.enabled=true even if external=false"
+  - it: "mariadb.yaml has spec.tls.enabled=true, serverCertSecretRef and serverCASecretRef when tls.enabled=true even if external=false"
     templates:
       - templates/mariadb.yaml
     set:
@@ -265,6 +286,9 @@ tests:
       - equal:
           path: spec.tls.serverCertSecretRef.name
           value: my-mariadb-tls
+      - equal:
+          path: spec.tls.serverCASecretRef.name
+          value: my-mariadb-ca-tls
       - notExists:
           path: spec.tls.serverCertIssuerRef
 
