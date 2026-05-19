@@ -35,6 +35,15 @@ spec:
       serverSecret: etcd-server-tls
       clientTrustedCASecret: etcd-ca-tls
       clientSecret: etcd-client-tls
+      # Required so etcd-operator v0.4.4+ backup_agent / restore_agent
+      # mount the server CA at /etc/etcd/pki/server/ca/ca.crt and set
+      # ETCD_TLS_CA_PATH (internal/controller/factory/backup_job.go gates
+      # the env+volume on EtcdCluster.IsServerTrustedCADefined()). Without
+      # it the agent's etcdctl client falls back to the system trust
+      # store and fails to verify the etcd server cert with "certificate
+      # signed by unknown authority". Same CA as clientTrustedCASecret -
+      # the chart issues client and server certs from the same etcd-ca.
+      serverTrustedCASecret: etcd-ca-tls
   podTemplate:
     metadata:
       labels:

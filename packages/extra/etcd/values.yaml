@@ -24,19 +24,19 @@ resources:
 ## @section Backup parameters
 ##
 
-## @typedef {struct} Backup - Backup configuration.
-## @field {bool} [enabled] - Enable scheduled S3 backups.
-## @field {string} [schedule] - Cron schedule for automated backups.
-## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
-## @field {string} [endpointURL] - S3 endpoint URL for uploads.
-## @field {string} [region] - S3 region.
-## @field {bool} [forcePathStyle] - Use path-style S3 URLs (required for MinIO and most S3-compatible providers).
-## @field {string} [s3AccessKey] - Access key for S3 authentication.
-## @field {string} [s3SecretKey] - Secret key for S3 authentication.
-## @field {int} [successfulJobsHistoryLimit] - Number of successful backup jobs to retain.
-## @field {int} [failedJobsHistoryLimit] - Number of failed backup jobs to retain.
+## @typedef {struct} Backup - DEPRECATED: Backup configuration. Superseded by the Cozystack BackupClass flow driven by the Etcd strategy (strategy.backups.cozystack.io/v1alpha1); see README.md for migration.
+## @field {bool} [enabled] - DEPRECATED: Enable scheduled S3 backups. Use a BackupJob against an Etcd strategy instead.
+## @field {string} [schedule] - DEPRECATED: Cron schedule for automated backups. Use a backups.cozystack.io/Plan instead.
+## @field {string} [destinationPath] - DEPRECATED: Destination path for backups (e.g. s3://bucket/path/).
+## @field {string} [endpointURL] - DEPRECATED: S3 endpoint URL for uploads.
+## @field {string} [region] - DEPRECATED: S3 region.
+## @field {bool} [forcePathStyle] - DEPRECATED: Use path-style S3 URLs (required for MinIO and most S3-compatible providers).
+## @field {string} [s3AccessKey] - DEPRECATED: Access key for S3 authentication.
+## @field {string} [s3SecretKey] - DEPRECATED: Secret key for S3 authentication.
+## @field {int} [successfulJobsHistoryLimit] - DEPRECATED: Number of successful backup jobs to retain.
+## @field {int} [failedJobsHistoryLimit] - DEPRECATED: Number of failed backup jobs to retain.
 
-## @param {Backup} backup - Backup configuration.
+## @param {Backup} backup - DEPRECATED: Backup configuration. The chart still renders the legacy EtcdBackupSchedule when backup.enabled=true, but new tenants should drive backups through a BackupClass bound to the Etcd strategy (strategy.backups.cozystack.io/v1alpha1).
 backup:
   enabled: false
   schedule: "0 2 * * *"

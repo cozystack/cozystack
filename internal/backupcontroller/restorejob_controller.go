@@ -118,6 +118,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileMariaDBRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.FoundationDBStrategyKind:
 		return r.reconcileFoundationDBRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.EtcdStrategyKind:
+		return r.reconcileEtcdRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}
