@@ -1,0 +1,449 @@
+suite: opensearch TLS cert-manager chain
+
+# Covers the tri-state tls.enabled field:
+#   (a) external: false, tls.enabled unset  → TLS off, operator generates HTTP cert
+#   (b) external: true,  tls.enabled unset  → TLS auto-on via cert-manager + external SAN
+#   (c) external: true,  tls.enabled: false → TLS off, operator generates HTTP cert
+#   (d) external: false, tls.enabled: true  → TLS on via cert-manager (no external SAN)
+#
+# Design: ONE combined leaf Certificate for HTTP + Dashboards (combined SAN list).
+# Keeps the chain to 4 resources: selfsigned Issuer, CA Cert, CA Issuer, leaf Cert.
+# Transport mTLS remains operator-managed (generate: true, perNode: true) — not touched here.
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+###############################################################################
+# certmanager.yaml — case (a): external false, tls.enabled unset → no resources
+###############################################################################
+
+templates:
+  - templates/certmanager.yaml
+
+tests:
+  - it: "(a) renders no resources when external false and tls.enabled unset"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "(c) renders no resources when tls.enabled explicitly false even with external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "(b) renders 4 cert-manager resources when tls auto-on via external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "(d) renders 4 cert-manager resources when tls explicitly enabled with external false"
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "(e) renders 4 resources and external SANs when tls.enabled explicitly true and external true"
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+      - contains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+        documentIndex: 3
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+        documentIndex: 3
+
+  # --- Chain structure ---
+
+  - it: first document is selfsigned Issuer
+    set:
+      tls:
+        enabled: true
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: spec.selfSigned
+          value: {}
+      - equal:
+          path: metadata.name
+          value: os-test-http-selfsigned
+
+  - it: second document is CA Certificate with isCA true and rotationPolicy Never
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretName
+          value: os-test-http-ca
+      - equal:
+          path: spec.issuerRef.name
+          value: os-test-http-selfsigned
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: third document is CA Issuer referencing the CA secret
+    set:
+      tls:
+        enabled: true
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.name
+          value: os-test-http-ca
+      - equal:
+          path: spec.ca.secretName
+          value: os-test-http-ca
+
+  - it: fourth document is leaf Certificate referencing the CA Issuer
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.secretName
+          value: os-test-http-cert
+      - equal:
+          path: spec.issuerRef.name
+          value: os-test-http-ca
+
+  # --- SAN coverage for HTTP services ---
+
+  - it: leaf cert includes three DNS forms for the main service
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test
+      - contains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc.cozy.local
+
+  - it: "(b) leaf cert includes external HTTP DNS SAN when external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+
+  - it: "(d) leaf cert does NOT include external HTTP DNS SAN when external false"
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+
+  # --- SAN coverage for Dashboards services ---
+
+  - it: leaf cert includes three DNS forms for the dashboards service
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc.cozy.local
+
+  - it: "(b) leaf cert includes external Dashboards DNS SAN when external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+
+  - it: leaf cert includes usages server auth, signing, and key encipherment
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: signing
+      - contains:
+          path: spec.usages
+          content: key encipherment
+      - lengthEqual:
+          path: spec.usages
+          count: 3
+      - notContains:
+          path: spec.usages
+          content: cert sign
+
+  - it: external SAN block fails clearly when _namespace.host missing
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: "external is true but _namespace.host is not set"
+
+---
+---
+###############################################################################
+# opensearch.yaml — TLS state reflected in OpenSearchCluster spec
+###############################################################################
+
+templates:
+  - templates/opensearch.yaml
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  # --- Transport TLS: always operator-managed, never touched ---
+
+  - it: transport TLS always uses operator generate regardless of tls.enabled
+    asserts:
+      - equal:
+          path: spec.security.tls.transport.generate
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.transport.perNode
+          value: true
+        documentIndex: 0
+
+  - it: transport TLS stays operator generate even when tls.enabled true
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.security.tls.transport.generate
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.transport.perNode
+          value: true
+        documentIndex: 0
+
+  # --- HTTP TLS: case (a) — operator generate when tls off by default ---
+
+  - it: "(a) HTTP uses operator generate when external false and tls.enabled unset"
+    asserts:
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.secret
+        documentIndex: 0
+
+  # --- HTTP TLS: case (b) — cert-manager secret when external true and tls.enabled unset ---
+
+  - it: "(b) HTTP uses cert-manager secret when external true and tls.enabled unset"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - equal:
+          path: spec.security.tls.http.secret.name
+          value: os-test-http-cert
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.generate
+        documentIndex: 0
+
+  # --- HTTP TLS: case (c) — operator generate when tls.enabled explicitly false ---
+
+  - it: "(c) HTTP uses operator generate when tls.enabled explicitly false"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.secret
+        documentIndex: 0
+
+  # --- HTTP TLS: case (d) — cert-manager secret when tls.enabled explicitly true ---
+
+  - it: "(d) HTTP uses cert-manager secret when tls.enabled explicitly true"
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.security.tls.http.secret.name
+          value: os-test-http-cert
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.generate
+        documentIndex: 0
+
+  # --- Dashboards TLS: operator generate when dashboards on, cert-manager secret when tls enabled ---
+
+  - it: dashboards uses operator generate when enabled and tls off by default
+    set:
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "c1.small"
+        resources: {}
+    asserts:
+      - equal:
+          path: spec.dashboards.tls.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.dashboards.tls.secret
+        documentIndex: 0
+
+  - it: dashboards uses cert-manager secret when enabled and tls on via external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "c1.small"
+        resources: {}
+    asserts:
+      - equal:
+          path: spec.dashboards.tls.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.secret.name
+          value: os-test-http-cert
+        documentIndex: 0
+      - notExists:
+          path: spec.dashboards.tls.generate
+        documentIndex: 0
+
+  - it: dashboards uses cert-manager secret when tls.enabled explicitly true
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "c1.small"
+        resources: {}
+    asserts:
+      - equal:
+          path: spec.dashboards.tls.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.secret.name
+          value: os-test-http-cert
+        documentIndex: 0
+      - notExists:
+          path: spec.dashboards.tls.generate
+        documentIndex: 0
+
+---
+---
+###############################################################################
+# external-svc.yaml — required guard for _namespace.host
+###############################################################################
+
+templates:
+  - templates/external-svc.yaml
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  - it: external-svc fails clearly when external true and _namespace.host missing
+    set:
+      external: true
+      _namespace: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: "external is true but _namespace.host is not set"

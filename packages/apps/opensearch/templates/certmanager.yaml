@@ -1,0 +1,123 @@
+{{- /*
+NOTE: Transport mTLS is always operator-managed (spec.security.tls.transport.generate: true
+with perNode: true). This file covers HTTP layer (port 9200) and Dashboards HTTPS only.
+Setting tls.enabled: false does NOT disable transport mTLS — the operator enforces it
+regardless, as it is required by the OpenSearch security plugin.
+
+Design: ONE combined leaf Certificate covers both the HTTP API (port 9200) and Dashboards
+(port 5601) SANs. This keeps the chain at 4 resources and avoids duplicating the CA Issuer.
+
+IMPORTANT: The CA secret is named {{ .Release.Name }}-http-ca (NOT {{ .Release.Name }}-ca).
+The opensearch-operator hardcodes <clusterName>-ca as the name of its own internal transport
+CA secret (see ReadOrGenerateCaCert in
+https://github.com/Opster/opensearch-k8s-operator/blob/main/opensearch-operator/pkg/reconcilers/util/util.go).
+Using the same name would cause the operator to read our cert-manager CA and fail with
+"tls: failed to find any PEM data in key input" because it expects ca.key but the
+cert-manager secret stores the private key under tls.key.
+
+KNOWN ISSUE: The opensearch securityadmin job authenticates with an admin cert signed
+by the operator-managed transport CA, but it connects to the HTTP endpoint whose trust
+anchor is the chart's cert-manager CA. This cross-trust gap is not addressed by this
+chart yet — securityadmin currently relies on TLS verification being relaxed inside the
+job's environment. Resolution: either include the HTTP CA in the admin cert's trust
+bundle or run securityadmin against an internal endpoint trusted by transport CA.
+
+NAME-LENGTH GUARD: Kubernetes object names are bounded at 63 characters. The longest
+suffix below is "-http-selfsigned" (16 chars), so the release name must be 47 chars
+or fewer. Fail fast with a clear message rather than producing invalid object names.
+*/}}
+{{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
+{{- if $tlsEnabled }}
+{{- if gt (len .Release.Name) 47 -}}
+{{- fail (printf "Release name %q is %d chars; opensearch TLS requires <=47 chars so cert-manager resource names fit in the 63-char Kubernetes limit (longest suffix: -http-selfsigned)." .Release.Name (len .Release.Name)) -}}
+{{- end -}}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+---
+# Self-signed bootstrap Issuer — used only to sign the HTTP CA Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-http-selfsigned
+spec:
+  selfSigned: {}
+---
+# HTTP-layer CA Certificate. rotationPolicy: Never keeps the CA stable so existing
+# client trust bundles remain valid across cert-manager renewals.
+# Named http-ca (not ca) to avoid colliding with the operator's own transport CA secret
+# which is always named <clusterName>-ca by the opensearch-operator.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-http-ca
+spec:
+  secretName: {{ .Release.Name }}-http-ca
+  duration: 87600h  # 10 years
+  isCA: true
+  commonName: {{ .Release.Name }}-http-ca
+  usages:
+    - signing
+    - key encipherment
+    - cert sign
+  privateKey:
+    rotationPolicy: Never
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: {{ .Release.Name }}-http-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+# CA Issuer — used to sign the leaf server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-http-ca
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-http-ca
+---
+# Combined leaf TLS Certificate for HTTP API (port 9200) and Dashboards (port 5601).
+# A single cert with a combined SAN list is used so both services share the same
+# CA Issuer and the chain stays at exactly 4 resources.
+# The secret name ({{ .Release.Name }}-http-cert) is passed to both:
+#   spec.security.tls.http.secret.name  (OpenSearch HTTP API)
+#   spec.dashboards.tls.secret.name     (Dashboards HTTPS, when enabled)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-http-cert
+spec:
+  secretName: {{ .Release.Name }}-http-cert
+  duration: 8760h    # 1 year
+  renewBefore: 720h  # renew 30 days before expiry
+  isCA: false
+  usages:
+    - server auth
+    - signing
+    - key encipherment
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $name := .Release.Name }}
+    # OpenSearch HTTP API service (operator-created ClusterIP)
+    - {{ $name }}
+    - {{ $name }}.{{ $ns }}.svc
+    - {{ $name }}.{{ $ns }}.svc.{{ $clusterDomain }}
+    # Dashboards service (operator-created ClusterIP)
+    - {{ $name }}-dashboards
+    - {{ $name }}-dashboards.{{ $ns }}.svc
+    - {{ $name }}-dashboards.{{ $ns }}.svc.{{ $clusterDomain }}
+    {{- if .Values.external | default false }}
+    {{- $extHost := required "external is true but _namespace.host is not set" .Values._namespace.host }}
+    # External LoadBalancer DNS name (used by external-dns)
+    - {{ printf "%s.%s" $name $extHost }}
+    - {{ printf "%s-dashboards.%s" $name $extHost }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: {{ .Release.Name }}-http-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}
