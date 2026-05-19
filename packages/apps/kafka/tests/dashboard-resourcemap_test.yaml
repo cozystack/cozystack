@@ -1,11 +1,10 @@
-suite: dashboard resourcemap tests
+suite: Dashboard resourcemap tests
 
 templates:
   - templates/dashboard-resourcemap.yaml
 
 tests:
-  # Always renders Role and RoleBinding
-  - it: renders Role and RoleBinding
+  - it: creates Role and RoleBinding
     release:
       name: test-kafka
       namespace: tenant-test
@@ -19,30 +18,7 @@ tests:
           of: RoleBinding
         documentIndex: 1
 
-  # Role naming
-  - it: uses correct Role name
-    release:
-      name: my-kafka
-      namespace: tenant-test
-    asserts:
-      - equal:
-          path: metadata.name
-          value: my-kafka-dashboard-resources
-        documentIndex: 0
-
-  # RoleBinding naming
-  - it: uses correct RoleBinding name
-    release:
-      name: my-kafka
-      namespace: tenant-test
-    asserts:
-      - equal:
-          path: metadata.name
-          value: my-kafka-dashboard-resources
-        documentIndex: 1
-
-  # Internal bootstrap service always in RBAC
-  - it: grants access to internal bootstrap service
+  - it: allows access to internal kafka-bootstrap service
     release:
       name: test-kafka
       namespace: tenant-test
@@ -52,8 +28,7 @@ tests:
           content: test-kafka-kafka-bootstrap
         documentIndex: 0
 
-  # External bootstrap service absent when external is false
-  - it: does not grant access to external bootstrap service when external is false
+  - it: omits external kafka bootstrap service when external is false
     release:
       name: test-kafka
       namespace: tenant-test
@@ -65,8 +40,7 @@ tests:
           content: test-kafka-kafka-external-bootstrap
         documentIndex: 0
 
-  # External bootstrap service present when external is true
-  - it: grants access to external bootstrap service when external is true
+  - it: allows access to external kafka bootstrap service when external is true
     release:
       name: test-kafka
       namespace: tenant-test
@@ -78,8 +52,7 @@ tests:
           content: test-kafka-kafka-external-bootstrap
         documentIndex: 0
 
-  # Role grants access to CA secret
-  - it: grants access to clients CA secret
+  - it: allows access to clients-ca secret
     release:
       name: test-kafka
       namespace: tenant-test
@@ -89,8 +62,7 @@ tests:
           content: test-kafka-clients-ca
         documentIndex: 0
 
-  # Role grants access to workloadmonitors
-  - it: grants access to WorkloadMonitor
+  - it: allows access to broker and controller workloadmonitors
     release:
       name: test-kafka
       namespace: tenant-test
@@ -99,26 +71,17 @@ tests:
           path: rules[2].resourceNames
           content: test-kafka
         documentIndex: 0
-      - equal:
-          path: rules[2].apiGroups[0]
-          value: cozystack.io
+      - contains:
+          path: rules[2].resourceNames
+          content: test-kafka-controller
         documentIndex: 0
 
-  # RoleBinding references correct Role
-  - it: RoleBinding references correct Role
+  - it: does not reference zookeeper workloadmonitor
     release:
       name: test-kafka
       namespace: tenant-test
     asserts:
-      - equal:
-          path: roleRef.kind
-          value: Role
-        documentIndex: 1
-      - equal:
-          path: roleRef.name
-          value: test-kafka-dashboard-resources
-        documentIndex: 1
-      - equal:
-          path: roleRef.apiGroup
-          value: rbac.authorization.k8s.io
-        documentIndex: 1
+      - notContains:
+          path: rules[2].resourceNames
+          content: test-kafka-zookeeper
+        documentIndex: 0

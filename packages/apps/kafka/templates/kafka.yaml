@@ -1,3 +1,4 @@
+{{- $kafkaVersion := include "kafka.versionMap" . }}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -5,10 +6,12 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
 spec:
   kafka:
-    replicas: {{ .Values.kafka.replicas }}
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 6 }}
+    version: {{ $kafkaVersion }}
     listeners:
       - name: plain
         port: 9092
@@ -44,36 +47,6 @@ spec:
       default.replication.factor: 3
       min.insync.replicas: 2
       {{- end }}
-    storage:
-      type: jbod
-      volumes:
-      - id: 0
-        type: persistent-claim
-        {{- with .Values.kafka.size }}
-        size: {{ . }}
-        {{- end }}
-        {{- with .Values.kafka.storageClass }}
-        class: {{ . }}
-        {{- end }}
-        deleteClaim: true
-    metricsConfig:
-      type: jmxPrometheusExporter
-      valueFrom:
-        configMapKeyRef:
-          name: {{ .Release.Name }}-metrics
-          key: kafka-metrics-config.yml
-  zookeeper:
-    replicas: {{ .Values.zookeeper.replicas }}
-    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.zookeeper.resourcesPreset .Values.zookeeper.resources $) | nindent 6 }}
-    storage:
-      type: persistent-claim
-      {{- with .Values.zookeeper.size }}
-      size: {{ . }}
-      {{- end }}
-      {{- with .Values.kafka.storageClass }}
-      class: {{ . }}
-      {{- end }}
-      deleteClaim: false
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
