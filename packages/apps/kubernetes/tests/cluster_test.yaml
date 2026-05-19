@@ -340,39 +340,44 @@ tests:
         documentIndex: 5
 
   ###############################################
-  # ephemeralStorage migration guard            #
+  # ephemeralStorage backward compatibility      #
   ###############################################
 
-  - it: fails when ephemeralStorage is set instead of diskSize
+  - it: succeeds and uses default diskSize when only ephemeralStorage is set
     release:
       name: test-k8s
       namespace: tenant-test
     set:
       nodeGroups.md0.ephemeralStorage: 50Gi
     asserts:
-      - failedTemplate:
-          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: "20Gi"
+        documentIndex: 5
 
-  - it: fails when ephemeralStorage is set to empty string
+  - it: succeeds when ephemeralStorage is set to empty string
     release:
       name: test-k8s
       namespace: tenant-test
     set:
       nodeGroups.md0.ephemeralStorage: ""
     asserts:
-      - failedTemplate:
-          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+      - notFailedTemplate: {}
 
-  - it: fails when both ephemeralStorage and diskSize are set
+  - it: succeeds and uses diskSize when both ephemeralStorage and diskSize are set
     release:
       name: test-k8s
       namespace: tenant-test
     set:
-      nodeGroups.md0.ephemeralStorage: 50Gi
+      nodeGroups.md0.ephemeralStorage: 30Gi
       nodeGroups.md0.diskSize: 50Gi
     asserts:
-      - failedTemplate:
-          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 50Gi
+        documentIndex: 5
 
   ###############################################
   # KubeadmConfigTemplate — files block         #
