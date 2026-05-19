@@ -1,0 +1,84 @@
+{{/*
+TLS is active when tls.enabled is explicitly set (and true), or when
+tls.enabled is absent (tri-state default) and external is true.
+*/}}
+{{- $tlsEnabled := false }}
+{{- if hasKey .Values.tls "enabled" }}
+  {{- $tlsEnabled = .Values.tls.enabled }}
+{{- else }}
+  {{- $tlsEnabled = .Values.external }}
+{{- end }}
+
+{{- if $tlsEnabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-ca
+  duration: 43800h
+  commonName: {{ .Release.Name }}-ca
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+  isCA: true
+  usages:
+    - cert sign
+    - crl sign
+  privateKey:
+    # Never rotate the CA private key: rotating the CA key invalidates all
+    # leaf certs signed by the old key and causes a service outage. CA renewal
+    # (new certificate, same key) is handled automatically by cert-manager
+    # when the cert approaches its 43800h expiry.
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca
+---
+{{- $dnsNames := list
+  .Release.Name
+  (printf "%s.%s.svc" .Release.Name .Release.Namespace)
+  (printf "%s.%s.svc.cluster.local" .Release.Name .Release.Namespace)
+}}
+{{- if .Values.external }}
+  {{- $dnsNames = append $dnsNames (printf "%s.%s" .Release.Name .Values._namespace.host) }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+    kind: Issuer
+    group: cert-manager.io
+  commonName: {{ .Release.Name }}
+  dnsNames:
+    {{- range $dnsNames }}
+    - {{ . }}
+    {{- end }}
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+{{- end }}
