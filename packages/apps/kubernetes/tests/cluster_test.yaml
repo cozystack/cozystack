@@ -343,10 +343,10 @@ tests:
   # ephemeralStorage backward compatibility      #
   ###############################################
 
-  # diskSize defaults to 20Gi for all nodeGroups (schema required+default).
-  # coalesce picks diskSize first; ephemeralStorage is a fallback only when
-  # diskSize is absent (e.g. nodeGroup added by a future schema change).
-  - it: uses diskSize default (20Gi) when ephemeralStorage is set alongside default diskSize
+  # ephemeralStorage is silently dropped — the operator fills diskSize from the
+  # schema default (20Gi) before the chart runs, so the user's ephemeralStorage
+  # value is never reached. Users with non-default sizes MUST set diskSize explicitly.
+  - it: ephemeralStorage is silently dropped — diskSize defaults to 20Gi regardless
     release:
       name: test-k8s
       namespace: tenant-test
@@ -359,7 +359,7 @@ tests:
           value: "20Gi"
         documentIndex: 5
 
-  - it: succeeds when ephemeralStorage is set to empty string
+  - it: empty ephemeralStorage does not break rendering and diskSize stays at default 20Gi
     release:
       name: test-k8s
       namespace: tenant-test
@@ -367,6 +367,10 @@ tests:
       nodeGroups.md0.ephemeralStorage: ""
     asserts:
       - notFailedTemplate: {}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: "20Gi"
+        documentIndex: 5
 
   - it: diskSize takes precedence over ephemeralStorage when both are explicitly set
     release:
