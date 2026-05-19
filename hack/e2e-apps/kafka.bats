@@ -47,7 +47,10 @@ EOF
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-client -o jsonpath='{.spec.ports[0].port}' | grep -q '2181'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-nodes -o jsonpath='{.spec.ports[*].port}' | grep -q '2181 2888 3888'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints kafka-$name-zookeeper-nodes -o jsonpath='{.subsets[*].addresses[0].ip}' | grep -q '[0-9]'; do sleep 10; done"
-  kubectl -n tenant-test delete kafka.apps.cozystack.io $name
-  kubectl -n tenant-test delete pvc data-kafka-$name-zookeeper-0
-  kubectl -n tenant-test delete pvc data-kafka-$name-zookeeper-1
+  kubectl -n tenant-test delete kafka.apps.cozystack.io $name --timeout=2m
+  # Strimzi reclaims ZooKeeper PVCs automatically when deleteClaim is true on
+  # the persistent-claim storage. Verify they disappear instead of issuing a
+  # manual kubectl delete, which would mask a regression in the operator.
+  timeout 60 sh -ec "while kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0 >/dev/null 2>&1; do sleep 2; done"
+  timeout 60 sh -ec "while kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-1 >/dev/null 2>&1; do sleep 2; done"
 }
