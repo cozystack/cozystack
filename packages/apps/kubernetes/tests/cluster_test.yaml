@@ -343,7 +343,10 @@ tests:
   # ephemeralStorage backward compatibility      #
   ###############################################
 
-  - it: succeeds and uses default diskSize when only ephemeralStorage is set
+  # diskSize defaults to 20Gi for all nodeGroups (schema required+default).
+  # coalesce picks diskSize first; ephemeralStorage is a fallback only when
+  # diskSize is absent (e.g. nodeGroup added by a future schema change).
+  - it: uses diskSize default (20Gi) when ephemeralStorage is set alongside default diskSize
     release:
       name: test-k8s
       namespace: tenant-test
@@ -365,7 +368,7 @@ tests:
     asserts:
       - notFailedTemplate: {}
 
-  - it: succeeds and uses diskSize when both ephemeralStorage and diskSize are set
+  - it: diskSize takes precedence over ephemeralStorage when both are explicitly set
     release:
       name: test-k8s
       namespace: tenant-test

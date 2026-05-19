@@ -43,7 +43,7 @@ spec:
           storage:
             resources:
               requests:
-                storage: {{ .group.diskSize | default "20Gi" | quote }}
+                storage: {{ coalesce .group.diskSize .group.ephemeralStorage "20Gi" | quote }}
             {{- with .group.storageClass }}
             storageClassName: {{ . | quote }}
             {{- end }}
