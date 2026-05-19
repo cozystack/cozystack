@@ -362,12 +362,15 @@ func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, 
 	}, nil
 }
 
-// ControllerUnpublishVolume for NFS volumes: deletes CiliumNetworkPolicy.
-// For RWO volumes, delegates to upstream (hotplug removal).
+// ControllerUnpublishVolume for NFS volumes (RWX Filesystem): deletes CiliumNetworkPolicy.
+// For everything else (RWO and RWX Block), delegates to upstream so the hotplug
+// DataVolume is removed from VM.spec.template.spec.volumes. RWX Block volumes used
+// for live migration must NOT be treated as NFS — their cleanup goes through upstream
+// hotplug removal, otherwise stale VM-spec entries permanently block re-attachment to
+// a different VM via the anti-split-brain check (issue #2634).
 func (w *WrappedControllerService) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	dvName := req.GetVolumeId()
 
-	// Determine if NFS by checking infra PVC access modes
 	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, dvName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -376,7 +379,7 @@ func (w *WrappedControllerService) ControllerUnpublishVolume(ctx context.Context
 		return nil, err
 	}
 
-	if !hasRWXAccessMode(pvc) {
+	if !isNFSVolume(pvc) {
 		return w.ControllerService.ControllerUnpublishVolume(ctx, req)
 	}
 
@@ -404,11 +407,12 @@ func (w *WrappedControllerService) ControllerExpandVolume(ctx context.Context, r
 		return nil, err
 	}
 
-	// For NFS volumes, no node-side expansion is needed
+	// For NFS volumes (RWX Filesystem), no node-side expansion is needed. RWX Block
+	// volumes still require node-side expansion of the in-VM disk.
 	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, req.GetVolumeId(), metav1.GetOptions{})
 	if err != nil {
 		klog.Warningf("Failed to check PVC access mode for %s/%s: %v", w.infraNamespace, req.GetVolumeId(), err)
-	} else if hasRWXAccessMode(pvc) {
+	} else if isNFSVolume(pvc) {
 		resp.NodeExpansionRequired = false
 	}
 
@@ -542,6 +546,19 @@ func hasRWXAccessMode(pvc *corev1.PersistentVolumeClaim) bool {
 		}
 	}
 	return false
+}
+
+// isNFSVolume reports whether the PVC was provisioned by our CreateVolume NFS path
+// (RWX + Filesystem). RWX Block volumes are upstream hotplug volumes used for live
+// migration and must NOT be handled as NFS.
+func isNFSVolume(pvc *corev1.PersistentVolumeClaim) bool {
+	if !hasRWXAccessMode(pvc) {
+		return false
+	}
+	if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock {
+		return false
+	}
+	return true
 }
 
 // getNFSExport extracts the NFS export URL from a PersistentVolume.
