@@ -82,31 +82,30 @@ func init() {
 		Timeout:   10 * time.Second,
 	}
 
-	// Create httprc client with custom HTTP client
-	httprcClient := httprc.NewClient(
-		httprc.WithHTTPClient(httpClient),
-	)
+	// jwx v3 / httprc v3 regression: jwk.Cache.Register *always* overrides
+	// the HTTPClient for each Resource. The client from httprc.NewClient is
+	// ignored; without an explicit jwk.WithHTTPClient on Register, jwk falls
+	// back to its own plain http.Client which has neither our cluster CA nor
+	// the SA bearer token, so the in-cluster JWKS fetch fails TLS verification
+	// and the controller's Ready() never signals — Register blocks forever.
+	// See jwx@v3.1.0/jwk/cache.go:141-180.
+	httprcClient := httprc.NewClient()
 
-	// Create JWK cache
 	jwkCache, err = jwk.NewCache(ctx, httprcClient)
 	if err != nil {
-		jwkCacheErr := fmt.Errorf("failed to create JWK cache: %w", err)
-		panic(jwkCacheErr)
+		panic(fmt.Errorf("failed to create JWK cache: %w", err))
 	}
 
-	// Register the JWKS URL with refresh settings
 	if err := jwkCache.Register(ctx, jwksURL,
+		jwk.WithHTTPClient(httpClient),
 		jwk.WithMinInterval(5*time.Minute),
 		jwk.WithMaxInterval(15*time.Minute),
 	); err != nil {
-		jwkCacheErr := fmt.Errorf("failed to register JWKS URL: %w", err)
-		panic(jwkCacheErr)
+		panic(fmt.Errorf("failed to register JWKS URL: %w", err))
 	}
 
-	// Perform initial fetch to ensure the JWKS is available
 	if _, err := jwkCache.Refresh(ctx, jwksURL); err != nil {
-		jwkCacheErr := fmt.Errorf("failed to fetch initial JWKS: %w", err)
-		panic(jwkCacheErr)
+		panic(fmt.Errorf("failed to fetch initial JWKS: %w", err))
 	}
 
 	log.Printf("JWK cache initialized with JWKS URL: %s", jwksURL)
