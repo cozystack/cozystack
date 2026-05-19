@@ -105,6 +105,8 @@ spec:
     required: {{ if kindIs "invalid" $tlsRequired }}true{{ else }}{{ $tlsRequired }}{{ end }}
     serverCertSecretRef:
       name: {{ .Release.Name }}-tls
+    serverCASecretRef:
+      name: {{ .Release.Name }}-ca-tls
   {{- end }}
 
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
