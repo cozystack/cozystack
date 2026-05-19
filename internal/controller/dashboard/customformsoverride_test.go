@@ -289,7 +289,7 @@ func TestHiddenDeprecatedFields_UnknownKind(t *testing.T) {
 func TestApplyListInputOverrides_StorageClassSimple(t *testing.T) {
 	for _, kind := range []string{
 		"ClickHouse", "Harbor", "HTTPCache", "Kubernetes", "MariaDB", "MongoDB",
-		"NATS", "OpenBAO", "Postgres", "Qdrant", "RabbitMQ", "Redis", "VMDisk",
+		"NATS", "OpenBAO", "OpenSearch", "Postgres", "Qdrant", "RabbitMQ", "Redis", "VMDisk",
 	} {
 		t.Run(kind, func(t *testing.T) {
 			schema := map[string]any{}

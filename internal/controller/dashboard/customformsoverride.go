@@ -244,7 +244,7 @@ func applyListInputOverrides(schema map[string]any, kind string, openAPIProps ma
 		}
 
 	case "ClickHouse", "Harbor", "HTTPCache", "Kubernetes", "MariaDB", "MongoDB",
-		"NATS", "OpenBAO", "Postgres", "Qdrant", "RabbitMQ", "Redis":
+		"NATS", "OpenBAO", "OpenSearch", "Postgres", "Qdrant", "RabbitMQ", "Redis":
 		specProps := ensureSchemaPath(schema, "spec")
 		specProps["storageClass"] = storageClassListInput()
 
