@@ -162,16 +162,18 @@ See:
 
 ### TLS for server connections
 
-When TLS is enabled (either explicitly via `tls.enabled: true` or automatically when `external: true`), the chart creates four cert-manager resources under the release name:
+CNPG manages the cert chain end-to-end. The operator auto-generates a self-signed CA, signs server, client, and replication leaf certs from it, and rotates them as needed. The chart does not render any cert-manager `Issuer`/`Certificate` objects — that path is mutually exclusive with the operator-managed chain on the CNPG admission webhook.
 
-- `<release>-selfsigned` — a self-signed `Issuer` used only to bootstrap the CA
-- `<release>-ca` — a `Certificate` with `isCA: true`; the resulting Secret holds `ca.crt`, `tls.crt`, and `tls.key`
-- `<release>-ca` (Issuer) — a CA `Issuer` that signs the leaf certificate
-- `<release>-tls` — the leaf server `Certificate` covering all three CNPG ClusterIP services (`-rw`, `-ro`, `-r`) plus, when `external: true`, the external DNS name `<release>.<_namespace.host>`
+What the chart contributes: when TLS is on and `external: true`, the chart sets `spec.certificates.serverAltDNSNames` on the CNPG Cluster CR to inject the external hostname `<release>.<_namespace.host>` into the auto-generated server certificate's SAN list. CNPG's default SAN coverage already includes the three built-in ClusterIP services (`-rw`, `-r`, `-ro`) across the four DNS forms (`<svc>`, `<svc>.<ns>`, `<svc>.<ns>.svc`, `<svc>.<ns>.svc.<cluster-domain>`); only the external hostname needs to be added.
 
-The CNPG Cluster CR references these secrets via `spec.certificates.serverCASecret` and `spec.certificates.serverTLSSecret`.
+The tri-state `tls.enabled` controls whether the chart injects `serverAltDNSNames`:
 
-**Retrieving the CA bundle** for client verification:
+- `tls.enabled: null` (the default) — TLS posture inherits from `external`. When `external: true`, the chart injects the external hostname into the operator-managed cert.
+- `tls.enabled: true` with `external: true` — same effect as the default.
+- `tls.enabled: true` with `external: false` — no `serverAltDNSNames` injection is needed (there is no external hostname to add); CNPG's auto-generated cert covers internal services.
+- `tls.enabled: false` — the chart skips `serverAltDNSNames` injection. **Note:** CNPG keeps its built-in TLS on the wire regardless of this flag; this toggle only controls whether the external hostname is added to the cert. To force PostgreSQL to drop TLS entirely you would need to set `postgresql.parameters.ssl = "off"` at the CNPG layer, which is out of scope for this flag.
+
+**Retrieving the CA bundle** for client verification (from the operator-managed Secret `<release>-ca`, key `ca.crt`):
 
 ```bash
 kubectl --context <ctx> --namespace <tenant> \
@@ -187,8 +189,6 @@ psql "host=<host> port=5432 dbname=app user=app \
 ```
 
 For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved to `ca.crt`. Without it, use `sslmode=require` (encrypts but does not verify the server certificate).
-
-**External SAN:** when `external: true`, the leaf cert includes `<release>.<_namespace.host>` as an additional DNS SAN so external clients can verify the hostname of the LoadBalancer endpoint.
 
 ## Parameters
 
@@ -208,11 +208,11 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### TLS configuration
 
-| Name          | Description                                                                                                                                                                                                         | Type     | Value  |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `tls`         | TLS configuration for server connections.                                                                                                                                                                           | `object` | `{}`   |
-| `tls.enabled` | Tri-state TLS switch. When omitted (null), TLS is enabled automatically if `external` is true and disabled otherwise. Set explicitly to `true` to force TLS on or `false` to force it off regardless of `external`. | `*bool`  | `null` |
-| `version`     | PostgreSQL major version to deploy                                                                                                                                                                                  | `string` | `v18`  |
+| Name          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Type     | Value  |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`         | TLS configuration for server connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `object` | `{}`   |
+| `tls.enabled` | Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted (null), the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer. | `*bool`  | `null` |
+| `version`     | PostgreSQL major version to deploy                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `string` | `v18`  |
 
 
 ### Application-specific parameters
