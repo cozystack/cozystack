@@ -15,3 +15,14 @@ COZYRDS="$REPO_ROOT/packages/system/kafka-rd/cozyrds/kafka.yaml"
     exit 1
   fi
 }
+
+@test "kafka-rd cozyrds references cluster-ca-cert (Strimzi actual name)" {
+  grep -q "cluster-ca-cert" "$COZYRDS"
+}
+
+@test "kafka-rd cozyrds does not reference bare cluster-ca (wrong name)" {
+  if grep -qP "cluster-ca(?!-)" "$COZYRDS"; then
+    echo "Found bare 'cluster-ca' reference (missing '-cert' suffix)" >&2
+    exit 1
+  fi
+}
