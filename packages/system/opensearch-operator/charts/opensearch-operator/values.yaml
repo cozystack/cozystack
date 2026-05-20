@@ -113,7 +113,7 @@ kubeRbacProxy:
     initialDelaySeconds: 10
 
   image:
-    repository: "quay.io/brancz/kube-rbac-proxy"
+    repository: "gcr.io/kubebuilder/kube-rbac-proxy"
     tag: "v0.15.0"
 
 ## If this is set to true, RoleBindings will be used instead of ClusterRoleBindings, inorder to restrict ClusterRoles
