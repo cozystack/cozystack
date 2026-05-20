@@ -47,6 +47,8 @@ EOF
   kubectl wait kafkas -n tenant-test $name --timeout=300s --for=condition=ready
   timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0; do sleep 10; done"
   kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
+  timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-1 >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-1 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-client -o jsonpath='{.spec.ports[0].port}' | grep -q '2181'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-nodes -o jsonpath='{.spec.ports[*].port}' | grep -q '2181 2888 3888'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints kafka-$name-zookeeper-nodes -o jsonpath='{.subsets[*].addresses[0].ip}' | grep -q '[0-9]'; do sleep 10; done"
