@@ -189,7 +189,13 @@ EOF
 }
 
 @test "Keycloak OIDC stack is healthy" {
-  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true}}}}}}}'
+  # keycloakInternalUrl makes oauth2-proxy skip OIDC discovery and route
+  # backend calls (token/jwks/userinfo/logout) through the in-cluster
+  # keycloak Service. Without it the dashboard gatekeeper crashloops on
+  # DNS lookup of keycloak.example.org -- the e2e host placeholder does
+  # not resolve, and under Flux v2.8 kstatus the gatekeeper Deployment
+  # then flips to Failed and stalls the dashboard HelmRelease.
+  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true,"keycloakInternalUrl":"http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"}}}}}}}'
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
