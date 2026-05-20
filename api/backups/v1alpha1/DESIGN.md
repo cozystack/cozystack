@@ -110,6 +110,13 @@ type PlanSpec struct {
 
     // When backups should run.
     Schedule PlanSchedule `json:"schedule"`
+
+    // Parameters is copied into every BackupJob this Plan creates and
+    // overrides the matched BackupClassStrategy.Parameters on a per-key
+    // basis (see §4.2 "Parameters semantics"). Same value space and the
+    // same no-credentials rule as BackupClassStrategy.Parameters.
+    // +optional
+    Parameters map[string]string `json:"parameters,omitempty"`
 }
 ```
 
@@ -147,9 +154,10 @@ Core Plan controller:
      * `spec.planRef.name = plan.Name`
      * `spec.applicationRef = plan.spec.applicationRef` (normalized with default apiGroup if not specified)
      * `spec.backupClassName = plan.spec.backupClassName`
+     * `spec.parameters = plan.spec.parameters` (deep-copied; carries the Plan's per-key overrides forward to every scheduled run)
    * Set `ownerReferences` so the `BackupJob` is owned by the `Plan`.
 
-**Note:** The `BackupJob` controller resolves the `BackupClass` to determine the appropriate strategy and parameters, based on the `ApplicationRef`. The strategy template is processed with a context containing the `Application` object and `Parameters` from the `BackupClass`.
+**Note:** The `BackupJob` controller resolves the `BackupClass` to determine the appropriate strategy and effective parameters, based on the `ApplicationRef`. The strategy template is processed with a context containing the `Application` object and the **effective** `Parameters` — i.e., `BackupClassStrategy.Parameters` overlaid with `BackupJob.Spec.Parameters` (see §4.2 "Parameters semantics").
 
 The Plan controller does **not**:
 
@@ -183,9 +191,21 @@ type BackupClassStrategy struct {
     // If apiGroup is not specified, it defaults to "apps.cozystack.io".
     Application ApplicationSelector `json:"application"`
 
-    // Parameters holds strategy-specific parameters, like storage reference.
+    // Parameters is the DEFAULT parameter set for the strategy — intended
+    // for cluster-wide platform configuration (e.g., the platform's
+    // default S3 endpoint, bucket, region, and the name of the canonical
+    // credentials Secret tenants are expected to provide). Callers
+    // (BackupJob, Plan) may override individual keys at run time; see
+    // "Parameters semantics" below.
+    //
     // Common parameters include:
-    // - backupStorageLocationName: Name of Velero BackupStorageLocation
+    // - bucket / endpoint / region: storage coordinates
+    // - credentialsSecretName: name of the Secret in the tenant
+    //   namespace carrying AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+    //   (and optionally ca.crt)
+    // - backupStorageLocationName: name of a pre-provisioned Velero
+    //   BackupStorageLocation (escape-hatch for admins who want the
+    //   pre-Cozystack Velero flow)
     // +optional
     Parameters map[string]string `json:"parameters,omitempty"`
 }
@@ -208,15 +228,39 @@ type ApplicationSelector struct {
   2. Matches the `ApplicationRef` against strategies in the `BackupClass`:
      * Normalizes `ApplicationRef.apiGroup` (defaults to `"apps.cozystack.io"` if not specified).
      * Finds a strategy where `ApplicationSelector` matches the `ApplicationRef` (apiGroup and kind).
-  3. Returns the matched `StrategyRef` and `Parameters`.
+  3. Computes the **effective parameters** by merging the caller-supplied overrides over the matched strategy's defaults (see "Parameters semantics" below).
+  4. Returns the matched `StrategyRef` and the effective parameter map.
 * Strategy templates (e.g., Velero's `backupTemplate.spec`) are processed with a context containing:
   * `Application`: The application object being backed up.
-  * `Parameters`: The parameters from the matched `BackupClassStrategy`.
+  * `Parameters`: The **effective** parameters (defaults ⊕ overrides).
 
-**Parameters**
+**Parameters semantics**
 
-* Parameters are passed via `Parameters` in the `BackupClass` (e.g., `backupStorageLocationName` for Velero).
-* The driver uses these parameters to resolve the actual resources (e.g., Velero's `BackupStorageLocation` CRD).
+`BackupClassStrategy.Parameters` is the **default** parameter set for the strategy, owned by the cluster admin. Per-execution callers (`BackupJob`, `Plan`) may supply their own parameter map via their `spec.parameters` field; the resolver merges those on top of the defaults on a per-key basis:
+
+```
+effective[k] = caller.Parameters[k]   if k is present in caller.Parameters
+             = strategy.Parameters[k] otherwise
+```
+
+Keys present only in defaults are preserved; keys present only in the override are added; keys present in both are taken from the override. The merged map is the `Parameters` context fed to the strategy template.
+
+This is what lets a single platform-shipped `BackupClass` serve both:
+
+* tenants that accept the platform-managed storage (omit `spec.parameters` → defaults apply unchanged), and
+* tenants that bring their own bucket / external S3 / Cozystack `Bucket` (set `spec.parameters: { bucket: ..., endpoint: ..., credentialsSecretName: ... }` → those specific keys override the defaults).
+
+See §6.2 / §6.3 for the end-to-end flow.
+
+**Security: no credentials in parameter values**
+
+The no-credentials-in-values rule (`BackupClassStrategy.Parameters` source comment) applies to **both** layers — `BackupClass` defaults AND caller overrides. Parameter values are persisted into `Backup.spec.driverMetadata` / `Backup.status.underlyingResources`, which are tenant-readable and replicated through every derived artifact, so they MUST NOT contain access keys, passwords, tokens, or any other secret material.
+
+Credentials are always referenced by Secret name. The canonical convention is `parameters.credentialsSecretName`, pointing at a Secret in the application's namespace that holds `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (and optionally `ca.crt` for self-signed endpoints). Drivers consume the Secret directly or materialize a driver-shaped derived Secret from it.
+
+**Future work: override allow-list**
+
+A future revision MAY add `BackupClassStrategy.OverridableParameters []string`. When set, the resolver would reject (or warn-and-drop) caller overrides for keys not in the allow-list — letting admins lock down which knobs tenants can actually touch (e.g., allow `bucket` but pin `endpoint`). Out of scope for the initial implementation; documented here so the field is reserved.
 
 ---
 
@@ -243,6 +287,17 @@ type BackupJobSpec struct {
     // The BackupClass will be resolved to determine the appropriate strategy and parameters
     // based on the ApplicationRef.
     BackupClassName string `json:"backupClassName"`
+
+    // Parameters overrides values from the matched
+    // BackupClassStrategy.Parameters for this run. Merged with the
+    // BackupClass defaults at resolve time on a per-key basis (see §4.2
+    // "Parameters semantics"). Subject to the same no-credentials rule
+    // as BackupClassStrategy.Parameters — credentials live in a Secret
+    // referenced by name (e.g. parameters.credentialsSecretName), not
+    // inline in this map.
+    // Immutable once the BackupJob is created.
+    // +optional
+    Parameters map[string]string `json:"parameters,omitempty"`
 }
 ```
 
@@ -279,11 +334,12 @@ type BackupJobStatus struct {
   2. Resolve inputs:
 
      * Resolve `BackupClass` from `spec.backupClassName`.
-     * Match `ApplicationRef` against `BackupClass` strategies to get `StrategyRef` and `Parameters`.
+     * Match `ApplicationRef` against `BackupClass` strategies to get `StrategyRef` and the strategy's default `Parameters`.
+     * Compute **effective parameters** by merging `BackupJob.Spec.Parameters` over the strategy's defaults on a per-key basis (see §4.2 "Parameters semantics"). This is the map exposed to the strategy template as `.Parameters`.
      * Read `Strategy` (driver-owned CRD) from `StrategyRef`.
      * Read `Application` from `ApplicationRef`.
-     * Extract parameters from `Parameters` (e.g., `backupStorageLocationName` for Velero).
-     * Process strategy template with context: `Application` object and `Parameters` from `BackupClass`.
+     * Process strategy template with context: `Application` object and the **effective** `Parameters` map.
+     * Persist the effective parameters (or the storage coordinates derived from them) into `Backup.spec.driverMetadata` / `Backup.status.underlyingResources` so the restore path can reproduce the same storage target without re-reading the original `BackupClass` / `BackupJob` (see §4.4).
   3. Execute backup logic (implementation-specific).
   4. On success:
 
@@ -321,7 +377,7 @@ type BackupSpec struct {
 }
 ```
 
-**Note:** Parameters are not stored directly in `Backup`. Instead, they are resolved from `BackupClass` parameters when the backup was created. The storage location is managed by the driver (e.g., Velero's `BackupStorageLocation`) and referenced via parameters in the `BackupClass`.
+**Note:** The driver writes the **effective** storage coordinates into `Backup.spec.driverMetadata` at backup time — that is, the post-merge result of `BackupClassStrategy.Parameters` and the originating `BackupJob.Spec.Parameters` (see §4.2 "Parameters semantics"). The restore path reads from there, so a backup taken with a tenant-supplied override (e.g., a different bucket or endpoint than the BackupClass default) is restored from that same override even if the `BackupClass` defaults change later. The storage location itself is whatever the driver materialised (e.g., a Velero `BackupStorageLocation`); `driverMetadata` holds either the coordinates inline or a reference the driver can resolve back at restore time.
 
 **Key fields (status)**
 
@@ -359,7 +415,7 @@ type BackupStatus struct {
     * Anchor `RestoreJob` operations.
     * Implement higher-level policies (retention) if needed.
 
-**Note:** Parameters are resolved from `BackupClass` when the `BackupJob` is created. The driver uses these parameters to determine where to store backups. The storage location itself is managed by the driver (e.g., Velero's `BackupStorageLocation` CRD) and is not directly referenced in the `Backup` resource. When restoring, the driver resolves the storage location from the original `BackupClass` parameters or from the driver's own metadata.
+**Note:** The driver determines where to store backups from the **effective** parameters (BackupClass defaults overlaid with the originating BackupJob's overrides — see §4.2). It persists what restore needs into `Backup.spec.driverMetadata` (the coordinates, plus references to any driver-materialised resources like Velero's `BackupStorageLocation`). When restoring, the driver resolves the storage location from `Backup.spec.driverMetadata` — independent of the current state of the `BackupClass` and without needing the originating `BackupJob` to still exist.
 
 ---
 
@@ -462,7 +518,140 @@ Drivers are interchangeable as long as they respect:
 
 ---
 
-## 6. Summary
+## 6. User flows
+
+The parameter-merge model (§4.2) is designed to collapse the user surface to two operational shapes. This section walks both.
+
+### 6.1 Admin: install + default storage
+
+The platform bundle ships, per supported application kind (`Postgres`, `MariaDB`, `ClickHouse`, `FoundationDB`, `Etcd`, plus Velero for VM/disk):
+
+* A cluster-scoped strategy CR (`strategy.backups.cozystack.io/<Kind>`) whose template references `{{ .Parameters.* }}` rather than per-app naming conventions.
+* A cluster-scoped `BackupClass` (`postgres`, `mariadb`, `clickhouse`, `foundationdb`, `etcd`) whose `strategies[0].parameters` carries the platform's default storage coordinates and the name of the canonical credentials Secret tenants are expected to provide.
+
+The admin's only configuration is the platform-storage defaults, exposed via Helm values:
+
+```yaml
+# values.yaml for the backupstrategy-controller chart
+backupClassDefaults:
+  bucket:                "cozy-default-backups"
+  endpoint:              "http://seaweedfs-s3.cozy-system.svc:8333"
+  region:                "us-east-1"
+  forcePathStyle:        "true"
+  credentialsSecretName: "cozy-default-backup-creds"   # name only; values live in a Secret
+  endpointCASecretName:  ""                            # set when the endpoint serves a self-signed cert
+```
+
+(Optional) The admin can distribute `cozy-default-backup-creds` into every tenant namespace via cluster-scoped Secret projection (e.g. a `ClusterSecret`/`SecretBinding`) so tenants inherit credentials without per-namespace setup.
+
+That's the entire admin loop. No per-tenant `BackupClass`. No per-application named Secret conventions.
+
+### 6.2 Tenant: default storage path
+
+When the tenant accepts the platform defaults, the entire backup spec is:
+
+```yaml
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: my-postgres-adhoc
+  namespace: tenant-foo
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: my-postgres
+  backupClassName: postgres
+  # no spec.parameters — defaults from BackupClass `postgres` apply
+```
+
+Outcome:
+
+* Effective parameters at resolve time = `BackupClass.strategies[0].parameters` verbatim.
+* Backup lands in the platform bucket at the path the strategy template renders.
+* `Backup.spec.driverMetadata` records the effective coordinates.
+* Restoring (`RestoreJob` referencing the resulting `Backup`) reads those coordinates from `driverMetadata` and reproduces the storage target without any extra tenant input.
+
+A scheduled equivalent (`Plan`) is the same shape with `schedule:` and otherwise identical fields.
+
+### 6.3 Tenant: own storage (Cozystack `Bucket`, external S3, ...)
+
+When the tenant wants a different bucket — e.g. a Cozystack-managed `Bucket` in their own namespace, an external S3-compatible endpoint, or a cloud provider's S3 — they keep the same `BackupClass` and override per-job via `spec.parameters`:
+
+```yaml
+# 1. Tenant brings their own bucket (Cozystack-managed example).
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: my-pg-backups
+  namespace: tenant-foo
+spec:
+  users:
+    backup:
+      readonly: false
+---
+# 2. Tenant materialises the canonical credentials Secret. Cozystack
+#    tenants do not have RBAC on core/v1.Secret directly; the
+#    tenant-visible surface is core.cozystack.io/v1alpha1.TenantSecret,
+#    which the apiserver proxies to a real Secret carrying the
+#    `internal.cozystack.io/tenantresource=true` label. Drivers read the
+#    underlying Secret directly (they have core/secrets RBAC).
+#
+#    For the Cozystack Bucket case (step 1), the chart-emitted
+#    BucketInfo Secret is already labelled tenantresource=true by the
+#    lineage webhook, so it surfaces as a TenantSecret in read-only and
+#    the tenant can compose this Secret from it via jq + apply. For
+#    external S3 the tenant supplies their own creds.
+apiVersion: core.cozystack.io/v1alpha1
+kind: TenantSecret
+metadata:
+  name: my-s3
+  namespace: tenant-foo
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID:     "<access key>"
+  AWS_SECRET_ACCESS_KEY: "<secret key>"
+  # ca.crt: |
+  #   <CA bundle for self-signed endpoints, optional>
+---
+# 3. BackupJob overrides the platform defaults via spec.parameters.
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: my-postgres-adhoc
+  namespace: tenant-foo
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: my-postgres
+  backupClassName: postgres
+  parameters:
+    bucket:                "my-pg-backups"
+    endpoint:              "https://s3.tenant-foo.cozystack.example.com"
+    region:                "us-east-1"
+    credentialsSecretName: "my-s3"
+```
+
+Effective parameters at resolve time: the keys explicitly listed in `spec.parameters` replace the BackupClass defaults; everything else (e.g. `forcePathStyle`, `endpointCASecretName`) inherits unchanged. `Plan` accepts the exact same `spec.parameters` shape, so scheduled runs use the same tenant override on every fire.
+
+Restore (`RestoreJob`) needs no override: it reads the effective coordinates from `Backup.spec.driverMetadata` written at backup time, so an artifact taken against the tenant bucket restores against that same tenant bucket even if the BackupClass defaults change later or the tenant override is removed.
+
+> **Open question — tenant RBAC for `TenantSecret`:** the default
+> `cozy:tenant:*` aggregation in `packages/system/cozystack-basics/templates/clusterroles.yaml`
+> grants only `get/list/watch` on `core.cozystack.io/v1alpha1.TenantSecret`
+> and zero verbs on `core/v1.Secret`. Step 2 above presumes
+> `create/update/patch/delete` on `TenantSecret` is granted by
+> something — either by extending `cozy:tenant:admin:base` in basics,
+> or by shipping a separate aggregated ClusterRole from
+> `system/backup-controller/templates/tenant-clusterroles.yaml`, or by
+> requiring an admin-supplied Secret projection (and dropping step 2
+> from the tenant flow). To be resolved before implementation; see
+> §[plan §5 RBAC].
+
+---
+
+## 7. Summary
 
 The Cozystack backups core API:
 
@@ -470,9 +659,10 @@ The Cozystack backups core API:
 * Cleanly separates:
 
   * **When** (Plan schedule) – core-owned.
-  * **How & where** (BackupClass) – central configuration unit that encapsulates strategy and parameters (e.g., storage reference) per application type, resolved per BackupJob/Plan.
-  * **Execution** (BackupJob) – created by Plan when schedule fires, resolves BackupClass to get strategy and parameters, then delegates to driver.
-  * **What backup artifacts exist** (Backup) – driver-created but cluster-visible.
-  * **Restore lifecycle** (RestoreJob) – shared contract boundary.
+  * **How** (BackupClass strategy + default parameters) – admin-owned, cluster-scoped, shipped with the platform.
+  * **Where** (effective parameters: BackupClass defaults overlaid with per-execution overrides on `BackupJob` / `Plan`) – admin sets defaults, tenant overrides per-run when bringing their own storage.
+  * **Execution** (BackupJob) – created by Plan when schedule fires or ad-hoc by the tenant, resolves the effective parameters, then delegates to the driver.
+  * **What backup artifacts exist** (Backup) – driver-created, cluster-visible, carries the effective storage coordinates in `driverMetadata` so restore is self-contained.
+  * **Restore lifecycle** (RestoreJob) – shared contract boundary, reads storage from `Backup.driverMetadata` (no separate restore-side override needed).
 * Allows multiple strategy drivers to implement backup/restore logic without entangling their implementation with the core API.
 
