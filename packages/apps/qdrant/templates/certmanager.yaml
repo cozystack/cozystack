@@ -2,13 +2,7 @@
 {{- if .Values._cluster }}
 {{- $clusterDomain = (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 {{- end }}
-{{- $tlsMap := default (dict) .Values.tls -}}
-{{- $tlsEnabled := false -}}
-{{- if hasKey $tlsMap "enabled" -}}
-  {{- $tlsEnabled = index $tlsMap "enabled" -}}
-{{- else -}}
-  {{- $tlsEnabled = .Values.external | default false -}}
-{{- end -}}
+{{- $tlsEnabled := eq (include "qdrant.tls.enabled" .) "true" -}}
 {{- if $tlsEnabled }}
 ---
 apiVersion: cert-manager.io/v1

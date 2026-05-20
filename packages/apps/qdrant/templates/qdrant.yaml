@@ -1,10 +1,4 @@
-{{- $tlsMap := default (dict) .Values.tls -}}
-{{- $tlsEnabled := false -}}
-{{- if hasKey $tlsMap "enabled" -}}
-  {{- $tlsEnabled = index $tlsMap "enabled" -}}
-{{- else -}}
-  {{- $tlsEnabled = .Values.external | default false -}}
-{{- end -}}
+{{- $tlsEnabled := eq (include "qdrant.tls.enabled" .) "true" -}}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
