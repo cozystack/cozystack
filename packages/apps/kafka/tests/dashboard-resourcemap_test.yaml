@@ -118,8 +118,8 @@ tests:
           value: cozystack.io
         documentIndex: 0
 
-  # External bootstrap service present when tls.enabled=true and external=false ($showExternal is true)
-  - it: grants access to external bootstrap service when tls.enabled=true and external=false
+  # External bootstrap service absent when external=false, regardless of tls.enabled
+  - it: does not grant access to external bootstrap service when tls.enabled=true and external=false
     release:
       name: test-kafka
       namespace: tenant-test
@@ -128,7 +128,7 @@ tests:
       tls:
         enabled: true
     asserts:
-      - contains:
+      - notContains:
           path: rules[0].resourceNames
           content: test-kafka-kafka-external-bootstrap
         documentIndex: 0

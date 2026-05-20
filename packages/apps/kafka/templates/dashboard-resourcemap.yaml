@@ -1,12 +1,4 @@
-{{- $tlsMap := .Values.tls | default dict -}}
-{{- $tlsEnabledExplicit := hasKey $tlsMap "enabled" -}}
-{{- $tlsEnabled := false -}}
-{{- if $tlsEnabledExplicit -}}
-  {{- $tlsEnabled = index $tlsMap "enabled" -}}
-{{- else -}}
-  {{- $tlsEnabled = .Values.external | default false -}}
-{{- end -}}
-{{- $showExternal := or .Values.external (and $tlsEnabledExplicit $tlsEnabled) -}}
+{{- $showExternal := .Values.external | default false -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
