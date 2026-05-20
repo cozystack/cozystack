@@ -12,10 +12,11 @@
   Internal TLS listener (port 9093) is always on; Strimzi manages the PKI.
 */ -}}
 {{- $tlsMap := .Values.tls | default dict -}}
-{{- $tlsEnabledExplicit := hasKey $tlsMap "enabled" -}}
+{{- $tlsEnabledRaw := index $tlsMap "enabled" -}}
+{{- $tlsEnabledExplicit := and (hasKey $tlsMap "enabled") (ne $tlsEnabledRaw nil) -}}
 {{- $tlsEnabled := false -}}
 {{- if $tlsEnabledExplicit -}}
-  {{- $tlsEnabled = index $tlsMap "enabled" -}}
+  {{- $tlsEnabled = $tlsEnabledRaw -}}
 {{- else -}}
   {{- $tlsEnabled = .Values.external | default false -}}
 {{- end -}}
