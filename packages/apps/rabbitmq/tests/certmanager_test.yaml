@@ -177,10 +177,27 @@ tests:
           content: myrabbitmq.tenant-test.svc
       - contains:
           path: spec.dnsNames
-          content: myrabbitmq.tenant-test.svc.cluster.local
+          content: myrabbitmq.tenant-test.svc.cozy.local
       - notContains:
           path: spec.dnsNames
           content: myrabbitmq.example.com
+
+  - it: leaf Certificate uses custom cluster domain in FQDN SAN when _cluster.cluster-domain is set
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      _cluster.cluster-domain: custom.example
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.custom.example
+      - notContains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.cozy.local
 
   # -----------------------------------------------------------------------
   # SAN coverage: external=true adds namespace.host SAN
@@ -216,7 +233,7 @@ tests:
           content: myrabbitmq.tenant-test.svc
       - contains:
           path: spec.dnsNames
-          content: myrabbitmq.tenant-test.svc.cluster.local
+          content: myrabbitmq.tenant-test.svc.cozy.local
       - contains:
           path: spec.dnsNames
           content: myrabbitmq.example.com
