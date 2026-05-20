@@ -1,12 +1,11 @@
 {{/*
-TLS is active when tls.enabled is explicitly set (and true), or when
-tls.enabled is absent (tri-state default) and external is true.
+TLS is active when tls.enabled is explicitly set to a non-null boolean, or when
+tls.enabled is absent/null (tri-state default) and external is true.
+A null tls.enabled is treated as "inherit from external", not as disabled.
 */}}
-{{- $tlsEnabled := false }}
-{{- if hasKey .Values.tls "enabled" }}
+{{- $tlsEnabled := .Values.external }}
+{{- if and (hasKey .Values.tls "enabled") (ne .Values.tls.enabled nil) }}
   {{- $tlsEnabled = .Values.tls.enabled }}
-{{- else }}
-  {{- $tlsEnabled = .Values.external }}
 {{- end }}
 
 {{- if $tlsEnabled }}
@@ -51,10 +50,14 @@ spec:
   ca:
     secretName: {{ .Release.Name }}-ca
 ---
+{{- $clusterDomain := "cozy.local" }}
+{{- if .Values._cluster }}
+  {{- $clusterDomain = (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- end }}
 {{- $dnsNames := list
   .Release.Name
   (printf "%s.%s.svc" .Release.Name .Release.Namespace)
-  (printf "%s.%s.svc.cluster.local" .Release.Name .Release.Namespace)
+  (printf "%s.%s.svc.%s" .Release.Name .Release.Namespace $clusterDomain)
 }}
 {{- if .Values.external }}
   {{- $dnsNames = append $dnsNames (printf "%s.%s" .Release.Name .Values._namespace.host) }}
