@@ -18,22 +18,19 @@
   # actually pulls (skips configmap fields and CRD examples that happen to
   # contain an `image:` key). Add a chart here when a new peer-sensitive
   # workload is found.
-  # Stage each render to a file: bats does not enable `pipefail`, so a
-  # direct `helm template | yq` pipe would let yq's exit code mask a
-  # helm-template failure and the test would pass while pre-pull was
-  # skipped. Writing to a file makes `set -e` trip on a render failure
-  # without using `var=$(helm template ...)` captures, which `set -x`
-  # would expand into the trace and balloon CI logs.
-  local kubeovn_yaml linstor_yaml
-  kubeovn_yaml=$(mktemp)
-  linstor_yaml=$(mktemp)
-  helm template packages/system/kubeovn > "$kubeovn_yaml"
-  helm template packages/system/linstor > "$linstor_yaml"
-  cat "$kubeovn_yaml" "$linstor_yaml" | yq -N '
+  # Stream each render through a brace group instead of `var=$(helm ...)`:
+  # `set -x` would expand captured output into the trace and balloon CI
+  # logs, but rendered YAML flowing through a pipe stays out of stderr.
+  # `pipefail` makes a helm-template or yq failure trip `set -e` instead
+  # of being masked by the downstream prepull exit code.
+  set -o pipefail
+  {
+    helm template packages/system/kubeovn
+    helm template packages/system/linstor
+  } | yq -N '
       (..|select(has("containers"))|.containers[]|.image),
       (..|select(has("initContainers"))|.initContainers[]|.image)
     ' | hack/e2e-prepull-images.sh
-  rm -f "$kubeovn_yaml" "$linstor_yaml"
 }
 
 @test "Install Cozystack" {
