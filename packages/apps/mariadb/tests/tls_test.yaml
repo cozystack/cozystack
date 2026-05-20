@@ -144,6 +144,15 @@ tests:
     asserts:
       - contains:
           path: spec.dnsNames
+          content: "my-mariadb"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cluster.local"
+      - contains:
+          path: spec.dnsNames
           content: "my-mariadb-primary"
       - contains:
           path: spec.dnsNames
@@ -253,6 +262,9 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "my-mariadb.example.com"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb"
       - contains:
           path: spec.dnsNames
           content: "my-mariadb-primary"
