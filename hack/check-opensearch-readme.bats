@@ -24,7 +24,7 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   # TLS section should contain only tls/tls.enabled rows, not topology spread.
   # The awk pattern skips the heading line itself, then prints until the next
   # section heading so the range is non-vacuous.
-  awk '/### TLS configuration/{found=1; next} found && /^### /{exit} found' "$README" | grep -qv "topologySpreadPolicy"
+  ! awk '/### TLS configuration/{found=1; next} found && /^### /{exit} found' "$README" | grep -q "topologySpreadPolicy"
 }
 
 @test "topologySpreadPolicy appears in README outside TLS section" {
