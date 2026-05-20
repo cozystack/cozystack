@@ -182,6 +182,57 @@ tests:
           path: spec.dnsNames
           content: myrabbitmq.example.com
 
+  - it: leaf Certificate contains inter-node headless SANs when external is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"
+
+  - it: leaf Certificate contains inter-node headless SANs when external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"
+
   - it: leaf Certificate uses custom cluster domain in FQDN SAN when _cluster.cluster-domain is set
     release:
       name: myrabbitmq
@@ -198,6 +249,15 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: myrabbitmq.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.custom.example
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc.custom.example"
+      - notContains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
 
   # -----------------------------------------------------------------------
   # SAN coverage: external=true adds namespace.host SAN
