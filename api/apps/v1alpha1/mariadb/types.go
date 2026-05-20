@@ -103,6 +103,7 @@ type TLS struct {
 	// Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.
 	Enabled *bool `json:"enabled,omitempty"`
 	// Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet.
+	// +kubebuilder:default:=true
 	Required bool `json:"required,omitempty"`
 }
 
