@@ -8,3 +8,4 @@ update:
 	helm repo add opensearch-operator https://opensearch-project.github.io/opensearch-k8s-operator/
 	helm repo update opensearch-operator
 	helm pull opensearch-operator/opensearch-operator --version 2.8.0 --untar --untardir charts
+	patch --no-backup-if-mismatch -p4 < patches/fix-kube-rbac-proxy-image.patch
