@@ -18,19 +18,26 @@
   # actually pulls (skips configmap fields and CRD examples that happen to
   # contain an `image:` key). Add a chart here when a new peer-sensitive
   # workload is found.
-  # Stream each render through a brace group instead of `var=$(helm ...)`:
-  # `set -x` would expand captured output into the trace and balloon CI
-  # logs, but rendered YAML flowing through a pipe stays out of stderr.
-  # `pipefail` makes a helm-template or yq failure trip `set -e` instead
-  # of being masked by the downstream prepull exit code.
-  set -o pipefail
-  {
-    helm template packages/system/kubeovn
-    helm template packages/system/linstor
-  } | yq -N '
+  # Stage each render AND the yq filter through tmp files instead of
+  # piping. Two constraints stack here: `set -x` would expand any
+  # `var=$(helm ...)` capture into the trace and balloon CI logs, and
+  # `set -o pipefail` is unavailable because hack/cozytest.sh runs under
+  # /bin/sh which is dash on Ubuntu CI. Redirection keeps each step as a
+  # standalone command — set -e catches a failure at any stage (helm
+  # render, yq filter, prepull) without needing pipefail and without
+  # leaking rendered YAML into the trace.
+  local kubeovn_yaml linstor_yaml images_list
+  kubeovn_yaml=$(mktemp)
+  linstor_yaml=$(mktemp)
+  images_list=$(mktemp)
+  helm template packages/system/kubeovn > "$kubeovn_yaml"
+  helm template packages/system/linstor > "$linstor_yaml"
+  yq -N '
       (..|select(has("containers"))|.containers[]|.image),
       (..|select(has("initContainers"))|.initContainers[]|.image)
-    ' | hack/e2e-prepull-images.sh
+    ' "$kubeovn_yaml" "$linstor_yaml" > "$images_list"
+  hack/e2e-prepull-images.sh < "$images_list"
+  rm -f "$kubeovn_yaml" "$linstor_yaml" "$images_list"
 }
 
 @test "Install Cozystack" {
