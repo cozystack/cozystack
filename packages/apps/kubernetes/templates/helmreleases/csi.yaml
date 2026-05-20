@@ -9,6 +9,7 @@ metadata:
     sharding.fluxcd.io/key: tenants
 spec:
   interval: 5m
+  timeout: 10m
   releaseName: csi
   chartRef:
     kind: ExternalArtifact
