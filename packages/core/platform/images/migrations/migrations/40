@@ -1,0 +1,42 @@
+#!/bin/sh
+# Migration 40 --> 41
+# Remove obsolete dashboard.cozystack.io CRDs left over from the dashboard
+# controller, which is no longer part of Cozystack.
+#
+# The dashboard controller used to project ApplicationDefinitions into a set
+# of dashboard.cozystack.io CRs (Sidebar, Factory, Navigation, Breadcrumb,
+# CustomFormsOverride, CustomFormsPrefill, CustomColumnsOverride,
+# MarketplacePanel, TableUriMapping, CFOMapping, BreadcrumbInside) consumed
+# by the legacy UI. cozystack-ui now reads ApplicationDefinitions directly,
+# so both the controller and the CRDs are dead. The chart no longer ships
+# these CRDs, but existing clusters still have them installed — delete them
+# explicitly here so they do not stay around as orphans.
+
+set -euo pipefail
+
+CRDS="
+breadcrumbs.dashboard.cozystack.io
+breadcrumbsinside.dashboard.cozystack.io
+cfomappings.dashboard.cozystack.io
+customcolumnsoverrides.dashboard.cozystack.io
+customformsoverrides.dashboard.cozystack.io
+customformsprefills.dashboard.cozystack.io
+factories.dashboard.cozystack.io
+marketplacepanels.dashboard.cozystack.io
+navigations.dashboard.cozystack.io
+sidebars.dashboard.cozystack.io
+tableurimappings.dashboard.cozystack.io
+"
+
+for CRD in $CRDS; do
+  if kubectl get crd "$CRD" >/dev/null 2>&1; then
+    echo "Deleting CRD $CRD"
+    kubectl delete crd "$CRD" --ignore-not-found=true --wait=false
+  else
+    echo "CRD $CRD not found, skipping"
+  fi
+done
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=41 --dry-run=client -o yaml | kubectl apply -f-
