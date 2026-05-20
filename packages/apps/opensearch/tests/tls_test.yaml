@@ -27,6 +27,17 @@ templates:
   - templates/certmanager.yaml
 
 tests:
+  - it: fails when release name exceeds the 47-char cert-manager naming limit
+    release:
+      name: os-test-name-that-is-definitely-too-long-xxxxxxx
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "Release name \"os-test-name-that-is-definitely-too-long-xxxxxxx\" is 48 chars; opensearch TLS requires <=47 chars so cert-manager resource names fit in the 63-char Kubernetes limit (longest suffix: -http-selfsigned)."
+
   - it: "(a) renders no resources when external false and tls.enabled unset"
     asserts:
       - hasDocuments:
