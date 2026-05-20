@@ -1,11 +1,10 @@
 {{/*
-Tri-state TLS resolution: explicit tls.enabled wins; when not set, defaults to external.
+Tri-state TLS resolution: explicit non-null tls.enabled wins; when absent or null,
+defaults to external. A null tls.enabled is treated as "inherit from external".
 */}}
-{{- $tlsEnabled := false }}
-{{- if hasKey .Values.tls "enabled" }}
+{{- $tlsEnabled := .Values.external }}
+{{- if and (hasKey .Values.tls "enabled") (ne .Values.tls.enabled nil) }}
   {{- $tlsEnabled = .Values.tls.enabled }}
-{{- else }}
-  {{- $tlsEnabled = .Values.external }}
 {{- end }}
 
 apiVersion: rabbitmq.com/v1beta1
