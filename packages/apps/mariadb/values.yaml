@@ -83,7 +83,12 @@ external: false
 ## @field {bool} [required] - Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet.
 
 ## @param {TLS} [tls] - TLS configuration. When omitted, TLS is enabled automatically when `external` is true.
-tls: {}
+tls:
+  required: true
+
+##
+## @section Version parameters
+##
 
 ##
 ## @enum {string} Version
