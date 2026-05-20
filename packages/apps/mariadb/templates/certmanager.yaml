@@ -47,8 +47,8 @@ spec:
     secretName: {{ .Release.Name }}-ca-tls
 ---
 # Leaf server TLS Certificate passed to mariadb-operator via spec.tls.serverCertSecretRef.
-# The SAN list covers the primary and secondary services plus, when external is true,
-# the external DNS name for the LoadBalancer service.
+# The SAN list covers the base, primary, and secondary services plus, when external is
+# true, the external DNS name for the LoadBalancer service.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -69,7 +69,7 @@ spec:
     - localhost
     - {{ printf "*.%s-internal.%s.svc" $name $ns | quote }}
     - {{ printf "*.%s-internal.%s.svc.%s" $name $ns $clusterDomain | quote }}
-    {{- range $svc := list (printf "%s-primary" $name) (printf "%s-secondary" $name) }}
+    {{- range $svc := list $name (printf "%s-primary" $name) (printf "%s-secondary" $name) }}
     - {{ $svc }}
     - {{ $svc }}.{{ $ns }}.svc
     - {{ $svc }}.{{ $ns }}.svc.{{ $clusterDomain }}
