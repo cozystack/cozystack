@@ -2,3 +2,7 @@ opensearch-operator:
   manager:
     # Enable cluster-wide mode to watch all namespaces
     watchNamespace: ""
+  kubeRbacProxy:
+    image:
+      # gcr.io/kubebuilder/kube-rbac-proxy was sunset; use the original upstream
+      repository: "quay.io/brancz/kube-rbac-proxy"
