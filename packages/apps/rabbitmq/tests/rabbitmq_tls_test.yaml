@@ -167,6 +167,27 @@ tests:
           path: spec.rabbitmq.additionalConfig
           pattern: "management.ssl.port = 15671"
 
+  - it: renders LoadBalancer override ports when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - contains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management-tls
+            port: 15671
+            targetPort: 15671
+            protocol: TCP
+
   # -----------------------------------------------------------------------
   # Tri-state: explicit tls.enabled=false beats external=true
   # -----------------------------------------------------------------------
@@ -324,7 +345,9 @@ tests:
     set:
       tls.enabled: false
       external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
     asserts:
       - isKind:
           of: RabbitmqCluster
-        documentIndex: 0
