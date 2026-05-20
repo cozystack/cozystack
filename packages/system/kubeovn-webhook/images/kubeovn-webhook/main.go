@@ -39,6 +39,7 @@ func main() {
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS12,
 	}
 
 	if clientCAFile != "" {
