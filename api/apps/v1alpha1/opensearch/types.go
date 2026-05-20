@@ -36,15 +36,15 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// HTTP-layer TLS configuration.
-	// +kubebuilder:default:={}
-	Tls TLS `json:"tls"`
 	// How strictly to enforce pod distribution across nodes and zones.
 	// +kubebuilder:default:="soft"
 	TopologySpreadPolicy TopologySpreadPolicy `json:"topologySpreadPolicy"`
 	// OpenSearch major version to deploy.
 	// +kubebuilder:default:="v2"
 	Version Version `json:"version"`
+	// HTTP-layer TLS configuration.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// Container images used by the operator.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`

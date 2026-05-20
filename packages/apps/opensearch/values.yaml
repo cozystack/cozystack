@@ -75,23 +75,6 @@ storageClass: ""
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
-##
-## @section TLS configuration
-##
-
-## @typedef {struct} TLS - HTTP-layer TLS configuration for OpenSearch and Dashboards.
-## @field {*bool} enabled - Tri-state TLS switch. When omitted (null), TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
-##   NOTE: Transport mTLS between nodes is always active and is managed by the opster
-##   operator (tls.transport.generate: true). Setting enabled: false here does NOT
-##   disable transport mTLS — the OpenSearch security plugin requires it unconditionally.
-
-## @param {TLS} tls - HTTP-layer TLS configuration.
-tls: {}
-
-##
-## @section Common parameters
-##
-
 ## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
 ## @value soft - Best-effort distribution (ScheduleAnyway) - pods may be scheduled on same node if needed
 ## @value hard - Strict distribution (DoNotSchedule) - pods will not schedule if spread cannot be achieved
@@ -107,6 +90,19 @@ topologySpreadPolicy: "soft"
 
 ## @param {Version} version - OpenSearch major version to deploy.
 version: v2
+
+##
+## @section TLS configuration
+##
+
+## @typedef {struct} TLS - HTTP-layer TLS configuration for OpenSearch and Dashboards.
+## @field {*bool} enabled - Tri-state TLS switch. When omitted (null), TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
+##   NOTE: Transport mTLS between nodes is always active and is managed by the opster
+##   operator (tls.transport.generate: true). Setting enabled: false here does NOT
+##   disable transport mTLS — the OpenSearch security plugin requires it unconditionally.
+
+## @param {TLS} tls - HTTP-layer TLS configuration.
+tls: {}
 
 ##
 ## @section Image configuration
