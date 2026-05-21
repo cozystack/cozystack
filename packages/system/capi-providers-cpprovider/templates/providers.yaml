@@ -11,7 +11,7 @@ spec:
         cp-components: cozy
   deployment:
     containers:
-    - name: manager
+    - name: controller
       resources:
         limits:
           cpu: "1"
