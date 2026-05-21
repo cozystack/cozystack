@@ -85,7 +85,7 @@ See the reference for components utilized in this service:
 
 ## Breaking Changes
 
-- **`ephemeralStorage` renamed to `diskSize`**: The `nodeGroups[name].ephemeralStorage` field has been renamed to `nodeGroups[name].diskSize` to better reflect its purpose (persistent disk for kubelet and containerd data). There is no backward-compatibility fallback; users MUST update their configurations to use `diskSize` instead of `ephemeralStorage`. If `ephemeralStorage` is still present in values, Helm template rendering will fail with an error directing you to use `diskSize`. When upgrading the CRD directly (bypassing Helm), the unrecognized field is silently dropped and kubelet storage reverts to the default 20Gi. Existing VMs will be automatically rolling-updated via CAPI when the new values are applied. State persists across same-VM reboots (virt-launcher restart, guest reboot, node failure); VM replacement by CAPI (e.g. nodeGroup field change, MachineHealthCheck remediation) provisions a fresh PVC.
+- **`ephemeralStorage` renamed to `diskSize`** (v1.4): The `nodeGroups[name].ephemeralStorage` field has been renamed to `nodeGroups[name].diskSize` to better reflect its purpose (persistent disk for kubelet and containerd data). Existing clusters are migrated transparently by platform migration 41 during the pre-upgrade hook — no manual action is required. Newly written values should use `diskSize`. Existing VMs will be automatically rolling-updated via CAPI when the new values are applied. State persists across same-VM reboots (virt-launcher restart, guest reboot, node failure); VM replacement by CAPI (e.g. nodeGroup field change, MachineHealthCheck remediation) provisions a fresh PVC.
 
 ## Parameters
 

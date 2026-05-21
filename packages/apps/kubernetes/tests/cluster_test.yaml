@@ -351,7 +351,7 @@ tests:
       nodeGroups.md0.ephemeralStorage: 50Gi
     asserts:
       - failedTemplate:
-          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system.'
 
   - it: fails when ephemeralStorage is set to empty string
     release:
@@ -361,7 +361,7 @@ tests:
       nodeGroups.md0.ephemeralStorage: ""
     asserts:
       - failedTemplate:
-          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system.'
 
   - it: fails when both ephemeralStorage and diskSize are set
     release:
@@ -372,7 +372,7 @@ tests:
       nodeGroups.md0.diskSize: 50Gi
     asserts:
       - failedTemplate:
-          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions.'
+          errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system.'
 
   ###############################################
   # KubeadmConfigTemplate — files block         #
