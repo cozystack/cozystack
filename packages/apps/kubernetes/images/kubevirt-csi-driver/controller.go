@@ -555,10 +555,7 @@ func isNFSVolume(pvc *corev1.PersistentVolumeClaim) bool {
 	if !hasRWXAccessMode(pvc) {
 		return false
 	}
-	if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock {
-		return false
-	}
-	return true
+	return pvc.Spec.VolumeMode == nil || *pvc.Spec.VolumeMode == corev1.PersistentVolumeFilesystem
 }
 
 // getNFSExport extracts the NFS export URL from a PersistentVolume.
