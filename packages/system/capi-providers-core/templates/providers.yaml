@@ -10,3 +10,13 @@ spec:
     selector:
       matchLabels:
         core-components: cozy
+  deployment:
+    containers:
+    - name: manager
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 10m
+          memory: 64Mi
