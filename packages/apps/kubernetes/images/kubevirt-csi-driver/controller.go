@@ -257,14 +257,17 @@ func (w *WrappedControllerService) publishHotplugVolume(ctx context.Context, req
 
 	vmNamespace, vmName, parseErr := cache.SplitMetaNamespaceKey(req.GetNodeId())
 	if parseErr != nil {
-		klog.Warningf("Cannot verify VMI readiness after publish: failed to parse node ID %q: %v", req.GetNodeId(), parseErr)
-		return resp, nil
+		return nil, status.Errorf(codes.Internal,
+			"cannot verify VMI readiness after publish: failed to parse node ID %q: %v",
+			req.GetNodeId(), parseErr)
 	}
 	dvName := req.GetVolumeId()
+	// GetVirtualMachine on this client returns a VirtualMachineInstance, not a VM.
 	vmi, getErr := w.virtClient.GetVirtualMachine(ctx, vmNamespace, vmName)
 	if getErr != nil {
-		klog.Warningf("Cannot verify VMI %s/%s readiness after publish of %s: %v", vmNamespace, vmName, dvName, getErr)
-		return resp, nil
+		return nil, status.Errorf(codes.Unavailable,
+			"cannot verify VMI %s/%s readiness after publish of %s: %v",
+			vmNamespace, vmName, dvName, getErr)
 	}
 	for _, vs := range vmi.Status.VolumeStatus {
 		if vs.Name != dvName {
