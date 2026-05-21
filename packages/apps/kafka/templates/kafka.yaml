@@ -73,7 +73,7 @@ spec:
       {{- with .Values.kafka.storageClass }}
       class: {{ . }}
       {{- end }}
-      deleteClaim: false
+      deleteClaim: true
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
