@@ -13,14 +13,14 @@ update:
 
 image:
 	docker buildx build images/kamaji \
-		--tag $(REGISTRY)/kamaji:$(call settag,$(TAG)) \
+		$(call image-tags,kamaji,v$(COZYSTACK_VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/kamaji:latest \
 		--cache-to type=inline \
 		--metadata-file images/kamaji.json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/kamaji" \
 		yq -i '.kamaji.image.repository = strenv(REPOSITORY)' values.yaml
-	TAG=$(TAG)@$$(yq e '."containerimage.digest"' images/kamaji.json -o json -r) \
+	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kamaji.json -o json -r) \
 		yq -i '.kamaji.image.tag = strenv(TAG)' values.yaml
 	yq -i '.kamaji.extraArgs[0] = "--migrate-image=" + .kamaji.image.repository + ":" + .kamaji.image.tag' values.yaml
 	rm -f images/kamaji.json

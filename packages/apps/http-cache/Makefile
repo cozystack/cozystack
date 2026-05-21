@@ -7,12 +7,12 @@ image: image-nginx
 
 image-nginx:
 	docker buildx build images/nginx-cache \
-		--tag $(REGISTRY)/nginx-cache:$(call settag,$(NGINX_CACHE_TAG)) \
+		$(call image-tags,nginx-cache,$(NGINX_CACHE_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/nginx-cache:latest \
 		--cache-to type=inline \
 		--metadata-file images/nginx-cache.json \
 		$(BUILDX_ARGS)
-	echo "$(REGISTRY)/nginx-cache:$(call settag,$(NGINX_CACHE_TAG))@$$(yq e '."containerimage.digest"' images/nginx-cache.json -o json -r)" \
+	echo "$(REGISTRY)/nginx-cache:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/nginx-cache.json -o json -r)" \
 		> images/nginx-cache.tag
 	rm -f images/nginx-cache.json
 

@@ -18,11 +18,11 @@ image: image-migrations
 
 image-migrations:
 	docker buildx build images/migrations \
-		--tag $(REGISTRY)/platform-migrations:$(call settag,$(TAG)) \
+		$(call image-tags,platform-migrations,v$(COZYSTACK_VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/platform-migrations:latest \
 		--cache-to type=inline \
 		--metadata-file images/migrations.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/platform-migrations:$(call settag,$(TAG))@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
+	IMAGE="$(REGISTRY)/platform-migrations:$(IMAGE_TAG)@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
 		yq --inplace '.migrations.image = strenv(IMAGE)' values.yaml
 	rm -f images/migrations.json

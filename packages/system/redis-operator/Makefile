@@ -14,13 +14,13 @@ update:
 
 image:
 	docker buildx build images/redis-operator \
-		--tag $(REGISTRY)/redis-operator:$(REDIS_OPERATOR_TAG) \
+		$(call image-tags,redis-operator,$(REDIS_OPERATOR_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/redis-operator:latest \
 		--cache-to type=inline \
 		--metadata-file images/redis-operator.json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/redis-operator" \
 		yq -i '.redis-operator.image.repository = strenv(REPOSITORY)' values.yaml
-	TAG=$(REDIS_OPERATOR_TAG)@$$(yq e '."containerimage.digest"' images/redis-operator.json -o json -r) \
+	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/redis-operator.json -o json -r) \
 		yq -i '.redis-operator.image.tag = strenv(TAG)' values.yaml
 	rm -f images/redis-operator.json

@@ -15,11 +15,11 @@ update:
 
 image:
 	docker buildx build images/multus-cni \
-		--tag $(REGISTRY)/multus-cni:$(call settag,$(TAG)) \
+		$(call image-tags,multus-cni,v$(COZYSTACK_VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/multus-cni:latest \
 		--cache-to type=inline \
 		--metadata-file images/multus-cni.json \
 		$(BUILDX_ARGS)
 	DIGEST=$$(yq e '."containerimage.digest"' images/multus-cni.json -o json -r) && \
-		sed -i "s|image: .*multus-cni.*|image: $(REGISTRY)/multus-cni:$(TAG)@$${DIGEST}|g" templates/multus-daemonset-thick.yml
+		sed -i "s|image: .*multus-cni.*|image: $(REGISTRY)/multus-cni:$(IMAGE_TAG)@$${DIGEST}|g" templates/multus-daemonset-thick.yml
 	rm -f images/multus-cni.json

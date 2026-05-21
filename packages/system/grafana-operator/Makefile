@@ -12,11 +12,11 @@ update:
 
 image:
 	docker buildx build --file images/grafana-dashboards/Dockerfile ../../.. \
-		--tag $(REGISTRY)/grafana-dashboards:$(call settag,$(TAG)) \
+		$(call image-tags,grafana-dashboards,v$(COZYSTACK_VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/grafana-dashboards:latest \
 		--cache-to type=inline \
 		--metadata-file images/grafana-dashboards.json \
 		$(BUILDX_ARGS)
-	echo "$(REGISTRY)/grafana-dashboards:$(call settag,$(TAG))@$$(yq --exit-status '.["containerimage.digest"]' images/grafana-dashboards.json --output-format json -r)" \
+	echo "$(REGISTRY)/grafana-dashboards:$(IMAGE_TAG)@$$(yq --exit-status '.["containerimage.digest"]' images/grafana-dashboards.json --output-format json -r)" \
 		> images/grafana-dashboards.tag
 	rm -f images/grafana-dashboards.json
