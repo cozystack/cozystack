@@ -39,7 +39,7 @@ spec:
             cdi.kubevirt.io/storage.usePopulator: "false"
         spec:
           {{- if hasKey .group "ephemeralStorage" }}
-          {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported. Rename it to diskSize. See README.md for migration instructions." .groupName) }}
+          {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}
           source:
             blank: {}
