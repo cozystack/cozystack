@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Chart Values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kubernetes"
+  ],
+  "properties": {
+    "kubernetes": {
+      "type": "string",
+      "description": "Name of the parent Kubernetes cluster (Cluster CR) in the same namespace.",
+      "minLength": 1
+    },
+    "storageClass": {
+      "type": "string",
+      "description": "StorageClass used for the worker system disk.",
+      "default": "replicated"
+    },
+    "minReplicas": {
+      "type": "integer",
+      "description": "Minimum replicas in this pool. Used as the cluster-autoscaler floor.",
+      "default": 0,
+      "minimum": 0
+    },
+    "maxReplicas": {
+      "type": "integer",
+      "description": "Maximum replicas in this pool. Used as the cluster-autoscaler ceiling.",
+      "default": 10,
+      "minimum": 0
+    },
+    "instanceType": {
+      "type": "string",
+      "description": "VirtualMachineClusterInstancetype reference. Leave empty to specify resources explicitly.",
+      "default": "u1.medium"
+    },
+    "resources": {
+      "type": "object",
+      "description": "Explicit CPU/memory when instanceType is empty.",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ],
+          "description": "CPU available."
+        },
+        "memory": {
+          "type": "string",
+          "description": "Memory (RAM) available."
+        }
+      },
+      "default": {}
+    },
+    "diskSize": {
+      "type": "string",
+      "description": "System disk size. Talos partitions EPHEMERAL on top.",
+      "default": "20Gi"
+    },
+    "roles": {
+      "type": "array",
+      "description": "Node-role labels applied via node-role.kubernetes.io/<role>.",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "gpus": {
+      "type": "array",
+      "description": "GPU passthrough devices.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of GPU resource, such as nvidia.com/AD102GL_L40S."
+          }
+        }
+      },
+      "default": []
+    },
+    "kubelet": {
+      "type": "object",
+      "description": "Kubelet reservation overrides.",
+      "additionalProperties": false,
+      "properties": {
+        "systemReservedMemory": { "type": "string" },
+        "kubeReservedMemory":   { "type": "string" },
+        "systemReservedCpu":    { "type": "string" },
+        "kubeReservedCpu":      { "type": "string" },
+        "evictionHardMemory":   { "type": "string", "default": "7%" },
+        "evictionSoftMemory":   { "type": "string", "default": "10%" }
+      },
+      "default": {}
+    }
+  }
+}
