@@ -1,3 +1,7 @@
+{{- $controllerReplicas := 3 }}
+{{- if le (int .Values.kafka.replicas) 1 }}
+  {{- $controllerReplicas = 1 }}
+{{- end }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
@@ -6,29 +10,29 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ .Values.kafka.resourcesPreset | quote }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: {{ .Values.kafka.replicas }}
   minReplicas: 1
   kind: kafka
-  type: kafka
+  type: kafka-broker
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
     app.kubernetes.io/name: kafka
+    strimzi.io/pool-name: {{ $.Release.Name }}-broker
   version: {{ $.Chart.Version }}
-
 ---
-
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
-  name: {{ $.Release.Name }}-zookeeper
+  name: {{ $.Release.Name }}-controller
   labels:
-    workloads.cozystack.io/resource-preset: {{ .Values.zookeeper.resourcesPreset | quote }}
+    workloads.cozystack.io/resource-preset: {{ .Values.kafka.resourcesPreset | quote }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: {{ $controllerReplicas }}
   minReplicas: 1
   kind: kafka
-  type: zookeeper
+  type: kafka-controller
   selector:
     app.kubernetes.io/instance: {{ $.Release.Name }}
-    app.kubernetes.io/name: zookeeper
+    app.kubernetes.io/name: kafka
+    strimzi.io/pool-name: {{ $.Release.Name }}-controller
   version: {{ $.Chart.Version }}

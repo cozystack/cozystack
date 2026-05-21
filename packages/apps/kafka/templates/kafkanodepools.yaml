@@ -1,0 +1,52 @@
+{{- /* Controller replicas: odd quorum (1 for single-node, 3 otherwise) */ -}}
+{{- $controllerReplicas := 3 }}
+{{- if le (int .Values.kafka.replicas) 1 }}
+  {{- $controllerReplicas = 1 }}
+{{- end }}
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.kafka.replicas }}
+  roles:
+    - broker
+  resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 4 }}
+  storage:
+    type: jbod
+    volumes:
+    - id: 0
+      type: persistent-claim
+      {{- with .Values.kafka.size }}
+      size: {{ . }}
+      {{- end }}
+      {{- with .Values.kafka.storageClass }}
+      class: {{ . }}
+      {{- end }}
+      deleteClaim: false
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: {{ .Release.Name }}-controller
+  labels:
+    strimzi.io/cluster: {{ .Release.Name }}
+spec:
+  replicas: {{ $controllerReplicas }}
+  roles:
+    - controller
+  resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 4 }}
+  storage:
+    type: jbod
+    volumes:
+    - id: 0
+      type: persistent-claim
+      size: {{ .Values.kafka.controllerStorageSize | default "5Gi" }}
+      {{- with .Values.kafka.storageClass }}
+      class: {{ . }}
+      {{- end }}
+      kraftMetadata: shared
+      deleteClaim: false

@@ -1,0 +1,223 @@
+suite: KafkaNodePool tests
+
+templates:
+  - templates/kafkanodepools.yaml
+
+tests:
+  ##################################
+  # Pool layout (always separated) #
+  ##################################
+
+  - it: renders both broker and controller pools
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: KafkaNodePool
+        documentIndex: 0
+      - isKind:
+          of: KafkaNodePool
+        documentIndex: 1
+
+  - it: names pools correctly
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-kafka-broker
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-kafka-controller
+        documentIndex: 1
+
+  - it: sets cluster label on both pools
+    release:
+      name: my-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: my-kafka
+        documentIndex: 0
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: my-kafka
+        documentIndex: 1
+
+  ##################################
+  # Roles                          #
+  ##################################
+
+  - it: broker pool has only broker role
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.roles
+          value:
+            - broker
+        documentIndex: 0
+
+  - it: controller pool has only controller role
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.roles
+          value:
+            - controller
+        documentIndex: 1
+
+  ##################################
+  # Replicas                       #
+  ##################################
+
+  - it: broker replicas track kafka.replicas
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+        documentIndex: 0
+
+  - it: controller pool has 3 replicas when kafka.replicas >= 2
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+        documentIndex: 1
+
+  - it: controller pool falls back to 1 replica when kafka.replicas <= 1
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 1
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentIndex: 0
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentIndex: 1
+
+  ##################################
+  # Storage                        #
+  ##################################
+
+  - it: broker pool uses kafka.size and deleteClaim=false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        size: 50Gi
+    asserts:
+      - equal:
+          path: spec.storage.type
+          value: jbod
+        documentIndex: 0
+      - equal:
+          path: spec.storage.volumes[0].type
+          value: persistent-claim
+        documentIndex: 0
+      - equal:
+          path: spec.storage.volumes[0].size
+          value: 50Gi
+        documentIndex: 0
+      - equal:
+          path: spec.storage.volumes[0].deleteClaim
+          value: false
+        documentIndex: 0
+
+  - it: controller pool uses controllerStorageSize, kraftMetadata=shared and deleteClaim=false
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        size: 50Gi
+        controllerStorageSize: 20Gi
+    asserts:
+      - equal:
+          path: spec.storage.volumes[0].size
+          value: 20Gi
+        documentIndex: 1
+      - equal:
+          path: spec.storage.volumes[0].kraftMetadata
+          value: shared
+        documentIndex: 1
+      - equal:
+          path: spec.storage.volumes[0].deleteClaim
+          value: false
+        documentIndex: 1
+
+  - it: applies storageClass to both pools when provided
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        storageClass: fast-ssd
+    asserts:
+      - equal:
+          path: spec.storage.volumes[0].class
+          value: fast-ssd
+        documentIndex: 0
+      - equal:
+          path: spec.storage.volumes[0].class
+          value: fast-ssd
+        documentIndex: 1
+
+  - it: omits storageClass when empty on both pools
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        storageClass: ""
+    asserts:
+      - notExists:
+          path: spec.storage.volumes[0].class
+        documentIndex: 0
+      - notExists:
+          path: spec.storage.volumes[0].class
+        documentIndex: 1
+
+  ##################################
+  # Resources                      #
+  ##################################
+
+  - it: applies resources to both pools
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - exists:
+          path: spec.resources
+        documentIndex: 0
+      - exists:
+          path: spec.resources
+        documentIndex: 1
