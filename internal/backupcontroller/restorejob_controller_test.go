@@ -35,6 +35,7 @@ func TestStrategyKindForRestoreJob(t *testing.T) {
 		{"cnpg strategy", strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.CNPGStrategyKind},
 		{"job strategy", strategyv1alpha1.JobStrategyKind, strategyv1alpha1.JobStrategyKind},
 		{"mariadb strategy", strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MariaDBStrategyKind},
+		{"etcd strategy", strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.EtcdStrategyKind},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,6 +168,54 @@ func TestCleanupOnDelete_FoundationDB_DoesNotTouchVeleroNamespace(t *testing.T) 
 	got := &velerov1.Restore{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(owned), got); err != nil {
 		t.Fatalf("FoundationDB cleanup incorrectly routed to Velero cleanup; matching Velero Restore was deleted (err=%v)", err)
+	}
+}
+
+// TestCleanupOnDelete_Etcd_DoesNotTouchVeleroNamespace mirrors the
+// CNPG / FoundationDB cleanup tests for the Etcd strategy. The Etcd
+// driver does not materialise namespaced artefacts in cozy-velero
+// (the destructive in-place flow's side state lives on the RestoreJob
+// itself as the EtcdClusterSpecCaptured + TargetPurged conditions,
+// and the operator-side EtcdCluster is owned by the source
+// HelmRelease). A future refactor that drops Etcd from the no-op
+// group would fall through to the conservative `default` branch
+// which runs the Velero cleanup unconditionally - silently reaping
+// matching velero.io/Restore objects on label match and emitting a
+// misleading "Failed to delete Velero Restore" event on
+// non-Etcd-related apiserver errors. Seeding a label-matching Velero
+// Restore proves the Etcd branch stays no-op.
+func TestCleanupOnDelete_Etcd_DoesNotTouchVeleroNamespace(t *testing.T) {
+	apiGroup := strategyv1alpha1.GroupVersion.Group
+	rj := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &apiGroup, Kind: strategyv1alpha1.EtcdStrategyKind, Name: "s",
+			},
+		},
+	}
+	owned := &velerov1.Restore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: veleroNamespace,
+			Name:      "would-be-victim",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      "rj",
+				backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+			},
+		},
+	}
+	c := newRestoreJobTestClient(t, rj, backup, owned)
+	r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	r.cleanupOnDelete(context.Background(), rj)
+
+	got := &velerov1.Restore{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(owned), got); err != nil {
+		t.Fatalf("Etcd cleanup incorrectly routed to Velero cleanup; matching Velero Restore was deleted (err=%v)", err)
 	}
 }
 
