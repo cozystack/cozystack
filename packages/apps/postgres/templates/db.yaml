@@ -108,7 +108,7 @@ spec:
       {{- $defaults := dict "max_wal_senders" "30" }}
       {{- $params := merge (dict) .Values.postgresql.parameters $defaults }}
       {{- /* Security: Block parameters that enable arbitrary code execution (shell commands or .so loading) */ -}}
-      {{- $dangerousParams := list "archive_command" "restore_command" "ssl_passphrase_command" "dynamic_library_path" "local_preload_libraries" "session_preload_libraries" "shared_preload_libraries" }}
+      {{- $dangerousParams := list "archive_command" "restore_command" "ssl_passphrase_command" "archive_cleanup_command" "recovery_end_command" "dynamic_library_path" "local_preload_libraries" "session_preload_libraries" "shared_preload_libraries" }}
       {{- range $key, $value := $params }}
       {{- $normalizedKey := lower $key }}
       {{- if has $normalizedKey $dangerousParams }}

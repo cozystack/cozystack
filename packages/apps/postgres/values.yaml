@@ -89,7 +89,7 @@ version: v18
 ##
 
 ## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
-## @field {map[string]string} [parameters] - PostgreSQL server parameters. All values must be strings (quote numbers: "100"). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
+## @field {map[string]intOrString} [parameters] - PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 
 ## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
 postgresql:
@@ -104,7 +104,7 @@ postgresql:
 ##   work_mem: "256MB"
 ##
 ## SECURITY: The following parameters are BLOCKED (enable arbitrary code execution):
-##   archive_command, restore_command, ssl_passphrase_command (shell commands),
+##   archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command (shell commands),
 ##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
 ##   shared_preload_libraries (arbitrary .so loading)
 ##
