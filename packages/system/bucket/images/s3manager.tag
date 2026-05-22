@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/s3manager:v0.5.0@sha256:1f2f0885770b807cf65dc2ab590dfdc7586d57df3c74107c1b5a4f00574165a8
+ghcr.io/cozystack/cozystack/s3manager:v0.5.0@sha256:2ee46e59e860da57c446189f627f9e5c5c226b51dfb2e29e31d94ab9b18396ba

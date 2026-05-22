@@ -1,7 +1,7 @@
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
-    tag: 1.33.2@sha256:7962188dd7485b997f3ea9a0ee51f9e41f1edf656201435f98eadfe7846007de
+    tag: 1.33.2@sha256:54c0c15778446257272373074473fe4efd4bd20c6e742a0b0d77e7db8fe49014
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
