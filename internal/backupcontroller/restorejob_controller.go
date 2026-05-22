@@ -118,6 +118,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileMariaDBRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.FoundationDBStrategyKind:
 		return r.reconcileFoundationDBRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.EtcdStrategyKind:
+		return r.reconcileEtcdRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}
@@ -210,9 +212,12 @@ func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *
 	case strategyv1alpha1.VeleroStrategyKind:
 		r.cleanupVeleroRestore(ctx, restoreJob)
 
-	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind:
+	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind:
 		// Nothing to clean up: these drivers don't materialise namespaced
-		// artifacts that outlive the RestoreJob.
+		// artifacts that outlive the RestoreJob. (Etcd: the operator-side
+		// EtcdCluster is owned by the source HelmRelease, and the
+		// EtcdClusterSpecCaptured / TargetPurged conditions live on the
+		// RestoreJob itself - all gone with the parent.)
 	default:
 		// Unknown strategy or Backup unreadable. Conservative path: try
 		// the Velero cleanup since it's idempotent (DeleteAllOf with

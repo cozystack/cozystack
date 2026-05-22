@@ -67,6 +67,19 @@ rules:
     - patch
     - watch
   - apiGroups:
+    - ""
+    resources:
+    - pods
+    verbs:
+    - get
+    - list
+  - apiGroups:
+    - ""
+    resources:
+    - pods/log
+    verbs:
+    - get
+  - apiGroups:
     - "storage.k8s.io"
     resources:
     - storageclasses
