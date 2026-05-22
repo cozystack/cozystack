@@ -19,8 +19,8 @@ RUN curl -sSL "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_${TA
  && chmod +x /usr/local/bin/yq
 RUN curl -sSL "https://fluxcd.io/install.sh" | bash
 RUN curl -sSL "https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh" | sh -s -- -v "${COZYHR_VERSION}"
-RUN curl https://dl.min.io/client/mc/release/${TARGETOS}-${TARGETARCH}/mc --create-dirs -o  /usr/local/bin/mc \
-&& chmod +x /usr/local/bin/mc
+RUN curl -fsSL "https://dl.min.io/client/mc/release/${TARGETOS}-${TARGETARCH}/mc" --create-dirs -o /usr/local/bin/mc \
+ && chmod +x /usr/local/bin/mc
 RUN <<'EOF'
 cat <<'EOT' >> /etc/bash.bashrc
 . /etc/bash_completion
