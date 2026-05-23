@@ -1,0 +1,55 @@
+name: OpenSSF Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Run weekly on Mondays at 06:00 UTC.
+    - cron: '0 6 * * 1'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Declare default permissions as read-only.
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload the results to the GitHub code-scanning dashboard.
+      security-events: write
+      # Needed to publish results to the public scorecard.dev API
+      # (OIDC token allows publish without storing long-lived credentials).
+      id-token: write
+      # Needed to read repository contents.
+      contents: read
+      # Needed to read workflow definitions for the Dangerous-Workflow check.
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publish the results to the OpenSSF Scorecard public API so the
+          # project appears at https://scorecard.dev/viewer/?uri=github.com/cozystack/cozystack
+          publish_results: true
+
+      - name: Upload SARIF as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
