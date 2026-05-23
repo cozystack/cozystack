@@ -147,5 +147,22 @@ If and when contributors' commitment levels change, contributors can consider st
 
 Contact the Maintainers about changing to Emeritus status, or reducing your contributor level.
 
+### How the Emeritus transition is recorded
+
+1. A pull request is opened against `MAINTAINERS.md` that moves the maintainer's row from the `Active Maintainers` section to the `Emeritus Maintainers` section. The PR is opened by the maintainer stepping down or, if they have already become unresponsive, by another maintainer with their prior notification.
+2. The PR is reviewed under the standard rules in this document — for a voluntary transition, acknowledgement by at least one other maintainer is sufficient; for involuntary transitions, the majority vote described in [Involuntary Removal or Demotion](#involuntary-removal-or-demotion) applies.
+3. After the PR is merged, the project performs the following technical offboarding within five business days:
+   - Removes the user from any GitHub team that grants write or admin permissions on project repositories (currently the `engineering` team in the `cozystack` GitHub organization).
+   - Downgrades GitHub organization role from `admin` (Owner) to `member`, unless the user explicitly remains an organization admin in another capacity.
+   - Removes any direct repository-collaborator entries that granted elevated permissions beyond default organization membership.
+   - Updates `CODEOWNERS` if the user appeared there.
+   - Audits repository and organization Actions secrets; rotates any shared credentials that the user could have known (for example, registry tokens, CI bot keys, organization-level App private keys).
+   - Updates internal communication channels (private maintainer rooms, calendar invites) as appropriate. Emeritus maintainers remain welcome in public community channels.
+4. The Emeritus maintainer keeps default organization membership unless they ask to be removed. Their contribution history, commit attributions, and credits in past release notes are preserved unchanged.
+
+### Returning to active status
+
+An Emeritus maintainer who wishes to return to active maintainership opens a pull request moving their row back to the `Active Maintainers` section, with an updated affiliation if needed. The reactivation is treated like a new maintainer addition under [Becoming a Maintainer](#contributor-ladder) — the same review and approval flow applies. Past contributions count toward the new application; the contributor does not need to re-prove the full ladder.
+
 ## Contact
 * For inquiries, please reach out to: @kvaps, @tym83
