@@ -7,7 +7,7 @@
 | Andrei Kvapil | [@kvaps](https://github.com/kvaps) | Ænix | Core Maintainer |
 | George Gaál | [@gecube](https://github.com/gecube) | Independent | DevOps Practices in Platform, Developers Advocate |
 | Kingdon Barrett | [@kingdonb](https://github.com/kingdonb) | Urmanac | FluxCD and flux-operator |
-| Timofei Larkin | [@lllamnyp](https://github.com/lllamnyp) | Ænix | Etcd-operator Lead |
+| Timofei Larkin | [@lllamnyp](https://github.com/lllamnyp) | Ænix | Core Maintainer |
 | Timur Tukaev | [@tym83](https://github.com/tym83) | Ænix | Cozystack Website, Marketing, Community Management |
 | Nikita Bykov | [@nbykov0](https://github.com/nbykov0) | Independent | Maintainer of ARM and stuff |
 | Matthieu Robin | [@matthieu-robin](https://github.com/matthieu-robin) | Hidora | Managed Applications, Platform Quality & Benchmarking |
