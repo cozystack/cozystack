@@ -8,6 +8,7 @@ include ../../../hack/package.mk
 
 test:
 	helm unittest .
+	bash tests/containerd-config-path-test.sh
 
 generate:
 	cozyvalues-gen -m 'kubernetes' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/kubernetes/types.go
