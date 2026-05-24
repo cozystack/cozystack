@@ -468,6 +468,7 @@ spec:
       - mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd
       - mountpoint -q /var/lib/kubelet || mount -o bind /persistent/kubelet /var/lib/kubelet
       - mountpoint -q /var/lib/containerd || mount -o bind /persistent/containerd /var/lib/containerd
+      {{/* containerd 2.x renamed the CRI plugin from io.containerd.grpc.v1.cri to io.containerd.cri.v1.images; both seds run unconditionally and the wrong-version one is a no-op */}}
       - sed -i '/\[plugins\.[^]]*grpc\.v1\.cri[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
       - sed -i '/\[plugins\.[^]]*io\.containerd\.cri\.v1\.images[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
       - systemctl start containerd.service
