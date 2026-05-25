@@ -11,6 +11,14 @@
   resources (omit it for cluster-scoped objects like CRDs and Namespaces).
     kubectl label <kind> <name> --namespace <ns> platform.cozystack.io/no-delete-
 
+  Self-protection is sequential, not bilateral: both the VAP and the Binding
+  carry the no-delete label, but either one can be unlabeled and deleted
+  first — once the Binding is gone, the VAP is unenforced and can be deleted
+  without the dance, and vice versa. The labeling is operational guidance,
+  not adversarial defense. Whole-chart teardown is via `make unprotect` (see
+  packages/core/platform/Makefile), which strips the label from every
+  guarded object so `helm uninstall` can proceed.
+
   failurePolicy is intentionally omitted: the validation expression is the
   literal `false`, so CEL evaluation cannot fail and the default (Fail) is
   unreachable in practice. Setting it explicitly would be misleading config.
