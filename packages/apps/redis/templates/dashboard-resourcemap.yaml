@@ -1,3 +1,4 @@
+{{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -19,6 +20,10 @@ rules:
   - secrets
   resourceNames:
   - "{{ .Release.Name }}-auth"
+  {{- if $tlsEnabled }}
+  - "{{ .Release.Name }}-tls"
+  - "{{ .Release.Name }}-ca-tls"
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
