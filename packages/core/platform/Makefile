@@ -17,6 +17,9 @@ reconcile: apply
 diff:
 	cozyhr diff --namespace $(NAMESPACE) $(NAME)
 
+test:
+	helm unittest .
+
 image: image-migrations
 
 image-migrations:

@@ -7,8 +7,9 @@
   gate below keeps the template renderable on clusters that pre-date 1.30
   (the install simply skips the guardrail there).
 
-  Bypass: remove the label, then delete.
-    kubectl label <kind> <name> platform.cozystack.io/no-delete-
+  Bypass: remove the label, then delete. Pass --namespace for namespaced
+  resources (omit it for cluster-scoped objects like CRDs and Namespaces).
+    kubectl label <kind> <name> --namespace <ns> platform.cozystack.io/no-delete-
 
   failurePolicy is intentionally omitted: the validation expression is the
   literal `false`, so CEL evaluation cannot fail and the default (Fail) is
@@ -35,7 +36,8 @@ spec:
     message: >-
       Deletion blocked: object carries platform.cozystack.io/no-delete=true.
       To bypass, first remove the label:
-      kubectl label <kind> <name> platform.cozystack.io/no-delete-
+      kubectl label <kind> <name> --namespace <ns> platform.cozystack.io/no-delete-
+      (omit --namespace for cluster-scoped resources)
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
