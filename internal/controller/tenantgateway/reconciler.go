@@ -239,13 +239,28 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 // collectHostnameClaims lists HTTPRoutes and TLSRoutes cluster-wide
 // and returns a map of hostname -> []routeRef of routes claiming
 // it via parentRefs targeting this TenantGateway's Gateway. Routes
-// whose namespace is not the tenant namespace and not in
-// Spec.AttachedNamespaces are filtered out — Gateway listener
-// allowedRoutes selectors reject those routes at runtime, but the
-// reconciler must not provision certs / listeners for them either
-// (each unused cert eats LE rate limits and leaks the operator's
-// reachable hostname set). Empty map in DNS-01 mode (wildcard
-// handles everything).
+// whose namespace is not allowed to attach to this Gateway are
+// filtered out — Gateway listener allowedRoutes selectors reject
+// those routes at runtime, but the reconciler must not provision
+// certs / listeners for them either (each unused cert eats LE rate
+// limits and leaks the operator's reachable hostname set). Empty
+// map in DNS-01 mode (wildcard handles everything).
+//
+// A namespace is allowed to attach when:
+//   - It is the TenantGateway's own namespace, OR
+//   - It is in Spec.AttachedNamespaces (static admin-configured
+//     attach list of cozy-* system namespaces), OR
+//   - It carries the label namespace.cozystack.io/gateway pointing
+//     at this Gateway's namespace (inheritance — apps/tenant chart
+//     writes the label on every tenant namespace, inherited or
+//     self-owning, so child tenants reach the parent Gateway).
+//
+// The third source is what makes HTTP-01 inheritance work end-to-end:
+// without it, a child tenant's HTTPRoute would be silently dropped
+// here and no per-listener Certificate would be issued — the
+// Gateway's label-based allowedRoutes selector would let the route
+// through at runtime but no listener would accept it (no matching
+// hostname), so Accepted stays False indefinitely.
 func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string][]routeRef, error) {
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 {
 		return nil, nil
@@ -257,6 +272,18 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 			continue
 		}
 		allowed[ns] = struct{}{}
+	}
+	// Inheritance: every namespace pointing at this Gateway via the
+	// label is also allowed. The same label drives the Gateway's
+	// allowedRoutes selector, so the two paths agree on which
+	// namespaces can attach.
+	nsList := &corev1.NamespaceList{}
+	selector := labels.SelectorFromSet(labels.Set{namespaceGatewayLabel: tgw.Namespace})
+	if err := r.List(ctx, nsList, client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return nil, fmt.Errorf("list namespaces by gateway label: %w", err)
+	}
+	for i := range nsList.Items {
+		allowed[nsList.Items[i].Name] = struct{}{}
 	}
 
 	out := map[string][]routeRef{}

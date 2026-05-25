@@ -1191,6 +1191,86 @@ func TestReconcile_DNS01IssuerCloudflareSolver(t *testing.T) {
 	}
 }
 
+// TestReconcile_HTTP01CollectsHostnamesFromInheritingChildNamespaces
+// pins the inheritance flow for HTTP-01 mode: an HTTPRoute living in
+// a namespace that carries namespace.cozystack.io/gateway=<owner> but
+// is NOT in tgw.Spec.AttachedNamespaces must still be collected by
+// collectHostnameClaims so the controller renders a per-listener
+// HTTPS listener + Certificate for its hostname.
+//
+// Without this, the e2e flow "child tenant's HTTPRoute attaches to
+// parent's Gateway via inheritance label" deadlocks: the apps/tenant
+// chart labels the child namespace, the parent Gateway's
+// allowedRoutes selector matches by label, but the controller never
+// adds a per-listener for the child route's hostname — so no
+// listener accepts the route, Accepted stays False, the route hangs
+// indefinitely with NoMatchingListenerHostname.
+func TestReconcile_HTTP01CollectsHostnamesFromInheritingChildNamespaces(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "example.org",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			// Intentionally empty: the child namespace is reached via
+			// inheritance label, NOT via the static attach list.
+		},
+	}
+	// Child namespace inherits via the gateway label (Helm-owned —
+	// the apps/tenant chart writes it; no controller annotation).
+	nsChild := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root-alice",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "alice.example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	// Self namespace (also labelled by the inheritance contract).
+	nsRoot := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	// HTTPRoute in the child namespace, pointing at the parent Gateway.
+	route := httpRouteAttachedTo("harbor", "tenant-root-alice", "harbor.alice.example.org", "tenant-root")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsRoot, nsChild, route).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+
+	var sawHarbor bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "harbor.alice.example.org" && l.Protocol == gatewayv1.HTTPSProtocolType {
+			sawHarbor = true
+			break
+		}
+	}
+	if !sawHarbor {
+		t.Errorf("expected per-listener HTTPS listener for harbor.alice.example.org (from inheriting child ns), got listeners: %+v", gw.Spec.Listeners)
+	}
+}
+
 // TestReconcile_DNS01WildcardCertCoversInheritingChildApexes pins
 // the SAN-expansion contract: when a tenant inherits this Gateway's
 // publishing layer (its namespace is labelled namespace.cozystack.
@@ -1564,9 +1644,17 @@ func TestReconcile_DNS01CreatesWildcardCertificate(t *testing.T) {
 // parentRef pointing at the tenant-foo/cozystack Gateway and a single
 // hostname.
 func httpRouteAttached(name, ns, hostname string) *gatewayv1.HTTPRoute {
+	return httpRouteAttachedTo(name, ns, hostname, "tenant-foo")
+}
+
+// httpRouteAttachedTo is httpRouteAttached with the parent Gateway's
+// namespace parameterised. Used by inheritance tests where the parent
+// owns the Gateway in tenant-root (or similar) while the route lives
+// in a child tenant namespace.
+func httpRouteAttachedTo(name, ns, hostname, parentNs string) *gatewayv1.HTTPRoute {
 	gwGroup := gatewayv1.Group(gatewayv1.GroupName)
 	gwKind := gatewayv1.Kind("Gateway")
-	gwNs := gatewayv1.Namespace("tenant-foo")
+	gwNs := gatewayv1.Namespace(parentNs)
 	return &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: gatewayv1.HTTPRouteSpec{
