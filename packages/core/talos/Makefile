@@ -12,10 +12,11 @@ image: image-matchbox image-talos
 
 image-talos:
 	test -f ../../../_out/assets/installer-amd64.tar || make talos-installer
+	set -e; \
 	SRC=docker-archive:../../../_out/assets/installer-amd64.tar; \
-	skopeo copy $$SRC docker://$(REGISTRY)/talos:$(IMAGE_TAG); \
-	if [ "$(PUBLISH_VERSIONED)" = "1" ]; then skopeo copy $$SRC docker://$(REGISTRY)/talos:$(TALOS_VERSION); fi; \
-	if [ "$(PUBLISH_FLOATING)" = "1" ]; then skopeo copy $$SRC docker://$(REGISTRY)/talos:latest; fi
+	skopeo copy "$$SRC" docker://$(REGISTRY)/talos:$(IMAGE_TAG); \
+	if [ "$(PUBLISH_VERSIONED)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:$(TALOS_VERSION); fi; \
+	if [ "$(PUBLISH_FLOATING)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:latest; fi
 
 image-matchbox:
 	test -f ../../../_out/assets/kernel-amd64 || make talos-kernel
