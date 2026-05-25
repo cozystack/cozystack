@@ -1,0 +1,16 @@
+{{- range .Values.rbac.ownedNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-customizer
+  namespace: {{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: cozystack-customizer
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

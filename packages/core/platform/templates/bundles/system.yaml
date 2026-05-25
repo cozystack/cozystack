@@ -219,4 +219,10 @@
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
 
+# Admin-facing GitOps customizer (opt-in via customizer.enabled)
+{{- if .Values.customizer.enabled }}
+{{- $customizerComponents := dict "customizer" (dict "values" .Values.customizer) }}
+{{include "cozystack.platform.package" (list "cozystack.customizer" "default" $ $customizerComponents) }}
+{{- end }}
+
 {{- end }}

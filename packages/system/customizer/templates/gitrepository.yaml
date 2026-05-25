@@ -1,0 +1,18 @@
+{{- if not .Values.source.url -}}
+{{- fail "customizer: source.url is required when the package is enabled" -}}
+{{- end -}}
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: cozystack-customizer-config
+  namespace: {{ .Release.Namespace }}
+spec:
+  interval: {{ .Values.source.interval }}
+  url: {{ .Values.source.url | quote }}
+  ref:
+    {{- toYaml .Values.source.ref | nindent 4 }}
+  {{- with .Values.source.secretRef }}
+  secretRef:
+    name: {{ . }}
+  {{- end }}

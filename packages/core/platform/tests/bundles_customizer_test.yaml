@@ -1,0 +1,80 @@
+suite: customizer bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: emits no cozystack.customizer Package when customizer.enabled is false
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      customizer:
+        enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.customizer
+        not: true
+        documentIndex: -1
+
+  - it: emits cozystack.customizer Package with customizer values when customizer.enabled is true
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      customizer:
+        enabled: true
+        source:
+          url: https://github.com/myorg/cozystack-customizer.git
+          ref:
+            branch: main
+          secretRef: cozystack-customizer-git
+        kustomization:
+          path: ./clusters/prod
+          ssaStrategy: Merge
+        rbac:
+          ownedNamespaces:
+            - cozy-customizer
+    documentSelector:
+      path: metadata.name
+      value: cozystack.customizer
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+      - equal:
+          path: spec.components.customizer.values.source.url
+          value: https://github.com/myorg/cozystack-customizer.git
+      - equal:
+          path: spec.components.customizer.values.kustomization.path
+          value: ./clusters/prod
+
+  - it: respects bundles.disabledPackages for cozystack.customizer
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        disabledPackages:
+          - cozystack.customizer
+      customizer:
+        enabled: true
+        source:
+          url: https://github.com/myorg/cozystack-customizer.git
+        kustomization:
+          path: ./clusters/prod
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.customizer
+        not: true
+        documentIndex: -1

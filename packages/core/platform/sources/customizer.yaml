@@ -1,0 +1,19 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.customizer
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    components:
+    - name: customizer
+      path: system/customizer
+      install:
+        namespace: cozy-system
+        releaseName: customizer
