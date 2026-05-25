@@ -1,8 +1,16 @@
 # Cozystack Tenant Gateway
 
-Per-tenant Gateway API Gateway backed by Cilium. Installed automatically when `tenant.spec.gateway=true` on the publishing tenant.
+Per-tenant Gateway API Gateway backed by Cilium. Installed automatically when `tenant.spec.gateway=true` on the publishing tenant. Other tenants under that tenant inherit through the publishing Gateway without opting in.
 
 The chart renders one `gateway.cozystack.io/v1alpha1 TenantGateway` CR per tenant. The cozystack-controller reconciles the actual `Gateway`, per-tenant `Issuer`, and per-listener `Certificate` resources from there. Helm does not render `Gateway` or `Certificate` directly — that prevents the Helm-vs-controller race on `Gateway.spec.listeners` that ad-hoc HTTPRoute additions would cause.
+
+## Inheritance: when to opt in for a separate Gateway
+
+A tenant gets its own dedicated Gateway (own LB Service, own LB IP, own Certificate) only when it explicitly asks via `tenant.spec.gateway=true`. Every other tenant in the tree attaches its routes to the Gateway of the nearest ancestor that does own one — same shape as `_namespace.ingress` inheritance today.
+
+The `apps/tenant` chart writes a namespace label `namespace.cozystack.io/gateway: <owner-tenant-name>` onto each tenant namespace, carrying either this tenant's own name (when owning a Gateway) or the inherited ancestor name (when inheriting). The Gateway's listener `allowedRoutes.namespaces.selector` is keyed on that label, so the same logic permits the inheriting tenant's HTTPRoutes / TLSRoutes to attach. cozystack-controller separately patches the same label onto every namespace in `tgw.Spec.AttachedNamespaces` so cozy-* system namespaces (cert-manager, monitoring, harbor, …) reach the publishing Gateway alongside the tenant tree, garbage-collecting labels it wrote when an entry is removed from the attach list.
+
+Owning a separate Gateway makes sense for: a tenant that needs its own LB IP (DNS already pinned, firewall rule on a specific address), a tenant whose apex is not derived from the parent (custom `host`, e.g. `customer1.io` not under the platform apex — the ancestor's cert/Issuer can't cover it), or a tenant that wants its own ACME account / cert authority. Otherwise leave `gateway` unset and inherit.
 
 ## Cert mode: HTTP-01 (default) vs DNS-01 (opt-in)
 
@@ -33,6 +41,8 @@ Set `publishing.certificates.solver: dns01` and configure the provider under `pu
 The platform chart writes those values into `_cluster.dns01-*` keys consumed by the per-tenant gateway chart, which renders them onto the `TenantGateway` CR. Each provider sub-block carries safe defaults for secret-key field names (`api-token`, `secret-access-key`, `access-token`, `tsig-secret-key`) so the typical opt-in path is `solver: dns01` plus the provider-specific `secretName` (and `region` for route53 / `nameserver`+`tsigKeyName` for rfc2136).
 
 DNS-01 mode renders a single wildcard `Certificate` covering `<apex>` and `*.<apex>`, plus the corresponding `https` (`*.<apex>`) and `https-apex` (`<apex>`) listeners. New apps published under the apex pick up the existing wildcard cert without per-listener provisioning.
+
+For inheriting child tenants under this Gateway: the controller extends the same wildcard Certificate with `<child-apex>` + `*.<child-apex>` SANs per child, and adds one `*.<child-apex>` listener per child apex referencing the same cert. Child apex SANs are discovered by listing namespaces carrying `namespace.cozystack.io/gateway = <owner>` and reading their `namespace.cozystack.io/host` label. The ACME challenge must succeed for every SAN, which means the DNS provider account configured at the platform layer must be able to write TXT records under each child apex zone — for deeply-nested children that requires either zone delegation or a provider account with apex-spanning permissions.
 
 Pick DNS-01 when you specifically want a wildcard cert (e.g. a long-lived staging cluster with many short-lived apps and tight LE rate limits). Otherwise stay on HTTP-01.
 
@@ -105,4 +115,7 @@ The default for a fresh tenant is unlimited; operators running shared-apex multi
 
 - **Upstream application gaps** — some chart-level features (harbor ACL integrations, bucket upstream limitations) remain on ingress-nginx workflows in upstream docs; cozystack tracks those separately as upstream PRs.
 - **Supported ACME issuers** — `publishing.certificates.issuerName` for Gateway-based tenants must be `letsencrypt-prod` or `letsencrypt-stage` (the controller maps those names to concrete ACME server URLs). To support another ACME provider, extend the controller's renderer with an additional branch.
-- **Inheritance from parent Gateway** — child tenants currently must opt into their own Gateway via `tenant.spec.gateway=true`. There is no "share the parent's Gateway" mode. Two reasons that compound: (a) the Gateway API spec hard-caps `Gateway.spec.listeners` at 64, and HTTP-01 ACME mints one listener per Certificate — inheriting bottom-tenant routes onto the parent Gateway exhausts that cap quickly; (b) at the Cilium layer every tenant Gateway claims `443/TCP`, so sharing-key on a single parent Gateway is inactive until [Cilium ListenerSet support](https://github.com/cilium/cilium/issues/42756) lands. Until ListenerSet ships, per-tenant Gateway is the only scalable shape. Inheritance may revisit once the upstream constraint clears.
+- **DNS-01 wildcards require DNS provider access for every apex level** — when a deeply nested tenant (e.g. `tenant-root` → `alice` → `alice-prod`) inherits DNS-01 mode, the parent's `*.alice.example.org` SAN requires the parent's ACME challenge to write a TXT record under `_acme-challenge.alice.example.org`. If the operator hasn't delegated that subzone to the parent's DNS provider account, cert issuance for the grandchild apex stalls. HTTP-01 mode is unaffected — each per-listener challenge runs against the specific hostname.
+- **Cilium sharing-key port-collision** — operators wanting *multiple* per-tenant Gateways to share a single LB IP cannot do so on current Cilium: every tenant Gateway claims `443/TCP`, so `lbipam.cilium.io/sharing-key` is inactive on port collision ([cilium#21270](https://github.com/cilium/cilium/issues/21270), [cilium#42756](https://github.com/cilium/cilium/issues/42756)). Each Gateway → own LB IP until Cilium ships ListenerSet. Within a single Gateway, inheritance (parent + all inheriting children sharing one IP) works today.
+- **Upstream application gaps** — some chart-level features (harbor ACL integrations, bucket upstream limitations) remain on ingress-nginx workflows in upstream docs; cozystack tracks those separately as upstream PRs.
+- **Supported ACME issuers** — `publishing.certificates.issuerName` for Gateway-based tenants must be `letsencrypt-prod` or `letsencrypt-stage` (the controller maps those names to concrete ACME server URLs). To support another ACME provider, extend the controller's renderer with an additional branch.
