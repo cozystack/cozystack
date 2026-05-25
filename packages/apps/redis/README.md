@@ -33,7 +33,7 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
 | `tls`             | TLS configuration. When omitted, TLS is enabled automatically when `external` is true.                                                                                                                                              | `object` | `{}`   |
 | `tls.enabled`     | Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`. | `*bool`  | `null` |
-| `tls.authClients` | Maps to the Redis `tls-auth-clients` directive. One of `no`, `optional`, `yes`. Defaults to `no` — the server certificate is presented but client certificates are not validated.                                                 | `string` | `""`   |
+| `tls.authClients` | Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.                                                                                 | `string` | `{}`   |
 | `version`         | Redis major version to deploy                                                                                                                                                                                                       | `string` | `v8`   |
 
 

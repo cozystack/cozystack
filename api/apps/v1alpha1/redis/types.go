@@ -55,11 +55,14 @@ type Resources struct {
 }
 
 type TLS struct {
-	// Maps to the Redis `tls-auth-clients` directive. One of `no`, `optional`, `yes`. Defaults to `no` — the server certificate is presented but client certificates are not validated.
-	AuthClients string `json:"authClients,omitempty"`
+	// Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.
+	AuthClients AuthClients `json:"authClients,omitempty"`
 	// Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.
 	Enabled *bool `json:"enabled,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="no";"optional";"yes"
+type AuthClients string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
