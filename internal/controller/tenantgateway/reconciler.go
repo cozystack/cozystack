@@ -30,6 +30,7 @@ import (
 	"sort"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -130,6 +131,16 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		for _, ref := range refs {
 			allRefs[ref] = struct{}{}
 		}
+	}
+
+	// Label every expected namespace BEFORE rendering the Gateway —
+	// the Gateway's allowedRoutes selector is label-based, so any
+	// route reconcile that races with this run must already see the
+	// label in place to satisfy the attach contract. Garbage-collect
+	// stale labels in the same pass so a dropped AttachedNamespaces
+	// entry stops attracting routes on the next reconcile.
+	if err := r.ensureNamespaceLabels(ctx, tgw); err != nil {
+		return err
 	}
 
 	if err := r.reconcileGateway(ctx, tgw, dynHostnames); err != nil {
@@ -786,6 +797,96 @@ func ptrTLSMode(m gatewayv1.TLSModeType) *gatewayv1.TLSModeType {
 // SetupWithManager wires the Reconciler into the controller manager
 // with For (TenantGateway as primary), Owns (Gateway and Certificate
 // as owned children), and Watches against HTTPRoute and TLSRoute so
+// ensureNamespaceLabels reconciles namespace.cozystack.io/gateway
+// labels on every namespace that should attach to this Gateway:
+// the TenantGateway's own namespace plus tgw.Spec.AttachedNamespaces.
+// Tracks its writes via the cozystack.io/gateway-attached-by
+// annotation so Helm-owned labels on tenant namespaces (written by
+// apps/tenant chart's namespace.yaml during inheritance) are never
+// stripped.
+//
+// GC: every reconcile lists namespaces carrying the annotation
+// pointing at this TGW and removes both label and annotation from
+// those no longer in the expected set. This keeps an admin-side
+// revoke of a Package's gateway.attachedNamespaces effective
+// without a separate cleanup step.
+func (r *Reconciler) ensureNamespaceLabels(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	expected := map[string]struct{}{tgw.Namespace: {}}
+	for _, ns := range tgw.Spec.AttachedNamespaces {
+		if ns != "" {
+			expected[ns] = struct{}{}
+		}
+	}
+
+	for ns := range expected {
+		if err := r.patchNamespaceGatewayLabel(ctx, ns, tgw.Namespace); err != nil {
+			return fmt.Errorf("label namespace %s: %w", ns, err)
+		}
+	}
+
+	// GC pass.
+	list := &corev1.NamespaceList{}
+	if err := r.List(ctx, list); err != nil {
+		return fmt.Errorf("list namespaces for label GC: %w", err)
+	}
+	for i := range list.Items {
+		nsObj := &list.Items[i]
+		if nsObj.Annotations[namespaceGatewayManagedByAnnotation] != tgw.Namespace {
+			// Either un-annotated (Helm-owned label, leave alone)
+			// or annotated by a different TGW (also leave alone).
+			continue
+		}
+		if _, ok := expected[nsObj.Name]; ok {
+			continue
+		}
+		if err := r.stripNamespaceGatewayLabel(ctx, nsObj.Name); err != nil {
+			return fmt.Errorf("strip stale label from %s: %w", nsObj.Name, err)
+		}
+	}
+	return nil
+}
+
+// patchNamespaceGatewayLabel sets the namespace.cozystack.io/gateway
+// label and the controller-ownership annotation. Missing namespace
+// is not fatal — Flux may not have created the cozy-* namespace yet,
+// and the next reconcile will retry once it exists.
+func (r *Reconciler) patchNamespaceGatewayLabel(ctx context.Context, name, ownerNamespace string) error {
+	ns := &corev1.Namespace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: name}, ns); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	before := ns.DeepCopy()
+	if ns.Labels == nil {
+		ns.Labels = map[string]string{}
+	}
+	ns.Labels[namespaceGatewayLabel] = ownerNamespace
+	if ns.Annotations == nil {
+		ns.Annotations = map[string]string{}
+	}
+	ns.Annotations[namespaceGatewayManagedByAnnotation] = ownerNamespace
+	if equality.Semantic.DeepEqual(before.Labels, ns.Labels) && equality.Semantic.DeepEqual(before.Annotations, ns.Annotations) {
+		return nil
+	}
+	return r.Patch(ctx, ns, client.MergeFrom(before))
+}
+
+// stripNamespaceGatewayLabel removes both the gateway-attach label
+// and the ownership annotation. Used by the GC pass when a
+// namespace falls out of tgw.Spec.AttachedNamespaces.
+func (r *Reconciler) stripNamespaceGatewayLabel(ctx context.Context, name string) error {
+	ns := &corev1.Namespace{}
+	if err := r.Get(ctx, types.NamespacedName{Name: name}, ns); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	before := ns.DeepCopy()
+	delete(ns.Labels, namespaceGatewayLabel)
+	delete(ns.Annotations, namespaceGatewayManagedByAnnotation)
+	if equality.Semantic.DeepEqual(before.Labels, ns.Labels) && equality.Semantic.DeepEqual(before.Annotations, ns.Annotations) {
+		return nil
+	}
+	return r.Patch(ctx, ns, client.MergeFrom(before))
+}
+
 // route additions in attached namespaces re-trigger reconciliation
 // of the parent TenantGateway.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {

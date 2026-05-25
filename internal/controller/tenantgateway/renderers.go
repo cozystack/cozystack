@@ -39,6 +39,27 @@ const (
 	cozystackManagedByValue   = "cozystack-controller"
 	cozystackTenantGatewayKey = "cozystack.io/tenantgateway"
 	cozystackPerListenerCert  = "cozystack.io/per-listener-cert"
+
+	// namespaceGatewayLabel marks a Namespace as attaching to the
+	// Gateway owned by the tenant named in its value. Apps/tenant
+	// chart writes it via namespace.yaml (own name when owning a
+	// Gateway, inherited ancestor name otherwise); cozystack-
+	// controller patches it onto every namespace in
+	// TenantGateway.Spec.AttachedNamespaces so cozy-* system
+	// namespaces (cert-manager, monitoring, harbor, …) reach the
+	// publishing Gateway alongside the tenant tree.
+	namespaceGatewayLabel = "namespace.cozystack.io/gateway"
+
+	// namespaceGatewayManagedByAnnotation tags namespaces the
+	// controller wrote namespaceGatewayLabel onto. Labels without
+	// this annotation are Helm-owned (apps/tenant chart) and the
+	// controller MUST NOT strip them — stripping a chart-written
+	// label would break inheritance for every child tenant under
+	// this Gateway every reconcile cycle. The annotation also
+	// scopes GC to "labels this specific TenantGateway wrote": if
+	// two TGWs ever shared an attached namespace name (they
+	// can't, but defensively), each only manages its own writes.
+	namespaceGatewayManagedByAnnotation = "cozystack.io/gateway-attached-by"
 )
 
 // acmeServerForIssuer maps the operator-facing issuerName field to
@@ -62,25 +83,38 @@ func acmeServerForIssuer(name gatewayv1alpha1.IssuerName) (string, error) {
 const acmeChallengeNamespace = "cozy-cert-manager"
 
 // buildAllowedRoutes computes the AllowedRoutes block applied to
-// HTTPS / TLS-passthrough listeners: a Selector that matches the
-// built-in `kubernetes.io/metadata.name` label (kube-apiserver-
-// written, unspoofable). Accepted set is the publishing tenant
-// namespace plus tgw.Spec.AttachedNamespaces. This is Layer 1 of
-// the security model documented in the gateway chart README.
+// HTTPS / TLS-passthrough listeners: a label selector matching
+// namespace.cozystack.io/gateway = <tgw.Namespace>. Every namespace
+// carrying that label attaches to this Gateway. The label has two
+// writers:
+//
+//   - apps/tenant chart namespace.yaml — every tenant namespace
+//     gets the label pointing at the nearest ancestor that owns a
+//     Gateway (self if owning, inherited otherwise). This is how
+//     child tenants attach without their own LB IP / Certificate.
+//   - cozystack-controller (see ensureNamespaceLabels in
+//     reconciler.go) — patches the label onto every namespace
+//     in tgw.Spec.AttachedNamespaces so cozy-* system namespaces
+//     reach the Gateway alongside the tenant tree.
+//
+// The previous shape pinned a static `kubernetes.io/metadata.name
+// In [list]` whitelist. That foreclosed inheritance because a child
+// tenant's namespace was not literally on the list. The label-
+// based selector restores inheritance parity with the legacy
+// ingress flow and matches the upstream Gateway API multi-tenancy
+// pattern (Kamaji, GKE, Istio Ambient).
 func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
-	values := []string{tgw.Namespace}
-	seen := map[string]struct{}{tgw.Namespace: {}}
-	for _, ns := range tgw.Spec.AttachedNamespaces {
-		if ns == "" {
-			continue
-		}
-		if _, dup := seen[ns]; dup {
-			continue
-		}
-		seen[ns] = struct{}{}
-		values = append(values, ns)
+	from := gatewayv1.NamespacesFromSelector
+	return &gatewayv1.AllowedRoutes{
+		Namespaces: &gatewayv1.RouteNamespaces{
+			From: &from,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					namespaceGatewayLabel: tgw.Namespace,
+				},
+			},
+		},
 	}
-	return allowedRoutesFromValues(values)
 }
 
 // buildHTTPListenerAllowedRoutes returns a strictly narrower

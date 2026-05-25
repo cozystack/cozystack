@@ -282,6 +282,259 @@ func containsString(haystack []string, needle string) bool {
 	return false
 }
 
+// TestReconcile_LabelsAttachedNamespaces pins the controller-side
+// half of the label-based attach contract: every namespace in
+// spec.AttachedNamespaces is patched with
+// namespace.cozystack.io/gateway = <tgw.Namespace>. Without this,
+// the Gateway's label-selector allowedRoutes (see
+// TestReconcile_HTTPSListenerUsesGatewayLabelSelector below)
+// matches nothing in those namespaces and apps (harbor, monitoring,
+// cert-manager, …) silently fail to attach.
+func TestReconcile_LabelsAttachedNamespaces(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor", "cozy-monitoring"},
+		},
+	}
+	// Pre-create the namespaces (kube-apiserver writes them; the
+	// controller is expected to .Patch labels onto pre-existing
+	// objects, not create them).
+	nsFoo := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo"}}
+	nsHarbor := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cozy-harbor"}}
+	nsMon := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cozy-monitoring"}}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsFoo, nsHarbor, nsMon).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, name := range []string{"tenant-foo", "cozy-harbor", "cozy-monitoring"} {
+		got := &corev1.Namespace{}
+		if err := c.Get(context.TODO(), types.NamespacedName{Name: name}, got); err != nil {
+			t.Fatalf("get namespace %s: %v", name, err)
+		}
+		v := got.Labels["namespace.cozystack.io/gateway"]
+		if v != "tenant-foo" {
+			t.Errorf("namespace %s: expected label namespace.cozystack.io/gateway=tenant-foo, got %q (all labels: %v)", name, v, got.Labels)
+		}
+	}
+}
+
+// TestReconcile_LabelGCRemovesDroppedAttachedNamespaces pins the
+// garbage-collection contract: when an entry is removed from
+// spec.AttachedNamespaces between reconciles, the controller
+// strips the label it previously applied. Without GC, an
+// admin who revokes a namespace's attach permission via the
+// platform Package would still see that namespace's routes
+// served (label persists → selector still matches → routes still
+// attached).
+func TestReconcile_LabelGCRemovesDroppedAttachedNamespaces(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor", "cozy-monitoring"},
+		},
+	}
+	nsFoo := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo"}}
+	nsHarbor := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cozy-harbor"}}
+	nsMon := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cozy-monitoring"}}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsFoo, nsHarbor, nsMon).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	// Phase 1: both namespaces labelled.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 1 reconcile: %v", err)
+	}
+
+	// Drop cozy-harbor.
+	updated := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, updated); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	updated.Spec.AttachedNamespaces = []string{"cozy-monitoring"}
+	if err := c.Update(context.TODO(), updated); err != nil {
+		t.Fatalf("update tgw: %v", err)
+	}
+
+	// Phase 2: only cozy-monitoring should remain labelled (plus
+	// tenant-foo itself).
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 2 reconcile: %v", err)
+	}
+
+	harbor := &corev1.Namespace{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozy-harbor"}, harbor); err != nil {
+		t.Fatalf("get cozy-harbor: %v", err)
+	}
+	if v := harbor.Labels["namespace.cozystack.io/gateway"]; v != "" {
+		t.Errorf("expected cozy-harbor label removed, got %q", v)
+	}
+
+	mon := &corev1.Namespace{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozy-monitoring"}, mon); err != nil {
+		t.Fatalf("get cozy-monitoring: %v", err)
+	}
+	if v := mon.Labels["namespace.cozystack.io/gateway"]; v != "tenant-foo" {
+		t.Errorf("expected cozy-monitoring label preserved, got %q", v)
+	}
+}
+
+// TestReconcile_LabelGCDoesNotStripHelmOwnedLabels pins the
+// safety contract that the controller never strips a
+// namespace.cozystack.io/gateway label it did not write. Tenant
+// namespaces carry the label via the apps/tenant chart (Helm-
+// owned) — these MUST be left alone even if not in
+// spec.AttachedNamespaces, otherwise inheritance for child
+// tenants under this Gateway breaks every reconcile.
+//
+// The controller distinguishes its own labels by an annotation
+// cozystack.io/gateway-attached-by — only labels with the
+// annotation are eligible for GC.
+func TestReconcile_LabelGCDoesNotStripHelmOwnedLabels(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			// No AttachedNamespaces — tenant tree is the only source
+			// of gateway labels for this tenant.
+		},
+	}
+	nsFoo := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo"}}
+	// Helm-owned: label set by apps/tenant chart namespace.yaml,
+	// no controller annotation.
+	nsAlice := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-foo-alice",
+			Labels: map[string]string{
+				"namespace.cozystack.io/gateway": "tenant-foo",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsFoo, nsAlice).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &corev1.Namespace{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "tenant-foo-alice"}, got); err != nil {
+		t.Fatalf("get tenant-foo-alice: %v", err)
+	}
+	if v := got.Labels["namespace.cozystack.io/gateway"]; v != "tenant-foo" {
+		t.Errorf("controller stripped Helm-owned label from tenant-foo-alice (got %q) — inheritance for child tenants is broken", v)
+	}
+}
+
+// TestReconcile_HTTPSListenerUsesGatewayLabelSelector pins the
+// inheritance contract: the HTTPS listener's allowedRoutes is a
+// MatchLabels selector keyed on namespace.cozystack.io/gateway =
+// <tgw.Namespace>. Every namespace carrying that label attaches
+// — apps/tenant chart writes it on tenant namespaces (own name
+// when owning a Gateway, inherited ancestor name otherwise), and
+// cozystack-controller patches it onto cozy-* namespaces from
+// spec.AttachedNamespaces. The previous static-name whitelist
+// foreclosed inheritance — a child tenant whose namespace was not
+// literally listed in AttachedNamespaces could not attach, so the
+// only way to publish through a parent Gateway was to add every
+// child-namespace by name on platform values. Switching to a label
+// selector closes that gap.
+func TestReconcile_HTTPSListenerUsesGatewayLabelSelector(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	// Attach a route so an HTTPS listener actually gets rendered.
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+
+	var httpsListener *gatewayv1.Listener
+	for i := range gw.Spec.Listeners {
+		l := &gw.Spec.Listeners[i]
+		if l.Protocol == gatewayv1.HTTPSProtocolType {
+			httpsListener = l
+			break
+		}
+	}
+	if httpsListener == nil {
+		t.Fatalf("expected an HTTPS listener, got listeners: %+v", gw.Spec.Listeners)
+	}
+	if httpsListener.AllowedRoutes == nil || httpsListener.AllowedRoutes.Namespaces == nil || httpsListener.AllowedRoutes.Namespaces.Selector == nil {
+		t.Fatalf("expected allowedRoutes.namespaces.selector, got %+v", httpsListener.AllowedRoutes)
+	}
+
+	sel := httpsListener.AllowedRoutes.Namespaces.Selector
+	// Pin the MatchLabels shape directly. The old shape used
+	// MatchExpressions on kubernetes.io/metadata.name In [list] —
+	// asserting MatchLabels is non-nil + correct value catches the
+	// transition explicitly.
+	if got, want := sel.MatchLabels["namespace.cozystack.io/gateway"], "tenant-foo"; got != want {
+		t.Errorf("expected MatchLabels[namespace.cozystack.io/gateway]=%q, got %q (full selector: %+v)", want, got, sel)
+	}
+	if len(sel.MatchExpressions) > 0 {
+		t.Errorf("expected no MatchExpressions on HTTPS listener (label-based selector), got %+v", sel.MatchExpressions)
+	}
+}
+
 // TestReconcile_CertModeTransitionHTTP01ToDNS01CleansPerListenerCerts
 // pins the GC contract: switching certMode from http01 to dns01
 // reclaims per-listener Certificates created during the http01

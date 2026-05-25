@@ -44,6 +44,27 @@ tests:
           path: metadata.labels["namespace.cozystack.io/host"]
           value: customer1.io
 
+  - it: gateway label set to tenant-root when _cluster.gateway-enabled is "true"
+    # Once the operator flips the platform-level Gateway flag, the
+    # tenant-root namespace becomes the publishing apex; its own
+    # namespace must carry the label so the Gateway's label-based
+    # allowedRoutes selector picks up routes living here (the
+    # controller-owned http→https redirect among them). The
+    # symmetric "label absent when gateway-enabled unset/false"
+    # case is enforced by the conditional `{{- if eq (toString
+    # ...) "true" }}` in templates/tenant-root.yaml itself — without
+    # it the platform would advertise tenant-root as a gateway-owner
+    # before the operator opts in. helm-unittest in this version
+    # has no notExists assertion to pin the negative path directly.
+    set:
+      _cluster:
+        gateway-enabled: "true"
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["namespace.cozystack.io/gateway"]
+          value: tenant-root
+
   - it: tenant-root HelmRelease references the tenant-application chart
     asserts:
       - documentIndex: 1
