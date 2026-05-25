@@ -37,6 +37,7 @@ spec:
         - service
         {{- if .Values.gatewayAPI }}
         - gateway-httproute
+        - gateway-tlsroute
         {{- end }}
       {{- with .Values.domainFilters }}
       domainFilters:

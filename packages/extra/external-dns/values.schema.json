@@ -45,7 +45,7 @@
       }
     },
     "gatewayAPI": {
-      "description": "Enable Gateway API HTTPRoute as a source for DNS records.",
+      "description": "Enable Gateway API HTTPRoute and TLSRoute as sources for DNS records.",
       "type": "boolean",
       "default": false
     },
