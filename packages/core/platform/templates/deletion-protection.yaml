@@ -9,6 +9,10 @@
 
   Bypass: remove the label, then delete.
     kubectl label <kind> <name> platform.cozystack.io/no-delete-
+
+  failurePolicy is intentionally omitted: the validation expression is the
+  literal `false`, so CEL evaluation cannot fail and the default (Fail) is
+  unreachable in practice. Setting it explicitly would be misleading config.
 */}}
 {{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
 ---
@@ -19,7 +23,6 @@ metadata:
   labels:
     platform.cozystack.io/no-delete: "true"
 spec:
-  failurePolicy: Fail
   matchConstraints:
     resourceRules:
     - apiGroups:   ["*"]
