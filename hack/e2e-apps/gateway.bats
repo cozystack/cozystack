@@ -119,15 +119,22 @@ EOF
   fi
 }
 
-@test "cozystack-gateway-attached-namespaces-policy rejects Packages with tenant-* entries" {
-  # The platform Package default name is cozystack.cozystack-platform, managed by
-  # cozystack-api. Creating a dummy Package with tenant-alice in gateway.attachedNamespaces
-  # must fail at admission time.
-  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+@test "Package admission accepts gateway.attachedNamespaces with tenant-* entries" {
+  # Regression guard: the previous shape rejected `tenant-*` entries in
+  # publishing.gateway.attachedNamespaces (both a render-time fail in
+  # cozystack-basics and a dedicated VAP). Under inheritance the attach
+  # surface is governed by the namespace.cozystack.io/gateway label
+  # selector, not by entries in attachedNamespaces — Layers 4/5/7
+  # (Tenant.spec.host, namespace label, HTTPRoute hostname VAPs) defend
+  # against hostname hijack independently. Adding a tenant-* entry must
+  # no longer be blocked at admission. A future refactor that re-adds
+  # the gate would silently break inheritance for every cluster that
+  # has set attachedNamespaces explicitly.
+  kubectl apply -f - <<'EOF'
 apiVersion: cozystack.io/v1alpha1
 kind: Package
 metadata:
-  name: vap-reject-probe
+  name: vap-accept-probe
 spec:
   variant: isp-full
   components:
@@ -137,15 +144,10 @@ spec:
           attachedNamespaces:
           - tenant-alice
 EOF
-); then
-    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
-    echo "$output" | grep -q "must not contain any tenant-"
-  else
-    echo "BUG: admission accepted tenant-* in attachedNamespaces — Package 'vap-reject-probe' was created" >&2
-    echo "$output" >&2
-    kubectl delete package vap-reject-probe --ignore-not-found
-    return 1
-  fi
+  # Apply succeeded → admission accepted the tenant-* entry. Clean up
+  # immediately; this Package was just a probe and is not consumed by
+  # the platform.
+  kubectl delete package vap-accept-probe --ignore-not-found
 }
 
 @test "cozystack-tenant-host-policy blocks non-trusted callers from setting tenant.spec.host" {
@@ -484,4 +486,140 @@ EOF
   echo "$cozyvalues" | grep -E '^\s*gateway:\s*"tenant-test-gwprop"\s*$' >/dev/null
 
   kubectl -n tenant-test delete tenant gwprop --ignore-not-found
+}
+
+@test "child tenant without explicit gateway inherits _namespace.gateway from a Gateway-owning parent" {
+  # Pins the inheritance flow: when a parent tenant owns its Gateway
+  # (gateway=true), a child tenant under that parent with the gateway
+  # field unset receives _namespace.gateway = <parent-tenant-name> in
+  # its cozystack-values Secret AND the same value on the
+  # namespace.cozystack.io/gateway label of the child namespace.
+  #
+  # Without this lockstep, the parent's Gateway label-selector
+  # allowedRoutes does not match the child namespace at runtime, and
+  # the child's HTTPRoutes silently fail to attach.
+  #
+  # tenant-test in the e2e fixture has no Gateway of its own, so the
+  # test sets up its own parent (gwparent) under tenant-test with
+  # explicit gateway=true. The child (gwchild) under that parent is
+  # the inheritance-under-test.
+  kubectl apply -f - <<'EOF'
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: gwparent
+  namespace: tenant-test
+spec:
+  gateway: true
+EOF
+  timeout 180 sh -ec 'until kubectl get ns tenant-test-gwparent >/dev/null 2>&1; do sleep 3; done'
+  timeout 60 sh -ec 'until kubectl -n tenant-test-gwparent get secret cozystack-values >/dev/null 2>&1; do sleep 2; done'
+  parent_label=$(kubectl get ns tenant-test-gwparent -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/gateway}')
+  [ "$parent_label" = "tenant-test-gwparent" ]
+
+  kubectl apply -f - <<'EOF'
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: gwchild
+  namespace: tenant-test-gwparent
+spec: {}
+EOF
+  timeout 180 sh -ec 'until kubectl get ns tenant-test-gwparent-gwchild >/dev/null 2>&1; do sleep 3; done'
+  timeout 60 sh -ec 'until kubectl -n tenant-test-gwparent-gwchild get secret cozystack-values >/dev/null 2>&1; do sleep 2; done'
+
+  child_label=$(kubectl get ns tenant-test-gwparent-gwchild -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/gateway}')
+  [ "$child_label" = "tenant-test-gwparent" ]
+
+  cozyvalues=$(kubectl -n tenant-test-gwparent-gwchild get secret cozystack-values -o jsonpath='{.data.values\.yaml}' | base64 -d)
+  echo "$cozyvalues" | grep -E '^\s*gateway:\s*"tenant-test-gwparent"\s*$' >/dev/null
+
+  # The child must NOT have its own gateway HelmRelease — inheritance
+  # means no separate Gateway resource for the child tenant.
+  ! kubectl -n tenant-test-gwparent-gwchild get helmrelease gateway 2>/dev/null
+
+  kubectl -n tenant-test-gwparent delete tenant gwchild --ignore-not-found
+  kubectl -n tenant-test delete tenant gwparent --ignore-not-found
+}
+
+@test "child tenant's HTTPRoute attaches to parent's Gateway via inheritance label" {
+  # End-to-end cross-namespace attach: the parent owns the Gateway,
+  # the child inherits via the namespace.cozystack.io/gateway label,
+  # and an HTTPRoute in the child namespace with parentRef pointing at
+  # the parent's Gateway reaches Accepted=True. This is the contract
+  # kvaps' May 25 review asked for — without it, child tenants must
+  # opt into their own Gateway / LB IP, breaking parity with the
+  # legacy ingress inheritance flow.
+  #
+  # The route's hostname is constructed under the child's derived
+  # apex (<child-name>.<parent-apex>) so Layer 7
+  # (cozystack-route-hostname-policy) admits it.
+  kubectl apply -f - <<'EOF'
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: rparent
+  namespace: tenant-test
+spec:
+  gateway: true
+EOF
+  timeout 180 sh -ec 'until kubectl get ns tenant-test-rparent >/dev/null 2>&1; do sleep 3; done'
+  # Wait for the cozystack-controller to materialise the parent's
+  # Gateway resource. Programmed status requires Cilium dataplane
+  # provisioning which depends on the LB allocator; for this test
+  # we only need the Gateway object to exist + carry the
+  # label-selector allowedRoutes.
+  timeout 120 sh -ec 'until kubectl -n tenant-test-rparent get gateway cozystack >/dev/null 2>&1; do sleep 3; done'
+
+  parent_apex=$(kubectl get ns tenant-test-rparent -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+  [ -n "$parent_apex" ]
+
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: rchild
+  namespace: tenant-test-rparent
+spec: {}
+EOF
+  timeout 180 sh -ec 'until kubectl get ns tenant-test-rparent-rchild >/dev/null 2>&1; do sleep 3; done'
+
+  child_apex=$(kubectl get ns tenant-test-rparent-rchild -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+  [ -n "$child_apex" ]
+
+  route_host="harbor.${child_apex}"
+
+  kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: inherit-probe
+  namespace: tenant-test-rparent-rchild
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cozystack
+    namespace: tenant-test-rparent
+  hostnames:
+  - "${route_host}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: kubernetes
+      namespace: default
+      port: 443
+EOF
+
+  # The route reaches Accepted=True once Cilium evaluates the
+  # parent Gateway's allowedRoutes selector against the child
+  # namespace's namespace.cozystack.io/gateway label.
+  timeout 180 sh -ec 'until kubectl -n tenant-test-rparent-rchild get httproute inherit-probe -o jsonpath="{.status.parents[0].conditions[?(@.type==\"Accepted\")].status}" 2>/dev/null | grep -q True; do sleep 3; done'
+
+  kubectl -n tenant-test-rparent-rchild delete httproute inherit-probe --ignore-not-found
+  kubectl -n tenant-test-rparent delete tenant rchild --ignore-not-found
+  kubectl -n tenant-test delete tenant rparent --ignore-not-found
 }
