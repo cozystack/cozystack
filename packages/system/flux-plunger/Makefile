@@ -1,7 +1,7 @@
 export NAME=flux-plunger
 export NAMESPACE=cozy-fluxcd
 
-include ../../../scripts/common-envs.mk
+include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
 image:
