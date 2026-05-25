@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 
 	kubevirtclient "kubevirt.io/csi-driver/pkg/kubevirt"
@@ -237,12 +238,59 @@ func (w *WrappedControllerService) determineDvSource(ctx context.Context, req *c
 	return res, nil
 }
 
+// publishHotplugVolume delegates to upstream for the hotplug attach, then re-verifies
+// that the volume reached VolumeReady in VMI.Status.VolumeStatus before returning
+// success. Upstream's fast path (EnsureVolumeAvailableVM) considers the volume
+// attached based only on its presence in VM.spec.template.spec.volumes — so when an
+// earlier attempt wrote that entry but the volume never became Ready (e.g. the infra
+// PVC is stuck ClaimPending because the storage backend cannot provision), the
+// retried Publish reports success and external-attacher sets Attached=true.
+// QEMU never received device_add, and the tenant kubelet's NodeStageVolume fails
+// with "couldn't find device by serial id". Verifying VMI Ready independently of
+// upstream propagates the not-ready condition back to external-attacher so it keeps
+// retrying instead of silently declaring the volume attached.
+func (w *WrappedControllerService) publishHotplugVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	resp, err := w.ControllerService.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	vmNamespace, vmName, parseErr := cache.SplitMetaNamespaceKey(req.GetNodeId())
+	if parseErr != nil {
+		return nil, status.Errorf(codes.Internal,
+			"cannot verify VMI readiness after publish: failed to parse node ID %q: %v",
+			req.GetNodeId(), parseErr)
+	}
+	dvName := req.GetVolumeId()
+	// GetVirtualMachine on this client returns a VirtualMachineInstance, not a VM.
+	vmi, getErr := w.virtClient.GetVirtualMachine(ctx, vmNamespace, vmName)
+	if getErr != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"cannot verify VMI %s/%s readiness after publish of %s: %v",
+			vmNamespace, vmName, dvName, getErr)
+	}
+	for _, vs := range vmi.Status.VolumeStatus {
+		if vs.Name != dvName {
+			continue
+		}
+		if vs.Phase == kubevirtv1.VolumeReady {
+			return resp, nil
+		}
+		return nil, status.Errorf(codes.Unavailable,
+			"volume %s is in VM %s/%s spec but not Ready in VMI status (phase=%q, message=%q)",
+			dvName, vmNamespace, vmName, vs.Phase, vs.Message)
+	}
+	return nil, status.Errorf(codes.Unavailable,
+		"volume %s not present in VMI %s/%s status after publish", dvName, vmNamespace, vmName)
+}
+
 // ControllerPublishVolume for NFS volumes: annotates infra PVC for WFFC binding,
 // waits for PVC bound, extracts NFS export from PV, and creates CiliumNetworkPolicy.
-// For RWO volumes, delegates to upstream (hotplug SCSI).
+// For hotplug volumes (RWO and RWX Block), delegates to upstream and then verifies
+// the volume is actually Ready in VMI.Status.VolumeStatus before returning success.
 func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 	if req.GetVolumeContext()[nfsVolumeKey] != "true" {
-		return w.ControllerService.ControllerPublishVolume(ctx, req)
+		return w.publishHotplugVolume(ctx, req)
 	}
 
 	if len(req.GetVolumeId()) == 0 {
