@@ -127,6 +127,21 @@
       "type": "boolean",
       "default": false
     },
+    "tls": {
+      "description": "TLS configuration. When omitted, TLS is enabled automatically when `external` is true.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "authClients": {
+          "description": "Maps to the Redis `tls-auth-clients` directive. One of `no`, `optional`, `yes`. Defaults to `no` — the server certificate is presented but client certificates are not validated.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.",
+          "type": "boolean"
+        }
+      }
+    },
     "version": {
       "description": "Redis major version to deploy",
       "type": "string",

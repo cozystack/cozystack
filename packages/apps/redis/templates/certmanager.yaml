@@ -1,0 +1,98 @@
+{{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
+{{- if $tlsEnabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cluster.local" }}
+---
+# Self-signed bootstrap Issuer — used only to sign the CA Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+# CA Certificate. rotationPolicy: Never keeps the CA stable so existing
+# client trust bundles remain valid across cert-manager renewals.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  isCA: true
+  commonName: {{ .Release.Name }}-ca
+  secretName: {{ .Release.Name }}-ca-tls
+  duration: 43800h
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+  privateKey:
+    rotationPolicy: Never
+    algorithm: ECDSA
+    size: 256
+  # CA usages: signing (OCSP/CRL signing) + cert sign (issuing leaf certs)
+  usages:
+    - signing
+    - cert sign
+---
+# CA Issuer — used to sign the leaf server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca-tls
+---
+# Leaf server TLS Certificate passed to redis-operator via spec.tls.certificateSecret.
+# The SAN list mirrors what the operator computes for its own Certificate
+# (operator/redisfailover/service/generator.go: redisCertificateDNSNames):
+#   - per-service short, namespace, .svc and .svc.<clusterDomain> forms for
+#     rfr-/rfrm-/rfrs-/rfs- services
+#   - wildcard covering per-pod headless DNS for the redis statefulset
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  isCA: false
+  usages:
+    - server auth
+    - client auth
+    - key encipherment
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $rfName := .Release.Name }}
+    {{- $redisSvc := printf "rfr-%s" $rfName }}
+    {{- $masterSvc := printf "rfrm-%s" $rfName }}
+    {{- $slaveSvc := printf "rfrs-%s" $rfName }}
+    {{- $sentinelSvc := printf "rfs-%s" $rfName }}
+    - localhost
+    {{- range $svc := list $redisSvc $masterSvc $slaveSvc $sentinelSvc }}
+    - {{ $svc | quote }}
+    - {{ printf "%s.%s" $svc $ns | quote }}
+    - {{ printf "%s.%s.svc" $svc $ns | quote }}
+    - {{ printf "%s.%s.svc.%s" $svc $ns $clusterDomain | quote }}
+    {{- end }}
+    - {{ printf "*.%s" $redisSvc | quote }}
+    - {{ printf "*.%s.%s" $redisSvc $ns | quote }}
+    - {{ printf "*.%s.%s.svc" $redisSvc $ns | quote }}
+    - {{ printf "*.%s.%s.svc.%s" $redisSvc $ns $clusterDomain | quote }}
+    {{- if .Values.external | default false }}
+    - {{ printf "%s.%s" .Release.Name .Values._namespace.host | quote }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}
