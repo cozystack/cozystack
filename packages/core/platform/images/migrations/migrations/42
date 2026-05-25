@@ -9,24 +9,34 @@
 # preserves migration-managed data.version), so the label needs an
 # explicit one-shot backfill here.
 #
-# Idempotent: kubectl label --overwrite is a no-op when the label is
-# already at the target value.
+# Idempotent: kubectl apply re-runs are a no-op once the ConfigMap matches
+# the declared shape. One source of truth — same label set the chart bakes
+# in at install time, no 3-way-merge subtlety.
 
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-cozy-system}"
 DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 
+MANIFEST=$(cat <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: ${NAMESPACE}
+  labels:
+    platform.cozystack.io/no-delete: "true"
+data:
+  version: "43"
+EOF
+)
+
 if [ "$DRY_RUN" = "1" ]; then
-  echo "[dry-run] would label configmap $NAMESPACE/cozystack-version with platform.cozystack.io/no-delete=true"
+  echo "[dry-run] would apply:"
+  printf '%s\n' "$MANIFEST"
   echo "Dry-run complete; version stamp not advanced"
   exit 0
 fi
 
-kubectl label --namespace "$NAMESPACE" --overwrite configmap cozystack-version \
-  platform.cozystack.io/no-delete=true
-echo "Labeled configmap $NAMESPACE/cozystack-version"
-
-kubectl create configmap --namespace "$NAMESPACE" cozystack-version \
-  --from-literal=version=43 --dry-run=client --output yaml \
-  | kubectl apply --filename -
+printf '%s\n' "$MANIFEST" | kubectl apply --filename -
+echo "Applied configmap $NAMESPACE/cozystack-version with deletion-protection label"
