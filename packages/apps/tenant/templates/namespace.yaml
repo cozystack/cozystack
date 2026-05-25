@@ -30,19 +30,25 @@
 {{- end }}
 
 {{/*
-  Gateway reference is NOT inherited from parent. A child tenant
-  namespace is not on the parent Gateway's allowedRoutes whitelist,
-  and the parent Gateway's wildcard cert only covers <apex> +
-  *.<apex> (one level) while a child apex would be two levels deep —
-  inheritance would break both admission and TLS. Each tenant that
-  wants Gateway-attached apps either sets tenant.spec.gateway=true
-  explicitly or hits the auto-default for derived-apex tenants
-  (tenant.gatewayEffective). The same helper is consulted by
-  gateway.yaml (HelmRelease render) so the per-tenant Gateway, the
-  namespace label, and _namespace.gateway propagation to apps stay
-  in lockstep.
+  Gateway reference inherits from the parent, same shape as ingress
+  above: $gateway is the name of the nearest ancestor (inclusive)
+  that owns a Gateway. Apps in this tenant render HTTPRoutes whose
+  parentRefs.namespace points at that owner namespace, and the
+  owner's Gateway lists this namespace in allowedRoutes via the
+  matching namespace.cozystack.io/gateway label.
+
+  Override fires only when the tenant itself owns a Gateway —
+  tenant.gatewayEffective returns "true" for explicit
+  tenant.spec.gateway=true and for tenants with a custom non-derived
+  host (their apex isn't covered by any ancestor's cert / Issuer).
+  In those cases the controller renders a separate Gateway in this
+  tenant's namespace, with its own LB Service / IP / Certificate.
+
+  Cross-namespace attach is gated by ReferenceGrants rendered by the
+  TenantGateway controller in the owner namespace, one per child
+  that inherits.
 */}}
-{{- $gateway := "" }}
+{{- $gateway := $parentNamespace.gateway | default "" }}
 {{- if eq (include "tenant.gatewayEffective" .) "true" }}
 {{- $gateway = $tenantName }}
 {{- end }}

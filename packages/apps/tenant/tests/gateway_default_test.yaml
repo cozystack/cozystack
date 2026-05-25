@@ -1,28 +1,27 @@
-suite: tenant gateway default — auto-on for derived apex, opt-in for custom
+suite: tenant gateway default — inherit from parent, opt-in for own Gateway
 templates:
   - templates/gateway.yaml
 
-# Cozystack targets low-skill operators. A tenant with a derived apex
-# (`<name>.<parent>`, computed by the chart when tenant.spec.host is
-# empty) implicitly expects routability under that apex — forcing
-# operators to also set `tenant.spec.gateway: true` is a UX bug.
-#
-# The auto-default fires only when the platform itself is gateway-
-# enabled (`_cluster.gateway-enabled=true`). Auto-on a Gateway when
-# the cluster doesn't ship the gateway-application chart only produces
-# broken HelmReleases — explicit opt-in still works in that case so
-# operators can preview the wiring on a non-Gateway cluster.
+# Cozystack targets low-skill operators. A child tenant under a Gateway-
+# enabled parent must publish through the parent's Gateway by default —
+# forcing every child to set `tenant.spec.gateway: true` would break
+# parity with how `_namespace.ingress` already inherits, and would burn
+# one LB IP per child tenant for no isolation benefit.
 #
 # Rules under test (see _helpers.tpl::tenant.gatewayEffective):
-#   - platform off + any host + gateway unset    → OFF (auto-default
-#                                                       waits for the
-#                                                       platform flag)
-#   - platform on  + host=""  + gateway unset    → ON  (auto-default)
-#   - platform on  + host=custom + gateway unset → OFF (custom apex
-#                                                       needs explicit
-#                                                       opt-in)
-#   - gateway=true  explicit                     → ON  (regardless)
-#   - gateway=false explicit                     → OFF (escape hatch)
+#   - gateway unset                     → OFF own (inherit from parent)
+#   - gateway=true  explicit            → ON  own (LB IP / cert burned)
+#   - gateway=false explicit            → OFF own (parked, no inherit)
+#
+# The inheritance propagation itself happens in namespace.yaml:
+# $gateway := $parentNamespace.gateway | default ""
+# overridden to $tenantName when tenant.gatewayEffective is "true".
+# That logic is exercised by the cozystack-basics secret test for the
+# root tenant (cozystack-values-secret_test.yaml) plus by the
+# controller-level reconciler tests for the cross-namespace attach
+# flow — helm-unittest cannot mock the `lookup` call namespace.yaml
+# uses for ownerReferences, so the chart-level pin here covers only
+# the HelmRelease render side.
 
 release:
   name: tenant-alice
@@ -35,8 +34,34 @@ set:
     gateway-enabled: "true"
 
 tests:
-  - it: derived apex + gateway unset → renders HelmRelease (auto-on)
+  - it: gateway unset → inherit, no own HelmRelease
+    # The default for a derived-apex child. _namespace.gateway will
+    # propagate the parent's owner-name through namespace.yaml; the
+    # tenant chart does NOT render its own gateway HelmRelease.
     set:
+      host: ""
+    asserts:
+      - template: templates/gateway.yaml
+        hasDocuments:
+          count: 0
+
+  - it: gateway unset on custom-apex tenant → inherit, no own HelmRelease
+    # Custom apex without explicit `gateway: true` falls through to
+    # inheritance — same rule. The HTTPRoutes for this tenant's apps
+    # will attach to the parent Gateway but fail TLS (parent cert
+    # doesn't cover customer1.io). That's the operator's responsibility
+    # to notice; we don't auto-Gateway because they might just want
+    # the namespace for isolation with no public exposure.
+    set:
+      host: customer1.io
+    asserts:
+      - template: templates/gateway.yaml
+        hasDocuments:
+          count: 0
+
+  - it: gateway=true explicit on derived apex → own HelmRelease
+    set:
+      gateway: true
       host: ""
     asserts:
       - template: templates/gateway.yaml
@@ -48,26 +73,10 @@ tests:
           path: metadata.name
           value: gateway
 
-  - it: custom apex + gateway unset → no HelmRelease (explicit opt-in)
-    set:
-      host: customer1.io
-    asserts:
-      - template: templates/gateway.yaml
-        hasDocuments:
-          count: 0
-
-
-  - it: gateway=true explicit on derived apex → renders (passthrough)
-    set:
-      gateway: true
-      host: ""
-    asserts:
-      - template: templates/gateway.yaml
-        equal:
-          path: kind
-          value: HelmRelease
-
-  - it: gateway=true explicit on custom apex → renders (overrides default)
+  - it: gateway=true explicit on custom apex → own HelmRelease
+    # The intended path for an operator who wants a custom apex
+    # publicly reachable: set host + gateway=true. The tenant gets
+    # its own Gateway / LB IP / Certificate / Issuer.
     set:
       gateway: true
       host: customer1.io
@@ -77,10 +86,12 @@ tests:
           path: kind
           value: HelmRelease
 
-  - it: gateway=false explicit on derived apex → no HelmRelease (escape hatch)
-    # The reason this matters: an operator who wants a derived-apex
-    # tenant for namespace-isolation purposes only (no public exposure)
-    # must be able to opt out without inventing a custom apex.
+  - it: gateway=false explicit → no own HelmRelease (parked)
+    # The escape hatch. Operator opts out of any Gateway publishing,
+    # even inheritance: namespace.yaml writes _namespace.gateway as
+    # empty string (the cozystack-basics-side label pins this in
+    # cozystack-values-secret_test.yaml), and the parent Gateway's
+    # allowedRoutes selector therefore does not match this namespace.
     set:
       gateway: false
       host: ""
@@ -89,74 +100,11 @@ tests:
         hasDocuments:
           count: 0
 
-  - it: gateway=false explicit on custom apex → no HelmRelease (passthrough)
-    set:
-      gateway: false
-      host: customer1.io
-    asserts:
-      - template: templates/gateway.yaml
-        hasDocuments:
-          count: 0
-
-  - it: tenant-root with gateway unset and host set → no auto-default
-    # tenant-root always has tenant.spec.host set explicitly (it's the
-    # platform apex). This must NOT auto-Gateway tenant-root just
-    # because the chart receives the platform apex via `host`.
-    # Operators who want gateway on tenant-root set it explicitly.
-    release:
-      name: tenant-root
-      namespace: tenant-root
-    set:
-      host: example.org
-    asserts:
-      - template: templates/gateway.yaml
-        hasDocuments:
-          count: 0
-
-  # The platform-off cases below pin a critical regression-guard: a
-  # tenant on a cluster where `gateway.enabled=false` at the platform
-  # level must NOT silently auto-Gateway. The gateway-application
-  # chart isn't installed on such clusters, so an auto-on would
-  # produce a broken HelmRelease. The e2e install bats lives in this
-  # mode (gateway not enabled in the bundle), and a regression here
-  # broke `Create tenant with isolated mode enabled` until the
-  # platform-flag gate landed.
-
-  - it: platform off + derived apex + gateway unset → no HelmRelease
-    set:
-      host: ""
-      _cluster:
-        expose-ingress: tenant-root
-        expose-external-ips: "192.0.2.10"
-        gateway-enabled: "false"
-    asserts:
-      - template: templates/gateway.yaml
-        hasDocuments:
-          count: 0
-
-  - it: platform unset + derived apex + gateway unset → no HelmRelease
-    # gateway-enabled empty string — what cozystack-values renders
-    # when an operator hasn't flipped gateway.enabled in the platform
-    # chart. The helper treats anything other than the literal
-    # "true" as off. This is what an upgraded existing cluster looks
-    # like before the operator opts in.
-    set:
-      host: ""
-      _cluster:
-        expose-ingress: tenant-root
-        expose-external-ips: "192.0.2.10"
-        gateway-enabled: ""
-    asserts:
-      - template: templates/gateway.yaml
-        hasDocuments:
-          count: 0
-
-  - it: platform off + gateway=true explicit → renders (operator override wins)
-    # Explicit operator opt-in always wins, even when the platform
-    # hasn't flipped gateway.enabled. The gateway HelmRelease will
-    # fail at runtime (no chart), but that's a user-visible error
-    # which is the right outcome — the operator deliberately asked
-    # for it.
+  - it: gateway=true on platform-off cluster → own HelmRelease (operator override)
+    # The HelmRelease will fail at runtime (no gateway-application
+    # chart on the cluster) — that's a user-visible error, which is
+    # the right outcome for explicit opt-in against a not-yet-
+    # provisioned platform.
     set:
       gateway: true
       host: ""
