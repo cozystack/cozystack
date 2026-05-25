@@ -37,13 +37,14 @@ BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
 # image-tags <repo> <versioned-tag>
 # Expands to one or more `--tag` flags for `docker buildx build`:
 #   - always:                 :$(IMAGE_TAG)        (build-unique handle)
-#   - if PUBLISH_VERSIONED=1: :<versioned-tag>     (skipped when arg2 is empty)
+#   - if PUBLISH_VERSIONED=1: :<versioned-tag>     (skipped when arg2 is empty
+#                                                  or equals IMAGE_TAG)
 #   - if PUBLISH_FLOATING=1:  :latest
 # Consumers reference images by digest, so the build-unique tag is enough
 # for cluster-side pulls; the versioned and floating tags exist for human
 # discoverability and downstream tooling on releases.
 define image-tags
---tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(strip $(2)), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)
+--tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)
 endef
 
 ifeq ($(COZYSTACK_VERSION),)
