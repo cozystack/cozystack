@@ -12,6 +12,21 @@
           "type": "integer",
           "default": 2
         },
+        "resources": {
+          "description": "Kubernetes resource requests and limits, passed verbatim to the CNPG Cluster.",
+          "type": "object",
+          "default": {
+            "limits": {
+              "cpu": "1",
+              "memory": "2048Mi"
+            },
+            "requests": {
+              "cpu": "100m",
+              "memory": "512Mi"
+            }
+          },
+          "x-kubernetes-preserve-unknown-fields": true
+        },
         "size": {
           "description": "Persistent Volume size.",
           "default": "10Gi",
