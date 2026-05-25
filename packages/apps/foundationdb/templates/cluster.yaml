@@ -21,21 +21,33 @@ spec:
   automationOptions:
     replacements:
       enabled: {{ .Values.automaticReplacements }}
-    faultDomain:
-      key: {{ .Values.cluster.faultDomain.key }}
-      {{- if .Values.cluster.faultDomain.valueFrom }}
-      valueFrom: {{ .Values.cluster.faultDomain.valueFrom }}
-      {{- end }}
-    imageType: {{ .Values.imageType }}
-    labels:
-      filterOnOwnerReference: false
-      matchLabels:
-        foundationdb.org/fdb-cluster-name: {{ .Release.Name }}
-      processClassLabels:
-        - foundationdb.org/fdb-process-class
-      processGroupIDLabels:
-        - foundationdb.org/fdb-process-group-id
-    minimumUptimeSecondsForBounce: 60
+
+  # The FoundationDBCluster CRD schema places faultDomain, imageType, labels,
+  # and minimumUptimeSecondsForBounce as direct children of spec (siblings of
+  # automationOptions). The chart historically nested them under
+  # automationOptions; Flux v2.7's client-side patch silently dropped the
+  # unknown fields, so the misconfiguration had no runtime effect. Flux v2.8's
+  # Server-Side Apply enforces the CRD schema and rejects the apply with
+  # "field not declared in schema". Move all four fields to where the
+  # operator actually reads them.
+  faultDomain:
+    key: {{ .Values.cluster.faultDomain.key }}
+    {{- if .Values.cluster.faultDomain.valueFrom }}
+    valueFrom: {{ .Values.cluster.faultDomain.valueFrom }}
+    {{- end }}
+
+  imageType: {{ .Values.imageType }}
+
+  labels:
+    filterOnOwnerReference: false
+    matchLabels:
+      foundationdb.org/fdb-cluster-name: {{ .Release.Name }}
+    processClassLabels:
+      - foundationdb.org/fdb-process-class
+    processGroupIDLabels:
+      - foundationdb.org/fdb-process-group-id
+
+  minimumUptimeSecondsForBounce: 60
   
   processes:
     general:
