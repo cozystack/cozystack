@@ -1191,6 +1191,320 @@ func TestReconcile_DNS01IssuerCloudflareSolver(t *testing.T) {
 	}
 }
 
+// TestReconcile_DNS01WildcardCertCoversInheritingChildApexes pins
+// the SAN-expansion contract: when a tenant inherits this Gateway's
+// publishing layer (its namespace is labelled namespace.cozystack.
+// io/gateway=<owner>), the wildcard Certificate that the owner
+// issues for DNS-01 mode must also cover the child's apex —
+// <child-apex> and *.<child-apex>. Let's Encrypt wildcards are
+// single-level, so the parent's `*.<apex>` does not match a child
+// hostname `harbor.alice.example.com` (two labels deep). Without
+// SAN expansion the inheritance flow renders Gateway listeners
+// referencing a cert that fails the SNI handshake — silently in
+// some implementations, with a TLS error on the client side.
+func TestReconcile_DNS01WildcardCertCoversInheritingChildApexes(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "example.org",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	// Self namespace + one inheriting child (Helm-owned label, no
+	// controller annotation — controller MUST still read its host
+	// label and add SANs for it).
+	nsRoot := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	nsAlice := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root-alice",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "alice.example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsRoot, nsAlice).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cert := &cmv1.Certificate{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-root"}, cert); err != nil {
+		t.Fatalf("get Certificate: %v", err)
+	}
+
+	want := map[string]bool{
+		"example.org":         false,
+		"*.example.org":       false,
+		"alice.example.org":   false,
+		"*.alice.example.org": false,
+	}
+	for _, n := range cert.Spec.DNSNames {
+		if _, ok := want[n]; ok {
+			want[n] = true
+		}
+	}
+	for n, seen := range want {
+		if !seen {
+			t.Errorf("missing DNS name %q in cert.spec.dnsNames=%v", n, cert.Spec.DNSNames)
+		}
+	}
+}
+
+// TestReconcile_DNS01WildcardCertDeduplicatesChildApexEqualToParent
+// guards against double-listing when a child namespace's host label
+// happens to equal the parent's apex (e.g. operator mis-labelled, or
+// an edge case where two tenants share an apex). The Certificate
+// must contain each unique name exactly once — duplicates trigger
+// cert-manager validation errors.
+func TestReconcile_DNS01WildcardCertDeduplicatesChildApexEqualToParent(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "example.org",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	nsRoot := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	// Pathological: child labelled with same host as parent apex.
+	nsBogus := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root-bogus",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsRoot, nsBogus).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cert := &cmv1.Certificate{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-root"}, cert); err != nil {
+		t.Fatalf("get Certificate: %v", err)
+	}
+
+	count := map[string]int{}
+	for _, n := range cert.Spec.DNSNames {
+		count[n]++
+	}
+	for n, c := range count {
+		if c > 1 {
+			t.Errorf("DNS name %q appears %d times in cert.spec.dnsNames=%v (must be unique)", n, c, cert.Spec.DNSNames)
+		}
+	}
+	if count["example.org"] != 1 || count["*.example.org"] != 1 {
+		t.Errorf("expected parent SANs exactly once, got counts=%v", count)
+	}
+}
+
+// TestReconcile_HTTP01WildcardCertNeverRendered guards the inverse:
+// HTTP-01 mode never renders a wildcard Certificate, regardless of
+// how many child tenants inherit. Per-listener certs (rendered
+// elsewhere) handle child hostnames in that mode.
+func TestReconcile_HTTP01WildcardCertNeverRendered(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "example.org",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	nsRoot := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-root"}}
+	nsAlice := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root-alice",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "alice.example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsRoot, nsAlice).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-root"}, &cmv1.Certificate{}); err == nil {
+		t.Errorf("HTTP-01 mode rendered a wildcard Certificate — must not exist")
+	}
+}
+
+// TestReconcile_DNS01GatewayHasListenerPerChildApex pins the
+// listener-expansion contract: in DNS-01 mode, every inheriting
+// child apex gets a dedicated `*.<child-apex>` listener on the
+// parent Gateway, referencing the parent's wildcard Certificate
+// (SANs cover the child apex via the cert-side expansion). Without
+// the listener, an HTTPRoute with hostname harbor.alice.example.org
+// matches no listener (parent's *.example.org is single-label-
+// only) and silently fails to attach.
+//
+// HTTP-01 mode does not need this expansion — its per-listener
+// cert flow already renders one listener per HTTPRoute hostname.
+func TestReconcile_DNS01GatewayHasListenerPerChildApex(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "example.org",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	nsRoot := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	nsAlice := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root-alice",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "alice.example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	nsBob := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root-bob",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "bob.example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsRoot, nsAlice, nsBob).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+
+	wantHosts := map[string]bool{
+		"*.alice.example.org": false,
+		"*.bob.example.org":   false,
+	}
+	for i := range gw.Spec.Listeners {
+		l := &gw.Spec.Listeners[i]
+		if l.Hostname == nil {
+			continue
+		}
+		h := string(*l.Hostname)
+		if _, ok := wantHosts[h]; !ok {
+			continue
+		}
+		wantHosts[h] = true
+		if l.Protocol != gatewayv1.HTTPSProtocolType {
+			t.Errorf("listener %s: expected HTTPS protocol, got %s", h, l.Protocol)
+		}
+		if l.TLS == nil || len(l.TLS.CertificateRefs) == 0 {
+			t.Errorf("listener %s: expected TLS config with certificateRefs, got %+v", h, l.TLS)
+		} else if string(l.TLS.CertificateRefs[0].Name) != "cozystack-gateway-tls" {
+			t.Errorf("listener %s: expected cert ref cozystack-gateway-tls, got %s", h, l.TLS.CertificateRefs[0].Name)
+		}
+	}
+	for h, seen := range wantHosts {
+		if !seen {
+			t.Errorf("expected per-child-apex listener with hostname %q, full listeners=%+v", h, gw.Spec.Listeners)
+		}
+	}
+}
+
 // TestReconcile_DNS01CreatesWildcardCertificate pins the wildcard Cert
 // rendered in DNS-01 mode: dnsNames cover both <apex> and *.<apex>,
 // the cert references the per-tenant Issuer, and the secretName

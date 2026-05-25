@@ -196,6 +196,16 @@ func perListenerName(hostname string) string {
 	return "https-" + hostnameFirstLabel(hostname) + "-" + hostnameSuffix(hostname)
 }
 
+// childListenerName produces the Gateway listener name for the
+// per-child-apex wildcard listener rendered in DNS-01 mode. Same
+// shape as perListenerName but with a "child-" infix so the
+// listener role is readable at a glance in Gateway.spec.listeners
+// and so a child apex can never collide with a per-app HTTPS
+// listener whose first-label happens to be "alice".
+func childListenerName(childApex string) gatewayv1.SectionName {
+	return gatewayv1.SectionName("https-child-" + hostnameFirstLabel(childApex) + "-" + hostnameSuffix(childApex))
+}
+
 // perListenerCertName produces the cert-manager Certificate name for
 // a per-listener cert: "<tgw>-<first-label>-<8-hex>-tls".
 func perListenerCertName(tgw *gatewayv1alpha1.TenantGateway, hostname string) string {
@@ -356,9 +366,42 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 }
 
 // renderWildcardCertificate builds the cert-manager Certificate that
-// covers <apex> and *.<apex>. Only used in DNS-01 mode; the listeners
-// rendered by renderGateway reference its secretName.
-func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGateway) (*cmv1.Certificate, error) {
+// covers <apex> and *.<apex>, plus per-child-apex SANs for every
+// tenant inheriting through this Gateway. Only used in DNS-01 mode;
+// the listeners rendered by renderGateway reference its secretName.
+//
+// childApexes is the deduplicated, sorted list of apex hostnames
+// inherited by child tenants whose namespace carries
+// namespace.cozystack.io/gateway = tgw.Namespace. Caller collects
+// them via collectInheritingChildApexes. Without these SANs the
+// parent's single-level wildcard (*.<apex>) cannot match a child
+// route's hostname (harbor.alice.example.com is two labels deeper
+// than the wildcard accepts).
+func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGateway, childApexes []string) (*cmv1.Certificate, error) {
+	dnsNames := []string{tgw.Spec.Apex, "*." + tgw.Spec.Apex}
+	seen := map[string]struct{}{
+		tgw.Spec.Apex:           {},
+		"*." + tgw.Spec.Apex:    {},
+	}
+	for _, apex := range childApexes {
+		if apex == "" {
+			continue
+		}
+		// Skip a child whose host label collides with the parent
+		// apex (mis-labelled namespace, or two tenants briefly
+		// sharing an apex during a rename). cert-manager rejects
+		// duplicate dnsNames; the inheriting tenant still attaches
+		// via the parent SANs already present.
+		if _, dup := seen[apex]; !dup {
+			dnsNames = append(dnsNames, apex)
+			seen[apex] = struct{}{}
+		}
+		wildcard := "*." + apex
+		if _, dup := seen[wildcard]; !dup {
+			dnsNames = append(dnsNames, wildcard)
+			seen[wildcard] = struct{}{}
+		}
+	}
 	cert := &cmv1.Certificate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      gatewayCertificateName(tgw),
@@ -373,10 +416,7 @@ func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGatewa
 				Kind: "Issuer",
 				Name: gatewayIssuerName(tgw),
 			},
-			DNSNames: []string{
-				tgw.Spec.Apex,
-				"*." + tgw.Spec.Apex,
-			},
+			DNSNames: dnsNames,
 		},
 	}
 	if err := controllerutil.SetControllerReference(tgw, cert, r.Scheme); err != nil {

@@ -35,6 +35,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -467,7 +468,11 @@ func ownedByTenantGateway(refs []metav1.OwnerReference, tgw *gatewayv1alpha1.Ten
 
 func (r *Reconciler) reconcileGateway(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string) error {
 	logger := log.FromContext(ctx)
-	desired, err := r.renderGateway(tgw, dynHostnames)
+	childApexes, err := r.collectInheritingChildApexes(ctx, tgw)
+	if err != nil {
+		return fmt.Errorf("collect inheriting child apexes: %w", err)
+	}
+	desired, err := r.renderGateway(tgw, dynHostnames, childApexes)
 	if err != nil {
 		return fmt.Errorf("render Gateway: %w", err)
 	}
@@ -607,7 +612,11 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 		logger.V(1).Info("deleted stale wildcard Certificate after switch to HTTP-01", "name", stale.Name)
 		return nil
 	}
-	desired, err := r.renderWildcardCertificate(tgw)
+	childApexes, err := r.collectInheritingChildApexes(ctx, tgw)
+	if err != nil {
+		return fmt.Errorf("collect inheriting child apexes: %w", err)
+	}
+	desired, err := r.renderWildcardCertificate(tgw, childApexes)
 	if err != nil {
 		return fmt.Errorf("render Certificate: %w", err)
 	}
@@ -659,7 +668,7 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // list (cozy-* platform namespaces) can attach routes. This is
 // Layer 1 of the security model documented in
 // packages/extra/gateway/README.md.
-func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string) (*gatewayv1.Gateway, error) {
+func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string, childApexes []string) (*gatewayv1.Gateway, error) {
 	allowedRoutes := buildAllowedRoutes(tgw)
 	httpAllowedRoutes := buildHTTPListenerAllowedRoutes(tgw)
 	listeners := []gatewayv1.Listener{
@@ -713,6 +722,34 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 				AllowedRoutes: httpsAllowedRoutes,
 			},
 		)
+		// Per-child-apex wildcard listeners — every inheriting
+		// tenant gets a `*.<child-apex>` listener so routes deeper
+		// than the parent's single-label wildcard can attach. The
+		// parent wildcard Certificate's SAN list (see
+		// renderWildcardCertificate) covers the child apex too, so
+		// these listeners reuse the same certName.
+		//
+		// One listener per child = up to 64 (Gateway API hard cap on
+		// spec.listeners minus the http/https/https-apex slots) —
+		// well past typical tenant fan-out. Operators near that limit
+		// should switch their high-fanout subtree to its own Gateway
+		// via tenant.spec.gateway=true.
+		for _, apex := range childApexes {
+			childWildcard := gatewayv1.Hostname("*." + apex)
+			listeners = append(listeners, gatewayv1.Listener{
+				Name:     childListenerName(apex),
+				Port:     443,
+				Protocol: gatewayv1.HTTPSProtocolType,
+				Hostname: &childWildcard,
+				TLS: &gatewayv1.ListenerTLSConfig{
+					Mode: ptrTLSMode(gatewayv1.TLSModeTerminate),
+					CertificateRefs: []gatewayv1.SecretObjectReference{
+						{Name: gatewayv1.ObjectName(certName)},
+					},
+				},
+				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
+			})
+		}
 	} else {
 		// HTTP-01 (default): per-app HTTPS listener per attached
 		// HTTPRoute / TLSRoute hostname. Names + cert refs are
@@ -797,6 +834,48 @@ func ptrTLSMode(m gatewayv1.TLSModeType) *gatewayv1.TLSModeType {
 // SetupWithManager wires the Reconciler into the controller manager
 // with For (TenantGateway as primary), Owns (Gateway and Certificate
 // as owned children), and Watches against HTTPRoute and TLSRoute so
+// collectInheritingChildApexes returns the deduplicated, sorted
+// list of apex hostnames from tenant namespaces that inherit this
+// Gateway's publishing layer. A namespace counts as inheriting when
+// it carries namespace.cozystack.io/gateway = <tgw.Namespace> AND
+// is not the Gateway's own namespace AND has a non-empty
+// namespace.cozystack.io/host label.
+//
+// Used by reconcileWildcardCertificate to add child apex SANs to
+// the parent's DNS-01 wildcard Certificate (parent's *.<apex>
+// covers a single label, so harbor.alice.example.com — two labels
+// past alice.example.org — needs its own *.alice.example.org SAN).
+//
+// Apexes equal to tgw.Spec.Apex are filtered (defensive against a
+// mis-labelled namespace duplicating the parent apex in the SAN
+// list — cert-manager rejects duplicates).
+func (r *Reconciler) collectInheritingChildApexes(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) ([]string, error) {
+	list := &corev1.NamespaceList{}
+	selector := labels.SelectorFromSet(labels.Set{namespaceGatewayLabel: tgw.Namespace})
+	if err := r.List(ctx, list, client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return nil, fmt.Errorf("list namespaces by gateway label: %w", err)
+	}
+	seen := map[string]struct{}{tgw.Spec.Apex: {}}
+	apexes := []string{}
+	for i := range list.Items {
+		nsObj := &list.Items[i]
+		if nsObj.Name == tgw.Namespace {
+			continue
+		}
+		host := nsObj.Labels["namespace.cozystack.io/host"]
+		if host == "" {
+			continue
+		}
+		if _, dup := seen[host]; dup {
+			continue
+		}
+		seen[host] = struct{}{}
+		apexes = append(apexes, host)
+	}
+	sort.Strings(apexes)
+	return apexes, nil
+}
+
 // ensureNamespaceLabels reconciles namespace.cozystack.io/gateway
 // labels on every namespace that should attach to this Gateway:
 // the TenantGateway's own namespace plus tgw.Spec.AttachedNamespaces.
