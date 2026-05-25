@@ -18,26 +18,24 @@
   # actually pulls (skips configmap fields and CRD examples that happen to
   # contain an `image:` key). Add a chart here when a new peer-sensitive
   # workload is found.
-  # Stage each render AND the yq filter through tmp files instead of
-  # piping. Two constraints stack here: `set -x` would expand any
-  # `var=$(helm ...)` capture into the trace and balloon CI logs, and
-  # `set -o pipefail` is unavailable because hack/cozytest.sh runs under
-  # /bin/sh which is dash on Ubuntu CI. Redirection keeps each step as a
-  # standalone command — set -e catches a failure at any stage (helm
-  # render, yq filter, prepull) without needing pipefail and without
-  # leaking rendered YAML into the trace.
-  local kubeovn_yaml linstor_yaml images_list
+  # Stage each render to a file: bats does not enable `pipefail`, so a
+  # direct `helm template | yq` pipe would let yq's exit code mask a
+  # helm-template failure and the test would pass while pre-pull was
+  # skipped. Writing to a file makes `set -e` trip on a render failure
+  # without using `var=$(helm template ...)` captures, which `set -x`
+  # would expand into the trace and balloon CI logs.
+  local kubeovn_yaml linstor_yaml certmanager_yaml
   kubeovn_yaml=$(mktemp)
   linstor_yaml=$(mktemp)
-  images_list=$(mktemp)
+  certmanager_yaml=$(mktemp)
   helm template packages/system/kubeovn > "$kubeovn_yaml"
   helm template packages/system/linstor > "$linstor_yaml"
-  yq -N '
+  helm template packages/system/cert-manager > "$certmanager_yaml"
+  cat "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml" | yq -N '
       (..|select(has("containers"))|.containers[]|.image),
       (..|select(has("initContainers"))|.initContainers[]|.image)
-    ' "$kubeovn_yaml" "$linstor_yaml" > "$images_list"
-  hack/e2e-prepull-images.sh < "$images_list"
-  rm -f "$kubeovn_yaml" "$linstor_yaml" "$images_list"
+    ' | hack/e2e-prepull-images.sh
+  rm -f "$kubeovn_yaml" "$linstor_yaml" "$certmanager_yaml"
 }
 
 @test "Install Cozystack" {
@@ -141,9 +139,15 @@ EOF
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait hr/etcd hr/ingress hr/tenant-root hr/seaweedfs -n tenant-root --timeout=4m --for=condition=ready
-
-  kubectl wait hr/monitoring hr/seaweedfs-system -n tenant-root --timeout=2m --for=condition=ready
+  # tenant-root parent HR only flips Ready after every child HR is Ready,
+  # so listing all four top-level children plus the parent gives precise
+  # failure messages without redundant separate waits. seaweedfs now
+  # installs as a serial chain seaweedfs-db (CNPG bootstrap) ->
+  # seaweedfs-system (master raft quorum) -> seaweedfs wrapper, which
+  # pushes the parent's Ready flip to ~5-6 min; tenant-root HR.spec.timeout
+  # is 15m and this 10m wait stays inside it.
+  kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
+    -n tenant-root --timeout=10m --for=condition=ready
 
 
   # Expose Cozystack services through ingress
