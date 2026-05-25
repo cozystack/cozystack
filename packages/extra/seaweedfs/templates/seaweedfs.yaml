@@ -104,12 +104,13 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
 spec:
+  dependsOn:
+  - name: {{ .Release.Name }}-db
   {{- if eq $ingress .Release.Namespace }}
   # Ensure the ingress-nginx admission webhook is ready before creating Ingress resources.
   # Only when this tenant owns its ingress; sub-tenants inherit ingress from a parent
   # namespace where ingress-nginx-system already runs, and the dependency would deadlock
   # because the HR doesn't exist locally.
-  dependsOn:
   - name: ingress-nginx-system
     namespace: {{ .Release.Namespace }}
   {{- end }}
@@ -117,12 +118,13 @@ spec:
     kind: ExternalArtifact
     name: cozystack-seaweedfs-application-default-seaweedfs-system
     namespace: cozy-system
-  interval: 5m
+  interval: 30s
   timeout: 10m
   install:
     remediation:
       retries: -1
   upgrade:
+    force: true
     remediation:
       retries: -1
   valuesFrom:
@@ -131,13 +133,6 @@ spec:
   values:
     global:
       serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"
-    db:
-      replicas: {{ .Values.db.replicas }}
-      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.db.resourcesPreset .Values.db.resources $) | nindent 8 }}
-      size: {{ .Values.db.size }}
-      {{- with .Values.db.storageClass }}
-      storageClass: {{ . }}
-      {{- end }}
     seaweedfs:
       master:
         {{ if eq .Values.topology "Simple" }}
