@@ -17,14 +17,14 @@ image-controller image-speaker:
 	docker buildx build images/metallb \
 		--target $(TARGET) \
 		--build-arg VERSION=$(VERSION) \
-		--tag $(REGISTRY)/metallb-$(TARGET):$(VERSION) \
+		$(call image-tags,metallb-$(TARGET),$(VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/metallb-$(TARGET):latest \
 		--cache-to type=inline \
 		--metadata-file images/$(TARGET).json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/metallb-$(TARGET)" \
 		yq -i '.metallb.$(TARGET).image.repository = strenv(REPOSITORY)' values.yaml
-	TAG=$(VERSION)@$$(yq e '."containerimage.digest"' images/$(TARGET).json -o json -r) \
+	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/$(TARGET).json -o json -r) \
 		yq -i '.metallb.$(TARGET).image.tag = strenv(TAG)' values.yaml
 	rm -f images/$(TARGET).json
 

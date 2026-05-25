@@ -26,15 +26,14 @@ update:
 
 image:
 	docker buildx build images/cilium \
-		--tag $(REGISTRY)/cilium:$(call settag,$(CILIUM_TAG)) \
-		--tag $(REGISTRY)/cilium:$(call settag,$(CILIUM_TAG)-$(TAG)) \
+		$(call image-tags,cilium,$(CILIUM_TAG)) \
 		--cache-from type=registry,ref=$(REGISTRY)/cilium:latest \
 		--cache-to type=inline \
 		--metadata-file images/cilium.json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/cilium" \
 		yq -i '.cilium.image.repository = strenv(REPOSITORY)' values.yaml
-	TAG=$(call settag,$(CILIUM_TAG)) \
+	TAG=$(IMAGE_TAG) \
 		yq -i '.cilium.image.tag = strenv(TAG)' values.yaml
 	DIGEST=$$(yq e '."containerimage.digest"' images/cilium.json -o json -r) \
 		yq -i '.cilium.image.digest = strenv(DIGEST)' values.yaml

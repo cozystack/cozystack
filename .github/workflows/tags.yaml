@@ -118,6 +118,11 @@ jobs:
         run: make build
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # Release semantics: push the release tag as :IMAGE_TAG (vX.Y.Z),
+          # the component versions as :<component-ver>, and move :latest.
+          IMAGE_TAG: ${{ github.ref_name }}
+          PUBLISH_VERSIONED: '1'
+          PUBLISH_FLOATING: '1'
 
       # Commit built artifacts
       - name: Commit release artifacts

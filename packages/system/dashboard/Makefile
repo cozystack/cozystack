@@ -25,7 +25,7 @@ build-console:
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
-		--tag $(REGISTRY)/cozystack-ui:$(call settag,$(TAG)) \
+		$(call image-tags,cozystack-ui,v$(COZYSTACK_VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/cozystack-ui:latest \
 		--cache-to type=inline \
 		--metadata-file images/console.json \
@@ -35,7 +35,7 @@ build-console:
 		--load=$(LOAD)
 
 update-values-console:
-	IMAGE="$(REGISTRY)/cozystack-ui:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/console.json -r)" \
+	IMAGE="$(REGISTRY)/cozystack-ui:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/console.json -r)" \
 		yq -i '.console.image = strenv(IMAGE)' values.yaml
 
 clean-console:
@@ -46,13 +46,13 @@ image-token-proxy:
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
-		--tag $(REGISTRY)/token-proxy:$(call settag,$(TAG)) \
+		$(call image-tags,token-proxy,v$(COZYSTACK_VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/token-proxy:latest \
 		--cache-to type=inline \
 		--metadata-file images/token-proxy.json \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
 		--load=$(LOAD)
-	IMAGE="$(REGISTRY)/token-proxy:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/token-proxy.json -r)" \
+	IMAGE="$(REGISTRY)/token-proxy:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/token-proxy.json -r)" \
 		yq -i '.tokenProxy.image = strenv(IMAGE)' values.yaml
 	rm -f images/token-proxy.json

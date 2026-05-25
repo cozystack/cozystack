@@ -70,6 +70,12 @@ jobs:
         run: make build
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # Unique per (PR, commit) so concurrent PR builds never push the same
+          # tag. PUBLISH_VERSIONED/PUBLISH_FLOATING stay off — PR images are
+          # consumed by digest, and :latest belongs to release builds.
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
 
       - name: Build Talos image
         run: make -C packages/core/talos talos-nocloud

@@ -10,13 +10,13 @@ update:
 
 image:
 	docker buildx build images/kilo \
-		--tag $(REGISTRY)/kilo:$(call settag,$(TAG)) \
+		$(call image-tags,kilo,v$(COZYSTACK_VERSION)) \
 		--cache-from type=registry,ref=$(REGISTRY)/kilo:latest \
 		--cache-to type=inline \
 		--metadata-file images/kilo.json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/kilo" \
 		yq -i '.kilo.image.repository = strenv(REPOSITORY)' values.yaml
-	TAG=$(TAG)@$$(yq e '."containerimage.digest"' images/kilo.json -o json -r) \
+	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kilo.json -o json -r) \
 		yq -i '.kilo.image.tag = strenv(TAG)' values.yaml
 	rm -f images/kilo.json
