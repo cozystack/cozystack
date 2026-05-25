@@ -10,4 +10,3 @@ update:
 	yq -i 'select(.kind != "VirtualMachinePreference")' templates/preferences.yaml
 	kustomize build https://github.com/kubevirt/common-instancetypes/instancetypes > templates/instancetypes.yaml
 	yq -i 'select(.kind != "VirtualMachineInstancetype")' templates/instancetypes.yaml
-	sed -i '/persistent: true/d' templates/preferences.yaml
