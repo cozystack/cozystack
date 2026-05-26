@@ -1,0 +1,28 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.trust-manager
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.cert-manager
+    components:
+    - name: trust-manager-crds
+      path: system/trust-manager-crds
+      install:
+        namespace: cozy-cert-manager
+        releaseName: trust-manager-crds
+    - name: trust-manager
+      path: system/trust-manager
+      install:
+        namespace: cozy-cert-manager
+        releaseName: trust-manager
+        dependsOn:
+        - trust-manager-crds

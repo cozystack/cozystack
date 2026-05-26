@@ -1,0 +1,148 @@
+suite: trust-manager bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: emits cozystack.trust-manager Package with resource-policy keep in isp-full
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.trust-manager
+    asserts:
+      - equal:
+          path: apiVersion
+          value: cozystack.io/v1alpha1
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: spec.variant
+          value: default
+
+  - it: emits cozystack.trust-manager Package with resource-policy keep in isp-full-generic
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        podCIDR: 10.244.0.0/16
+        podGateway: 10.244.0.1
+        serviceCIDR: 10.96.0.0/16
+        joinCIDR: 100.64.0.0/16
+        kubeovn:
+          MASTER_NODES: ""
+      publishing:
+        apiServerEndpoint: https://127.0.0.1:6443
+    documentSelector:
+      path: metadata.name
+      value: cozystack.trust-manager
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: spec.variant
+          value: default
+
+  - it: emits cozystack.trust-manager Package with resource-policy keep in isp-hosted
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+    documentSelector:
+      path: metadata.name
+      value: cozystack.trust-manager
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: spec.variant
+          value: default
+
+  - it: bundles.disabledPackages suppresses cozystack.trust-manager in isp-full
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        disabledPackages:
+          - cozystack.trust-manager
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.trust-manager
+        not: true
+        documentIndex: -1
+
+  - it: bundles.disabledPackages suppresses cozystack.trust-manager in isp-hosted
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        disabledPackages:
+          - cozystack.trust-manager
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.trust-manager
+        not: true
+        documentIndex: -1
+
+  - it: bundles.disabledPackages suppresses cozystack.trust-manager in isp-full-generic
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+        disabledPackages:
+          - cozystack.trust-manager
+      networking:
+        podCIDR: 10.244.0.0/16
+        podGateway: 10.244.0.1
+        serviceCIDR: 10.96.0.0/16
+        joinCIDR: 100.64.0.0/16
+        kubeovn:
+          MASTER_NODES: ""
+      publishing:
+        apiServerEndpoint: https://127.0.0.1:6443
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.trust-manager
+        not: true
+        documentIndex: -1
+
+  - it: emits no cozystack.trust-manager Package when bundles.system.enabled is false
+    set:
+      bundles:
+        system:
+          enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.trust-manager
+        not: true
+        documentIndex: -1

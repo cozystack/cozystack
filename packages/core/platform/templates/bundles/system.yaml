@@ -117,6 +117,7 @@
 # Common Packages
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.trust-manager" $) }}
 {{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.7.0)
        ships a pre-delete Helm hook that sed-strips the BEGIN/END
        block from kube-system/coredns Corefile when the chart is
