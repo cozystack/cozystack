@@ -1,13 +1,13 @@
 {{/*
 Determines whether TLS should be enabled.
 Returns "true" or "false" (string).
-Inherits .Values.external when .Values.tls.enabled is not set.
+When tls.enabled is explicitly set, its value is used.
+When tls.enabled is unset (null/invalid), falls back to .Values.external.
 */}}
 {{- define "qdrant.tls.enabled" -}}
-{{- $tlsMap := default (dict) .Values.tls -}}
-{{- if hasKey $tlsMap "enabled" -}}
-{{- index $tlsMap "enabled" -}}
-{{- else -}}
+{{- if kindIs "invalid" .Values.tls.enabled -}}
 {{- .Values.external | default false -}}
+{{- else -}}
+{{- .Values.tls.enabled -}}
 {{- end -}}
 {{- end -}}
