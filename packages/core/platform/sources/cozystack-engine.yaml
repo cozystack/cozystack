@@ -58,6 +58,7 @@ spec:
   - name: oidc
     dependsOn:
     - cozystack.networking
+    - cozystack.cert-manager
     - cozystack.keycloak
     - cozystack.keycloak-operator
     libraries:
