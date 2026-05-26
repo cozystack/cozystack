@@ -208,3 +208,53 @@ tests:
       - equal:
           path: spec.values.nats.tlsCA.enabled
           value: true
+
+  ###################################################
+  # cluster.routeURLs.useFQDN when TLS enabled      #
+  ###################################################
+
+  - it: sets cluster.routeURLs.useFQDN to true when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.cluster.routeURLs.useFQDN
+          value: true
+
+  - it: does not set cluster.routeURLs.useFQDN when tls.enabled is false
+    set:
+      tls:
+        enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - isNull:
+          path: spec.values.nats.config.cluster.routeURLs.useFQDN
+
+  - it: sets cluster.routeURLs.useFQDN to true when tls.enabled unset and external is true
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.cluster.routeURLs.useFQDN
+          value: true
+
+  - it: does not set cluster.routeURLs.useFQDN when tls.enabled unset and external is false
+    set:
+      external: false
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - isNull:
+          path: spec.values.nats.config.cluster.routeURLs.useFQDN

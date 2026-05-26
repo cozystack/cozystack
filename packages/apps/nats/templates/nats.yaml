@@ -94,6 +94,9 @@ spec:
           enabled: true
           routeURLs:
             k8sClusterDomain: {{ $clusterDomain }}
+            {{- if $tlsEnabled }}
+            useFQDN: true
+            {{- end }}
           replicas: {{ .Values.replicas }}
           {{- if $tlsEnabled }}
           tls:
