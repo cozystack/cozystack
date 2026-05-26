@@ -127,6 +127,12 @@ tests:
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Never
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
 
   - it: third document is CA Issuer referencing the CA secret
     set:
@@ -157,6 +163,15 @@ tests:
       - equal:
           path: spec.issuerRef.name
           value: os-test-http-ca
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
 
   # --- SAN coverage for HTTP services ---
 

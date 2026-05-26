@@ -60,8 +60,8 @@ spec:
     - cert sign
   privateKey:
     rotationPolicy: Never
-    algorithm: RSA
-    size: 4096
+    algorithm: ECDSA
+    size: 256
   issuerRef:
     name: {{ .Release.Name }}-http-selfsigned
     kind: Issuer
@@ -114,8 +114,8 @@ spec:
     {{- end }}
   privateKey:
     rotationPolicy: Always
-    algorithm: RSA
-    size: 4096
+    algorithm: ECDSA
+    size: 256
   issuerRef:
     name: {{ .Release.Name }}-http-ca
     kind: Issuer
