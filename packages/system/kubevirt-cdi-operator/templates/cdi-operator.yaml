@@ -5782,6 +5782,14 @@ spec:
             scheme: HTTP
           initialDelaySeconds: 5
           timeoutSeconds: 10
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8444
+            scheme: HTTP
+          periodSeconds: 5
+          failureThreshold: 30
+          timeoutSeconds: 10
         resources:
           requests:
             cpu: 100m
