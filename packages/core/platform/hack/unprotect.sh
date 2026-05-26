@@ -57,12 +57,16 @@ validatingadmissionpolicybinding
 linstorcluster
 "
 
-# Namespaced guarded kinds. ConfigMap, Repository/OCIRepository, HelmRelease.
+# Namespaced guarded kinds. ConfigMap, Flux source kinds (OCI/Git), HelmRelease.
+# Both OCIRepository and GitRepository are valid platform sourceRef.kind values
+# — repository.yaml templates `kind: {{ $sourceRef.kind }}` unrestricted — so
+# either may carry the no-delete label and must be enumerated here.
 # Use --all-namespaces with -o jsonpath so we get back (ns, name) pairs and
 # can pass each to a per-object `kubectl label`.
 NS_KINDS="
 configmap
 ocirepository
+gitrepository
 helmrelease
 "
 

@@ -337,7 +337,10 @@ EOF
     -o jsonpath='{.data.version}')
   kubectl delete configmap cozystack-version -n cozy-system
   ! kubectl get configmap cozystack-version -n cozy-system 2>/dev/null
-  # Reconstruct: declarative apply matches the migration / template shape.
+  # Reconstruct: declarative apply matches the chart template at
+  # packages/core/platform/templates/cozystack-version.yaml — same label set
+  # AND the helm.sh/resource-policy: keep annotation that pins the ConfigMap
+  # across helm uninstall.
   cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
@@ -346,6 +349,8 @@ metadata:
   namespace: cozy-system
   labels:
     platform.cozystack.io/no-delete: "true"
+  annotations:
+    helm.sh/resource-policy: keep
 data:
   version: "${version}"
 EOF
