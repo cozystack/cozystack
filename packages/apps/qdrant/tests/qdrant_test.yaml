@@ -289,3 +289,51 @@ tests:
       - equal:
           path: spec.values.qdrant.config.cluster.p2p.enable_tls
           value: true
+
+  #######################################################
+  # Reloader annotation for cert rotation (issue H)     #
+  #######################################################
+
+  - it: sets reloader annotation targeting TLS Secret when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.podAnnotations["secret.reloader.stakater.com/reload"]
+          value: "test-qdrant-tls"
+
+  - it: does not set reloader annotation when tls.enabled is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - notExists:
+          path: spec.values.qdrant.podAnnotations["secret.reloader.stakater.com/reload"]
+
+  - it: does not set reloader annotation when external is false and tls.enabled is unset
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - notExists:
+          path: spec.values.qdrant.podAnnotations
+
+  - it: sets reloader annotation when external is true and tls.enabled is unset (tri-state b)
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - equal:
+          path: spec.values.qdrant.podAnnotations["secret.reloader.stakater.com/reload"]
+          value: "test-qdrant-tls"
