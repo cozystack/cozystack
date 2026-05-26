@@ -2,6 +2,7 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,6 +10,15 @@ import (
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
+
+// ErrNoMatchingStrategy is returned by ResolveBackupClass when the
+// referenced BackupClass exists but does not bind a strategy for the
+// requested Kind. Callers check for this with errors.Is so they can
+// classify the BackupJob/RestoreJob as terminally Failed rather than
+// requeueing forever — the misbinding is a documented configuration
+// error (e.g. tenant fires FoundationDB BackupJob against the platform
+// cozy-default BackupClass, which intentionally does not bind FDB).
+var ErrNoMatchingStrategy = errors.New("no matching strategy in BackupClass for application Kind")
 
 const (
 	// DefaultApplicationAPIGroup is the default API group for applications
@@ -70,6 +80,6 @@ func ResolveBackupClass(
 		}
 	}
 
-	return nil, fmt.Errorf("no matching strategy found in BackupClass %s for application %s/%s",
-		backupClassName, appAPIGroup, applicationRef.Kind)
+	return nil, fmt.Errorf("%w: BackupClass=%s application=%s/%s",
+		ErrNoMatchingStrategy, backupClassName, appAPIGroup, applicationRef.Kind)
 }

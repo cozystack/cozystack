@@ -19,6 +19,10 @@ velero:
   deployNodeAgent: true
   configuration:
     # defaultVolumesToFsBackup: true
+    # cozy-default BackupStorageLocation lives in the
+    # backupstrategy-controller chart (single source of truth for
+    # backupStorage.{endpoint,bucketName,region}); see
+    # packages/system/backupstrategy-controller/templates/velero-bsl.yaml.
     backupStorageLocation: null
     volumeSnapshotLocation: null
     namespace: cozy-velero

@@ -160,11 +160,7 @@
       "type": "object",
       "default": {},
       "required": [
-        "enabled",
-        "s3AccessKey",
-        "s3Bucket",
-        "s3Region",
-        "s3SecretKey"
+        "enabled"
       ],
       "properties": {
         "cleanupStrategy": {
@@ -178,7 +174,7 @@
           "default": false
         },
         "endpoint": {
-          "description": "S3 endpoint URL. Stored in the chart-emitted `\u003crelease\u003e-backup-s3` Secret and consumed at runtime by the in-Pod `clickhouse-backup` sidecar. Empty means use the AWS default endpoint; in that case the chart also drops `S3_FORCE_PATH_STYLE` from the sidecar env, since AWS public S3 requires vhost-style.",
+          "description": "DEPRECATED. S3 endpoint URL for the legacy chart-emitted sidecar.",
           "type": "string",
           "default": ""
         },
@@ -188,17 +184,17 @@
           "default": "\u003cpassword\u003e"
         },
         "s3AccessKey": {
-          "description": "Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.",
+          "description": "DEPRECATED. Tenants no longer supply S3 keys; the platform-managed Bucket Secret is the source of truth. Optional now so `useSystemBucket: true` tenants can omit it.",
           "type": "string",
           "default": "\u003cyour-access-key\u003e"
         },
         "s3Bucket": {
-          "description": "S3 bucket used for storing backups.",
+          "description": "DEPRECATED. Optional; see `s3Region`.",
           "type": "string",
           "default": "s3.example.org/clickhouse-backups"
         },
         "s3CredentialsSecret": {
-          "description": "Reference to a pre-existing Secret carrying S3 credentials and bucket coordinates consumed by the chart-emitted `clickhouse-backup` sidecar. When `name` is set, the chart skips materialising `\u003crelease\u003e-backup-s3` and the sidecar reads from the referenced Secret instead. The strategy Pod is a curl/jq HTTP client and does not bind to this Secret directly.",
+          "description": "DEPRECATED. Pre-existing Secret reference for the legacy chart-emitted sidecar. The platform flow projects `cozy-backups-creds` instead.",
           "type": "object",
           "default": {},
           "properties": {
@@ -235,17 +231,17 @@
           }
         },
         "s3PathOverride": {
-          "description": "Object-key prefix the sidecar uses inside `s3Bucket`. Empty (default) scopes backups under the Helm release name so multiple ClickHouse releases sharing one bucket cannot clobber each other. Set this on a to-copy restore destination to point at the source release's prefix.",
+          "description": "DEPRECATED. Object-key prefix inside the legacy `s3Bucket`; the new platform flow scopes by namespace automatically.",
           "type": "string",
           "default": ""
         },
         "s3Region": {
-          "description": "AWS S3 region where backups are stored.",
+          "description": "DEPRECATED. Per-tenant S3 configuration is being phased out in favour of the platform-managed `cozy-default` BackupClass. Optional now so tenants on `useSystemBucket: true` can omit it.",
           "type": "string",
           "default": "us-east-1"
         },
         "s3SecretKey": {
-          "description": "Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.",
+          "description": "DEPRECATED. Optional; see `s3AccessKey`.",
           "type": "string",
           "default": "\u003cyour-secret-key\u003e"
         },
@@ -253,6 +249,11 @@
           "description": "Legacy. Cron schedule for the chart-emitted CronJob that runs the dump+restic backup. Empty (default) skips the legacy CronJob; recommended when a `BackupClass` + `Plan` from `backups.cozystack.io` already drives backup orchestration via the Altinity strategy.",
           "type": "string",
           "default": ""
+        },
+        "useSystemBucket": {
+          "description": "Opt-in: when true, the chart-emitted `\u003crelease\u003e-backup-s3` Secret is skipped and the `clickhouse-backup` sidecar reads bucket coordinates + S3 credentials from the platform-projected `cozy-backups-creds` Secret. `S3_PATH` is set to `\u003cnamespace\u003e/\u003crelease\u003e` for cross-tenant isolation. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill any `s3*` field below.",
+          "type": "boolean",
+          "default": false
         }
       }
     },

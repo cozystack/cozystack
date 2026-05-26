@@ -34,8 +34,9 @@ type RestoreJobReconciler struct {
 	client.Client
 	dynamic.Interface
 	meta.RESTMapper
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme            *runtime.Scheme
+	Recorder          record.EventRecorder
+	CredentialsConfig BackupCredentialsConfig
 }
 
 func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -94,7 +95,10 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to get Backup: %v", err))
 	}
 
-	// Step 2: Determine effective strategy from backup.spec.strategyRef
+	// Step 2: Determine effective strategy from backup.spec.strategyRef.
+	// Resolve and filter BEFORE projecting credentials so RestoreJobs
+	// targeting third-party drivers do not materialise cozy-backups-creds
+	// in the tenant namespace.
 	if backup.Spec.StrategyRef.APIGroup == nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, "Backup has nil StrategyRef.APIGroup")
 	}
@@ -102,6 +106,35 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if *backup.Spec.StrategyRef.APIGroup != strategyv1alpha1.GroupVersion.Group {
 		return r.markRestoreJobFailed(ctx, restoreJob,
 			fmt.Sprintf("StrategyRef.APIGroup doesn't match: %s", *backup.Spec.StrategyRef.APIGroup))
+	}
+
+	// Reject unsupported Kinds inside the platform APIGroup BEFORE
+	// credentials projection (mirrors BackupJob path). Without this guard
+	// a RestoreJob against a Backup whose strategyRef.Kind is unknown to
+	// this controller would leak cozy-backups-creds into the tenant
+	// namespace and then fall through to markRestoreJobFailed with the
+	// Secret already in place.
+	{
+		supported := false
+		for _, k := range supportedBackupStrategyKinds() {
+			if backup.Spec.StrategyRef.Kind == k {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
+		}
+	}
+
+	// Step 3: Project the platform-managed S3 credentials into the tenant
+	// namespace so default Strategy CRs (re-rendered at restore time) can
+	// reference a deterministic Secret name. Idempotent / no-op when
+	// projection is not configured. Transient errors requeue; terminal
+	// misconfig (target owned by someone else, source malformed) is
+	// surfaced as Failed.
+	if err := ProjectBackupCredentials(ctx, r.Client, r.CredentialsConfig, restoreJob.Namespace); err != nil {
+		return r.handleProjectionError(ctx, restoreJob, err)
 	}
 
 	logger.Info("processing RestoreJob", "restorejob", restoreJob.Name, "backup", backup.Name, "strategyKind", backup.Spec.StrategyRef.Kind)
@@ -144,6 +177,30 @@ func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// handleProjectionError classifies a credentials-projection error as
+// transient (requeue with Ready=False/CredentialsProjectionPending) or
+// terminal (markRestoreJobFailed). Mirrors the BackupJob variant — both
+// rely on IsTransient + CredentialsProjectionRequeue so a single source
+// of truth governs the backoff and the transient-vs-terminal split.
+func (r *RestoreJobReconciler) handleProjectionError(ctx context.Context, rj *backupsv1alpha1.RestoreJob, err error) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	credentialsProjectionFailures.WithLabelValues(rj.Namespace, classifyReason(err)).Inc()
+	if IsTransient(err) {
+		meta.SetStatusCondition(&rj.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "CredentialsProjectionPending",
+			Message: err.Error(),
+		})
+		if updateErr := r.Status().Update(ctx, rj); updateErr != nil {
+			logger.Error(updateErr, "failed to update RestoreJob status to projection-pending")
+		}
+		logger.Info("restore credentials projection transient failure; requeueing", "message", err.Error())
+		return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
+	}
+	return r.markRestoreJobFailed(ctx, rj, fmt.Sprintf("failed to project backup credentials: %v", err))
+}
+
 // markRestoreJobFailed updates the RestoreJob status to Failed with the given message.
 //
 // Coupling note: a failure that fires before reconcileCNPG's StartedAt block
@@ -179,6 +236,25 @@ func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restore
 	}
 	logger.Debug("RestoreJob failed", "message", message)
 	return ctrl.Result{}, nil
+}
+
+// requeueRestoreStrategyNotReady mirrors BackupJobReconciler.requeueStrategyNotReady
+// for the restore path. Surfaces a transient Ready=False/StrategyNotReady
+// when the Strategy CR referenced by Backup.spec.strategyRef.name is
+// not (yet) present — same bootstrap-window self-heal contract as the
+// backup path.
+func (r *RestoreJobReconciler) requeueRestoreStrategyNotReady(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, strategyName string) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	meta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  metav1.ConditionFalse,
+		Reason:  "StrategyNotReady",
+		Message: fmt.Sprintf("Strategy %q referenced by Backup is not yet provisioned; the platform may still be initialising backup storage", strategyName),
+	})
+	if updateErr := r.Status().Update(ctx, restoreJob); updateErr != nil {
+		logger.Error(updateErr, "failed to update RestoreJob status to StrategyNotReady")
+	}
+	return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
 }
 
 // cleanupResourceModifierConfigMaps deletes resource modifier ConfigMaps owned

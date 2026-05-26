@@ -25,6 +25,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -157,6 +158,18 @@ func main() {
 				&backupsv1alpha1.BackupClass{}: {},
 			},
 		},
+		Client: client.Options{
+			// Disable the controller-runtime cache for Secrets entirely.
+			// The credentials projector does point Get + CreateOrUpdate
+			// against arbitrary tenant namespaces, and a cluster-wide
+			// Secret informer would (a) require list/watch RBAC the chart
+			// explicitly does NOT grant, (b) keep every tenant Secret in
+			// the controller's RAM. Direct apiserver calls keep the
+			// blast radius bounded to the namespaces actively reconciled.
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{&corev1.Secret{}},
+			},
+		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -174,19 +187,36 @@ func main() {
 		os.Exit(1)
 	}
 
+	credentialsConfig := backupcontroller.BackupCredentialsConfig{
+		SourceNamespace:  os.Getenv("BACKUP_STORAGE_SECRET_NAMESPACE"),
+		SourceSecretName: os.Getenv("BACKUP_STORAGE_SECRET_NAME"),
+		TargetSecretName: os.Getenv("BACKUP_STORAGE_CREDS_SECRET_NAME"),
+		Endpoint:         os.Getenv("BACKUP_STORAGE_ENDPOINT"),
+		Region:           os.Getenv("BACKUP_STORAGE_REGION"),
+	}
+
+	if systemNamespaces := os.Getenv("BACKUP_STORAGE_SYSTEM_NAMESPACES"); systemNamespaces != "" {
+		if err := mgr.Add(backupcontroller.NewSystemCredentialsProjector(mgr.GetClient(), credentialsConfig, systemNamespaces, 0)); err != nil {
+			setupLog.Error(err, "unable to add SystemCredentialsProjector runnable")
+			os.Exit(1)
+		}
+	}
+
 	if err = (&backupcontroller.BackupJobReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("backup-controller"),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("backup-controller"),
+		CredentialsConfig: credentialsConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "BackupJob")
 		os.Exit(1)
 	}
 
 	if err = (&backupcontroller.RestoreJobReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("restore-controller"),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("restore-controller"),
+		CredentialsConfig: credentialsConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RestoreJob")
 		os.Exit(1)

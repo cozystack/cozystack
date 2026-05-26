@@ -11,8 +11,19 @@ spec:
     path: /
   variants:
   - name: default
+    # backupstrategy-controller now ships:
+    #   - the cozy-default BackupClass         (CRD from backup-controller)
+    #   - the cozy-backups apps.cozystack.io/Bucket (CRD from bucket-application via objectstorage-controller)
+    #   - the cozy-default Velero BackupStorageLocation (CRD from velero)
+    # All three must be installed before the templates render, otherwise
+    # the Helm release fails with "no matches for kind". Order is enforced
+    # via dependsOn so a fresh-cluster bootstrap cannot race the CRDs.
     dependsOn:
     - cozystack.networking
+    - cozystack.backup-controller
+    - cozystack.bucket-application
+    - cozystack.objectstorage-controller
+    - cozystack.velero
     components:
     - name: backupstrategy-controller
       path: system/backupstrategy-controller

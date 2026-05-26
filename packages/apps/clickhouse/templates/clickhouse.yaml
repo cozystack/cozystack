@@ -169,6 +169,14 @@ spec:
 {{- $regionKey := "region" }}
 {{- $accessKeyKey := "accessKey" }}
 {{- $secretKeyKey := "secretKey" }}
+{{- $s3Path := default .Release.Name .Values.backup.s3PathOverride }}
+{{- if .Values.backup.useSystemBucket }}
+{{- if .Values.backup.s3PathOverride }}
+{{- fail "clickhouse: backup.s3PathOverride is incompatible with backup.useSystemBucket=true. The platform flow scopes the S3 path to <namespace>/<release> automatically; clear s3PathOverride or disable useSystemBucket. To restore from another release's prefix, use a backups.cozystack.io/RestoreJob with spec.targetApplicationRef." }}
+{{- end }}
+{{- $sidecarSecretName = "cozy-backups-creds" }}
+{{- $s3Path = printf "%s/%s" .Release.Namespace .Release.Name }}
+{{- else }}
 {{- with .Values.backup.s3CredentialsSecret }}
 {{- if .name }}
 {{- $sidecarSecretName = .name }}
@@ -177,6 +185,7 @@ spec:
 {{- if .regionKey }}{{ $regionKey = .regionKey }}{{ end }}
 {{- if .accessKeyIDKey }}{{ $accessKeyKey = .accessKeyIDKey }}{{ end }}
 {{- if .secretAccessKeyKey }}{{ $secretKeyKey = .secretAccessKeyKey }}{{ end }}
+{{- end }}
 {{- end }}
 {{- end }}
             - name: clickhouse-backup
@@ -214,7 +223,7 @@ spec:
                   S3_FORCE_PATH_STYLE=false to their own clickhouse-backup
                   config.
                 */}}
-                {{- if or (not (eq (default "" .Values.backup.s3CredentialsSecret.name) "")) .Values.backup.endpoint }}
+                {{- if or .Values.backup.useSystemBucket (not (eq (default "" .Values.backup.s3CredentialsSecret.name) "")) .Values.backup.endpoint }}
                 - name: S3_FORCE_PATH_STYLE
                   value: "true"
                 {{- end }}
@@ -248,17 +257,30 @@ spec:
                   release's prefix (set backup.s3PathOverride).
                 */}}
                 - name: S3_PATH
-                  value: {{ default .Release.Name .Values.backup.s3PathOverride | quote }}
+                  value: {{ $s3Path | quote }}
+                {{- /*
+                  optional: true in the useSystemBucket path so the Pod
+                  starts even before the platform projector materialises
+                  cozy-backups-creds in this namespace (projection runs at
+                  first BackupJob time; the sidecar surfaces backup errors
+                  only when its HTTP API is exercised). Without this gate
+                  every fresh ClickHouse release with useSystemBucket=true
+                  would hang in CreateContainerConfigError until a
+                  BackupJob fires. Legacy path keeps the strict reference
+                  shape — its Secret is chart-emitted and present at
+                  install time.
+                */}}
+                {{- $secretOptional := .Values.backup.useSystemBucket }}
                 - name: S3_BUCKET
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $bucketKey | quote }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $bucketKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
                 - name: S3_ENDPOINT
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
                 - name: S3_REGION
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $regionKey | quote }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $regionKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
                 - name: S3_ACCESS_KEY
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
                 - name: S3_SECRET_KEY
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
               resources:
                 requests:
                   cpu: 10m

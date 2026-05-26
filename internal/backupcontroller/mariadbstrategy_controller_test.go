@@ -86,10 +86,10 @@ func TestBuildMariaDBBackupStorage_S3(t *testing.T) {
 	}
 	want := mariadbtypes.BackupStorage{
 		S3: &mariadbtypes.S3Storage{
-			Bucket:   "bkt",
-			Endpoint: "s3.example:9000",
-			Prefix:   "mariadb/",
-			Region:   "us-east-1",
+			Bucket:                      "bkt",
+			Endpoint:                    "s3.example:9000",
+			Prefix:                      "mariadb/",
+			Region:                      "us-east-1",
 			AccessKeyIdSecretKeyRef:     mariadbtypes.SecretKeySelector{Name: "creds", Key: "AWS_ACCESS_KEY_ID"},
 			SecretAccessKeySecretKeyRef: mariadbtypes.SecretKeySelector{Name: "creds", Key: "AWS_SECRET_ACCESS_KEY"},
 			TLS: &mariadbtypes.S3TLS{
@@ -174,6 +174,85 @@ func TestRenderMariaDBTemplate_TemplatingApplicationName(t *testing.T) {
 	if got.Storage.S3.AccessKeyIDSecretKeyRef.Name != "mariadb-src-creds" {
 		t.Errorf("AccessKey Secret name not templated: got %q", got.Storage.S3.AccessKeyIDSecretKeyRef.Name)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Backup-side "operator MariaDB CR not found" branch — transient + deadline
+// ---------------------------------------------------------------------------
+
+// TestReconcileMariaDBBackup_TargetMariaDBNotFoundIsTransient mirrors the
+// RestoreJob counterpart (TestReconcileMariaDBRestore_TargetMariaDBNotFound
+// IsTransient). PR #2605 FU-1: the BackupJob path used to requeue
+// forever when the operator-side k8s.mariadb.com/MariaDB CR never came
+// up; the fix adds a wall-clock deadline so a permanently-missing CR
+// eventually marks the BackupJob Failed instead of pinning it Running.
+func TestReconcileMariaDBBackup_TargetMariaDBNotFoundIsTransient(t *testing.T) {
+	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
+
+	mkResolved := func() *ResolvedBackupConfig {
+		return &ResolvedBackupConfig{
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &strategyAPIGroup,
+				Kind:     strategyv1alpha1.MariaDBStrategyKind,
+				Name:     "mdb-strategy",
+			},
+		}
+	}
+	mkStrategy := func() *strategyv1alpha1.MariaDB {
+		return &strategyv1alpha1.MariaDB{
+			ObjectMeta: metav1.ObjectMeta{Name: "mdb-strategy"},
+			Spec:       strategyv1alpha1.MariaDBSpec{Template: *newRenderedMariaDBTemplate()},
+		}
+	}
+
+	t.Run("fresh StartedAt → transient requeue, no terminal failure", func(t *testing.T) {
+		now := metav1.Now()
+		bj := newMariaDBBackupJob("bj-fresh", "tenant")
+		bj.Status.StartedAt = &now
+		app := newMariaDBApp("mariadb-src", "tenant")
+		// NO operator-side mariadbtypes.MariaDB CR seeded — that drives
+		// the NotFound branch under test.
+		c := newMariaDBStrategyTestClient(t, bj, app, mkStrategy())
+		r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+		res, err := r.reconcileMariaDB(context.Background(), bj, mkResolved())
+		if err != nil {
+			t.Fatalf("reconcileMariaDB: %v", err)
+		}
+		if res.RequeueAfter == 0 {
+			t.Errorf("expected transient requeue, got %+v", res)
+		}
+		if bj.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Errorf("fresh BackupJob must NOT be marked Failed: phase=%q", bj.Status.Phase)
+		}
+		cond := apimeta.FindStatusCondition(bj.Status.Conditions, "Ready")
+		if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "MariaDBNotReady" {
+			t.Errorf("expected Ready=False/MariaDBNotReady, got %+v", cond)
+		}
+	})
+
+	t.Run("StartedAt > deadline → terminal Failed", func(t *testing.T) {
+		expired := metav1.NewTime(time.Now().Add(-(mariadbDefaultBackupDeadline + time.Minute)))
+		bj := newMariaDBBackupJob("bj-expired", "tenant")
+		bj.Status.StartedAt = &expired
+		app := newMariaDBApp("mariadb-src", "tenant")
+		c := newMariaDBStrategyTestClient(t, bj, app, mkStrategy())
+		r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+		res, err := r.reconcileMariaDB(context.Background(), bj, mkResolved())
+		if err != nil {
+			t.Fatalf("reconcileMariaDB: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Errorf("expected terminal failure with no requeue, got %+v", res)
+		}
+		if bj.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("expected Phase=Failed after deadline, got %q", bj.Status.Phase)
+		}
+		if !strings.Contains(bj.Status.Message, "never reached existence within") {
+			t.Errorf("expected timeout message, got %q", bj.Status.Message)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,10 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -27,8 +30,9 @@ type BackupJobReconciler struct {
 	client.Client
 	dynamic.Interface
 	meta.RESTMapper
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme            *runtime.Scheme
+	Recorder          record.EventRecorder
+	CredentialsConfig BackupCredentialsConfig
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -46,12 +50,53 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
+	// Skip terminal BackupJobs: a Succeeded/Failed run must not keep
+	// projecting Secrets or re-running dispatch on every requeue, which
+	// would otherwise materialise cozy-backups-creds in tenant namespaces
+	// long after the BackupJob is done and pin needless work on the
+	// apiserver.
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		logger.V(1).Info("BackupJob already terminal, skipping", "phase", j.Status.Phase)
+		return ctrl.Result{}, nil
+	}
+
 	// Normalize ApplicationRef (default apiGroup if not specified)
 	normalizedAppRef := NormalizeApplicationRef(j.Spec.ApplicationRef)
 
-	// Resolve BackupClass
+	// Resolve BackupClass first so we know whether this BackupJob even
+	// targets a strategy this controller owns. Projecting credentials
+	// before this point would (a) leak cozy-backups-creds into namespaces
+	// that use third-party strategies and (b) terminally fail BackupJobs
+	// with an unrelated pre-existing cozy-backups-creds (ownership guard
+	// kicks in even though no platform strategy is involved).
 	resolved, err := ResolveBackupClass(ctx, r.Client, j.Spec.BackupClassName, normalizedAppRef)
 	if err != nil {
+		// ErrNoMatchingStrategy is a documented configuration error
+		// (e.g. tenant fires FoundationDB BackupJob against cozy-default,
+		// which intentionally does not bind FDB). Mark Failed terminally
+		// so the tenant sees the misbinding instead of an infinite
+		// requeue loop with no status signal.
+		if errors.Is(err, ErrNoMatchingStrategy) {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("BackupClass %q does not bind a strategy for Kind %q; see docs/operations/backup-classes.md", j.Spec.BackupClassName, normalizedAppRef.Kind))
+		}
+		// BackupClass not found yet is transient on a fresh install:
+		// during the bootstrap window the cozy-default BackupClass is
+		// gated on a populated BucketClaim status. Surface a clear
+		// Ready=False condition + requeue rather than spamming Error
+		// logs on every backoff cycle, mirroring the projection
+		// transient-vs-terminal split below.
+		if apierrors.IsNotFound(err) {
+			meta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "BackupClassNotFound",
+				Message: fmt.Sprintf("BackupClass %q not found; the platform may still be bootstrapping", j.Spec.BackupClassName),
+			})
+			if updateErr := r.Status().Update(ctx, j); updateErr != nil {
+				logger.Error(updateErr, "failed to update BackupJob status to BackupClassNotFound")
+			}
+			return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
+		}
 		logger.Error(err, "failed to resolve BackupClass", "backupClassName", j.Spec.BackupClassName)
 		return ctrl.Result{}, err
 	}
@@ -70,6 +115,40 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			"expected", strategyv1alpha1.GroupVersion.Group,
 			"got", *strategyRef.APIGroup)
 		return ctrl.Result{}, nil
+	}
+
+	// Reject unsupported Kinds inside the platform APIGroup BEFORE
+	// credentials projection. Without this guard a BackupClass that
+	// resolves to e.g. strategy.backups.cozystack.io/MadeUpKind would
+	// leak cozy-backups-creds into the tenant namespace and then
+	// silently no-op in the dispatch switch below — leaving the
+	// BackupJob in a phaseless state forever.
+	supported := false
+	for _, k := range supportedBackupStrategyKinds() {
+		if strategyRef.Kind == k {
+			supported = true
+			break
+		}
+	}
+	if !supported {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("strategy Kind %q is not supported by this controller (supported: %s)", strategyRef.Kind, strings.Join(supportedBackupStrategyKinds(), ", ")))
+	}
+
+	// Now project the platform-managed S3 credentials into the tenant
+	// namespace so default Strategy CRs can reference a deterministic
+	// Secret name. The projection is idempotent and silently skipped on
+	// clusters where it is not configured (legacy chart-managed flow).
+	//
+	// Failure handling: SourceSecretMissing / APIError are transient — the
+	// Bucket controller may not have produced the source Secret yet on a
+	// fresh install. Mark Ready=False and requeue rather than terminally
+	// failing the BackupJob (which would force tenants to recreate it and
+	// would silently fail Plan-driven runs). TargetSecretNotOwned and
+	// SourceSecretMalformed are operator-visible misconfigurations that
+	// will not self-heal — fail terminally so the tenant gets a clear
+	// message.
+	if err := ProjectBackupCredentials(ctx, r.Client, r.CredentialsConfig, j.Namespace); err != nil {
+		return r.handleProjectionError(ctx, j, err)
 	}
 
 	logger.Info("processing BackupJob", "backupjob", j.Name, "strategyKind", strategyRef.Kind, "backupClassName", j.Spec.BackupClassName)
@@ -143,6 +222,36 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// handleProjectionError classifies a credentials-projection error as
+// transient (requeue) or terminal (mark Failed). Transient errors record
+// a Ready=False condition without setting Phase=Failed so the BackupJob
+// resumes once the underlying issue (source Secret propagation, apiserver
+// hiccup) clears.
+func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *backupsv1alpha1.BackupJob, err error) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	// Tenant-side projection failures must be visible in the same
+	// Prometheus counter as system-side failures so the
+	// "absent_over_time(successes_total) OR rate(failures_total>0)" alert
+	// in docs/operations/backup-classes.md catches them. The system
+	// projector reports against system namespaces (cozy-velero etc.);
+	// here we attribute against the BackupJob's tenant namespace.
+	credentialsProjectionFailures.WithLabelValues(j.Namespace, classifyReason(err)).Inc()
+	if IsTransient(err) {
+		meta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "CredentialsProjectionPending",
+			Message: err.Error(),
+		})
+		if updateErr := r.Status().Update(ctx, j); updateErr != nil {
+			logger.Error(updateErr, "failed to update BackupJob status to projection-pending")
+		}
+		logger.Info("backup credentials projection transient failure; requeueing", "message", err.Error())
+		return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
+	}
+	return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to project backup credentials: %v", err))
+}
+
 // markBackupJobFailed records a terminal Failed phase on the BackupJob.
 //
 // Coupling note: a failure that fires before reconcileCNPG's StartedAt block
@@ -177,4 +286,29 @@ func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob
 	}
 	logger.Debug("BackupJob failed", "message", message)
 	return ctrl.Result{}, nil
+}
+
+// requeueStrategyNotReady surfaces a transient Ready=False/StrategyNotReady
+// condition on the BackupJob and requeues. Drivers call this when the
+// strategyRef.name referenced by a (resolved) BackupClass points at a
+// Strategy CR that does not exist yet — which happens during the
+// platform bootstrap window where backupstrategy-controller's chart
+// has rendered cozy-default BackupClass (always present) but its
+// strategy templates are still gated on the BucketClaim status
+// reconciling. Flux re-renders the chart once the BucketClaim status
+// populates, the Strategy CR appears, and the next reconcile picks it
+// up. Terminal failure here would force tenants to recreate BackupJobs
+// every time they raced the bootstrap.
+func (r *BackupJobReconciler) requeueStrategyNotReady(ctx context.Context, j *backupsv1alpha1.BackupJob, strategyName string) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	meta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  metav1.ConditionFalse,
+		Reason:  "StrategyNotReady",
+		Message: fmt.Sprintf("Strategy %q referenced by BackupClass %q is not yet provisioned; the platform may still be initialising backup storage", strategyName, j.Spec.BackupClassName),
+	})
+	if updateErr := r.Status().Update(ctx, j); updateErr != nil {
+		logger.Error(updateErr, "failed to update BackupJob status to StrategyNotReady")
+	}
+	return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
 }

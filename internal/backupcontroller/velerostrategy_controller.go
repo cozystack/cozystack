@@ -243,8 +243,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	veleroStrategy := &strategyv1alpha1.Velero{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, veleroStrategy); err != nil {
 		if errors.IsNotFound(err) {
-			logger.Error(err, "Velero strategy not found", "strategyName", resolved.StrategyRef.Name)
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Velero strategy not found: %s", resolved.StrategyRef.Name))
+			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
 		}
 		logger.Error(err, "failed to get Velero strategy")
 		return ctrl.Result{}, err
@@ -625,8 +624,7 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 	veleroStrategy := &strategyv1alpha1.Velero{}
 	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, veleroStrategy); err != nil {
 		if errors.IsNotFound(err) {
-			logger.Error(err, "Velero strategy not found", "strategyName", backup.Spec.StrategyRef.Name)
-			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Velero strategy not found: %s", backup.Spec.StrategyRef.Name))
+			return r.requeueRestoreStrategyNotReady(ctx, restoreJob, backup.Spec.StrategyRef.Name)
 		}
 		logger.Error(err, "failed to get Velero strategy")
 		return ctrl.Result{}, err

@@ -1,0 +1,110 @@
+{{/*
+  Strategy template rendering uses two layers of Go templates:
+   1. Helm renders this file at chart install time. Anything inside
+      `{{ ... }}` is interpreted by Helm.
+   2. The strategy controller renders the resulting Strategy CR
+      per-BackupJob, expanding `{{ .Application | .Release | .Mode }}`
+      against the live application object.
+  To emit a literal "{{ .Foo }}" that survives Helm, we pass it as the
+  string argument of `printf` — Helm does not interpret inner template
+  delimiters inside printf's quoted strings. Do NOT simplify by inlining
+  the literal directly without printf or Helm will try to evaluate the
+  inner expression at chart install time and fail.
+*/}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Altinity
+metadata:
+  name: cozy-default-altinity
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: ch-backup-client
+          # platform-migrations is the pre-built, digested image release
+          # CI maintains in packages/core/platform/values.yaml. It bundles
+          # curl + jq + kubectl + helm + ca-certificates on alpine, so the
+          # strategy Pod does not depend on dl-cdn.alpinelinux.org at run
+          # time — works on air-gapped clusters. The image is reused
+          # rather than a single-purpose ch-backup-client to avoid a
+          # second tag that release CI would have to re-digest each cut.
+          image: "{{ .Values.backupStrategyController.chBackupClientImage }}"
+          imagePullPolicy: IfNotPresent
+          # The clickhouse-backup HTTP API on :7171 enforces basic auth;
+          # creds live in the chart-emitted backup-api-auth Secret in the
+          # application's namespace. The Cozystack ClickHouse Helm release
+          # name is prefixed with "clickhouse-" so the actual Secret name
+          # is clickhouse-<release>-backup-api-auth.
+          env:
+            - name: API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "clickhouse-{{ .Release.Name }}-backup-api-auth" | quote }}
+                  key: username
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "clickhouse-{{ .Release.Name }}-backup-api-auth" | quote }}
+                  key: password
+          command: ["/bin/sh","-c"]
+          args:
+            - |
+              set -euo pipefail
+              # curl + jq are baked into the ch-backup-client image; no
+              # `apk add` here so the Pod stays runnable on air-gapped
+              # clusters.
+              host="chi-clickhouse-{{ printf "{{ .Release.Name }}" }}-clickhouse-0-0.{{ printf "{{ .Release.Namespace }}" }}.svc"
+              api="http://${host}:7171"
+              auth="-u ${API_USERNAME}:${API_PASSWORD}"
+              for _ in $(seq 1 60); do
+                if curl -fsS ${auth} --max-time 2 "${api}/backup/status" >/dev/null 2>&1; then break; fi
+                sleep 5
+              done
+              if [ "{{ printf "{{ .Mode }}" }}" = "backup" ]; then
+                prefix="clickhouse-{{ printf "{{ .Release.Name }}" }}-"
+                target="${prefix}$(date -u +%Y%m%dT%H%M%SZ)"
+                echo "create_remote ${target}"
+                curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}" >/dev/null
+              else
+                prefix="clickhouse-{{ printf "{{ .Backup.ApplicationRef.Name }}" }}-"
+                target=$(curl -fsS ${auth} "${api}/backup/list/remote" \
+                  | jq -rs --arg prefix "${prefix}" \
+                      '[.[] | select((.name // "") | startswith($prefix))] | sort_by(.created // "") | last.name // ""')
+                if [ -z "${target}" ] || [ "${target}" = "null" ]; then
+                  echo "no remote backup found" >&2
+                  exit 1
+                fi
+                echo "restore_remote ${target}"
+                curl -fsS ${auth} -X POST "${api}/backup/restore_remote/${target}" >/dev/null
+              fi
+              while true; do
+                row=$(curl -fsS ${auth} "${api}/backup/actions" \
+                  | jq -rs --arg suffix "${target}" \
+                      '[.[] | select((.command // "") | endswith($suffix))] | sort_by(.start) | last')
+                status=$(echo "${row}" | jq -r '.status // ""')
+                case "${status}" in
+                  success) echo "operation succeeded" ; exit 0 ;;
+                  error)
+                    err=$(echo "${row}" | jq -r '.error // "unknown"')
+                    echo "operation failed: ${err}" >&2
+                    exit 1
+                    ;;
+                esac
+                sleep 5
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+{{- end -}}

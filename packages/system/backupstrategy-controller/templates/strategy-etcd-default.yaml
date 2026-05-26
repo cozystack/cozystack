@@ -1,0 +1,18 @@
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Etcd
+metadata:
+  name: cozy-default-etcd
+spec:
+  template:
+    destination:
+      s3:
+        bucket: {{ $bucketName | quote }}
+        endpoint: {{ .Values.backupStorage.endpoint | quote }}
+        key: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" | quote }}
+        region: {{ .Values.backupStorage.region | quote }}
+        forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}
+        credentialsSecretRef:
+          name: cozy-backups-creds
+{{- end -}}

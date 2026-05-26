@@ -182,7 +182,7 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 	strategy := &strategyv1alpha1.Etcd{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Etcd strategy not found: %s", resolved.StrategyRef.Name))
+			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
 	}

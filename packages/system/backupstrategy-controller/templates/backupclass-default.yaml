@@ -1,0 +1,67 @@
+{{/*
+  cozy-default BackupClass is rendered unconditionally — it carries only
+  strategyRef.name routing entries (no bucket coords, no endpoint, no
+  credentials), so it has no dependency on the BucketClaim being
+  reconciled. This makes the platform's tenant-visible interface present
+  from Day 1; the Strategy CRs it references stay gated on a populated
+  $bucketName because they DO need the COSI-assigned bucket name
+  embedded in their template. A BackupJob fired during the bootstrap
+  window surfaces a transient Ready=False/StrategyNotReady in the
+  driver and self-heals once Flux re-renders the chart with the
+  populated BucketClaim status.
+*/}}
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: cozy-default
+spec:
+  strategies:
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Postgres
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: CNPG
+        name: cozy-default-cnpg
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: MariaDB
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: MariaDB
+        name: cozy-default-mariadb
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Etcd
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Etcd
+        name: cozy-default-etcd
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: ClickHouse
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Altinity
+        name: cozy-default-altinity
+    # FoundationDB intentionally NOT bound in cozy-default. The Strategy
+    # CR cozy-default-foundationdb is shipped (admins can wire it into a
+    # custom BackupClass), but Restore goes through fdbrestore in the
+    # foundationdb operator pod itself (cozy-foundationdb-operator). That
+    # operator deployment does not yet mount cozy-backups-creds, so a
+    # platform-default FDB restore would silently fail. See DESIGN.md /
+    # backup-classes.md for the open gap and follow-up work.
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: VMInstance
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Velero
+        name: cozy-default-velero-vminstance
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: VMDisk
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Velero
+        name: cozy-default-velero-vmdisk

@@ -101,11 +101,11 @@ func backupParameters(b *backupsv1alpha1.Backup) map[string]string {
 	return out
 }
 
-// renderJobTemplate runs the strategy's PodTemplateSpec through the
+// renderAltinityTemplate runs the strategy's PodTemplateSpec through the
 // repository's text/template engine with the same context shape as the CNPG
 // driver: every string field is templated against the application object,
 // the release shorthand, the run mode, and the resolved parameters.
-func renderJobTemplate(
+func renderAltinityTemplate(
 	tmpl corev1.PodTemplateSpec,
 	app map[string]interface{},
 	releaseName, releaseNamespace, mode string,
@@ -195,7 +195,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 	strategy := &strategyv1alpha1.Altinity{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Altinity strategy not found: %s", resolved.StrategyRef.Name))
+			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
 	}
@@ -208,7 +208,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		return ctrl.Result{}, err
 	}
 
-	rendered, err := renderJobTemplate(
+	rendered, err := renderAltinityTemplate(
 		strategy.Spec.Template,
 		app,
 		j.Spec.ApplicationRef.Name,
@@ -600,7 +600,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 	strategy := &strategyv1alpha1.Altinity{}
 	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Altinity strategy not found: %s", backup.Spec.StrategyRef.Name))
+			return r.requeueRestoreStrategyNotReady(ctx, restoreJob, backup.Spec.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
 	}
@@ -615,7 +615,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		return ctrl.Result{}, err
 	}
 
-	rendered, err := renderJobTemplate(
+	rendered, err := renderAltinityTemplate(
 		strategy.Spec.Template,
 		app,
 		targetAppName,

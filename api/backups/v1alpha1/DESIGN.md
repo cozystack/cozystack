@@ -18,6 +18,23 @@ It does **not** implement the backup logic itself.
 
 This document covers only the **core** API and its contracts with drivers, not driver implementations.
 
+### Platform-managed default flow
+
+As of Phase 2, Cozystack also ships **opinionated defaults** for the entire stack:
+
+* A platform-managed S3 bucket `cozy-backups` (provisioned through `apps.cozystack.io/Bucket` in `cozy-backup-controller`).
+* Pre-rendered `Strategy` CRs `cozy-default-{cnpg,mariadb,etcd,altinity,foundationdb,velero-vminstance,velero-vmdisk}`.
+* A single cluster-wide `BackupClass` `cozy-default` whose `spec.strategies[]` binds each supported `apps.cozystack.io/<Kind>` to the matching strategy.
+* A `CredentialsProjector` inside `backupstrategy-controller` that copies the bucket-controller Secret into each tenant namespace as `cozy-backups-creds` on demand (per `BackupJob`/`RestoreJob` reconcile) and into a configured list of system namespaces (e.g. `cozy-velero`) on a periodic tick.
+
+Tenants reference `cozy-default` from `BackupJob`/`Plan`/`RestoreJob`; they never see the bucket controller Secret, never write to a Secret in their own namespace (default RBAC denies it), and never share an S3 path with another tenant (every default strategy template prefixes the object key with `<namespace>/<application>`).
+
+The platform-managed flow is layered *on top of* — not in place of — the core API. Custom `BackupClass`/Strategy CRs targeting other buckets continue to work; tenants picking `cozy-default` simply opt into the platform's pre-wired stack.
+
+**Open gap (FoundationDB):** the `cozy-default-foundationdb` Strategy CR is shipped but **not** bound by `cozy-default`. Restore for FoundationDB runs `fdbrestore` from inside the `cozy-foundationdb-operator` deployment, which does not yet mount `cozy-backups-creds` with the blob credentials file. Admins who want platform-default FDB backups today must either wire the operator deployment manually or use a custom BackupClass — see [Backup Classes](../../../docs/operations/backup-classes.md) for the follow-up plan.
+
+**Tenant visibility:** projected Secrets carry no `internal.cozystack.io/tenantresource` label, so the lineage-controller webhook does not promote them to a `TenantSecret` view. Combined with the default RBAC (no core/v1.Secret verbs on tenant ServiceAccounts), the projected credentials are unreadable from a tenant kubeconfig even when they sit in the tenant's own namespace; the operator Pods mount the Secret via kubelet, which bypasses tenant RBAC.
+
 ---
 
 ## 2. Goals and non-goals
