@@ -180,10 +180,11 @@ spec:
 
 `flavor` is a bootstrap-time choice. Switching it on an existing release
 swaps the cluster image and CNPG will fail to restart the existing pods
-if the on-disk format does not match — plan a fresh release (with
-`bootstrap.recovery` from a backup if needed) when changing `flavor`.
-PostgreSQL v18 is not yet covered by the PostGIS image; pick a version
-in `[v13, v17]` when `flavor: postgis`.
+if the on-disk format does not match — plan a fresh release (or set
+`bootstrap.enabled: true` with `bootstrap.oldName` and
+`bootstrap.recoveryTime` to bootstrap from a backup) when changing
+`flavor`. PostgreSQL v18 is not yet covered by the PostGIS image; pick
+a version in `[v13, v17]` when `flavor: postgis`.
 
 ## Parameters
 
