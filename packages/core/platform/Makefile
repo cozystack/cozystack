@@ -17,9 +17,6 @@ reconcile: apply
 diff:
 	cozyhr diff --namespace $(NAMESPACE) $(NAME)
 
-test:
-	helm unittest .
-
 # Strip the platform.cozystack.io/no-delete label from every guarded object so
 # `helm uninstall cozy-platform` (and ad-hoc deletes of protected resources)
 # is no longer denied by the deletion-protection VAP. After this runs, the
