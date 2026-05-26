@@ -78,6 +78,9 @@ external: false
 ## @field {*bool} enabled - Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.
 
 ## @param {TLS} [tls] - TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.
+## When TLS is enabled, the CA certificate is available via the <release>-tls Secret:
+##   kubectl get secret <release>-tls -o jsonpath='{.data.ca\.crt}' | base64 -d
+## The <release>-tls Secret is exposed to tenants at the `use` access level via dashboard RBAC.
 tls: {}
 
 ##

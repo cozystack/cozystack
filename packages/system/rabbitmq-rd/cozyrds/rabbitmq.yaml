@@ -31,6 +31,8 @@ spec:
     include:
       - resourceNames:
           - rabbitmq-{{ .name }}-default-user
+      - resourceNames:
+          - rabbitmq-{{ .name }}-tls
       - matchLabels:
           apps.cozystack.io/user-secret: "true"
   services:
