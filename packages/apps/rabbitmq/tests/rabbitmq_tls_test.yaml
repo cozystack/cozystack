@@ -271,7 +271,15 @@ tests:
       - notExists:
           path: spec.override.service.spec.ports
 
-  - it: all four required ports are present in LoadBalancer override when TLS and external are true
+  # -----------------------------------------------------------------------
+  # F: LoadBalancer exposes only TLS ports when external+TLS enabled
+  #
+  # Plaintext AMQP (5672) and management (15672) MUST NOT be on the LB
+  # when TLS is active. Only amqps (5671) and management-tls (15671) are
+  # exposed. In-cluster ClusterIP plain listeners are not affected.
+  # -----------------------------------------------------------------------
+
+  - it: LoadBalancer override contains amqps port when TLS and external are true
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -286,10 +294,99 @@ tests:
       - contains:
           path: spec.override.service.spec.ports
           content:
+            name: amqps
+            port: 5671
+            targetPort: 5671
+            protocol: TCP
+
+  - it: LoadBalancer override contains management-tls port when TLS and external are true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - contains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management-tls
+            port: 15671
+            targetPort: 15671
+            protocol: TCP
+
+  - it: LoadBalancer override does NOT contain plain amqp port when TLS and external are true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
             name: amqp
             port: 5672
             targetPort: 5672
             protocol: TCP
+
+  - it: LoadBalancer override does NOT contain plain management port when TLS and external are true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management
+            port: 15672
+            targetPort: 15672
+            protocol: TCP
+
+  - it: LoadBalancer override contains plain amqp port when external is true but TLS is disabled
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.override.service.spec.ports
+
+  - it: LoadBalancer override contains only TLS ports when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
       - contains:
           path: spec.override.service.spec.ports
           content:
@@ -300,16 +397,23 @@ tests:
       - contains:
           path: spec.override.service.spec.ports
           content:
-            name: management
-            port: 15672
-            targetPort: 15672
-            protocol: TCP
-      - contains:
-          path: spec.override.service.spec.ports
-          content:
             name: management-tls
             port: 15671
             targetPort: 15671
+            protocol: TCP
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
+            name: amqp
+            port: 5672
+            targetPort: 5672
+            protocol: TCP
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management
+            port: 15672
+            targetPort: 15672
             protocol: TCP
 
   # -----------------------------------------------------------------------
