@@ -66,6 +66,11 @@ spec:
     - {{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc
     - {{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
     - "*.{{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}"
+    {{- range $i, $_ := until (int .Values.replicas) }}
+    - {{ printf "%s-%d.%s-headless" $.Release.Name $i $.Release.Name | quote }}
+    - {{ printf "%s-%d.%s-headless.%s.svc" $.Release.Name $i $.Release.Name $.Release.Namespace | quote }}
+    - {{ printf "%s-%d.%s-headless.%s.svc.%s" $.Release.Name $i $.Release.Name $.Release.Namespace $clusterDomain | quote }}
+    {{- end }}
     {{- if .Values.external }}
     - {{ .Release.Name }}.{{ .Values._namespace.host }}
     {{- end }}
