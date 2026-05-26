@@ -773,3 +773,147 @@ tests:
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Always
+
+  # -------------------------------------------------------------------
+  # E: backup CronJob mounts TLS CA secret when TLS is enabled
+  # When require_secure_transport=ON, the backup mysqldump/mysql commands
+  # need SSL flags to connect. The leaf Secret bundles ca.crt alongside
+  # tls.crt/tls.key so it is the right source for the trust anchor.
+  # -------------------------------------------------------------------
+  - it: "backup CronJob has tls-ca volumeMount when tls.enabled=true"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        enabled: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /etc/mysql-ssl
+            name: tls-ca
+            readOnly: true
+
+  - it: "backup CronJob has tls-ca volume from leaf TLS secret when tls.enabled=true"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        enabled: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-tls
+              items:
+              - key: ca.crt
+                path: ca.crt
+
+  - it: "backup CronJob has no tls-ca volume when tls.enabled=false"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        enabled: false
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - notContains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+
+  - it: "backup CronJob has no tls-ca volume when external=false and tls.enabled unset"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      external: false
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - notContains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+
+  # -------------------------------------------------------------------
+  # E: backup script contains --ssl-mode=VERIFY_IDENTITY when TLS enabled
+  # VERIFY_IDENTITY is the strictest SSL mode — validates CA and hostname,
+  # matching the cert SAN list that already covers the primary/secondary
+  # service names used by MYSQL_HOST.
+  # -------------------------------------------------------------------
+  - it: "backup-script Secret contains --ssl-mode=VERIFY_IDENTITY when tls.enabled=true"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        enabled: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-mode=VERIFY_IDENTITY"
+
+  - it: "backup-script Secret contains --ssl-ca=/etc/mysql-ssl/ca.crt when tls.enabled=true"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        enabled: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+
+  - it: "backup-script Secret does not contain ssl flags when tls.enabled=false"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        enabled: false
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-mode"
+
+  - it: "backup CronJob has tls-ca volumeMount when external=true and tls.enabled unset"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      external: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /etc/mysql-ssl
+            name: tls-ca
+            readOnly: true
