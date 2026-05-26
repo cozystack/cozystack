@@ -17,8 +17,9 @@ spec:
   # admission webhook, which is why the chart no longer renders a cert-manager
   # chain — the operator owns the chain end-to-end.
   #
-  # Trust anchor for clients: the operator-managed Opaque Secret <release>-ca
-  # (key: ca.crt). Mount that key into client pods to verify TLS.
+  # Trust anchor for clients: the ca.crt key present in every user-credentials
+  # Secret CNPG creates (e.g. <release>-credentials). Mount that key into
+  # client pods to verify TLS.
   certificates:
     serverAltDNSNames:
       - {{ printf "%s.%s" .Release.Name .Values._namespace.host }}

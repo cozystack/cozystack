@@ -39,7 +39,6 @@ spec:
     include:
       - resourceNames:
           - postgres-{{ .name }}-credentials
-          - postgres-{{ .name }}-ca
   services:
     exclude: []
     include:

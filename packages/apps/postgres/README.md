@@ -173,11 +173,13 @@ The tri-state `tls.enabled` controls whether the chart injects `serverAltDNSName
 - `tls.enabled: true` with `external: false` — no `serverAltDNSNames` injection is needed (there is no external hostname to add); CNPG's auto-generated cert covers internal services.
 - `tls.enabled: false` — the chart skips `serverAltDNSNames` injection. **Note:** CNPG keeps its built-in TLS on the wire regardless of this flag; this toggle only controls whether the external hostname is added to the cert. To force PostgreSQL to drop TLS entirely you would need to set `postgresql.parameters.ssl = "off"` at the CNPG layer, which is out of scope for this flag.
 
-**Retrieving the CA bundle** for client verification (from the operator-managed Secret `<release>-ca`, key `ca.crt`):
+**Retrieving the CA bundle** for client verification:
+
+CNPG bundles the CA certificate in every user-credentials Secret it creates under the key `ca.crt`. Retrieve it from the `<release>-credentials` Secret, which is already accessible to tenants via the dashboard RBAC:
 
 ```bash
 kubectl --context <ctx> --namespace <tenant> \
-  get secret <release>-ca \
+  get secret <release>-credentials \
   --output jsonpath='{.data.ca\.crt}' | base64 --decode
 ```
 
