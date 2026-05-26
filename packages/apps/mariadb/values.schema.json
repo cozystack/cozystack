@@ -134,10 +134,7 @@
       "properties": {
         "enabled": {
           "description": "Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "required": {
           "description": "Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet.",
@@ -237,12 +234,12 @@
         "resticPassword": {
           "description": "DEPRECATED: Password for Restic backup encryption.",
           "type": "string",
-          "default": "<password>"
+          "default": "\u003cpassword\u003e"
         },
         "s3AccessKey": {
           "description": "DEPRECATED: Access key for S3 authentication.",
           "type": "string",
-          "default": "<your-access-key>"
+          "default": "\u003cyour-access-key\u003e"
         },
         "s3Bucket": {
           "description": "DEPRECATED: S3 bucket used for storing backups.",
@@ -257,7 +254,7 @@
         "s3SecretKey": {
           "description": "DEPRECATED: Secret key for S3 authentication.",
           "type": "string",
-          "default": "<your-secret-key>"
+          "default": "\u003cyour-secret-key\u003e"
         },
         "schedule": {
           "description": "DEPRECATED: Cron schedule for automated backups.",
