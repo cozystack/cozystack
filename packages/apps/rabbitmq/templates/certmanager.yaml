@@ -1,10 +1,10 @@
 {{/*
-TLS is active when tls.enabled is explicitly set to a non-null boolean, or when
-tls.enabled is absent/null (tri-state default) and external is true.
-A null tls.enabled is treated as "inherit from external", not as disabled.
+Tri-state TLS resolution: explicit non-null tls.enabled wins; when absent or null,
+defaults to external. A null tls.enabled is treated as "inherit from external".
+kindIs "invalid" detects both the missing-key and explicit-null cases.
 */}}
 {{- $tlsEnabled := .Values.external }}
-{{- if and (hasKey .Values.tls "enabled") (ne .Values.tls.enabled nil) }}
+{{- if not (kindIs "invalid" .Values.tls.enabled) }}
   {{- $tlsEnabled = .Values.tls.enabled }}
 {{- end }}
 
@@ -35,6 +35,8 @@ spec:
     - cert sign
     - crl sign
   privateKey:
+    algorithm: ECDSA
+    size: 256
     # Never rotate the CA private key: rotating the CA key invalidates all
     # leaf certs signed by the old key and causes a service outage. CA renewal
     # (new certificate, same key) is handled automatically by cert-manager
@@ -91,4 +93,8 @@ spec:
     - digital signature
     - key encipherment
     - server auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
 {{- end }}
