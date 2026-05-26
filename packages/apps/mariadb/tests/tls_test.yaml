@@ -680,3 +680,37 @@ tests:
     asserts:
       - hasDocuments:
           count: 4
+
+  # -------------------------------------------------------------------
+  # K2: short-form SAN variants for ndots-shortened clients
+  # <name>.<ns> (without .svc) and *.<name>-internal (without <ns>.svc)
+  # cover clients that search-domain-shorten hostnames before sending DNS
+  # queries, which can produce names that bypass the full-form SANs.
+  # -------------------------------------------------------------------
+  - it: "leaf cert SAN list contains short-form <name>.<ns> entries"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-primary.tenant-test"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb-secondary.tenant-test"
+
+  - it: "leaf cert SAN list contains wildcard short-form *.<name>-internal entry"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal"
