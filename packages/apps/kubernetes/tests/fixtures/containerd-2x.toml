@@ -1,0 +1,16 @@
+version = 3
+
+[plugins]
+  [plugins.'io.containerd.cri.v1.images']
+    snapshotter = 'overlayfs'
+    [plugins.'io.containerd.cri.v1.images'.pinned_images]
+      sandbox = 'registry.k8s.io/pause:3.10'
+    [plugins.'io.containerd.cri.v1.images'.registry]
+      config_path = ''
+    [plugins.'io.containerd.cri.v1.images'.registry_credentials]
+
+  [plugins.'io.containerd.cri.v1.runtime']
+    enable_selinux = false
+    [plugins.'io.containerd.cri.v1.runtime'.containerd]
+      default_runtime_name = 'runc'
+      [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes]

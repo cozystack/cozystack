@@ -325,6 +325,20 @@ tests:
           content: "mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd"
         documentIndex: 4
 
+  - it: patches containerd registry config_path for both 1.x and 2.x plugin schemas
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: 'sed -i ''/\[plugins\.[^]]*grpc\.v1\.cri[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|'' /etc/containerd/config.toml'
+        documentIndex: 4
+      - contains:
+          path: spec.template.spec.preKubeadmCommands
+          content: 'sed -i ''/\[plugins\.[^]]*io\.containerd\.cri\.v1\.images[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|'' /etc/containerd/config.toml'
+        documentIndex: 4
+
   ###############################################
   # disk-kubelet matchVolume blockSize          #
   ###############################################
