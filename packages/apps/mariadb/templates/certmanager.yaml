@@ -29,8 +29,8 @@ spec:
     group: cert-manager.io
   privateKey:
     rotationPolicy: Never
-    algorithm: RSA
-    size: 4096
+    algorithm: ECDSA
+    size: 256
   # CA usages: signing + cert sign (issuing leaf certs) + crl sign (RFC 5280)
   usages:
     - signing
@@ -83,8 +83,8 @@ spec:
     {{- end }}
   privateKey:
     rotationPolicy: Always
-    algorithm: RSA
-    size: 4096
+    algorithm: ECDSA
+    size: 256
   issuerRef:
     name: {{ .Release.Name }}-ca
     kind: Issuer

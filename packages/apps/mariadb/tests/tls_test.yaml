@@ -714,3 +714,62 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "*.my-mariadb-internal"
+
+  # -------------------------------------------------------------------
+  # ECDSA: CA and leaf use ECDSA P-256
+  # Smaller keys, faster handshakes, stronger per-bit security than RSA.
+  # rotationPolicy preserved: Never for CA, Always for leaf.
+  # -------------------------------------------------------------------
+  - it: "CA cert uses ECDSA P-256 algorithm"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: "leaf cert uses ECDSA P-256 algorithm"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: "CA cert rotationPolicy is Never (ECDSA)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: "leaf cert rotationPolicy is Always (ECDSA)"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
