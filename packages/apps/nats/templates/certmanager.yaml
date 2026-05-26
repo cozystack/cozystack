@@ -23,6 +23,8 @@ spec:
     name: {{ .Release.Name }}-selfsigned
   isCA: true
   privateKey:
+    algorithm: ECDSA
+    size: 256
     rotationPolicy: Never
 ---
 apiVersion: cert-manager.io/v1
@@ -46,6 +48,10 @@ spec:
   issuerRef:
     name: {{ .Release.Name }}-ca
   commonName: {{ .Release.Name }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
   usages:
     - digital signature
     - key encipherment

@@ -369,3 +369,73 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "external is true but _namespace.host is not set"
+
+  ###################################################
+  # ECDSA P-256 for CA and leaf certificates        #
+  ###################################################
+
+  - it: CA certificate uses ECDSA algorithm
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+
+  - it: CA certificate uses P256 curve
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: CA certificate retains rotationPolicy Never
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: leaf certificate uses ECDSA algorithm
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+
+  - it: leaf certificate uses P256 curve
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: leaf certificate retains rotationPolicy Always
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
