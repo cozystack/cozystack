@@ -1,0 +1,28 @@
+{{- if and .Values.global.rbac.create .Values.app.targetNamespaces }}
+{{- $namespaces := append (append .Values.app.targetNamespaces .Values.app.trust.namespace) (include "trust-manager.namespace" . ) -}}
+{{- range $ns := uniq $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: trust-manager-role
+  namespace: {{ $ns }}
+rules:
+{{ include "trust-manager.rbac.namespacedResourcesRules" $ }}
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: trust-manager-role-binding
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: trust-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "trust-manager.name" $ }}
+    namespace: {{ include "trust-manager.namespace" $ }}
+{{- end }}
+{{- end }}

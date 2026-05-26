@@ -1,0 +1,42 @@
+{{- if .Values.global.rbac.create }}
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  labels:
+    {{- include "trust-manager.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  name: {{ include "trust-manager.name" . }}
+rules:
+- apiGroups:
+  - "trust.cert-manager.io"
+  resources:
+  - "bundles"
+  verbs: ["get", "list", "watch"]
+
+# Permissions to update finalizers are required for trust-manager to work correctly
+# on OpenShift, even though we don't directly use finalizers at the time of writing
+- apiGroups:
+  - "trust.cert-manager.io"
+  resources:
+  - "bundles/finalizers"
+  verbs: ["update"]
+
+- apiGroups:
+  - "trust.cert-manager.io"
+  resources:
+  - "bundles/status"
+  verbs: ["patch"]
+
+- apiGroups:
+  - ""
+  resources:
+  - "namespaces"
+  verbs: ["get", "list", "watch"]
+
+{{- if not .Values.app.targetNamespaces }}
+{{ include "trust-manager.rbac.namespacedResourcesRules" . }}
+{{- end -}}
+{{- end -}}

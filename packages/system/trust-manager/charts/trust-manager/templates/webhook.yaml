@@ -1,0 +1,126 @@
+{{- if and .Values.app.webhook.tls.helmCert.enabled .Values.app.webhook.tls.approverPolicy.enabled -}}
+{{- fail "cannot set .app.webhook.tls.helmCert.enabled and .Values.app.webhook.tls.approverPolicy.enabled" }}
+{{- end -}}
+
+{{- /*
+$ca is always generated here even if .Values.app.webhook.tls.helmCert.enabled is false because we need it to be
+visible in the scope for the ValidatingWebhookConfiguration below.
+
+genCA has two args - first is cert commonName (CN) and second is validity in days (9125 = ~25 years)
+
+We don't write this CA's private key to a secret because we don't want it to be used for any other purpose
+except for generating $cert below.
+
+DO NOT USE $ca ANYWHERE IF app.tls.helmCert.enabled IS FALSE
+*/}}
+
+{{- $ca := genCA (printf "*.%s.svc" .Release.Namespace ) 9125 -}}
+
+
+{{- if .Values.app.webhook.tls.helmCert.enabled -}}
+{{- $svcName := (printf "%s.%s.svc" (include "trust-manager.name" . ) .Release.Namespace ) -}}
+
+{{- /*
+genSignedCert has the following args, in order:
+1. The cert CN
+2. A list of IP addresses the cert is valid for
+3. A list of DNS altnames the cert is valid for
+4. The duration in days (3650 = ~10 years)
+5. The signing CA
+*/}}
+{{- $cert := genSignedCert $svcName nil (list $svcName) 3650 $ca -}}
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "trust-manager.name" . }}-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trust-manager.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $ca.Cert | b64enc }}
+  tls.key: {{ $cert.Key | b64enc }}
+  tls.crt: {{ $cert.Cert | b64enc }}
+
+---
+
+{{ end }}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trust-manager.name" . }}
+  namespace: {{ include "trust-manager.namespace" . }}
+  labels:
+    app: {{ include "trust-manager.name" . }}
+    {{- include "trust-manager.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.app.webhook.service.type }}
+  {{- if .Values.app.webhook.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.app.webhook.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if .Values.app.webhook.service.ipFamilies }}
+  ipFamilies: {{ .Values.app.webhook.service.ipFamilies | toYaml | nindent 2 }}
+  {{- end }}
+  ports:
+    - port: 443
+      targetPort: {{ .Values.app.webhook.port }}
+{{- if .Values.app.webhook.service.nodePort }}
+      nodePort: {{ .Values.app.webhook.service.nodePort }}
+{{- end }}
+      protocol: TCP
+      name: webhook
+  selector:
+    app: {{ include "trust-manager.name" . }}
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "trust-manager.name" . }}
+  labels:
+    app: {{ include "trust-manager.name" . }}
+    {{- include "trust-manager.labels" . | nindent 4 }}
+  {{- if or (not .Values.app.webhook.tls.helmCert.enabled) .Values.commonAnnotations }}
+  annotations:
+    {{- if not .Values.app.webhook.tls.helmCert.enabled }}
+    cert-manager.io/inject-ca-from: "{{ include "trust-manager.namespace" . }}/{{ include "trust-manager.name" . }}"
+    {{- end }}
+    {{- with .Values.commonAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+webhooks:
+  - name: trust.cert-manager.io
+    rules:
+      - apiGroups:
+          - "trust.cert-manager.io"
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - bundles
+    admissionReviewVersions: ["v1"]
+    timeoutSeconds: {{ .Values.app.webhook.timeoutSeconds }}
+    failurePolicy: Fail
+    sideEffects: None
+    clientConfig:
+{{ if .Values.app.webhook.tls.helmCert.enabled }}
+      caBundle: "{{ $ca.Cert | b64enc }}"
+{{ end }}
+      service:
+        name: {{ include "trust-manager.name" . }}
+        namespace: {{ include "trust-manager.namespace" . }}
+        path: /validate-trust-cert-manager-io-v1alpha1-bundle

@@ -1,0 +1,23 @@
+{{- if (lt (int .Values.replicaCount) 2) }}
+⚠️  WARNING: Consider increasing the Helm value `replicaCount` to 2 if you require high availability.
+{{- end }}
+
+{{- if (not .Values.podDisruptionBudget.enabled) }}
+⚠️  WARNING: Consider setting the Helm value `podDisruptionBudget.enabled` to true if you require high availability.
+{{- end }}
+
+trust-manager {{ .Chart.AppVersion }} has been deployed successfully!
+
+{{- if .Values.defaultPackage.enabled }}
+Your installation includes a default CA package, using the following
+default CA package image:
+
+{{ .Values.defaultPackageImage.repository }}:{{ .Values.defaultPackageImage.tag }}
+
+It's imperative that you keep the default CA package image up to date.
+{{- end }}
+To find out more about securely running trust-manager and to get started
+with creating your first bundle, check out the documentation on the
+cert-manager website:
+
+https://cert-manager.io/docs/projects/trust-manager/

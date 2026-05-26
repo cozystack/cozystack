@@ -1,0 +1,29 @@
+{{- if .Values.app.metrics.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trust-manager.name" . }}-metrics
+  namespace: {{ include "trust-manager.namespace" . }}
+  labels:
+    app: {{ include "trust-manager.name" . }}
+    {{- include "trust-manager.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.app.metrics.service.type }}
+  {{- if .Values.app.metrics.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.app.metrics.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if .Values.app.metrics.service.ipFamilies }}
+  ipFamilies: {{ .Values.app.metrics.service.ipFamilies | toYaml | nindent 2 }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.app.metrics.port }}
+      targetPort: {{ .Values.app.metrics.port }}
+      protocol: TCP
+      name: metrics
+  selector:
+    app: {{ include "trust-manager.name" . }}
+{{- end }}

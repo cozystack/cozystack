@@ -1,0 +1,177 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trust-manager.name" . }}
+  namespace: {{ include "trust-manager.namespace" . }}
+  labels:
+    {{- include "trust-manager.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      app: {{ include "trust-manager.name" . }}
+  template:
+    metadata:
+      {{- if or .Values.app.podAnnotations .Values.app.webhook.tls.helmCert.enabled }}
+      annotations:
+        {{- if .Values.app.podAnnotations }}
+        {{- toYaml .Values.app.podAnnotations | nindent 8 }}
+        {{- end }}
+        {{- if .Values.app.webhook.tls.helmCert.enabled }}
+        {{- /* When using a helm cert, the cert will be regenerated every time the chart is updated. When that happens, we need to restart the pods in the deployment to ensure the new cert is picked up. */}}
+        rollme-due-to-helm-cert: {{ randAlphaNum 5 | quote }}
+        {{- end }}
+      {{- end }}
+      labels:
+        app: {{ include "trust-manager.name" . }}
+        {{- include "trust-manager.labels" . | nindent 8 }}
+        {{- with .Values.app.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "trust-manager.serviceAccountName" . }}
+      {{- if hasKey .Values "automountServiceAccountToken" }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      {{- end }}
+      {{- if .Values.defaultPackage.enabled }}
+      initContainers:
+      - name: cert-manager-package-debian
+        image: "{{ template "image" (tuple .Values.defaultPackageImage .Values.imageRegistry .Values.imageNamespace .Values.defaultPackageImage._defaultReference) }}"
+        imagePullPolicy: {{ .Values.defaultPackageImage.pullPolicy }}
+        args:
+          - "/copyandmaybepause"
+          - "/debian-package"
+          - "/packages"
+        volumeMounts:
+        - mountPath: /packages
+          name: packages
+          readOnly: false
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          {{- if .Values.app.securityContext.seccompProfileEnabled }}
+          seccompProfile:
+            type: RuntimeDefault
+          {{- end }}
+        {{- if .Values.defaultPackage.resources }}
+        resources:
+          {{- toYaml .Values.defaultPackage.resources | nindent 10 }}
+        {{- end }}
+      {{- end }}
+      containers:
+      - name: {{ include "trust-manager.name" . }}
+        image: "{{ template "image" (tuple .Values.image .Values.imageRegistry .Values.imageNamespace (printf ":%s" $.Chart.AppVersion)) }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.app.webhook.port }}
+          name: webhook # for the PodMonitor port field
+        - containerPort: {{ .Values.app.metrics.port }}
+          name: metrics # for the PodMonitor port field
+        readinessProbe:
+          httpGet:
+            port: {{ .Values.app.readinessProbe.port }}
+            path: {{ .Values.app.readinessProbe.path }}
+          initialDelaySeconds: 3
+          periodSeconds: 7
+        args:
+          {{- with .Values.app.minTLSVersion }}
+          - "--tls-min-version={{.}}"
+          {{- end }}
+          {{- with .Values.app.cipherSuites }}
+          - "--tls-cipher-suites={{.}}"
+          {{- end }}
+          - "--log-format={{.Values.app.logFormat}}"
+          - "--log-level={{.Values.app.logLevel}}"
+          - "--metrics-port={{.Values.app.metrics.port}}"
+          - "--readiness-probe-port={{.Values.app.readinessProbe.port}}"
+          - "--readiness-probe-path={{.Values.app.readinessProbe.path}}"
+          - "--leader-elect={{.Values.app.leaderElection.enabled}}"
+          - "--leader-election-lease-duration={{.Values.app.leaderElection.leaseDuration}}"
+          - "--leader-election-renew-deadline={{.Values.app.leaderElection.renewDeadline}}"
+            # trust
+          - "--trust-namespace={{.Values.app.trust.namespace}}"
+            # webhook
+          - "--webhook-host={{.Values.app.webhook.host}}"
+          - "--webhook-port={{.Values.app.webhook.port}}"
+          - "--webhook-certificate-dir=/tls"
+          {{- if .Values.defaultPackage.enabled }}
+          - "--default-package-location=/packages/cert-manager-package-debian.json"
+          {{- end }}
+          {{- if .Values.secretTargets.enabled }}
+          - "--secret-targets-enabled=true"
+          {{- end }}
+          {{- if .Values.filterExpiredCertificates.enabled }}
+          - "--filter-expired-certificates=true"
+          {{- end }}
+          {{- if .Values.filterNonCACerts.enabled }}
+          - "--filter-non-ca-certs=true"
+          {{- end }}
+          {{- if .Values.app.targetNamespaces }}
+          - '--target-namespaces={{ join "," .Values.app.targetNamespaces }}'
+          {{- end }}
+        volumeMounts:
+        - mountPath: /tls
+          name: tls
+          readOnly: true
+        - mountPath: /packages
+          name: packages
+          readOnly: true
+        {{- with .Values.volumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.resources | nindent 12 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          {{- if .Values.app.securityContext.seccompProfileEnabled }}
+          seccompProfile:
+            type: RuntimeDefault
+          {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: "{{ . }}"
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with  .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+      - name: packages
+        emptyDir:
+          sizeLimit: 50M
+      - name: tls
+        secret:
+          defaultMode: 420
+          secretName: {{ include "trust-manager.name" . }}-tls
+      {{- with .Values.volumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if .Values.app.webhook.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
