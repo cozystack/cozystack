@@ -73,6 +73,9 @@ storageClass: ""
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @param {*object} [affinity] - Affinity scheduling rules applied to RabbitMQ pods.
+affinity: {}
+
 ##
 ## @enum {string} Version
 ## @value v4.2
