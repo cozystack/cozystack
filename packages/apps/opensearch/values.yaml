@@ -99,6 +99,15 @@ version: v2
 ##   NOTE: Transport mTLS between nodes is always active and is managed by the opster
 ##   operator (tls.transport.generate: true). Setting enabled: false here does NOT
 ##   disable transport mTLS — the OpenSearch security plugin requires it unconditionally.
+##
+## KNOWN LIMITATION: When chart-managed HTTP TLS is enabled, the opensearch-operator's
+## securityadmin job authenticates with an admin certificate signed by the operator's
+## transport CA, but connects to the HTTP endpoint whose trust anchor is this chart's
+## cert-manager CA (<release>-http-ca). These two CAs do not share a trust bundle, so
+## securityadmin cannot verify the HTTP TLS chain. As a result, security configuration
+## stored in the <release>-security-config Secret (users, roles, audit policies) may not
+## apply or refresh automatically. Workaround: reconcile security configuration manually,
+## or keep tls.enabled unset (operator-managed mode) until upstream adds merged CA support.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}
