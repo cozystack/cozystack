@@ -117,10 +117,7 @@
       "properties": {
         "enabled": {
           "description": "Enable TLS. When omitted, TLS is enabled automatically when `external` is true.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         }
       }
     },
