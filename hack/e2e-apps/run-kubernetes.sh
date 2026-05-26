@@ -10,7 +10,8 @@ run_kubernetes_test() {
     # to flip one addon flag — kubernetes-latest passes "true", kubernetes-
     # previous leaves it empty.
     local enable_ouroboros="${4:-}"
-    local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
+    local k8s_version
+    k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
   # Clean up stale resources from a previous failed retry
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
