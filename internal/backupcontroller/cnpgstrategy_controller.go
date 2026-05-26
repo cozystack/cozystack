@@ -179,7 +179,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 	strategy := &strategyv1alpha1.CNPG{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("CNPG strategy not found: %s", resolved.StrategyRef.Name))
+			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
 	}
@@ -527,7 +527,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	strategy := &strategyv1alpha1.CNPG{}
 	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("CNPG strategy not found: %s", backup.Spec.StrategyRef.Name))
+			return r.requeueRestoreStrategyNotReady(ctx, restoreJob, backup.Spec.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
 	}

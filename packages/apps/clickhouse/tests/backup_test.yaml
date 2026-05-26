@@ -1,0 +1,119 @@
+suite: backup sidecar S3 wiring (useSystemBucket vs legacy, path-override guard)
+
+# Locks in the clickhouse-backup sidecar S3 wiring this PR introduced on the
+# ClickHouseInstallation PodTemplate:
+#   - useSystemBucket=true points every S3_* env at the platform-projected
+#     cozy-backups-creds Secret with optional:true (the Pod starts before the
+#     first projection) and scopes S3_PATH to <namespace>/<release>; the
+#     chart-managed <release>-backup-s3 / <release>-backup Secrets are skipped;
+#   - the legacy flow keeps the chart-emitted <release>-backup-s3 Secret and a
+#     strict (non-optional) secretKeyRef;
+#   - s3PathOverride + useSystemBucket fails fast at render time.
+# These are template-rendering contracts, so helm-unittest is the right tool.
+
+templates:
+  - templates/clickhouse.yaml
+  - templates/backup-strategy-secret.yaml
+  - templates/backup-secret.yaml
+
+release:
+  name: ch-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  - it: "useSystemBucket=true: sidecar reads cozy-backups-creds (optional) and scopes S3_PATH"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_PATH")].value
+          value: tenant-test/ch-test
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.name
+          value: cozy-backups-creds
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.optional
+          value: true
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_SECRET_KEY")].valueFrom.secretKeyRef.name
+          value: cozy-backups-creds
+
+  - it: "useSystemBucket=true: S3_FORCE_PATH_STYLE is sourced from cozy-backups-creds, not hardcoded"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].valueFrom.secretKeyRef.name
+          value: cozy-backups-creds
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].valueFrom.secretKeyRef.key
+          value: forcePathStyle
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].valueFrom.secretKeyRef.optional
+          value: true
+      - notExists:
+          # must no longer be the hardcoded literal value: "true"
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].value
+
+  - it: "useSystemBucket=true: chart-managed backup Secrets are skipped"
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+        schedule: "0 * * * *"
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/backup-strategy-secret.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/backup-secret.yaml
+
+  - it: "legacy backup.enabled=true: sidecar reads <release>-backup-s3 (strict) and the Secret renders"
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.name
+          value: ch-test-backup-s3
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.optional
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - hasDocuments:
+          count: 1
+        template: templates/backup-strategy-secret.yaml
+
+  - it: "s3PathOverride + useSystemBucket: render fails fast"
+    template: templates/clickhouse.yaml
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+        s3PathOverride: other-release
+    asserts:
+      - failedTemplate:
+          errorMessage: "clickhouse: backup.s3PathOverride is incompatible with backup.useSystemBucket=true. The platform flow scopes the S3 path to <namespace>/<release> automatically; clear s3PathOverride or disable useSystemBucket. To restore from another release's prefix, use a backups.cozystack.io/RestoreJob with spec.targetApplicationRef."

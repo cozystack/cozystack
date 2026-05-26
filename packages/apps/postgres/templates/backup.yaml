@@ -14,8 +14,15 @@
   getting a chart-emitted ScheduledBackup that competes with their
   BackupClass policy. CNPG admission rejects an empty `schedule` field,
   so the gate keeps invalid manifests from reaching the cluster.
+
+  Also excluded when `backup.useSystemBucket=true`: in that flow the
+  Cluster's `spec.backup.barmanObjectStore` is intentionally left unset
+  until the BackupClass driver SSA-patches it at first BackupJob time, so
+  a chart-emitted ScheduledBackup would fire against a Cluster with no
+  backup configuration and fail. This mirrors the ClickHouse
+  `useSystemBucket` gates on the chart-managed backup resources.
 */}}
-{{- if and .Values.backup.enabled .Values.backup.schedule }}
+{{- if and .Values.backup.enabled .Values.backup.schedule (not .Values.backup.useSystemBucket) }}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup

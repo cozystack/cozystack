@@ -94,11 +94,16 @@ rules:
 - apiGroups: ["postgresql.cnpg.io"]
   resources: ["backups"]
   verbs: ["get", "list", "watch", "create", "patch", "delete"]
-# Note: the controller does NOT need cluster-scoped Secret read. The CNPG
-# restore path forwards the operator-supplied credentials Secret name into
-# spec.backup.s3CredentialsSecret on the Postgres app, which the chart then
-# wires into barmanObjectStore.s3Credentials. The Secret bytes never flow
-# through this controller.
+# Secrets: the BackupJob/RestoreJob reconcilers project the platform-managed
+# S3 credentials Secret from the backupStorage.namespace (tenant-root by
+# default) into each tenant namespace as cozy-backups-creds. The verbs are
+# cluster-scoped because the
+# target namespace varies per BackupJob. Only Get + Create/Update/Patch
+# are needed — the projector does no listing or watching. Trimming list +
+# watch keeps the cluster-wide Secret read blast-radius minimal.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "create", "update", "patch"]
 # Altinity strategy: drives clickhouse-backup as a one-shot batch/v1.Job
 # per BackupJob / RestoreJob. The controller renders the strategy
 # PodTemplateSpec into a Job in the application namespace and watches the

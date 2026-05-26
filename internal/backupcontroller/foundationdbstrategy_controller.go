@@ -159,7 +159,7 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 	strategy := &strategyv1alpha1.FoundationDB{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("FoundationDB strategy not found: %s", resolved.StrategyRef.Name))
+			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
 	}

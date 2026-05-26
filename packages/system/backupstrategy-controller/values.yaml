@@ -1,5 +1,14 @@
 backupStrategyController:
   image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.4.0-rc.2@sha256:dd5533d4bbb3e5f3b6bdd3499518fba270abbf183b252cc698168114851e7eae"
+  # chBackupClientImage is the image rendered into the Altinity strategy
+  # Pod: it drives clickhouse-backup's HTTP API via curl + jq. We reuse
+  # platform-migrations (already pre-built and digested by release CI in
+  # packages/core/platform/values.yaml) because it bundles curl + jq +
+  # ca-certificates — avoids shipping a one-binary tiny image whose tag
+  # would have to be re-digested on every release. Bumping the
+  # platform-migrations version requires updating BOTH this value and
+  # packages/core/platform/values.yaml so they remain in lockstep.
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.4.0-rc.2@sha256:17390197a9b11d76a8dd1b24c6d1512adb7d3226b28b5bcba8551b14b1ec4be0"
   replicas: 2
   debug: false
   metrics:
@@ -12,3 +21,78 @@ backupStrategyController:
     limits:
       cpu: 500m
       memory: 128Mi
+# backupStorage describes the platform-managed S3 bucket used by every
+# default BackupClass strategy. The bucket lives in the backupStorage.namespace
+# (tenant-root by default) and is provisioned through the apps.cozystack.io/Bucket CR.
+# Tenants never see these coordinates directly — they reference cozy-default
+# BackupClass and the backupstrategy-controller projects credentials per BackupJob.
+backupStorage:
+  # provisionBucket controls whether to create the apps.cozystack.io/Bucket CR.
+  # Set to false when the cluster runs against an external S3 (no SeaweedFS)
+  # and the admin manages the credentials Secret manually.
+  provisionBucket: true
+  # The Bucket CR lives in tenant-root (a tenant namespace) because the
+  # apps.cozystack.io/Bucket chart's RBAC helper fails Helm render on any
+  # namespace that does not start with "tenant-" (see
+  # packages/library/cozy-lib/templates/_rbac.tpl). tenant-root is the
+  # root tenant present on every Cozystack install, so the system Bucket
+  # naturally lives there. Cross-namespace Secret read is granted to the
+  # backupstrategy-controller via cluster-scoped Secret RBAC.
+  namespace: tenant-root
+  bucketName: cozy-backups
+  # bucketNameOverride is an escape hatch for offline `helm template`
+  # renders (CI / local diffs). When set, the chart skips the live-cluster
+  # BucketClaim status lookup and uses this string as the S3 bucket name.
+  # Leave empty in production — the COSI driver assigns its own bucket
+  # name independent of .bucketName above, and the BucketClaim status
+  # is the only authoritative source.
+  bucketNameOverride: ""
+  # endpoint is wired into every default Strategy CR at chart-render time.
+  # Switching to an https:// URL silently enables TLS in the MariaDB
+  # strategy (tls.enabled is computed from the scheme). Make sure the CA
+  # bundle is reachable to the operator (mariadb's tls.caSecretKeyRef, the
+  # FDB pod ca-cert volume, Velero's BSL caCert field) before flipping it.
+  endpoint: http://seaweedfs-s3.tenant-root.svc.cozy.local:8333
+  # region is re-projected into cozy-backups-creds on the next reconcile
+  # (1-minute tick for system namespaces, on-demand for tenant namespaces).
+  # However, charts that consume the region via secretKeyRef in env vars —
+  # the chart-emitted ClickHouse sidecar on `useSystemBucket: true` is the
+  # only such consumer today — only pick up the new value on Pod restart.
+  # Plan a rollout of those Pods when you change this value.
+  region: us-east-1
+  forcePathStyle: true
+  # systemSecretName — the human-friendly Secret produced by the Bucket
+  # application in the backupStorage.namespace (tenant-root by default). The Bucket release is
+  # wrapped with the bucket-rd "bucket-" prefix (see
+  # packages/system/bucket-rd/cozyrds/bucket.yaml), so the human-friendly
+  # Secret rendered by packages/system/bucket/templates/user-credentials.yaml
+  # is named <bucket-release>-<user>-credentials. The projector also
+  # tolerates the raw COSI Secret format (single BucketInfo JSON key) so a
+  # cluster that wires an external S3 Secret manually still works.
+  systemSecretName: bucket-cozy-backups-system-credentials
+  # systemNamespaces — namespaces where the controller eagerly projects
+  # cozy-backups-creds so long-lived static references (Velero BSL, FDB
+  # operator deployments) keep finding the Secret without on-demand
+  # rendering. Tenants are projected lazily during BackupJob reconcile.
+  systemNamespaces:
+    - cozy-velero
+# velero — BSL rendering. The cozy-default BackupStorageLocation is
+# created in cozy-velero by templates/velero-bsl.yaml so endpoint/bucket/
+# region come from the same backupStorage block used by Strategy CRs and
+# the projector, eliminating drift.
+#
+# bslEnabled defaults to TRUE because cozystack.velero is a hard
+# dependsOn for this PackageSource (see
+# packages/core/platform/sources/backupstrategy-controller.yaml) — the
+# Velero CRDs are guaranteed to exist by the time this chart installs.
+# The BSL template additionally gates itself on a populated BucketClaim
+# status via the bucketName helper, so on a bootstrap install the BSL
+# materialises only after the platform Bucket reconciles. Setting this
+# to false is an explicit opt-out for clusters that disable VM backups
+# entirely and want to avoid the cluster-default BSL — in that case the
+# cozy-default-velero-vminstance / -vmdisk strategy CRs still ship but
+# their `storageLocation: cozy-default` reference will not resolve, so
+# VM BackupJobs against cozy-default will fail.
+velero:
+  bslEnabled: true
+  namespace: cozy-velero

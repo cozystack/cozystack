@@ -140,7 +140,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	strategy := &strategyv1alpha1.MariaDB{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("MariaDB strategy not found: %s", resolved.StrategyRef.Name))
+			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
 	}
@@ -160,13 +160,20 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 
 	// Operator-side MariaDB CR carries the prefixed release name (see
 	// mariadbNameForApp); verify it exists before we ask the operator to
-	// back it up. Returning a NotFound surfaces a transient condition rather
-	// than a terminal failure: the chart may still be rendering on a fresh
-	// app.
+	// back it up. NotFound is normally transient (the chart may still be
+	// rendering on a fresh app), but bounded by mariadbDefaultBackupDeadline
+	// — otherwise a BackupJob whose applicationRef.name typo never resolves
+	// would pin in Running forever. StartedAt was persisted at line 132,
+	// so the deadline clock already started ticking on the first reconcile.
 	mdbName := mariadbNameForApp(j.Spec.ApplicationRef.Name)
 	if err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: mdbName},
 		&mariadbtypes.MariaDB{}); err != nil {
 		if apierrors.IsNotFound(err) {
+			if mariadbBackupDeadlineExceeded(j.Status.StartedAt) {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"k8s.mariadb.com/MariaDB %s/%s never reached existence within %s",
+					j.Namespace, mdbName, mariadbDefaultBackupDeadline))
+			}
 			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 				Type:    "Ready",
 				Status:  metav1.ConditionFalse,

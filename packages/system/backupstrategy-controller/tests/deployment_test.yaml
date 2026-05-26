@@ -1,0 +1,47 @@
+suite: controller Deployment — metrics wiring and projector source namespace
+
+# Guards the metrics.enable -> metrics.enabled fix (the misspelled key was
+# always nil, so the metrics arg and port were silently never rendered) and
+# pins the projector's source namespace to backupStorage.namespace, which is
+# what the credential-projection comments describe.
+
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: t
+  namespace: cozy-backup-controller
+
+tests:
+  - it: "metrics.enabled=true (default): --metrics-bind-address arg and metrics port are rendered"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8443
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+          any: true
+
+  - it: "metrics.enabled=false: metrics arg and port are absent (regression guard for the metrics.enable typo)"
+    set:
+      backupStrategyController.metrics.enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8443
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+          any: true
+
+  - it: "projector reads its source Secret from backupStorage.namespace (tenant-root by default)"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_SECRET_NAMESPACE
+            value: tenant-root
+          any: true

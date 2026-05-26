@@ -1,0 +1,156 @@
+suite: rendering gates — bucketName helper, BackupClass always-on, strategy/BSL gating
+
+# This whole chart is lookup-driven conditional rendering: the
+# backupstrategy-controller.bucketName helper decides whether the Strategy
+# CRs and the Velero BSL materialise, while the cozy-default BackupClass and
+# the cozy-backups Bucket follow different rules. helm-unittest renders with
+# no live cluster, so `lookup` returns nil — exactly the bootstrap window
+# these cases pin.
+
+templates:
+  - templates/backupclass-default.yaml
+  - templates/bucket.yaml
+  - templates/velero-bsl.yaml
+  - templates/strategy-cnpg-default.yaml
+  - templates/strategy-mariadb-default.yaml
+  - templates/strategy-etcd-default.yaml
+  - templates/strategy-altinity-default.yaml
+  - templates/strategy-foundationdb-default.yaml
+  - templates/strategy-velero-vminstance-default.yaml
+  - templates/strategy-velero-vmdisk-default.yaml
+
+release:
+  name: t
+  namespace: cozy-backup-controller
+
+tests:
+  - it: "bootstrap window (no resolvable bucket name): only Bucket + BackupClass render"
+    # defaults: provisionBucket=true, bucketNameOverride="" -> lookup nil -> $bucketName=""
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/backupclass-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/bucket.yaml
+      - equal:
+          path: metadata.namespace
+          value: tenant-root
+        template: templates/bucket.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-cnpg-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-mariadb-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-etcd-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-altinity-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-foundationdb-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-velero-vminstance-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-velero-vmdisk-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/velero-bsl.yaml
+
+  - it: "cozy-default BackupClass is the Day-1 tenant interface: renders unconditionally with all six routes (FoundationDB intentionally unbound)"
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/backupclass-default.yaml
+      - equal:
+          path: metadata.name
+          value: cozy-default
+        template: templates/backupclass-default.yaml
+      - lengthEqual:
+          path: spec.strategies
+          count: 6
+        template: templates/backupclass-default.yaml
+
+  - it: "all Strategy CRs and the Velero BSL render once a bucket name resolves"
+    set:
+      backupStorage.bucketNameOverride: test-bucket
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-cnpg-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-mariadb-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-etcd-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-altinity-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-foundationdb-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-velero-vminstance-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-velero-vmdisk-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/velero-bsl.yaml
+      - equal:
+          path: spec.objectStorage.bucket
+          value: test-bucket
+        template: templates/velero-bsl.yaml
+      - equal:
+          # s3ForcePathStyle is rendered as a quoted string, not a bool
+          path: spec.config.s3ForcePathStyle
+          value: "true"
+        template: templates/velero-bsl.yaml
+
+  - it: "external S3 (provisionBucket=false): Strategy CRs render against the configured bucketName, no Bucket CR is created"
+    set:
+      backupStorage.provisionBucket: false
+      backupStorage.bucketName: ext-bucket
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/bucket.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-cnpg-default.yaml
+      - matchRegex:
+          path: spec.template.barmanObjectStore.destinationPath
+          pattern: ^s3://ext-bucket/
+        template: templates/strategy-cnpg-default.yaml
+      - equal:
+          path: spec.template.storage.s3.bucket
+          value: ext-bucket
+        template: templates/strategy-mariadb-default.yaml
+
+  - it: "velero.bslEnabled=false: Velero strategies and BSL drop out while other strategies keep rendering"
+    set:
+      backupStorage.bucketNameOverride: test-bucket
+      velero.bslEnabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/velero-bsl.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-velero-vminstance-default.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/strategy-velero-vmdisk-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-cnpg-default.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/strategy-etcd-default.yaml

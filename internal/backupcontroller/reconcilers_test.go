@@ -249,12 +249,22 @@ func TestBackupJobReconciler_NotFoundIsNoop(t *testing.T) {
 	}
 }
 
-// TestBackupJobReconciler_MissingBackupClassErrors pins the resolve
-// failure: a BackupJob referencing a non-existent BackupClass should
-// surface the error to the controller-runtime queue (not silently
-// succeed) so the operator gets a backoff retry.
-func TestBackupJobReconciler_MissingBackupClassErrors(t *testing.T) {
-	s := newReconcilerScheme(t)
+// TestBackupJobReconciler_MissingBackupClassIsTransient pins the resolve
+// behaviour for a BackupJob referencing a BackupClass that does not exist.
+// This commit changed the contract: a missing BackupClass is treated as a
+// transient bootstrap condition (the cozy-default BackupClass is gated on a
+// populated BucketClaim status, so it legitimately does not exist for a
+// window on a fresh install) rather than a hard error. The reconcile must
+// therefore handle it in-band — surface Ready=False/BackupClassNotFound and
+// requeue, NOT return a bare apiserver error that controller-runtime logs at
+// Error level on every backoff cycle, and NOT terminally fail the job.
+//
+// Kept from the old TestBackupJobReconciler_MissingBackupClassErrors: the
+// no-APIGroup Kind=Harbor setup, so the apps.cozystack.io normalization +
+// missing-class lookup path (distinct from the Postgres/apps.cozystack.io
+// case in TestReconcile_BackupClassNotFound_IsTransient) stays covered and
+// the "missing BackupClass is handled, not panicking" intent survives.
+func TestBackupJobReconciler_MissingBackupClassIsTransient(t *testing.T) {
 	job := &backupsv1alpha1.BackupJob{
 		ObjectMeta: metav1.ObjectMeta{Name: "harbor-job", Namespace: "tenant-foo"},
 		Spec: backupsv1alpha1.BackupJobSpec{
@@ -265,14 +275,29 @@ func TestBackupJobReconciler_MissingBackupClassErrors(t *testing.T) {
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(job).Build()
+	c := newBackupJobTestClient(t, job)
 
-	r := &BackupJobReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(8)}
-	_, err := r.Reconcile(context.TODO(), ctrl.Request{
+	r := &BackupJobReconciler{Client: c, Recorder: record.NewFakeRecorder(8)}
+	res, err := r.Reconcile(context.TODO(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "harbor-job", Namespace: "tenant-foo"},
 	})
-	if err == nil {
-		t.Errorf("expected error from missing BackupClass, got nil")
+	if err != nil {
+		t.Fatalf("missing BackupClass must be handled in-band, got error %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected requeue for transient BackupClassNotFound, got %+v", res)
+	}
+
+	got := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "harbor-job", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("missing BackupClass must NOT be terminal; got Phase=%q", got.Status.Phase)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "BackupClassNotFound" {
+		t.Errorf("expected Ready=False/BackupClassNotFound, got %+v", cond)
 	}
 }
 
