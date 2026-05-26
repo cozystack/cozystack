@@ -576,3 +576,75 @@ tests:
           path: spec.dnsNames
           content: "test-qdrant-1.test-qdrant-headless"
         documentIndex: 3
+
+  #######################################################
+  # ECDSA P-256 private keys (issue ECDSA)              #
+  #######################################################
+
+  - it: CA Certificate uses ECDSA P-256 private key algorithm
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+        documentIndex: 1
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+        documentIndex: 1
+
+  - it: leaf Certificate uses ECDSA P-256 private key algorithm
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+        documentIndex: 3
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+        documentIndex: 3
+
+  - it: CA Certificate rotationPolicy is Never
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+        documentIndex: 1
+
+  - it: leaf Certificate rotationPolicy is Always
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+        documentIndex: 3

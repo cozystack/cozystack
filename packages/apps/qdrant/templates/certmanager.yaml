@@ -26,6 +26,8 @@ spec:
     name: {{ .Release.Name }}-selfsigned
   isCA: true
   privateKey:
+    algorithm: ECDSA
+    size: 256
     rotationPolicy: Never
 ---
 apiVersion: cert-manager.io/v1
@@ -50,6 +52,10 @@ spec:
   issuerRef:
     name: {{ .Release.Name }}-ca
   commonName: {{ .Release.Name }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
   # server auth: required for REST (6333) and gRPC (6334) TLS endpoints.
   # client auth: required for p2p mTLS — Qdrant uses ca_cert for peer
   # verification when cluster.p2p.enable_tls is true (see qdrant.yaml).
