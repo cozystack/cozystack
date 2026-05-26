@@ -570,26 +570,24 @@ tests:
           content: "my-mariadb.example.com"
 
   # -------------------------------------------------------------------
-  # B2: explicit tls.enabled=null falls through to external (tri-state)
-  # hasKey returns true but index gives nil; kindIs "invalid" catches it.
+  # B2: tls.enabled unset falls through to external (tri-state)
+  # kindIs "invalid" catches the unset case. The schema enforces type
+  # "boolean" for tls.enabled — null is rejected by schema validation
+  # before rendering; only the unset path triggers external inheritance.
   # -------------------------------------------------------------------
-  - it: "explicit tls.enabled=null with external=true enables TLS (auto-on path)"
+  - it: "tls.enabled unset with external=true enables TLS (auto-on path)"
     templates:
       - templates/certmanager.yaml
     set:
-      tls:
-        enabled: null
       external: true
     asserts:
       - hasDocuments:
           count: 4
 
-  - it: "explicit tls.enabled=null with external=false keeps TLS off"
+  - it: "tls.enabled unset with external=false keeps TLS off"
     templates:
       - templates/certmanager.yaml
     set:
-      tls:
-        enabled: null
       external: false
     asserts:
       - hasDocuments:
@@ -597,9 +595,10 @@ tests:
 
   # -------------------------------------------------------------------
   # NB: leaf cert usages are server auth + client auth + key encipherment
+  #     + digital signature (required for TLS 1.3 and TLS 1.2 ECDHE).
   # Absence of CA-only EKUs (cert sign, signing) is also verified.
   # -------------------------------------------------------------------
-  - it: "leaf cert usages are server auth, client auth, key encipherment only"
+  - it: "leaf cert usages are server auth, client auth, key encipherment, digital signature"
     templates:
       - templates/certmanager.yaml
     set:
@@ -616,6 +615,9 @@ tests:
       - contains:
           path: spec.usages
           content: key encipherment
+      - contains:
+          path: spec.usages
+          content: digital signature
       - notContains:
           path: spec.usages
           content: cert sign
@@ -624,16 +626,31 @@ tests:
           content: signing
       - lengthEqual:
           path: spec.usages
-          count: 3
+          count: 4
+
+  # -------------------------------------------------------------------
+  # C: digital signature in leaf cert usages
+  # Required for TLS 1.3 and TLS 1.2 ECDHE — strict clients (Go
+  # crypto/tls, BoringSSL) reject handshakes without this usage.
+  # -------------------------------------------------------------------
+  - it: "leaf cert usages contain digital signature"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: digital signature
 
   # -------------------------------------------------------------------
   # Integer tls.enabled edge case
-  # The JSON schema enforces type ["boolean","null"] for tls.enabled, so
-  # integer values (e.g. 1) are rejected by schema validation before the
-  # helper even runs. The `$enabled | toString | eq "true"` path in
-  # _tls.tpl would silently treat "1" as false if schema were absent, but
-  # schema-level validation makes that path unreachable for valid inputs.
-  # Only explicit bool true or null are accepted.
+  # The JSON schema enforces type "boolean" for tls.enabled, so integer
+  # values (e.g. 1) are rejected by schema validation before the helper
+  # even runs. Only explicit bool true is accepted; unset falls through
+  # to external inheritance via kindIs "invalid".
   # -------------------------------------------------------------------
   - it: "string true for tls.enabled enables TLS (toString round-trip is safe for bool)"
     templates:
