@@ -449,9 +449,10 @@ tests:
           count: 4
 
   # -------------------------------------------------------------------
-  # B1: CA cert usages — signing + cert sign only, no key encipherment
+  # B1: CA cert usages — signing + cert sign + crl sign, no key encipherment
+  # crl sign added for conventional compliance (RFC 5280).
   # -------------------------------------------------------------------
-  - it: "CA cert has correct usages (signing + cert sign only)"
+  - it: "CA cert has correct usages (signing + cert sign + crl sign)"
     templates:
       - templates/certmanager.yaml
     set:
@@ -468,9 +469,27 @@ tests:
       - contains:
           path: spec.usages
           content: cert sign
+      - contains:
+          path: spec.usages
+          content: crl sign
       - lengthEqual:
           path: spec.usages
-          count: 2
+          count: 3
+
+  # -------------------------------------------------------------------
+  # K1: crl sign in CA cert usages (RFC 5280 conventional compliance)
+  # -------------------------------------------------------------------
+  - it: "CA cert usages contain crl sign"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.usages
+          content: crl sign
 
   # -------------------------------------------------------------------
   # NB7: TLS secret names are consistent between cert-manager and RBAC
