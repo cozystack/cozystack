@@ -31,10 +31,11 @@ spec:
     rotationPolicy: Never
     algorithm: RSA
     size: 4096
-  # CA usages: signing (OCSP/CRL signing) + cert sign (issuing leaf certs)
+  # CA usages: signing + cert sign (issuing leaf certs) + crl sign (RFC 5280)
   usages:
     - signing
     - cert sign
+    - crl sign
 ---
 # CA Issuer — used to sign the leaf server certificate.
 apiVersion: cert-manager.io/v1
