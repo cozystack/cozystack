@@ -1,3 +1,15 @@
+//go:build manual
+
+// Manual exploration tool, not a unit test. Reads kubeconfig at package
+// init via config.GetConfigOrDie (panics without one) and accepts a
+// pod namespace + name through os.Args[1]/[2]. Standard `go test` runs
+// kill the process at init time and pass test framework flags into
+// os.Args, both of which break the file.
+//
+// Run it explicitly with:
+//
+//	go test -tags=manual -run TestWalkingOwnershipGraph ./pkg/lineage \
+//	    -- <namespace> <pod-name>
 package lineage
 
 import (

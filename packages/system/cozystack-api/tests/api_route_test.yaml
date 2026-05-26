@@ -1,0 +1,95 @@
+suite: cozystack-api ingress vs TLSRoute mode switch
+templates:
+  - templates/api-tlsroute.yaml
+  - templates/api-ingress.yaml
+
+release:
+  name: cozystack-api
+  namespace: cozy-system
+
+# The cozystack-api chart materializes the kubernetes API exposure
+# via either an Ingress (legacy) or a TLSRoute (Gateway API). The
+# `_cluster.gateway-enabled` flag is the toggle:
+#   - "false" (default) → Ingress, no TLSRoute
+#   - "true"            → TLSRoute, no Ingress
+# These are mutually exclusive — they share the same DNS hostname
+# (`api.<root-host>`) and would conflict if both rendered. The PR that
+# introduces Gateway API support depends on this toggle behaving
+# correctly: per-system-app templates flip together with the
+# platform-wide switch, and a refactor that breaks one direction
+# silently would land us in a state where the legacy ingress keeps
+# serving traffic while the operator believes Gateway mode is active.
+
+tests:
+  - it: gateway-enabled=false renders Ingress only
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api"
+        gateway-enabled: "false"
+    asserts:
+      - template: templates/api-ingress.yaml
+        equal:
+          path: kind
+          value: Ingress
+      - template: templates/api-tlsroute.yaml
+        hasDocuments:
+          count: 0
+
+  - it: gateway-enabled=true renders TLSRoute only
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: kind
+          value: TLSRoute
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: apiVersion
+          value: gateway.networking.k8s.io/v1alpha2
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: metadata.namespace
+          value: default
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: spec.hostnames[0]
+          value: api.example.org
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: spec.parentRefs[0].sectionName
+          value: tls-api
+      - template: templates/api-ingress.yaml
+        hasDocuments:
+          count: 0
+
+  - it: api not in expose-services renders neither template
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/api-tlsroute.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/api-ingress.yaml
+        hasDocuments:
+          count: 0
+
+  - it: gateway-enabled=true with custom expose-ingress targets that namespace's Gateway
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api"
+        expose-ingress: "tenant-foo"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/api-tlsroute.yaml
+        equal:
+          path: spec.parentRefs[0].namespace
+          value: tenant-foo

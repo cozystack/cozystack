@@ -8,6 +8,9 @@ include ../../../hack/package.mk
 .PHONY: clone-console build-console update-values-console clean-console
 .NOTPARALLEL: image
 
+test:
+	helm unittest .
+
 image: image-console image-token-proxy
 
 CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git

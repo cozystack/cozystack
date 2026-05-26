@@ -29,6 +29,30 @@
 {{- $ingress = $tenantName }}
 {{- end }}
 
+{{/*
+  Gateway reference inherits from the parent, same shape as ingress
+  above: $gateway is the name of the nearest ancestor (inclusive)
+  that owns a Gateway. Apps in this tenant render HTTPRoutes whose
+  parentRefs.namespace points at that owner namespace, and the
+  owner's Gateway lists this namespace in allowedRoutes via the
+  matching namespace.cozystack.io/gateway label.
+
+  Override fires only when the tenant itself owns a Gateway —
+  tenant.gatewayEffective returns "true" for explicit
+  tenant.spec.gateway=true and for tenants with a custom non-derived
+  host (their apex isn't covered by any ancestor's cert / Issuer).
+  In those cases the controller renders a separate Gateway in this
+  tenant's namespace, with its own LB Service / IP / Certificate.
+
+  Cross-namespace attach is gated by ReferenceGrants rendered by the
+  TenantGateway controller in the owner namespace, one per child
+  that inherits.
+*/}}
+{{- $gateway := $parentNamespace.gateway | default "" }}
+{{- if eq (include "tenant.gatewayEffective" .) "true" }}
+{{- $gateway = $tenantName }}
+{{- end }}
+
 {{- $monitoring := $parentNamespace.monitoring | default "" }}
 {{- if .Values.monitoring }}
 {{- $monitoring = $tenantName }}
@@ -61,6 +85,7 @@ metadata:
     {{/* Labels for network policies */}}
     namespace.cozystack.io/etcd: {{ $etcd | quote }}
     namespace.cozystack.io/ingress: {{ $ingress | quote }}
+    namespace.cozystack.io/gateway: {{ $gateway | quote }}
     namespace.cozystack.io/monitoring: {{ $monitoring | quote }}
     namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
     namespace.cozystack.io/host: {{ $computedHost | quote }}
@@ -92,6 +117,7 @@ stringData:
     _namespace:
       etcd: {{ $etcd | quote }}
       ingress: {{ $ingress | quote }}
+      gateway: {{ $gateway | quote }}
       monitoring: {{ $monitoring | quote }}
       seaweedfs: {{ $seaweedfs | quote }}
       host: {{ $computedHost | quote }}

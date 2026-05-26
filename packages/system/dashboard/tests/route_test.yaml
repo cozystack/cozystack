@@ -1,0 +1,73 @@
+suite: dashboard ingress vs HTTPRoute mode switch
+templates:
+  - templates/httproute.yaml
+  - templates/ingress.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# Dashboard is the highest-traffic system app and the first end-user
+# touchpoint after install. Its ingress/HTTPRoute toggle is identical
+# to cozystack-api's: gateway-enabled=false renders Ingress; =true
+# renders HTTPRoute, with no overlap. Pin both directions so a
+# render-time refactor cannot leave the legacy ingress active in
+# Gateway mode (which would silently keep the cluster on nginx
+# while the operator believes Gateway took over).
+
+tests:
+  - it: gateway-enabled=false renders Ingress only
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard"
+        gateway-enabled: "false"
+    asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: kind
+          value: Ingress
+      - template: templates/httproute.yaml
+        hasDocuments:
+          count: 0
+
+  - it: gateway-enabled=true renders HTTPRoute only
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/httproute.yaml
+        equal:
+          path: kind
+          value: HTTPRoute
+      - template: templates/httproute.yaml
+        equal:
+          path: apiVersion
+          value: gateway.networking.k8s.io/v1
+      - template: templates/httproute.yaml
+        equal:
+          path: spec.hostnames[0]
+          value: dashboard.example.org
+      - template: templates/httproute.yaml
+        equal:
+          path: spec.parentRefs[0].name
+          value: cozystack
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0
+
+  - it: dashboard not in expose-services renders neither
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/httproute.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0

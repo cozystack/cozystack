@@ -4,6 +4,9 @@ NAMESPACE=cozy-system
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 run-local:
 	openssl req -nodes -new -x509 -keyout /tmp/ca.key -out /tmp/ca.crt -subj "/CN=kube-ca"
 	openssl req -out /tmp/client.csr -new -newkey rsa:2048 -nodes -keyout /tmp/client.key -subj "/C=US/ST=SomeState/L=L/OU=Dev/CN=development/O=system:masters"

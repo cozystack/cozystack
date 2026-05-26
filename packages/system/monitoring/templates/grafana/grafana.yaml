@@ -2,6 +2,7 @@
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 ---
 apiVersion: grafana.integreatly.org/v1beta1
 kind: Grafana
@@ -70,6 +71,7 @@ spec:
                   secretKeyRef:
                     key: password
                     name: grafana-admin-password
+  {{- if ne $gatewayEnabled "true" }}
   ingress:
     metadata:
       annotations:
@@ -94,3 +96,4 @@ spec:
       - hosts:
         - "{{ printf "grafana.%s" (.Values.host | default $host) }}"
         secretName: grafana-ingress-tls
+  {{- end }}

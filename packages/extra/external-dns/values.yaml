@@ -31,7 +31,7 @@ policy: "upsert-only"
 ## @param {[]string} extraArgs - Extra arguments for external-dns.
 extraArgs: []
 
-## @param {bool} gatewayAPI=false - Enable Gateway API HTTPRoute as a source for DNS records.
+## @param {bool} gatewayAPI=false - Enable Gateway API HTTPRoute and TLSRoute as sources for DNS records.
 gatewayAPI: false
 
 ## @param {string} [annotationPrefix] - Custom annotation prefix for external-dns (useful for running multiple instances).

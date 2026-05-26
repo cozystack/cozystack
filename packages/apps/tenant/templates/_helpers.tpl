@@ -13,3 +13,50 @@
 {{- printf "tenant-%s" $tenantName }}
 {{- end }}
 {{- end }}
+
+{{/*
+  tenant.gatewayEffective resolves whether THIS tenant should own a
+  dedicated Gateway resource. Returns the literal string "true" or
+  "false" (callers must compare with `eq ... "true"`, bool coercion
+  is not safe).
+
+  When the helper returns "false" the tenant does NOT skip Gateway
+  routing — it attaches its published Routes to the Gateway of the
+  nearest ancestor that owns one, via _namespace.gateway propagation
+  in namespace.yaml. This mirrors the existing _namespace.ingress
+  inheritance: a child tenant publishes through its parent's
+  publishing layer unless it explicitly asks for its own.
+
+  Rules:
+    1. tenant.spec.gateway set explicitly (true|false) → use it.
+       Explicit choice always wins. A tenant that asks for its own
+       Gateway gets its own Service / LB IP / Certificate.
+    2. Otherwise → "false". The tenant inherits the parent's Gateway
+       through _namespace.gateway. Derived-apex children (`host`
+       empty) flow naturally: their predefined hostnames
+       `*.<name>.<parent-apex>` are routed by the ancestor's
+       controller which extends listener / SAN coverage as children
+       attach. If no ancestor owns a Gateway, _namespace.gateway
+       stays empty and apps fall back to Ingress (legacy path).
+
+  Custom-apex tenants (operator sets tenant.spec.host to something
+  not derived from the parent apex, e.g. `customer1.io`) must opt in
+  explicitly via `gateway: true` if they want public exposure. The
+  ancestor's TLS cert does not cover their apex and Let's Encrypt
+  wildcards are single-level, so silent inheritance would either
+  leak through the wrong cert or fail to terminate TLS. Forcing the
+  explicit flag keeps "I want my apex routable" a deliberate choice.
+
+  Implementation note: values.yaml leaves `gateway` absent (no key)
+  so Helm reads it as missing → `kindIs "invalid"`. cozyvalues-gen's
+  `[gateway]` (optional) marker syntax does not allow nullable schema
+  typing, so the "key absent" form is what distinguishes "unset"
+  from explicit `false`.
+*/}}
+{{- define "tenant.gatewayEffective" -}}
+{{- if kindIs "invalid" .Values.gateway -}}
+false
+{{- else -}}
+{{- if .Values.gateway -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+{{- end -}}

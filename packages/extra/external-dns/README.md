@@ -10,7 +10,7 @@
 | `domainFilters`    | List of domains this external-dns instance can manage.                             | `[]string` | `[]`          |
 | `policy`           | How DNS records are synchronized.                                                  | `string`   | `upsert-only` |
 | `extraArgs`        | Extra arguments for external-dns.                                                  | `[]string` | `[]`          |
-| `gatewayAPI`       | Enable Gateway API HTTPRoute as a source for DNS records.                          | `bool`     | `false`       |
+| `gatewayAPI`       | Enable Gateway API HTTPRoute and TLSRoute as sources for DNS records.              | `bool`     | `false`       |
 | `annotationPrefix` | Custom annotation prefix for external-dns (useful for running multiple instances). | `string`   | `""`          |
 
 
