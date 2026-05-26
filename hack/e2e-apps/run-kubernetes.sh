@@ -358,9 +358,9 @@ EOF
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 
   for component in cilium coredns csi vsnap-crd; do
-      kubectl wait hr kubernetes-${test_name}-${component} -n tenant-test --timeout=5m --for=condition=ready
+      kubectl wait hr "kubernetes-${test_name}-${component}" -n tenant-test --timeout=5m --for=condition=ready
     done
-    kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
+    kubectl wait hr "kubernetes-${test_name}-ingress-nginx" -n tenant-test --timeout=5m --for=condition=ready
 
   # Optional ouroboros addon assertions. Folded in from the standalone
   # ouroboros.bats so the test reuses this cluster instead of spinning up a
