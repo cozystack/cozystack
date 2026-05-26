@@ -117,6 +117,9 @@ tests:
       - equal:
           path: spec.privateKey.algorithm
           value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
 
   - it: "third document is the CA Issuer when TLS enabled via external"
     templates:
@@ -166,6 +169,26 @@ tests:
       - equal:
           path: spec.privateKey.algorithm
           value: ECDSA
+
+  - it: "leaf Certificate usages include digital signature for ECDSA TLS handshake"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: "digital signature"
+      - contains:
+          path: spec.usages
+          content: "server auth"
+      - contains:
+          path: spec.usages
+          content: "client auth"
+      - contains:
+          path: spec.usages
+          content: "key encipherment"
 
   - it: "leaf Certificate SAN list covers all four redis-operator service names with all DNS variants"
     templates:

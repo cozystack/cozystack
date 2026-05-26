@@ -63,6 +63,7 @@ spec:
   renewBefore: 720h
   isCA: false
   usages:
+    - digital signature
     - server auth
     - client auth
     - key encipherment
