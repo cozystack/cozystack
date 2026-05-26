@@ -1,10 +1,13 @@
 suite: postgres TLS configuration
 
-# Covers the tri-state tls.enabled field for the operator-managed CNPG TLS mode:
-#   - external: false, tls.enabled unset  → TLS off (default)
-#   - external: true,  tls.enabled unset  → TLS auto-on
-#   - tls.enabled: true  (explicit)       → TLS on regardless of external
-#   - tls.enabled: false (explicit)       → TLS off regardless of external
+# Covers the tri-state tls.enabled field for the operator-managed CNPG TLS mode.
+# tls.enabled is a plain boolean; null is NOT a valid input form (schema rejects it).
+# Omitting tls.enabled entirely triggers kindIs "invalid" → auto-on when external=true.
+#
+#   - external: false, tls.enabled omitted → TLS off (default)
+#   - external: true,  tls.enabled omitted → TLS auto-on
+#   - tls.enabled: true  (explicit)        → TLS on regardless of external
+#   - tls.enabled: false (explicit)        → TLS off regardless of external
 #
 # In TLS-on mode the chart sets spec.certificates with serverAltDNSNames so the
 # operator's own CA signs server certs. CNPG auto-derives SANs for the three
@@ -101,30 +104,3 @@ tests:
           path: spec.certificates.serverAltDNSNames
           count: 1
 
-  - it: Cluster has no spec.certificates when tls.enabled null and external false
-    set:
-      tls:
-        enabled: null
-    documentSelector:
-      path: kind
-      value: Cluster
-    asserts:
-      - isNull:
-          path: spec.certificates
-
-  - it: Cluster has spec.certificates when tls.enabled null and external true
-    set:
-      tls:
-        enabled: null
-      external: true
-      _namespace:
-        host: example.cozy.local
-    documentSelector:
-      path: kind
-      value: Cluster
-    asserts:
-      - exists:
-          path: spec.certificates
-      - contains:
-          path: spec.certificates.serverAltDNSNames
-          content: pg-test.example.cozy.local
