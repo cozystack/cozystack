@@ -1,0 +1,32 @@
+suite: cozystack trust-manager value overrides
+templates:
+  - charts/trust-manager/templates/deployment.yaml
+  - charts/trust-manager/templates/poddisruptionbudget.yaml
+release:
+  name: trust-manager
+  namespace: cozy-cert-manager
+tests:
+  - it: deployment runs two replicas (webhook stays available during rolling restart)
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+        template: charts/trust-manager/templates/deployment.yaml
+
+  - it: PDB is enabled with minAvailable=1
+    asserts:
+      - equal:
+          path: kind
+          value: PodDisruptionBudget
+        template: charts/trust-manager/templates/poddisruptionbudget.yaml
+      - equal:
+          path: spec.minAvailable
+          value: 1
+        template: charts/trust-manager/templates/poddisruptionbudget.yaml
+
+  - it: deployment passes --trust-namespace=cozy-cert-manager
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --trust-namespace=cozy-cert-manager
+        template: charts/trust-manager/templates/deployment.yaml

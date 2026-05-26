@@ -1,0 +1,11 @@
+trust-manager:
+  # Run two replicas so the ValidatingWebhookConfiguration
+  # (failurePolicy: Fail) keeps admitting Bundle CREATE/UPDATE
+  # during a rolling restart of trust-manager itself.
+  replicaCount: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  app:
+    trust:
+      namespace: cozy-cert-manager
