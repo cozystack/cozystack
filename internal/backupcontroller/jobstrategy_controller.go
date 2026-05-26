@@ -179,6 +179,13 @@ func (r *BackupJobReconciler) reconcileJob(ctx context.Context, j *backupsv1alph
 			Reason:  "BackupCompleted",
 			Message: "backup Job completed",
 		})
+		// A full Status().Update (rather than a MergeFrom patch) is safe here:
+		// j is the object the parent Reconcile freshly Get()s on every pass, and
+		// the only other status write in this driver - the StartedAt block above
+		// - returns a requeue instead of writing j in the same pass. So by the
+		// time control reaches this branch, j carries the current
+		// ResourceVersion and no concurrent write from this driver can have
+		// staled it. Mirrors reconcileAltinity.
 		if err := r.Status().Update(ctx, j); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -254,6 +261,10 @@ func buildJobStrategyBatchJob(namespace, name string, labels map[string]string, 
 	for k, v := range labels {
 		pod.Labels[k] = v
 	}
+	// backoffLimit is fixed at 2 (inherited from the Altinity driver). For an
+	// app-agnostic driver this is a footgun - an S3-heavy dump may want 0
+	// retries while a sidecar wants more - so making it operator-configurable
+	// is tracked in https://github.com/cozystack/cozystack/issues/2742.
 	backoffLimit := int32(2)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -444,6 +455,10 @@ func (r *RestoreJobReconciler) reconcileJobRestore(ctx context.Context, restoreJ
 			Reason:  "RestoreCompleted",
 			Message: "restore Job completed",
 		})
+		// Full Status().Update is safe for the same reason as the BackupJob
+		// success branch in reconcileJob: restoreJob is freshly Get() by the
+		// parent Reconcile each pass, and the StartedAt block returns a requeue
+		// rather than writing restoreJob in the same pass.
 		if err := r.Status().Update(ctx, restoreJob); err != nil {
 			return ctrl.Result{}, err
 		}

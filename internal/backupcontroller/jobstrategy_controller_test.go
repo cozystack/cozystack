@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -41,6 +42,11 @@ func newJobStrategyApp(name, namespace string) *unstructured.Unstructured {
 	})
 	u.SetName(name)
 	u.SetNamespace(namespace)
+	// A spec so tests can assert that strategy templates read the live
+	// application object via .Application (e.g. .Application.spec.replicas) -
+	// the load-bearing context key for any non-trivial Job strategy, since
+	// .Parameters only carries static BackupClass config.
+	u.Object["spec"] = map[string]any{"replicas": int64(3)}
 	return u
 }
 
@@ -100,7 +106,8 @@ func newJobStrategyTestEnv(t *testing.T, app *unstructured.Unstructured, builder
 }
 
 // newJobStrategy returns a Job strategy whose template exercises every key the
-// driver exposes to the template engine: .Release, .Mode, and .Parameters.
+// driver exposes to the template engine: .Release, .Mode, .Parameters, and
+// .Application (the live application object).
 func newJobStrategy(name string) *strategyv1alpha1.Job {
 	return &strategyv1alpha1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -115,6 +122,7 @@ func newJobStrategy(name string) *strategyv1alpha1.Job {
 							"--app={{ .Release.Name }}",
 							"--mode={{ .Mode }}",
 							"--bucket={{ .Parameters.bucketName }}",
+							"--replicas={{ .Application.spec.replicas }}",
 						},
 					}},
 				},
@@ -183,7 +191,9 @@ func TestReconcileJob_CreatesBatchJob(t *testing.T) {
 	}
 
 	containerArgs := k8sJob.Spec.Template.Spec.Containers[0].Args
-	wantArgs := []string{"--app=app-test", "--mode=backup", "--bucket=gen-bucket"}
+	// --replicas asserts that .Application reads the live application object's
+	// spec (replicas=3, set by newJobStrategyApp), not just static parameters.
+	wantArgs := []string{"--app=app-test", "--mode=backup", "--bucket=gen-bucket", "--replicas=3"}
 	for i, want := range wantArgs {
 		if i >= len(containerArgs) || containerArgs[i] != want {
 			t.Errorf("rendered args[%d]: want %q, got %q", i, want, containerArgs)
@@ -352,6 +362,13 @@ func TestReconcileJob_FailsOnMissingStrategy(t *testing.T) {
 	}
 	if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
 		t.Errorf("expected phase Failed for missing strategy, got %q", updated.Status.Phase)
+	}
+	// Assert the message names the strategy, so this stays a strategy-lookup
+	// failure. The app is seeded in the env, so a future reorder that fetched
+	// the app before the strategy would otherwise let this test pass on the
+	// wrong path.
+	if want := "Job strategy not found: missing-strategy"; !strings.Contains(updated.Status.Message, want) {
+		t.Errorf("expected message to contain %q, got %q", want, updated.Status.Message)
 	}
 }
 
@@ -571,8 +588,11 @@ func TestReconcileJob_FailsOnUnmappableKind(t *testing.T) {
 	if updated.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
 		t.Errorf("expected phase Failed for unmappable kind, got %q", updated.Status.Phase)
 	}
-	if updated.Status.Message == "" {
-		t.Error("expected failure message to be set")
+	// Assert the message identifies the unmappable-kind path specifically, so a
+	// different terminal failure (which would also populate Message) can't
+	// masquerade as this one.
+	if want := "kind not registered"; !strings.Contains(updated.Status.Message, want) {
+		t.Errorf("expected message to contain %q, got %q", want, updated.Status.Message)
 	}
 }
 
@@ -621,7 +641,9 @@ func TestReconcileJobRestore_FailsOnUnmappableTargetKind(t *testing.T) {
 	if updated.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
 		t.Errorf("expected phase Failed for unmappable target kind, got %q", updated.Status.Phase)
 	}
-	if updated.Status.Message == "" {
-		t.Error("expected failure message to be set")
+	// See the BackupJob mirror: pin the unmappable-kind message so another
+	// terminal failure can't pass this test on the wrong path.
+	if want := "kind not registered"; !strings.Contains(updated.Status.Message, want) {
+		t.Errorf("expected message to contain %q, got %q", want, updated.Status.Message)
 	}
 }
