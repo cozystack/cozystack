@@ -1,0 +1,2 @@
+tenant-test<US>healthy-app<US>True<US>ReconciliationSucceeded<US>Release reconciliation succeeded<US>false
+tenant-prod<US>broken-app<US>False<US>InstallFailed<US>Helm install failed: context deadline exceeded<US>false
