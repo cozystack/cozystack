@@ -4,16 +4,15 @@
 # Reads image references from stdin, one per line. Empty lines and lines
 # starting with '#' are ignored.
 #
-# Some workloads (OVN raft, LINSTOR) are sensitive to peer-readiness at
-# startup: if nodes pull the image at different speeds, one replica boots
-# before its peers are reachable, exhausts its raft connection retries, and
-# the HelmRelease install times out. Pre-pulling eliminates the pull stagger
-# so all replicas start within milliseconds of each other.
+# Some workloads (OVN raft, LINSTOR, cert-manager) are sensitive to slow or
+# staggered pulls at install time: a HelmRelease can time out while one node
+# is still pulling. Pre-pulling eliminates the stagger.
 #
-# Implementation: a DaemonSet with one regular container per image (parallel
-# pulls — total time = max of any one image rather than sum). kubectl rollout
-# status blocks until all pods are Ready (= all containers running = all
-# images cached on every node), then we delete the DaemonSet.
+# Distroless images (cert-manager, etc.) ship no shell or `sleep`, so we
+# can't just `command: ["sleep", "infinity"]`. Trick: an initContainer copies
+# busybox (a static binary) into a shared emptyDir, then every prepull
+# container execs /shared/sleep — the kernel execve's the binary from the
+# volume, the container's filesystem doesn't need to provide it.
 
 set -euo pipefail
 
@@ -38,8 +37,11 @@ for image in "${images[@]}"; do
   containers+="
       - name: pull-${i}
         image: ${image}
-        command: [\"sleep\", \"infinity\"]
+        command: [\"/shared/sleep\", \"infinity\"]
         imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: bin
+          mountPath: /shared
         resources:
           requests:
             cpu: 1m
@@ -65,17 +67,27 @@ spec:
         app: e2e-image-prepuller
     spec:
       # hostNetwork bypasses the CNI: this script runs BEFORE Cozystack
-      # installs kube-ovn, so the cluster has no working CNI yet and a normal
-      # pod would stay ContainerCreating with NetworkPluginNotReady, never
-      # reaching image-pull. With hostNetwork the pod sandbox is created on
-      # the host's namespace and the kubelet pulls images right away.
-      # Same pattern the cozystack-operator pod uses for the same reason.
+      # installs kube-ovn, so a normal pod would stay ContainerCreating with
+      # NetworkPluginNotReady.
       hostNetwork: true
-      # No need for an SA token — this pod just sleeps while images pull.
       automountServiceAccountToken: false
       tolerations:
-      # Reach every node including control-plane and nodes still coming up.
       - operator: Exists
+      initContainers:
+      # Stage a static \`sleep\` into the shared volume so distroless images
+      # (no shell, no /bin/sleep) can still keep their container alive.
+      # musl tag = statically linked; the glibc default needs an ELF
+      # interpreter that distroless images don't ship, so execve fails with
+      # "no such file or directory" even though the binary is right there.
+      - name: stage-sleep
+        image: busybox:musl
+        command: ["cp", "/bin/busybox", "/shared/sleep"]
+        volumeMounts:
+        - name: bin
+          mountPath: /shared
+      volumes:
+      - name: bin
+        emptyDir: {}
       containers:${containers}
 EOF
 
