@@ -1,0 +1,110 @@
+suite: RabbitMQ dashboard Role resource access
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+tests:
+  # -----------------------------------------------------------------------
+  # Baseline: Role always grants access to default-user secret
+  # -----------------------------------------------------------------------
+
+  - it: Role always grants access to default-user secret
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules[0].resourceNames
+          content: myrabbitmq-default-user
+
+  # -----------------------------------------------------------------------
+  # B: TLS on => Role includes <release>-tls secret
+  # -----------------------------------------------------------------------
+
+  - it: Role grants access to TLS secret when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules[0].resourceNames
+          content: myrabbitmq-tls
+
+  - it: Role grants access to TLS secret when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules[0].resourceNames
+          content: myrabbitmq-tls
+
+  - it: Role does NOT grant access to TLS secret when TLS is disabled
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - notContains:
+          path: rules[0].resourceNames
+          content: myrabbitmq-tls
+
+  - it: Role does NOT grant access to TLS secret when tls.enabled is explicitly false even if external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - notContains:
+          path: rules[0].resourceNames
+          content: myrabbitmq-tls
+
+  # -----------------------------------------------------------------------
+  # Verify RoleBinding is also rendered
+  # -----------------------------------------------------------------------
+
+  - it: RoleBinding is rendered as second document
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: roleRef.name
+          value: myrabbitmq-dashboard-resources
