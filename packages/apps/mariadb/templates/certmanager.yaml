@@ -63,6 +63,7 @@ spec:
     - server auth
     - client auth
     - key encipherment
+    - digital signature
   dnsNames:
     {{- $ns := .Release.Namespace }}
     {{- $name := .Release.Name }}
