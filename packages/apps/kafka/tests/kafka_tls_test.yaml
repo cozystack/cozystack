@@ -98,6 +98,56 @@ tests:
           count: 2
 
   ########################################
+  # kindIs "invalid" guard — Category J  #
+  ########################################
+
+  # J-1: external=true, tls.enabled absent → inherit path: TLS is on
+  - it: "kindIs-guard: TLS inherits from external when tls.enabled is absent and external is true"
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
+
+  # J-2: external=true, tls.enabled=false → explicit override wins: TLS is off
+  - it: "kindIs-guard: explicit tls.enabled=false overrides external=true"
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+      tls.enabled: false
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: false
+
+  # J-3: external=false, tls.enabled=true → external gate wins: no listener rendered
+  - it: "kindIs-guard: external gate suppresses listener even when tls.enabled=true"
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+      tls.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 2
+
+  ########################################
   # Internal listeners unaffected by TLS #
   ########################################
 

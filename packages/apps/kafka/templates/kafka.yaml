@@ -5,21 +5,14 @@
   - tls.enabled controls TLS *on the external listener* (independent of whether
     the listener exists):
     - If tls.enabled is explicitly set (true or false), that value wins.
-    - If tls.enabled is unset (nil), TLS inherits from .Values.external
+    - If tls.enabled is unset (nil / absent), TLS inherits from .Values.external
       (auto-on when external is true, off otherwise).
   - tls.enabled does NOT control whether the external listener is created.
     Setting tls.enabled=true with external=false has no effect on listeners.
   Internal TLS listener (port 9093) is always on; Strimzi manages the PKI.
+  Null detection uses `kindIs "invalid"` (canonical pattern) — see _tls.tpl.
 */ -}}
-{{- $tlsMap := .Values.tls | default dict -}}
-{{- $tlsEnabledRaw := index $tlsMap "enabled" -}}
-{{- $tlsEnabledExplicit := and (hasKey $tlsMap "enabled") (ne $tlsEnabledRaw nil) -}}
-{{- $tlsEnabled := false -}}
-{{- if $tlsEnabledExplicit -}}
-  {{- $tlsEnabled = $tlsEnabledRaw -}}
-{{- else -}}
-  {{- $tlsEnabled = .Values.external | default false -}}
-{{- end -}}
+{{- $tlsEnabled := include "kafka.tls.enabled" . | trim -}}
 {{- $showExternal := .Values.external -}}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
