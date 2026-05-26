@@ -153,10 +153,7 @@
       "properties": {
         "enabled": {
           "description": "Tri-state TLS switch. When omitted (null), TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.",
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         }
       }
     },
