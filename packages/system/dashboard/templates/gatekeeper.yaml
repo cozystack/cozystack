@@ -92,28 +92,6 @@ spec:
                 secretKeyRef:
                   name: dashboard-auth-config
                   key: cookieSecret
-        {{- else }}
-        - name: token-proxy
-          image: {{ .Values.tokenProxy.image }}
-          imagePullPolicy: IfNotPresent
-          args:
-            - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
-            - --http-address=0.0.0.0:8000
-            - --cookie-refresh=1h
-            - --cookie-name=kc-access
-            - --cookie-secure=true
-            - --cookie-secret=$(TOKEN_PROXY_COOKIE_SECRET)
-          env:
-            - name: TOKEN_PROXY_COOKIE_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: dashboard-auth-config
-                  key: cookieSecret
-        {{- end }}
-          ports:
-            - name: proxy
-              containerPort: 8000
-              protocol: TCP
           livenessProbe:
             httpGet:
               path: /ping
@@ -134,6 +112,69 @@ spec:
             timeoutSeconds: 2
             successThreshold: 1
             failureThreshold: 3
+        {{- else }}
+        - name: token-proxy
+          image: {{ .Values.tokenProxy.image }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
+            - --http-address=0.0.0.0:8000
+            - --cookie-refresh=1h
+            - --cookie-name=kc-access
+            - --cookie-secure=true
+            - --cookie-secret=$(TOKEN_PROXY_COOKIE_SECRET)
+          env:
+            - name: TOKEN_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth-config
+                  key: cookieSecret
+          # /healthz/live: process is up; /healthz/ready: JWK cache populated.
+          # Splitting them lets a permanent JWKS misconfig surface as 0/1 Ready
+          # (pod stays out of service endpoints) instead of being indistinguishable
+          # from "user pasted a bad token" at the sign-in handler.
+          #
+          # startupProbe is the backstop for the genuinely-stuck case: a
+          # permanently broken JWKS (wrong URL, missing RBAC, DNS that never
+          # resolves) leaves /healthz/ready returning 503 forever, but
+          # readiness failures alone never restart the pod. After ~5 minutes
+          # of consecutive failures the startupProbe restarts the container
+          # and surfaces the problem as RestartCount/CrashLoopBackOff so an
+          # operator sees something instead of a silently NotReady pod.
+          startupProbe:
+            httpGet:
+              path: /healthz/ready
+              port: proxy
+              scheme: HTTP
+            periodSeconds: 10
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+        {{- end }}
+          ports:
+            - name: proxy
+              containerPort: 8000
+              protocol: TCP
           resources:
             requests:
               cpu: 100m
