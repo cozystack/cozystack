@@ -18,7 +18,7 @@ if kubectl get deploy -n cozy-system cozystack-operator >/dev/null 2>&1; then
   kubectl logs -n cozy-system deploy/cozystack-operator --tail=2000 --previous > $REPORT_DIR/cozystack/operator-previous.log 2>&1 || true
 fi
 kubectl get cm -n cozy-system --no-headers | awk '$1 ~ /^cozystack/' |
-  while read NAME _; do
+  while read -r NAME _; do
     DIR=$REPORT_DIR/cozystack/configs
     mkdir -p $DIR
     kubectl get cm -n cozy-system $NAME -o yaml > $DIR/$NAME.yaml 2>&1
@@ -52,7 +52,7 @@ if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then
   kubectl get challenges.acme.cert-manager.io -A > $DIR/challenges.txt 2>&1
   # Per non-Ready cert: full yaml + describe
   kubectl get certificates.cert-manager.io -A --no-headers 2>/dev/null | awk '$3 != "True"' | \
-    while read NAMESPACE NAME _; do
+    while read -r NAMESPACE NAME _; do
       cdir=$DIR/certificates/$NAMESPACE/$NAME
       mkdir -p $cdir
       kubectl get certificates.cert-manager.io -n $NAMESPACE $NAME -o yaml > $cdir/cert.yaml 2>&1
@@ -61,6 +61,28 @@ if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then
   if kubectl get deploy -n cozy-cert-manager cert-manager >/dev/null 2>&1; then
     kubectl logs -n cozy-cert-manager deploy/cert-manager --tail=2000 > $DIR/cert-manager.log 2>&1
     kubectl logs -n cozy-cert-manager deploy/cert-manager-webhook --tail=2000 > $DIR/cert-manager-webhook.log 2>&1
+  fi
+fi
+
+# -- trust-manager module
+if kubectl get crd bundles.trust.cert-manager.io >/dev/null 2>&1; then
+  echo "Collecting trust-manager state..."
+  DIR="$REPORT_DIR/trust-manager"
+  mkdir -p "$DIR"
+  kubectl get bundles.trust.cert-manager.io > "$DIR/bundles.txt" 2>&1
+  # Per non-Synced Bundle: full yaml + describe.
+  # Column order from Bundle CRD additionalPrinterColumns:
+  # NAME ConfigMap_Target Secret_Target Synced Reason Age — $4 is Synced.
+  kubectl get bundles.trust.cert-manager.io --no-headers 2>/dev/null | awk '$4 != "True"' | \
+    while read -r NAME _; do
+      bdir="$DIR/bundles/$NAME"
+      mkdir -p "$bdir"
+      kubectl get bundles.trust.cert-manager.io "$NAME" -o yaml > "$bdir/bundle.yaml" 2>&1
+      kubectl describe bundles.trust.cert-manager.io "$NAME" > "$bdir/describe.txt" 2>&1
+    done
+  if kubectl get deploy -n cozy-cert-manager trust-manager >/dev/null 2>&1; then
+    kubectl logs -n cozy-cert-manager deploy/trust-manager --tail=2000 > "$DIR/trust-manager.log" 2>&1
+    kubectl logs -n cozy-cert-manager deploy/trust-manager --previous --tail=2000 > "$DIR/trust-manager-previous.log" 2>&1 || true
   fi
 fi
 
@@ -73,7 +95,7 @@ kubectl version > $REPORT_DIR/kubernetes/version.txt 2>&1
 echo "Collecting nodes..."
 kubectl get nodes -o wide > $REPORT_DIR/kubernetes/nodes.txt 2>&1
 kubectl get nodes --no-headers | awk '$2 != "Ready"' |
-  while read NAME _; do
+  while read -r NAME _; do
     DIR=$REPORT_DIR/kubernetes/nodes/$NAME
     mkdir -p $DIR
     kubectl get node $NAME -o yaml > $DIR/node.yaml 2>&1
@@ -83,7 +105,7 @@ kubectl get nodes --no-headers | awk '$2 != "Ready"' |
 echo "Collecting namespaces..."
 kubectl get ns -o wide > $REPORT_DIR/kubernetes/namespaces.txt 2>&1
 kubectl get ns --no-headers | awk '$2 != "Active"' |
-  while read NAME _; do
+  while read -r NAME _; do
     DIR=$REPORT_DIR/kubernetes/namespaces/$NAME
     mkdir -p $DIR
     kubectl get ns $NAME -o yaml > $DIR/namespace.yaml 2>&1
@@ -100,14 +122,14 @@ kubectl get events -A --sort-by=.lastTimestamp \
 echo "Collecting helmreleases..."
 kubectl get hr -A > $REPORT_DIR/kubernetes/helmreleases.txt 2>&1
 kubectl get hr -A --no-headers | awk '$4 != "True"' | \
-  while read NAMESPACE NAME _; do
+  while read -r NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/helmreleases/$NAMESPACE/$NAME
     mkdir -p $DIR
     kubectl get hr -n $NAMESPACE $NAME -o yaml > $DIR/hr.yaml 2>&1
     kubectl describe hr -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
     # Helm storage secrets: latest revision per release.
     kubectl get secret -n $NAMESPACE -l owner=helm,name=$NAME --sort-by='.metadata.creationTimestamp' --no-headers 2>/dev/null | \
-      tail -1 | awk '{print $1}' | while read SECRET; do
+      tail -1 | awk '{print $1}' | while read -r SECRET; do
         [ -z "$SECRET" ] && continue
         kubectl get secret -n $NAMESPACE $SECRET -o jsonpath='{.data.release}' 2>/dev/null \
           | base64 -d | base64 -d | gzip -d > $DIR/helm-release.json 2>&1 || true
@@ -117,7 +139,7 @@ kubectl get hr -A --no-headers | awk '$4 != "True"' | \
 echo "Collecting packages..."
 kubectl get packages > $REPORT_DIR/kubernetes/packages.txt 2>&1
 kubectl get packages --no-headers | awk '$3 != "True"' | \
-  while read NAME _; do
+  while read -r NAME _; do
     DIR=$REPORT_DIR/kubernetes/packages/$NAME
     mkdir -p $DIR
     kubectl get package $NAME -o yaml > $DIR/package.yaml 2>&1
@@ -127,7 +149,7 @@ kubectl get packages --no-headers | awk '$3 != "True"' | \
 echo "Collecting packagesources..."
 kubectl get packagesources > $REPORT_DIR/kubernetes/packagesources.txt 2>&1
 kubectl get packagesources --no-headers | awk '$3 != "True"' | \
-  while read NAME _; do
+  while read -r NAME _; do
     DIR=$REPORT_DIR/kubernetes/packagesources/$NAME
     mkdir -p $DIR
     kubectl get packagesource $NAME -o yaml > $DIR/packagesource.yaml 2>&1
@@ -142,7 +164,7 @@ for kind in applications.apps.cozystack.io applicationdefinitions.apps.cozystack
   if kubectl get crd $kind >/dev/null 2>&1; then
     kubectl get $kind -A > $DIR/$short.txt 2>&1
     kubectl get $kind -A -o jsonpath='{range .items[?(@.status.conditions[?(@.type=="Ready")].status!="True")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null | \
-      while read NAMESPACE NAME; do
+      while read -r NAMESPACE NAME; do
         [ -z "$NAMESPACE" ] && continue
         d=$DIR/$short/$NAMESPACE/$NAME
         mkdir -p $d
@@ -155,7 +177,7 @@ done
 echo "Collecting pods..."
 kubectl get pod -A -o wide > $REPORT_DIR/kubernetes/pods.txt 2>&1
 kubectl get pod -A --no-headers | awk '$4 !~ /Running|Succeeded|Completed/' |
-  while read NAMESPACE NAME _ STATE _; do
+  while read -r NAMESPACE NAME _ STATE _; do
     DIR=$REPORT_DIR/kubernetes/pods/$NAMESPACE/$NAME
     mkdir -p $DIR
     CONTAINERS=$(kubectl get pod -o jsonpath='{.spec.containers[*].name} {.spec.initContainers[*].name}' -n $NAMESPACE $NAME)
@@ -172,7 +194,7 @@ kubectl get pod -A --no-headers | awk '$4 !~ /Running|Succeeded|Completed/' |
 echo "Collecting virtualmachines..."
 kubectl get vm -A > $REPORT_DIR/kubernetes/vms.txt 2>&1
 kubectl get vm -A --no-headers | awk '$5 != "True"' |
-  while read NAMESPACE NAME _; do
+  while read -r NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/vm/$NAMESPACE/$NAME
     mkdir -p $DIR
     kubectl get vm -n $NAMESPACE $NAME -o yaml > $DIR/vm.yaml 2>&1
@@ -182,7 +204,7 @@ kubectl get vm -A --no-headers | awk '$5 != "True"' |
 echo "Collecting virtualmachine instances..."
 kubectl get vmi -A > $REPORT_DIR/kubernetes/vmis.txt 2>&1
 kubectl get vmi -A --no-headers | awk '$4 != "Running"' |
-  while read NAMESPACE NAME _; do
+  while read -r NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/vmi/$NAMESPACE/$NAME
     mkdir -p $DIR
     kubectl get vmi -n $NAMESPACE $NAME -o yaml > $DIR/vmi.yaml 2>&1
@@ -192,7 +214,7 @@ kubectl get vmi -A --no-headers | awk '$4 != "Running"' |
 echo "Collecting services..."
 kubectl get svc -A > $REPORT_DIR/kubernetes/services.txt 2>&1
 kubectl get svc -A --no-headers | awk '$4 == "<pending>"' |
-  while read NAMESPACE NAME _; do
+  while read -r NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/services/$NAMESPACE/$NAME
     mkdir -p $DIR
     kubectl get svc -n $NAMESPACE $NAME -o yaml > $DIR/service.yaml 2>&1
@@ -202,7 +224,7 @@ kubectl get svc -A --no-headers | awk '$4 == "<pending>"' |
 echo "Collecting pvcs..."
 kubectl get pvc -A > $REPORT_DIR/kubernetes/pvcs.txt 2>&1
 kubectl get pvc -A --no-headers | awk '$3 != "Bound"'  |
-  while read NAMESPACE NAME _; do
+  while read -r NAMESPACE NAME _; do
     DIR=$REPORT_DIR/kubernetes/pvc/$NAMESPACE/$NAME
     mkdir -p $DIR
     kubectl get pvc -n $NAMESPACE $NAME -o yaml > $DIR/pvc.yaml 2>&1
