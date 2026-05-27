@@ -24,6 +24,28 @@ Each shard is a replica set, and mongos routers handle query routing.
 
 ## Notes
 
+### TLS Mode
+
+TLS is fully managed by the PSMDB operator via its native cert-manager integration. When TLS is enabled (explicitly or auto-enabled by `external: true`), the operator creates the complete certificate chain:
+
+- A self-signed CA Issuer and CA Certificate
+- A CA-backed Issuer
+- A leaf TLS certificate with SANs covering the replica set service, per-pod DNS names, wildcards, and localhost
+
+The chart does **not** render cert-manager `Issuer` or `Certificate` resources. The operator manages these directly, and chart-rendered cert-manager objects would be orphaned and ignored as trust anchors.
+
+TLS mode is set to `preferTLS`, which means the MongoDB server accepts both TLS and non-TLS connections.
+
+> **Note:** `preferTLS` is intentional because the operator's backup CronJob does not yet support TLS. Strict enforcement (`requireTLS`) will be added in a follow-up once the backup workflow supports it. To enforce TLS at the network layer in the meantime, restrict client access via NetworkPolicy.
+
+> **External hostname SANs:** When `external: true` is enabled, the chart advertises per-pod LoadBalancer hostnames to the operator via `splitHorizons`, and the operator (PSMDB ≥ 1.22.0 with `crVersion: 1.22.0`, both shipped by this chart) folds those hostnames into the leaf certificate SAN list. External clients can then verify the TLS hostname, provided `<release>-rs0-<i>.<host>` resolves to the corresponding per-pod LoadBalancer — DNS is an operational prerequisite you must satisfy.
+>
+> The external hostnames are derived from `_namespace.host`, which the Cozystack controller injects per tenant. In the brief window before the controller populates it (or when the chart is rendered outside Cozystack), TLS is still enabled but `splitHorizons` is omitted, so the certificate does not yet cover external hostnames; this resolves automatically on the next reconcile once `_namespace.host` is present.
+
+### Sharding and TLS
+
+> **Warning:** When `sharding: true`, TLS coverage for `mongos` routers depends on the operator's SAN generation. The operator-managed certificate covers replica set member SANs; `mongos` endpoint coverage may be incomplete. TLS connections to `mongos` routers should be tested after enabling sharding with TLS.
+
 ### External Access
 
 When `external: true` is enabled:
@@ -56,7 +78,7 @@ When the MongoDB release is uninstalled, the operator finalizers reclaim release
 
 **Not reclaimed automatically:**
 
-- TLS secrets `<release>-ssl` and `<release>-ssl-internal` (issued by cert-manager) remain in the namespace after uninstall. Delete them manually if no longer needed.
+- TLS secrets `<release>-ssl`, `<release>-ssl-internal`, and `<release>-ca-cert` — created by the PSMDB operator via cert-manager — remain in the namespace after uninstall. Delete them manually if no longer needed. The operator also creates intermediate cert-manager `Issuer` and `Certificate` objects (named `<release>-*`); these must also be cleaned up manually if the operator is removed before the PSMDB CR is deleted.
 
 **Recovery from a stuck deletion:**
 
@@ -113,7 +135,15 @@ kubectl --namespace <namespace> delete secret percona-server-mongodb-users
 | `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`     |
 | `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`       |
 | `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`    |
-| `version`          | MongoDB major version to deploy.                                                                                                  | `string`   | `v8`       |
+
+
+### TLS configuration
+
+| Name          | Description                                                                                                                                                                                                         | Type     | Value  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`         | TLS configuration for server connections.                                                                                                                                                                           | `object` | `{}`   |
+| `tls.enabled` | Tri-state TLS switch. When omitted (null), TLS is enabled automatically if `external` is true and disabled otherwise. Set explicitly to `true` to force TLS on or `false` to force it off regardless of `external`. | `*bool`  | `null` |
+| `version`     | MongoDB major version to deploy.                                                                                                                                                                                    | `string` | `v8`   |
 
 
 ### Sharding configuration
