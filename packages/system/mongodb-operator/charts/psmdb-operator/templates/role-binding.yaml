@@ -3,7 +3,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ include "psmdb-operator.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "psmdb-operator.namespace" . }}
   {{- with .Values.serviceAccount.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -20,7 +20,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: service-account-{{ include "psmdb-operator.fullname" . }}
 {{- if not (or .Values.watchNamespace .Values.watchAllNamespaces) }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "psmdb-operator.namespace" . }}
 {{- end }}
   labels:
 {{ include "psmdb-operator.labels" . | indent 4 }}
@@ -28,7 +28,7 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "psmdb-operator.fullname" . }}
   {{- if or .Values.watchNamespace .Values.watchAllNamespaces }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "psmdb-operator.namespace" . }}
   {{- end }}
 roleRef:
   {{- if or .Values.watchNamespace .Values.watchAllNamespaces }}

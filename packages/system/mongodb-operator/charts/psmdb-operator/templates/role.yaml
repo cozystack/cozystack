@@ -8,7 +8,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: {{ include "psmdb-operator.fullname" . }}
 {{- if not (or .Values.watchNamespace .Values.watchAllNamespaces) }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "psmdb-operator.namespace" . }}
 {{- end }}
   labels:
 {{ include "psmdb-operator.labels" . | indent 4 }}
@@ -133,6 +133,15 @@ rules:
     - watch
     - create
     - patch
+{{- if or .Values.watchNamespace .Values.watchAllNamespaces }}
+  - apiGroups:
+    - metrics.k8s.io
+    resources:
+    - pods
+    verbs:
+    - get
+    - list
+{{- end }}
   - apiGroups:
     - certmanager.k8s.io
     - cert-manager.io
