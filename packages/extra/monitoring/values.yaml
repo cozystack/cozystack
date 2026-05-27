@@ -141,9 +141,20 @@ alerta:
 ## @typedef {struct} GrafanaDB - Grafana database configuration.
 ## @field {string} [size] - Persistent volume size for the database.
 
+## @typedef {struct} SmtpConfig - SMTP configuration for Grafana email notifications.
+## @field {bool} [enabled] - Enable SMTP for email notifications via Grafana Unified Alerting.
+## @field {string} [host] - SMTP server address and port (e.g. smtp.gmail.com:587).
+## @field {string} [user] - SMTP authentication username (stored in Secret).
+## @field {string} [password] - SMTP authentication password (stored in Secret).
+## @field {string} [from_address] - Email address used as the sender.
+## @field {string} [from_name] - Display name used as the sender.
+## @field {string} [start_tls_policy] - StartTLS policy (OpportunisticStartTLS, MandatoryStartTLS, NoStartTLS).
+## @field {bool} [skip_verify] - Skip TLS certificate verification.
+
 ## @typedef {struct} Grafana - Grafana service configuration.
 ## @field {GrafanaDB} [db] - Database configuration.
 ## @field {Resources} [resources] - Resource configuration.
+## @field {SmtpConfig} [smtp] - SMTP configuration for email notifications.
 
 ## @param {Grafana} grafana - Configuration for Grafana.
 grafana:
@@ -156,6 +167,15 @@ grafana:
     requests:
       cpu: 100m
       memory: 256Mi
+  smtp:
+    enabled: false
+    host: ""
+    user: ""
+    password: ""
+    from_address: ""
+    from_name: "Grafana"
+    start_tls_policy: "OpportunisticStartTLS"
+    skip_verify: false
 ##
 ## @section Vmagent configuration
 ##

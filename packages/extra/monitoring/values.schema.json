@@ -569,6 +569,53 @@
               }
             }
           }
+        },
+        "smtp": {
+          "description": "SMTP configuration for email notifications.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "enabled": {
+              "description": "Enable SMTP for email notifications via Grafana Unified Alerting.",
+              "type": "boolean",
+              "default": false
+            },
+            "from_address": {
+              "description": "Email address used as the sender.",
+              "type": "string",
+              "default": ""
+            },
+            "from_name": {
+              "description": "Display name used as the sender.",
+              "type": "string",
+              "default": "Grafana"
+            },
+            "host": {
+              "description": "SMTP server address and port (e.g. smtp.gmail.com:587).",
+              "type": "string",
+              "default": ""
+            },
+            "password": {
+              "description": "SMTP authentication password (stored in Secret).",
+              "type": "string",
+              "default": ""
+            },
+            "skip_verify": {
+              "description": "Skip TLS certificate verification.",
+              "type": "boolean",
+              "default": false
+            },
+            "start_tls_policy": {
+              "description": "StartTLS policy (OpportunisticStartTLS, MandatoryStartTLS, NoStartTLS).",
+              "type": "string",
+              "default": "OpportunisticStartTLS"
+            },
+            "user": {
+              "description": "SMTP authentication username (stored in Secret).",
+              "type": "string",
+              "default": ""
+            }
+          }
         }
       }
     },
