@@ -23,7 +23,7 @@ type ConfigSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
+	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"maxUnhealthy":"100%","minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
@@ -252,6 +252,9 @@ type NodeGroup struct {
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
+	// Max unhealthy nodes (integer or percentage) tolerated before the MachineHealthCheck stops auto-remediation.
+	// +kubebuilder:default:="100%"
+	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
 	// Minimum number of replicas.
 	// +kubebuilder:default:=0
 	MinReplicas int `json:"minReplicas"`
