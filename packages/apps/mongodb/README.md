@@ -26,7 +26,7 @@ Each shard is a replica set, and mongos routers handle query routing.
 
 ### TLS Mode
 
-TLS is fully managed by the PSMDB operator via its native cert-manager integration. When TLS is enabled (explicitly or auto-enabled by `external: true`), the operator creates the complete certificate chain:
+TLS is always enabled and fully managed by the PSMDB operator via its native cert-manager integration. The operator creates the complete certificate chain:
 
 - A self-signed CA Issuer and CA Certificate
 - A CA-backed Issuer
@@ -135,15 +135,7 @@ kubectl --namespace <namespace> delete secret percona-server-mongodb-users
 | `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`     |
 | `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`       |
 | `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`    |
-
-
-### TLS configuration
-
-| Name          | Description                                                                                                                                                                                                         | Type     | Value  |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `tls`         | TLS configuration for server connections.                                                                                                                                                                           | `object` | `{}`   |
-| `tls.enabled` | Tri-state TLS switch. When omitted (null), TLS is enabled automatically if `external` is true and disabled otherwise. Set explicitly to `true` to force TLS on or `false` to force it off regardless of `external`. | `*bool`  | `null` |
-| `version`     | MongoDB major version to deploy.                                                                                                                                                                                    | `string` | `v8`   |
+| `version`          | MongoDB major version to deploy.                                                                                                  | `string`   | `v8`       |
 
 
 ### Sharding configuration
