@@ -282,3 +282,84 @@ EOF
   -o jsonpath='{range .items[*].spec.limits[*]}{.default.cpu}{" "}{.default.memory}{" "}{.defaultRequest.cpu}{" "}{.defaultRequest.memory}{"\n"}{end}' \
   | grep -qx '250m 128Mi 25m 128Mi'
 }
+
+@test "Deletion-protection VAP denies delete on labeled cozystack-version ConfigMap" {
+  # Locks down the contract delivered by packages/core/platform/templates/
+  # deletion-protection.yaml: a DELETE on any object carrying
+  # platform.cozystack.io/no-delete=true is rejected by the
+  # ValidatingAdmissionPolicy with the documented message, and the bypass
+  # path (remove the label, then delete) succeeds.
+  #
+  # This covers every regression the PR is meant to prevent in a single
+  # pass: capability gate inverted, binding objectSelector mistyped,
+  # validationActions flipped Deny→Warn, expression flipped false→true,
+  # label-key drift between the binding and the manifests.
+
+  # Preflight: VAP requires Kubernetes 1.30+. Skip on older clusters so
+  # the suite stays green where the capability gate intentionally elides
+  # the policy. Detect by attempting to fetch the policy by name; if the
+  # API is present, the resource will be retrievable, otherwise kubectl
+  # exits non-zero on an unknown resource type.
+  if ! kubectl api-resources --api-group=admissionregistration.k8s.io \
+       2>/dev/null | grep -qw validatingadmissionpolicies; then
+    skip "ValidatingAdmissionPolicy API not available on this cluster"
+  fi
+  kubectl get validatingadmissionpolicy cozystack-no-delete-guardrail
+
+  # The cozystack-version ConfigMap is created with the no-delete label
+  # baked in by the chart (templates/cozystack-version.yaml) and is
+  # backfilled by the migration on upgrades. Asserting the label is the
+  # precondition for the deny check below: if the label is gone the deny
+  # will not fire and the test would misreport as a pass on a regressed
+  # binding.
+  kubectl get configmap cozystack-version -n cozy-system \
+    -o jsonpath='{.metadata.labels.platform\.cozystack\.io/no-delete}' \
+    | grep -qx 'true'
+
+  # The actual deny check. Capture both stdout+stderr and exit code so a
+  # network/auth failure does not silently look like a deny success.
+  local output rc
+  output=$(kubectl delete configmap cozystack-version -n cozy-system 2>&1) \
+    && rc=0 || rc=$?
+  echo "kubectl delete exit=$rc, output=$output"
+  # Delete MUST have failed: success means the VAP regressed.
+  [ "$rc" -ne 0 ]
+  # Assert the user-facing deny message is the one this PR ships — guards
+  # against expression flipped to "true" or message reworded away from the
+  # documented bypass. The CEL message is on one line in the api-server
+  # response, so grep for the literal substring with the --namespace flag.
+  echo "$output" | grep -q 'Deletion blocked: object carries platform.cozystack.io/no-delete=true'
+  echo "$output" | grep -q -- '--namespace'
+
+  # And confirm the ConfigMap is still there — a partial deny that races
+  # tombstone creation would also be a regression.
+  kubectl get configmap cozystack-version -n cozy-system >/dev/null
+
+  # Bypass path: remove the label, delete must succeed. Re-stamp the label
+  # afterward so the cluster ends the test in the same state it started.
+  kubectl label configmap cozystack-version -n cozy-system \
+    platform.cozystack.io/no-delete- --overwrite
+  # Stash the data so we can reconstruct after delete.
+  local version
+  version=$(kubectl get configmap cozystack-version -n cozy-system \
+    -o jsonpath='{.data.version}')
+  kubectl delete configmap cozystack-version -n cozy-system
+  ! kubectl get configmap cozystack-version -n cozy-system 2>/dev/null
+  # Reconstruct: declarative apply matches the chart template at
+  # packages/core/platform/templates/cozystack-version.yaml — same label set
+  # AND the helm.sh/resource-policy: keep annotation that pins the ConfigMap
+  # across helm uninstall.
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  version: "${version}"
+EOF
+}

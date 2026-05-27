@@ -2,6 +2,8 @@ apiVersion: piraeus.io/v1
 kind: LinstorCluster
 metadata:
   name: linstorcluster
+  labels:
+    platform.cozystack.io/no-delete: "true"
 spec:
   #nodeSelector:
   #  node-role.kubernetes.io/linstor: ""

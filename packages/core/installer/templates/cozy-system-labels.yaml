@@ -149,4 +149,5 @@ spec:
         - namespace
         - cozy-system
         - cozystack.io/system=true
+        - platform.cozystack.io/no-delete=true
         - pod-security.kubernetes.io/enforce=privileged
