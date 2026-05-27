@@ -37,12 +37,12 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// TLS configuration for server connections.
-	// +kubebuilder:default:={}
-	Tls TLS `json:"tls"`
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
+	// TLS configuration for server connections.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// PostgreSQL server configuration.
 	// +kubebuilder:default:={}
 	Postgresql PostgreSQL `json:"postgresql"`
