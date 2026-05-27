@@ -17,23 +17,9 @@
       }
     },
     "nodeGroups": {
-      "description": "Worker nodes configuration map.",
+      "description": "Worker nodes configuration map. When left empty, a single default node group `md0` (one `ingress-nginx` worker) is provisioned. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.",
       "type": "object",
-      "default": {
-        "md0": {
-          "diskSize": "20Gi",
-          "gpus": [],
-          "instanceType": "u1.medium",
-          "kubelet": {},
-          "maxReplicas": 10,
-          "minReplicas": 0,
-          "resources": {},
-          "roles": [
-            "ingress-nginx"
-          ],
-          "storageClass": ""
-        }
-      },
+      "default": {},
       "additionalProperties": {
         "type": "object",
         "required": [
