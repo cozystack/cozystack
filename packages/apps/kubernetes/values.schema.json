@@ -26,6 +26,7 @@
           "instanceType": "u1.medium",
           "kubelet": {},
           "maxReplicas": 10,
+          "maxUnhealthy": "100%",
           "minReplicas": 0,
           "resources": {},
           "roles": [
@@ -121,6 +122,11 @@
             "description": "Maximum number of replicas.",
             "type": "integer",
             "default": 10
+          },
+          "maxUnhealthy": {
+            "description": "Max unhealthy nodes (integer or percentage) tolerated before the MachineHealthCheck stops auto-remediation.",
+            "type": "string",
+            "default": "100%"
           },
           "minReplicas": {
             "description": "Minimum number of replicas.",
