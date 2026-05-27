@@ -64,7 +64,7 @@ tests:
           content: "my-redis.tls"
       - notContains:
           path: rules[1].resourceNames
-          content: "my-redis.ca-tls"
+          content: "my-redis.ca-cert"
 
   # ------------------------------------------------------------------
   # Case 2: external=true, tls.enabled unset -> TLS enabled via external
@@ -290,7 +290,7 @@ tests:
           path: spec.tls.certificateSecret.secretName
           value: my-redis.tls
 
-  - it: "dashboard-resourcemap.yaml lists TLS secrets in RBAC when external=true"
+  - it: "dashboard-resourcemap.yaml grants only the CA-only secret in RBAC when external=true and authClients defaults to no"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -307,10 +307,46 @@ tests:
       - lengthEqual:
           path: rules
           count: 3
+      # CA-only secret (ca.crt, no key) is always granted when TLS is on.
+      - contains:
+          path: rules[1].resourceNames
+          content: "my-redis.ca-cert"
+      # CA private-key secret is never granted to tenants.
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis.ca-tls"
+      # Leaf secret is withheld unless clients must authenticate.
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis.tls"
+
+  - it: "dashboard-resourcemap.yaml also grants the leaf TLS secret in RBAC when authClients=yes"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+      tls:
+        authClients: "yes"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      # The negatives below address rules[1] by index, and notContains is
+      # fail-open on a path that does not exist, so a SECOND secrets rule
+      # granting the key-bearing Secrets would satisfy every one of them.
+      # Pin the rule count: the Role renders services, secrets and
+      # workloadmonitors, and nothing else.
+      - lengthEqual:
+          path: rules
+          count: 3
+      - contains:
+          path: rules[1].resourceNames
+          content: "my-redis.ca-cert"
+      # Clients reuse the leaf secret as their client identity when authClients=yes.
       - contains:
           path: rules[1].resourceNames
           content: "my-redis.tls"
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: "my-redis.ca-tls"
 
