@@ -340,7 +340,9 @@ jobs:
       packages: read
       checks: write
     needs: ["save-state"]
-    if: ${{ needs.save-state.result == 'success' }}
+    # save-state has a hyphen, so it must be addressed with bracket notation —
+    # needs.save-state.result does not resolve in GitHub Actions expressions.
+    if: ${{ needs['save-state'].result == 'success' }}
 
     steps:
       # ▸ Checkout and prepare the codebase
