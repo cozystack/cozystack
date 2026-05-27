@@ -28,6 +28,10 @@ spec:
   tls:
     enabled: true
     authClients: {{ include "redis.tls.authClients" . | quote }}
+    # Operator publishes an Opaque secret with only ca.crt (no private key) so
+    # clients can verify the server under tightly scoped RBAC. See the secrets
+    # rule in dashboard-resourcemap.yaml.
+    caCertSecretName: {{ .Release.Name }}-ca-cert
     certificateSecret:
       secretName: {{ .Release.Name }}-tls
   {{- end }}

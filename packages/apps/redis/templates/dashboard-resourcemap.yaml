@@ -1,4 +1,5 @@
 {{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
+{{- $authClients := include "redis.tls.authClients" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -21,8 +22,17 @@ rules:
   resourceNames:
   - "{{ .Release.Name }}-auth"
   {{- if $tlsEnabled }}
+  # CA-only secret (ca.crt, no private key). Tenants trust this to verify the
+  # Redis server. The CA private key ({{ .Release.Name }}-ca-tls) is deliberately
+  # NOT granted here — exposing it would let tenants mint certificates trusted by
+  # the whole cluster.
+  - "{{ .Release.Name }}-ca-cert"
+  {{- if eq $authClients "yes" }}
+  # authClients=yes requires clients to present a certificate signed by the CA.
+  # They reuse the server leaf secret as their client identity. A dedicated
+  # per-tenant client certificate would be the stricter long-term design.
   - "{{ .Release.Name }}-tls"
-  - "{{ .Release.Name }}-ca-tls"
+  {{- end }}
   {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
