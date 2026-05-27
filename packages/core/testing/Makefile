@@ -36,6 +36,23 @@ prepare-cluster: copy-nocloud-image
 install-cozystack:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
+# The snapshot is pushed/pulled as an OCI artifact straight from inside the
+# sandbox (oras + sparse-aware tar). Tagged off the build-unique IMAGE_TAG so a
+# save in one job and a restore in another (different runner) of the same
+# workflow reference the exact same artifact. REGISTRY_USERNAME/REGISTRY_PASSWORD
+# are forwarded from the environment for the in-container `oras login`.
+save-state: ## Force-stop the VMs and push a consistent state to the registry.
+	docker exec \
+		-e REGISTRY="$(REGISTRY)" -e STATE_TAG="$(IMAGE_TAG)" \
+		-e REGISTRY_USERNAME -e REGISTRY_PASSWORD \
+		"${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-save-state.bats'
+
+restore-cluster: ## Pull the state from the registry, unpack it and boot the VMs.
+	docker exec \
+		-e REGISTRY="$(REGISTRY)" -e STATE_TAG="$(IMAGE_TAG)" \
+		-e REGISTRY_USERNAME -e REGISTRY_PASSWORD \
+		"${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-restore-state.bats'
+
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
 
