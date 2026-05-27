@@ -1,10 +1,10 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
-{{- $tlsEnabled := include "mongodb.tls.enabled" . | eq "true" -}}
 {{- /*
 TLS IMPLEMENTATION NOTE — operator-managed cert-manager chain
 =============================================================
-When TLS is enabled (spec.secrets.ssl is set), the PSMDB operator natively
-integrates with cert-manager and creates the full certificate chain itself:
+TLS is always on in operator-managed mode: spec.secrets.ssl is always set,
+so the PSMDB operator natively integrates with cert-manager and creates the
+full certificate chain itself:
 
   1. Self-signed bootstrap Issuer
   2. CA Certificate (10-year, rotationPolicy: Never)
@@ -37,18 +37,14 @@ spec:
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
   secrets:
     users: {{ .Release.Name }}-percona-server-mongodb-users
-    {{- if $tlsEnabled }}
     ssl: {{ .Release.Name }}-ssl
-    {{- end }}
   pause: false
   unmanaged: false
 
-  {{- if $tlsEnabled }}
   tls:
     # preferTLS keeps non-TLS clients working during rollout, so the
     # backup CronJob is not disrupted when TLS is first enabled.
     mode: preferTLS
-  {{- end }}
   image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
   imagePullPolicy: IfNotPresent
 
@@ -146,7 +142,7 @@ spec:
         {{- else }}
         enabled: false
         {{- end }}
-      {{- if and $tlsEnabled .Values.external }}
+      {{- if .Values.external }}
       {{- /* Split-horizon DNS advertises per-pod external hostnames to clients
              connecting from outside the cluster. PSMDB ≥ 1.22.0 also folds these
              hostnames into the operator-managed leaf certificate SAN list (gated

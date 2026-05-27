@@ -105,15 +105,13 @@ tests:
           value: rbac.authorization.k8s.io
         documentIndex: 1
 
-  # TLS RBAC: tri-state coverage for rules[1].resourceNames (secrets rule)
+  # TLS secrets are always exposed within the tenant: operator-managed TLS is
+  # always on, so the leaf (-ssl) and CA (-ca-cert) secrets always exist.
 
-  - it: Role includes TLS secrets when tls explicitly enabled
+  - it: Role always grants access to TLS secrets (ca-cert + ssl)
     release:
       name: test-mongodb
       namespace: tenant-test
-    set:
-      tls:
-        enabled: true
     asserts:
       - contains:
           path: rules[1].resourceNames
@@ -124,21 +122,7 @@ tests:
           content: test-mongodb-ssl
         documentIndex: 0
 
-  - it: Role excludes TLS secrets when TLS is off (default)
-    release:
-      name: test-mongodb
-      namespace: tenant-test
-    asserts:
-      - notContains:
-          path: rules[1].resourceNames
-          content: test-mongodb-ca-cert
-        documentIndex: 0
-      - notContains:
-          path: rules[1].resourceNames
-          content: test-mongodb-ssl
-        documentIndex: 0
-
-  - it: Role includes TLS secrets when external=true (auto-on tri-state)
+  - it: Role still grants access to TLS secrets when external is enabled
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -149,17 +133,7 @@ tests:
           path: rules[1].resourceNames
           content: test-mongodb-ca-cert
         documentIndex: 0
-
-  - it: Role excludes TLS secrets when external=true but tls.enabled=false (override)
-    release:
-      name: test-mongodb
-      namespace: tenant-test
-    set:
-      external: true
-      tls:
-        enabled: false
-    asserts:
-      - notContains:
+      - contains:
           path: rules[1].resourceNames
-          content: test-mongodb-ca-cert
+          content: test-mongodb-ssl
         documentIndex: 0
