@@ -15994,6 +15994,15 @@ spec:
                     - optional
                     - "yes"
                     type: string
+                  caCertSecretName:
+                    description: |-
+                      CACertSecretName names the Opaque Secret the operator publishes with
+                      only the CA certificate (ca.crt) extracted from the TLS material. It
+                      never contains tls.key, so RBAC can be scoped to it to let clients
+                      verify the server without exposing any private key. When TLS is
+                      enabled the operator always publishes this Secret; this field only
+                      overrides its name. Defaults to "<tls-secret-name>-ca" when empty.
+                    type: string
                   certManager:
                     description: |-
                       CertManager provisions the server certificate by creating a
