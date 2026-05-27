@@ -96,6 +96,7 @@ topics: []
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
 ## @field {quantity} size - Persistent Volume size for Kafka.
 ## @field {string} storageClass - StorageClass used to store the Kafka data.
+## @immutable
 
 ## @param {Kafka} kafka - Kafka configuration.
 kafka:
@@ -115,6 +116,7 @@ kafka:
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
 ## @field {quantity} size - Persistent Volume size for ZooKeeper.
 ## @field {string} storageClass - StorageClass used to store the ZooKeeper data.
+## @immutable
 
 ## @param {ZooKeeper} zookeeper - ZooKeeper configuration.
 zookeeper:

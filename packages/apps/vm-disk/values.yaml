@@ -29,4 +29,5 @@ optical: false
 storage: 5Gi
 
 ## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
 storageClass: replicated

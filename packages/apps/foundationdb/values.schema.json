@@ -105,7 +105,13 @@
         "storageClass": {
           "description": "Storage class (if not set, uses cluster default).",
           "type": "string",
-          "default": ""
+          "default": "",
+          "x-kubernetes-validations": [
+            {
+              "rule": "self == oldSelf",
+              "message": "storageClass is immutable"
+            }
+          ]
         }
       }
     },

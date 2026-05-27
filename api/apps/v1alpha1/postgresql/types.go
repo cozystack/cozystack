@@ -32,6 +32,7 @@ type ConfigSpec struct {
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false

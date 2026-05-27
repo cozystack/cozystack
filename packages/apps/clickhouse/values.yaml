@@ -71,6 +71,7 @@ resourcesPreset: "t1.small"
 size: 10Gi
 
 ## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
 storageClass: ""
 
 ##
