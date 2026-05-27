@@ -1,18 +1,12 @@
 suite: mongodb TLS CR integration
 
-# Covers the spec.tls block in the PerconaServerMongoDB CR
-# and the spec.secrets.ssl reference to the operator-managed leaf secret.
+# TLS is always on in operator-managed mode: the chart unconditionally sets
+# spec.secrets.ssl and spec.tls.mode: preferTLS. The PSMDB operator manages the
+# full cert-manager chain (it does NOT render Issuer/Certificate resources) —
+# see templates/mongodb.yaml for the detailed explanation.
 #
-# TLS chain is fully managed by the PSMDB operator via its native cert-manager
-# integration when spec.secrets.ssl is set. The chart does NOT render
-# cert-manager Issuer/Certificate resources — see templates/mongodb.yaml for
-# a detailed explanation.
-#
-# Tri-state matrix:
-#   (a) external: false, tls.enabled unset  → TLS off (no spec.tls, no spec.secrets.ssl)
-#   (b) external: true,  tls.enabled unset  → TLS auto-on
-#   (c) external: true,  tls.enabled: false → TLS off (explicit override)
-#   (d) external: false, tls.enabled: true  → TLS on (operator creates cert chain)
+# splitHorizons (per-pod external hostnames → leaf cert SANs) is injected only
+# when external: true and the per-tenant host (_namespace.host) is present.
 
 release:
   name: mg-test
@@ -27,26 +21,24 @@ templates:
 
 tests:
   ############################################################
-  # (a) external: false, tls.enabled unset → TLS OFF
+  # TLS is always enabled (operator-managed), regardless of external
   ############################################################
 
-  - it: (a) no spec.tls block when external false and tls unset
+  - it: spec.tls.mode is preferTLS by default (internal instance, external false)
     documentIndex: 0
     asserts:
-      - notExists:
-          path: spec.tls
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
 
-  - it: (a) no spec.secrets.ssl when external false and tls unset
+  - it: spec.secrets.ssl references the operator-managed leaf secret by default
     documentIndex: 0
     asserts:
-      - notExists:
+      - equal:
           path: spec.secrets.ssl
+          value: mg-test-ssl
 
-  ############################################################
-  # (b) external: true, tls.enabled unset → TLS AUTO-ON
-  ############################################################
-
-  - it: (b) spec.tls.mode is preferTLS when external true and tls unset
+  - it: TLS stays on when external is true
     set:
       external: true
       _namespace:
@@ -56,97 +48,15 @@ tests:
       - equal:
           path: spec.tls.mode
           value: preferTLS
-
-  - it: (b) spec.secrets.ssl references the leaf secret when external true and tls unset
-    set:
-      external: true
-      _namespace:
-        host: example.cozy.local
-    documentIndex: 0
-    asserts:
       - equal:
           path: spec.secrets.ssl
           value: mg-test-ssl
 
-  ############################################################
-  # (c) external: true, tls.enabled: false → TLS OFF (explicit)
-  ############################################################
-
-  - it: (c) no spec.tls block when external true but tls explicitly disabled
-    set:
-      external: true
-      _namespace:
-        host: example.cozy.local
-      tls:
-        enabled: false
-    documentIndex: 0
-    asserts:
-      - notExists:
-          path: spec.tls
-
-  - it: (c) no spec.secrets.ssl when external true but tls explicitly disabled
-    set:
-      external: true
-      _namespace:
-        host: example.cozy.local
-      tls:
-        enabled: false
-    documentIndex: 0
-    asserts:
-      - notExists:
-          path: spec.secrets.ssl
-
-  ############################################################
-  # (d) external: false, tls.enabled: true → TLS ON (internal only)
-  ############################################################
-
-  - it: (d) spec.tls.mode is preferTLS when tls explicitly enabled with external false
-    set:
-      external: false
-      tls:
-        enabled: true
-    documentIndex: 0
-    asserts:
-      - equal:
-          path: spec.tls.mode
-          value: preferTLS
-
-  - it: (d) spec.secrets.ssl references the leaf secret when tls explicitly enabled
-    set:
-      external: false
-      tls:
-        enabled: true
-    documentIndex: 0
-    asserts:
-      - equal:
-          path: spec.secrets.ssl
-          value: mg-test-ssl
-
-  ############################################################
-  # spec.tls does NOT include issuerConf — we pass the secret directly
-  ############################################################
-
-  - it: spec.tls has no issuerConf when TLS enabled
-    set:
-      tls:
-        enabled: true
+  - it: spec.tls has no issuerConf (the operator-managed secret is passed directly)
     documentIndex: 0
     asserts:
       - notExists:
           path: spec.tls.issuerConf
-
-  - it: TLS mode is preferTLS (allows mixed TLS/plaintext for backup compatibility)
-    # preferTLS is intentional: the backup CronJob does not yet support TLS,
-    # so requireTLS would break backups. Strict enforcement will be added in a
-    # follow-up once the backup workflow supports TLS connections.
-    set:
-      tls:
-        enabled: true
-    documentIndex: 0
-    asserts:
-      - equal:
-          path: spec.tls.mode
-          value: preferTLS
 
   ############################################################
   # crVersion gates the operator's splitHorizons → SAN injection
@@ -164,7 +74,7 @@ tests:
   # splitHorizons: per-pod external hostnames for external TLS
   ############################################################
 
-  - it: (b) splitHorizons advertises per-pod external hostnames when external + tls auto-on
+  - it: splitHorizons advertises per-pod external hostnames when external + host present
     set:
       external: true
       _namespace:
@@ -197,7 +107,7 @@ tests:
             mg-test-rs0-1:
               external: mg-test-rs0-1.example.cozy.local
 
-  - it: (b) TLS stays active but splitHorizons is omitted when external true and _namespace.host absent
+  - it: TLS stays active but splitHorizons is omitted when external true and _namespace.host absent
     set:
       external: true
       # _namespace intentionally absent — controller has not populated host yet
@@ -209,29 +119,7 @@ tests:
       - notExists:
           path: spec.replsets[0].splitHorizons
 
-  - it: (a) no splitHorizons when external false and tls unset
-    documentIndex: 0
-    asserts:
-      - notExists:
-          path: spec.replsets[0].splitHorizons
-
-  - it: (c) no splitHorizons when external true but tls explicitly disabled
-    set:
-      external: true
-      _namespace:
-        host: example.cozy.local
-      tls:
-        enabled: false
-    documentIndex: 0
-    asserts:
-      - notExists:
-          path: spec.replsets[0].splitHorizons
-
-  - it: (d) no splitHorizons when tls enabled but external false (internal-only TLS)
-    set:
-      external: false
-      tls:
-        enabled: true
+  - it: no splitHorizons for internal instances (external false)
     documentIndex: 0
     asserts:
       - notExists:
@@ -241,11 +129,9 @@ tests:
   # sharding + TLS combination
   ############################################################
 
-  - it: spec.tls.mode is preferTLS and secrets.ssl is set when tls enabled with sharding
+  - it: spec.tls.mode is preferTLS and secrets.ssl is set when sharding enabled
     set:
       sharding: true
-      tls:
-        enabled: true
       shardingConfig:
         configServers: 3
         configServerSize: 3Gi

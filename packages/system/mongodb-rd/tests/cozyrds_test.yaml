@@ -1,20 +1,14 @@
 suite: mongodb-rd ApplicationDefinition
 
 # The cozyrds/mongodb.yaml file is a plain YAML file included verbatim via
-# .Files.Get. It is NOT processed by Helm, so it does not support conditionals
-# ({{- if .Values.tls.enabled }}). As a result, the TLS secret references
-# (mongodb-{{ .name }}-ca-cert and mongodb-{{ .name }}-ssl) are always present in
-# spec.secrets.include regardless of whether TLS is enabled.
+# .Files.Get. It is NOT processed by Helm, so it does not support conditionals.
+# That is fine here: operator-managed TLS is always on, so the leaf (-ssl) and
+# CA (-ca-cert) secrets always exist and are listed unconditionally in
+# spec.secrets.include alongside the credentials secret.
 #
-# This is a known tooling limitation. The cozystack controller that processes
-# ApplicationDefinition is responsible for resolving {{ .name }} at runtime,
-# so the template strings are intentionally literal in the rendered manifest.
-#
-# KNOWN LIMITATION: mongodb-{{ .name }}-ca-cert and mongodb-{{ .name }}-ssl are
-# included unconditionally. When TLS is disabled, these secret names will be
-# referenced but the secrets themselves will not exist. The cozystack RBAC
-# controller must tolerate missing secrets to avoid breaking non-TLS instances.
-# Tracked for follow-up: conditional cozyrds support requires tooling changes.
+# The cozystack controller that processes ApplicationDefinition resolves
+# {{ .name }} at runtime, so the template strings are intentionally literal in
+# the rendered manifest.
 
 templates:
   - templates/cozyrd.yaml
@@ -35,11 +29,7 @@ tests:
             resourceNames:
               - "mongodb-{{ .name }}-credentials"
 
-  - it: TLS secrets are always included (known limitation - cozyrds lacks conditional support)
-    # NOTE: These entries are unconditional because cozyrds/mongodb.yaml is plain
-    # YAML and cannot use Helm conditionals. They appear even when tls.enabled is
-    # false. This is intentional: removing them would require cozyrds templating
-    # support, tracked as a follow-up improvement.
+  - it: TLS secrets are always included (operator-managed TLS is always on)
     asserts:
       - contains:
           path: spec.secrets.include
@@ -53,18 +43,6 @@ tests:
       - lengthEqual:
           path: spec.secrets.include
           count: 2
-
-  - it: TLS secrets are still listed in secrets.include when tls.enabled is explicitly false (cozyrds is not Helm-processed)
-    set:
-      tls:
-        enabled: false
-    asserts:
-      - contains:
-          path: spec.secrets.include
-          content:
-            resourceNames:
-              - "mongodb-{{ .name }}-ca-cert"
-              - "mongodb-{{ .name }}-ssl"
 
   - it: ApplicationDefinition name is mongodb
     asserts:

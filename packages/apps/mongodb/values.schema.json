@@ -124,20 +124,6 @@
       "type": "boolean",
       "default": false
     },
-    "tls": {
-      "description": "TLS configuration for server connections.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "enabled": {
-          "description": "Tri-state TLS switch. When omitted (null), TLS is enabled automatically if `external` is true and disabled otherwise. Set explicitly to `true` to force TLS on or `false` to force it off regardless of `external`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      }
-    },
     "version": {
       "description": "MongoDB major version to deploy.",
       "type": "string",
