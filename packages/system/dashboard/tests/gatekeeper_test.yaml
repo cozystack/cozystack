@@ -1,0 +1,76 @@
+suite: gatekeeper container and probes per OIDC mode
+templates:
+  - templates/gatekeeper.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# gatekeeper.yaml selects between two completely different containers
+# depending on _cluster.oidc-enabled: the OIDC-enabled branch runs
+# oauth2-proxy (image quay.io/oauth2-proxy/oauth2-proxy) which serves
+# /ping as a health endpoint, and the OIDC-disabled branch runs the
+# in-tree token-proxy which serves /healthz/live + /healthz/ready.
+# Each branch has its own probes; a refactor that collapses the
+# if/else differently (e.g. shared probes on /ping) would silently
+# break the OIDC-disabled deployment because token-proxy does not
+# answer /ping with a 2xx. Pin both branches so structural drift is
+# a test failure.
+
+tests:
+  - it: oidc-enabled=false renders token-proxy with /healthz probes
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "false"
+      tokenProxy:
+        image: example.invalid/token-proxy:test
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: token-proxy
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: example.invalid/token-proxy:test
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz/ready
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz/live
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz/ready
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8000
+
+  - it: oidc-enabled=true renders auth-proxy with /ping probes and no startupProbe
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: auth-proxy
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^quay\\.io/oauth2-proxy/oauth2-proxy:"
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /ping
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /ping
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8000
