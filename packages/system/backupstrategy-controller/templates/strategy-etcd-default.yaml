@@ -1,0 +1,23 @@
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Etcd
+metadata:
+  name: cozy-default-etcd
+spec:
+  template:
+    destination:
+      s3:
+        bucket: {{ $bucketName | quote }}
+        endpoint: {{ .Values.backupStorage.endpoint | quote }}
+        key: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" | quote }}
+        region: {{ .Values.backupStorage.region | quote }}
+        forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}
+        # The etcd-operator reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+        # from this Secret by default (no explicit key fields like the
+        # MariaDB strategy's *SecretKeyRef). The projector writes exactly
+        # those keys into cozy-backups-creds — keep the two in sync if
+        # either side's key names ever change.
+        credentialsSecretRef:
+          name: cozy-backups-creds
+{{- end -}}

@@ -27,7 +27,7 @@ spec:
         image: "{{ .Values.backupStrategyController.image }}"
         args:
         - --leader-elect
-        {{- if .Values.backupStrategyController.metrics.enable }}
+        {{- if .Values.backupStrategyController.metrics.enabled }}
         - --metrics-bind-address={{ .Values.backupStrategyController.metrics.bindAddress }}
         {{- end }}
         {{- if .Values.backupStrategyController.debug }}
@@ -35,9 +35,26 @@ spec:
         {{- else }}
         - --zap-log-level=info
         {{- end }}
+        env:
+        - name: BACKUP_STORAGE_SECRET_NAMESPACE
+          value: {{ .Values.backupStorage.namespace | quote }}
+        - name: BACKUP_STORAGE_SECRET_NAME
+          value: {{ .Values.backupStorage.systemSecretName | quote }}
+        - name: BACKUP_STORAGE_CREDS_SECRET_NAME
+          value: cozy-backups-creds
+        - name: BACKUP_STORAGE_ENDPOINT
+          value: {{ .Values.backupStorage.endpoint | quote }}
+        - name: BACKUP_STORAGE_REGION
+          value: {{ .Values.backupStorage.region | quote }}
+        - name: BACKUP_STORAGE_FORCE_PATH_STYLE
+          value: {{ .Values.backupStorage.forcePathStyle | quote }}
+        - name: BACKUP_STORAGE_SYSTEM_NAMESPACES
+          value: {{ .Values.backupStorage.systemNamespaces | join "," | quote }}
         ports:
+        {{- if .Values.backupStrategyController.metrics.enabled }}
         - name: metrics
           containerPort: {{ splitList ":" .Values.backupStrategyController.metrics.bindAddress | mustLast }}
+        {{- end }}
         - name: health
           containerPort: 8081
         readinessProbe:

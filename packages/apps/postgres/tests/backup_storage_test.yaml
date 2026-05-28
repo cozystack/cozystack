@@ -1,0 +1,114 @@
+suite: backup storage flow (barmanObjectStore gating, chart Secret, bootstrap guards)
+
+# Locks in the conditional rendering this PR introduced on the cnpg.io
+# Cluster and the chart-managed <release>-s3-creds Secret:
+#   - the legacy flow renders spec.backup.barmanObjectStore + the Secret
+#     only when real S3 coordinates are present;
+#   - the platform useSystemBucket flow leaves both out (the CNPG backup
+#     driver SSA-patches the live Cluster at first BackupJob time);
+#   - bootstrap.recovery fails fast at render time when it would otherwise
+#     emit a dangling s3Credentials reference (useSystemBucket, or no creds).
+# These are template-rendering contracts, so helm-unittest is the right tool.
+
+templates:
+  - templates/db.yaml
+  - templates/backup-secret.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: "useSystemBucket=true: chart skips barmanObjectStore and <release>-s3-creds"
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+    asserts:
+      - notExists:
+          path: spec.backup.barmanObjectStore
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      - hasDocuments:
+          count: 0
+        template: templates/backup-secret.yaml
+
+  - it: "legacy backup with inline creds: renders barmanObjectStore + <release>-s3-creds"
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+    asserts:
+      - exists:
+          path: spec.backup.barmanObjectStore
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      - equal:
+          path: spec.backup.barmanObjectStore.s3Credentials.accessKeyId.name
+          value: pg-test-s3-creds
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      - hasDocuments:
+          count: 1
+        template: templates/backup-secret.yaml
+      - equal:
+          path: metadata.name
+          value: pg-test-s3-creds
+        template: templates/backup-secret.yaml
+
+  - it: "backup enabled, no creds, useSystemBucket=false: barmanObjectStore not rendered"
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: ""
+        s3SecretKey: ""
+    asserts:
+      - notExists:
+          path: spec.backup.barmanObjectStore
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      - hasDocuments:
+          count: 0
+        template: templates/backup-secret.yaml
+
+  - it: "bootstrap + useSystemBucket: render fails fast (lock in existing guard)"
+    template: templates/db.yaml
+    set:
+      backup:
+        useSystemBucket: true
+      bootstrap:
+        enabled: true
+        oldName: old
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Use a backups.cozystack.io/RestoreJob against the cozy-default BackupClass to restore from the system bucket; see docs/operations/backup-classes.md."
+
+  - it: "bootstrap without credentials: render fails fast"
+    template: templates/db.yaml
+    set:
+      backup:
+        enabled: false
+        useSystemBucket: false
+        s3AccessKey: ""
+        s3SecretKey: ""
+      bootstrap:
+        enabled: true
+        oldName: old
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: bootstrap.enabled=true requires S3 credentials: set backup.s3AccessKey+backup.s3SecretKey, backup.s3CredentialsSecret.name, or backup.useSystemBucket=true (with a backups.cozystack.io/RestoreJob)."

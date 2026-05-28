@@ -1,5 +1,15 @@
 # MariaDB backup / restore example
 
+> **Heads up — most clusters do not need this walk-through.** Cozystack
+> ships a platform-managed `cozy-default` `BackupClass` together with
+> the system bucket `cozy-backups`. Tenants reference `cozy-default`
+> directly from BackupJob / Plan / RestoreJob without provisioning a
+> Bucket or supplying S3 credentials. See
+> [Backup Classes](../../../docs/operations/backup-classes.md).
+> The walk-through below covers the **legacy** path that wires a
+> per-app Bucket and bespoke BackupClass — useful for tuned non-default
+> policies (custom retention, encryption, secondary buckets).
+
 End-to-end example for backing up and restoring a Cozystack-managed
 MariaDB application via the `strategy.backups.cozystack.io/v1alpha1`
 `MariaDB` strategy driver. Files are numbered so that

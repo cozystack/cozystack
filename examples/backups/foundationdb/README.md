@@ -1,5 +1,14 @@
 # FoundationDB backup/restore example
 
+> **FoundationDB is currently the one supported Kind that is NOT bound
+> by the platform-managed `cozy-default` BackupClass.** Restore runs
+> `fdbrestore` from the `cozy-foundationdb-operator` pod, which does not
+> yet mount the projected `cozy-backups-creds` Secret. Until that gap is
+> closed, FDB backup/restore goes through this walk-through (per-app
+> Bucket + `blob_credentials.json` Secret + custom BackupClass). The
+> `cozy-default-foundationdb` strategy CR is shipped and you can bind it
+> in a custom BackupClass when you wire the operator deployment manually.
+
 This directory shows how to back up and restore a Cozystack-managed
 `FoundationDB` application using the cluster's `FoundationDB` backup
 strategy driver. The driver delegates to the [FoundationDB Kubernetes

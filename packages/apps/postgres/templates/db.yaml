@@ -15,6 +15,33 @@ spec:
   {{- $credCfg := default (dict) .Values.backup.s3CredentialsSecret }}
   {{- $credSecretName := $credCfg.name | default (printf "%s-s3-creds" .Release.Name) }}
   {{/*
+    Platform-managed default flow (useSystemBucket=true):
+      - The chart does NOT render spec.backup.barmanObjectStore. The
+        backup-controller's CNPG driver SSA-patches the live Cluster
+        with destinationPath/endpointURL/credentials at first BackupJob
+        time using field manager "cozystack-cnpg-backup-driver" with
+        ForceOwnership (see internal/backupcontroller/cnpgstrategy_controller.go
+        applyClusterBarmanObjectStore). SSA semantics mean the chart's
+        Helm field manager never owns spec.backup, so a subsequent Flux
+        re-render of this chart leaves the driver's patch intact — no
+        tug-of-war on the live Cluster.
+        Coordinates come from a single backupStorage values block in
+        the backupstrategy-controller chart. This eliminates the
+        endpoint-duplication failure mode (an operator switching the
+        platform endpoint would otherwise have to update both the
+        backupstrategy-controller and this chart).
+      - Consequence: archive_command is not active until the first
+        BackupJob has run. WAL accumulates on the local PVC in the
+        meantime — fine for small / fresh clusters, but admins of large
+        Postgres releases switching mid-flight should run an ad-hoc
+        BackupJob immediately after enabling the flag.
+      - The chart-emitted <release>-s3-creds Secret is also skipped, so a
+        default install no longer leaks placeholder credentials into the
+        tenant namespace.
+  */}}
+  {{- $destinationPath := .Values.backup.destinationPath }}
+  {{- $endpointURL := .Values.backup.endpointURL }}
+  {{/*
     accessKeyIDKey/secretAccessKeyKey only apply when an external Secret was
     supplied via backup.s3CredentialsSecret.name. The chart-managed
     <release>-s3-creds Secret materialised by backup-secret.yaml hard-codes
@@ -40,11 +67,29 @@ spec:
   */}}
   {{- $caCfg := default (dict) .Values.backup.endpointCA }}
   {{- $caKey := $caCfg.key | default "ca.crt" }}
-  {{- if .Values.backup.enabled }}
+  {{/*
+    barmanObjectStore is chart-rendered only when the legacy path has
+    real coordinates:
+      - backup.enabled=true AND
+      - useSystemBucket=false (platform flow lets the CNPG driver SSA-
+        patch the live Cluster instead) AND
+      - destinationPath is non-empty AND either an inline access/secret
+        pair is supplied OR an external Secret reference (s3Credentials-
+        Secret.name) is set.
+    Anything short of that means the user has enabled backup but not yet
+    supplied S3 coordinates — rendering a half-empty barmanObjectStore
+    would just feed CNPG a broken archive_command. Tenants opting into
+    `useSystemBucket: true` keep barmanObjectStore unset until the
+    backup-controller's CNPG driver SSA-patches it on the first BackupJob.
+  */}}
+  {{- $hasInlineCreds := and (ne (default "" .Values.backup.s3AccessKey) "") (ne (default "" .Values.backup.s3SecretKey) "") }}
+  {{- $hasLegacyCreds := or $hasInlineCreds (ne (default "" $credCfg.name) "") }}
+  {{- $renderBarman := and .Values.backup.enabled (not .Values.backup.useSystemBucket) (ne $destinationPath "") $hasLegacyCreds }}
+  {{- if $renderBarman }}
   backup:
     barmanObjectStore:
-      destinationPath: {{ .Values.backup.destinationPath }}
-      endpointURL: {{ .Values.backup.endpointURL }}
+      destinationPath: {{ $destinationPath }}
+      endpointURL: {{ $endpointURL }}
       {{- if $caCfg.name }}
       endpointCA:
         name: {{ $caCfg.name }}
@@ -60,6 +105,41 @@ spec:
     retentionPolicy: {{ .Values.backup.retentionPolicy }}
   {{- end }}
 
+  {{/*
+    bootstrap.enabled + backup.useSystemBucket is unsupported in this
+    chart: bootstrap.recovery requires an explicit externalClusters entry
+    with destinationPath / endpointURL / s3Credentials, but useSystemBucket
+    deliberately leaves the platform coordinates out of values.yaml (they
+    live in the backupstrategy-controller chart). Rendering the bootstrap
+    block here with empty coordinates would produce a broken cnpg.io
+    Cluster CR and a confusing CNPG bootstrap failure.
+
+    The supported way to restore against the platform bucket is a
+    backups.cozystack.io/RestoreJob targeting a fresh Postgres app — the
+    backup-controller's CNPG driver SSA-patches the Cluster's
+    spec.bootstrap before CNPG sees it. See the BackupClass and Restore
+    flow in docs/operations/backup-classes.md.
+
+    Fail fast at chart-render time so tenants see the misconfiguration
+    immediately rather than during a Postgres bootstrap pod crash loop.
+  */}}
+  {{- if and .Values.bootstrap.enabled .Values.backup.useSystemBucket }}
+  {{- fail "postgres: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Use a backups.cozystack.io/RestoreJob against the cozy-default BackupClass to restore from the system bucket; see docs/operations/backup-classes.md." }}
+  {{- end }}
+  {{/*
+    The externalClusters bootstrap block below references $credSecretName
+    (default <release>-s3-creds) for recovery. That Secret is only
+    materialised by backup-secret.yaml when inline creds are present, so a
+    legacy-flow bootstrap with no usable credentials would render a cnpg.io
+    Cluster whose recovery s3Credentials points at a Secret that never
+    exists — CNPG then crash-loops with an opaque "secret not found".
+    Fail closed at render time (mirroring the useSystemBucket guard above)
+    so the misconfiguration is obvious immediately. useSystemBucket-mode
+    restore is the RestoreJob flow, already rejected by the guard above.
+  */}}
+  {{- if and .Values.bootstrap.enabled (not .Values.backup.useSystemBucket) (not $credCfg.name) (not $hasInlineCreds) }}
+  {{- fail "postgres: bootstrap.enabled=true requires S3 credentials: set backup.s3AccessKey+backup.s3SecretKey, backup.s3CredentialsSecret.name, or backup.useSystemBucket=true (with a backups.cozystack.io/RestoreJob)." }}
+  {{- end }}
   {{- if .Values.bootstrap.enabled }}
   bootstrap:
     recovery:

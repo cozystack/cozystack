@@ -124,6 +124,18 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// not own the archive, so it does not delete it on CR removal.
 		// Mirrors the Altinity branch's "we do not own S3" stance.
 		return nil
+	case strategyv1alpha1.FoundationDBStrategyKind:
+		// Cozystack Backup deletion does NOT delete the operator-side
+		// foundationdb.org/FoundationDBBackup CR. That CR drives a
+		// continuously streaming backup_agent Deployment; its lifecycle
+		// is governed by the next BackupJob's stopOtherFoundationDBBackups
+		// call, by manual operator action, or by
+		// examples/backups/foundationdb/cleanup.sh. Same "we do not own
+		// the archive" contract as Altinity / MariaDB — the explicit
+		// branch guards the seam against a future driver refactor that
+		// might incidentally stamp velero.io/backup-name onto FDB
+		// driverMetadata via a shared helper.
+		return nil
 	case strategyv1alpha1.VeleroStrategyKind:
 		return r.cleanupVeleroBackup(ctx, backup)
 	default:

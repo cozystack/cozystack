@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -1413,6 +1414,98 @@ func TestReconcileCNPG_StartedAtReturnsEarlyToAvoidStaleResourceVersion(t *testi
 	// the next reconcile picks up cleanly with the post-patch RV.
 	if persisted.Status.Phase != "" {
 		t.Errorf("expected Phase unchanged after StartedAt early return, got %q", persisted.Status.Phase)
+	}
+}
+
+// TestReconcileCNPGRestore_MissingStrategyFailsClosedAfterDeadline covers the
+// restore-path blocker: a RestoreJob whose referenced CNPG Strategy CR never
+// appears must NOT requeue forever. requeueRestoreStrategyNotReady gates
+// terminal-vs-transient on Status.StartedAt, and the "fail closed" guarantee
+// only holds if every driver stamps StartedAt before it can reach the Strategy
+// NotFound branch. reconcileCNPGRestore stamps StartedAt and returns early on
+// the first reconcile (well before the strategy lookup), so the deadline clock
+// starts even when the job begins with StartedAt==nil; once the deadline
+// elapses the next reconcile flips the RestoreJob to Phase=Failed.
+//
+// The existing TestRequeueRestoreStrategyNotReady_BoundedByDeadline only
+// exercises the helper in isolation with StartedAt pre-populated, so it cannot
+// catch a driver that reaches the NotFound branch without ever stamping
+// StartedAt. This test proves the guarantee end to end at the driver call site.
+func TestReconcileCNPGRestore_MissingStrategyFailsClosedAfterDeadline(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "missing-strategy",
+			},
+		},
+	}
+	// Status.StartedAt deliberately nil: the driver itself must start the clock.
+	rj := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: backup.Name}},
+	}
+	// No CNPG Strategy CR seeded - the NotFound branch is the point.
+	c := newCNPGStrategyTestClient(t, backup, rj)
+	r := &RestoreJobReconciler{Client: c}
+	ctx := context.Background()
+
+	// Pass 1: StartedAt is nil, so the driver stamps it and requeues. It must
+	// NOT fail yet - the bootstrap grace window has only just opened.
+	res, err := r.reconcileCNPGRestore(ctx, rj, backup)
+	if err != nil {
+		t.Fatalf("pass 1 reconcileCNPGRestore: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("pass 1 must requeue after stamping StartedAt, got %+v", res)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(rj), persisted); err != nil {
+		t.Fatalf("get after pass 1: %v", err)
+	}
+	if persisted.Status.StartedAt == nil {
+		t.Fatalf("driver did not stamp StartedAt before the Strategy NotFound branch; " +
+			"the deadline clock would never start and the RestoreJob would requeue forever")
+	}
+	if persisted.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("must not fail within the grace window, got Phase=%q", persisted.Status.Phase)
+	}
+
+	// Simulate StrategyNotReadyDeadline of wall-clock elapsing by backdating the
+	// persisted StartedAt past the deadline.
+	stale := metav1.NewTime(persisted.Status.StartedAt.Add(-StrategyNotReadyDeadline - time.Minute))
+	base := persisted.DeepCopy()
+	persisted.Status.StartedAt = &stale
+	if err := c.Status().Patch(ctx, persisted, client.MergeFrom(base)); err != nil {
+		t.Fatalf("backdate StartedAt: %v", err)
+	}
+
+	// Pass 2: StartedAt is now past the deadline and the Strategy CR still does
+	// not exist, so the driver call site must fail closed.
+	reloaded := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(rj), reloaded); err != nil {
+		t.Fatalf("get before pass 2: %v", err)
+	}
+	res, err = r.reconcileCNPGRestore(ctx, reloaded, backup)
+	if err != nil {
+		t.Fatalf("pass 2 reconcileCNPGRestore: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatalf("terminal failure must not requeue, got %+v", res)
+	}
+	final := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(rj), final); err != nil {
+		t.Fatalf("get after pass 2: %v", err)
+	}
+	if final.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("expected Phase=Failed once the deadline elapsed, got %q", final.Status.Phase)
+	}
+	if !strings.Contains(final.Status.Message, "missing-strategy") {
+		t.Errorf("failure message should name the missing strategy, got %q", final.Status.Message)
 	}
 }
 

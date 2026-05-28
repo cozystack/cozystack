@@ -60,33 +60,36 @@ type Backup struct {
 	// Enable backup integration. Materialises the chart-emitted `<release>-backup-s3` Secret consumed by the Altinity backup strategy and, when `schedule` is non-empty, also renders the legacy chart-managed CronJob.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// S3 endpoint URL. Stored in the chart-emitted `<release>-backup-s3` Secret and consumed at runtime by the in-Pod `clickhouse-backup` sidecar. Empty means use the AWS default endpoint; in that case the chart also drops `S3_FORCE_PATH_STYLE` from the sidecar env, since AWS public S3 requires vhost-style.
+	// DEPRECATED. S3 endpoint URL for the legacy chart-emitted sidecar.
 	// +kubebuilder:default:=""
 	Endpoint string `json:"endpoint,omitempty"`
 	// Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.
 	// +kubebuilder:default:="<password>"
 	ResticPassword string `json:"resticPassword,omitempty"`
-	// Access key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
+	// DEPRECATED. Tenants no longer supply S3 keys; the platform-managed Bucket Secret is the source of truth. Optional now so `useSystemBucket: true` tenants can omit it.
 	// +kubebuilder:default:="<your-access-key>"
-	S3AccessKey string `json:"s3AccessKey"`
-	// S3 bucket used for storing backups.
+	S3AccessKey string `json:"s3AccessKey,omitempty"`
+	// DEPRECATED. Optional; see `s3Region`.
 	// +kubebuilder:default:="s3.example.org/clickhouse-backups"
-	S3Bucket string `json:"s3Bucket"`
-	// Reference to a pre-existing Secret carrying S3 credentials and bucket coordinates consumed by the chart-emitted `clickhouse-backup` sidecar. When `name` is set, the chart skips materialising `<release>-backup-s3` and the sidecar reads from the referenced Secret instead. The strategy Pod is a curl/jq HTTP client and does not bind to this Secret directly.
+	S3Bucket string `json:"s3Bucket,omitempty"`
+	// DEPRECATED. Pre-existing Secret reference for the legacy chart-emitted sidecar. The platform flow projects `cozy-backups-creds` instead.
 	// +kubebuilder:default:={}
 	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
-	// Object-key prefix the sidecar uses inside `s3Bucket`. Empty (default) scopes backups under the Helm release name so multiple ClickHouse releases sharing one bucket cannot clobber each other. Set this on a to-copy restore destination to point at the source release's prefix.
+	// DEPRECATED. Object-key prefix inside the legacy `s3Bucket`; the new platform flow scopes by namespace automatically.
 	// +kubebuilder:default:=""
 	S3PathOverride string `json:"s3PathOverride,omitempty"`
-	// AWS S3 region where backups are stored.
+	// DEPRECATED. Per-tenant S3 configuration is being phased out in favour of the platform-managed `cozy-default` BackupClass. Optional now so tenants on `useSystemBucket: true` can omit it.
 	// +kubebuilder:default:="us-east-1"
-	S3Region string `json:"s3Region"`
-	// Secret key for S3 authentication. Ignored when `s3CredentialsSecret.name` is set.
+	S3Region string `json:"s3Region,omitempty"`
+	// DEPRECATED. Optional; see `s3AccessKey`.
 	// +kubebuilder:default:="<your-secret-key>"
-	S3SecretKey string `json:"s3SecretKey"`
+	S3SecretKey string `json:"s3SecretKey,omitempty"`
 	// Legacy. Cron schedule for the chart-emitted CronJob that runs the dump+restic backup. Empty (default) skips the legacy CronJob; recommended when a `BackupClass` + `Plan` from `backups.cozystack.io` already drives backup orchestration via the Altinity strategy.
 	// +kubebuilder:default:=""
 	Schedule string `json:"schedule,omitempty"`
+	// Opt-in: when true, the chart-emitted `<release>-backup-s3` Secret is skipped and the `clickhouse-backup` sidecar reads bucket coordinates + S3 credentials from the platform-projected `cozy-backups-creds` Secret. `S3_PATH` is set to `<namespace>/<release>` for cross-tenant isolation. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill any `s3*` field below.
+	// +kubebuilder:default:=false
+	UseSystemBucket bool `json:"useSystemBucket,omitempty"`
 }
 
 type ClickHouseKeeper struct {

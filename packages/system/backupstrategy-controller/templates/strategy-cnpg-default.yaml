@@ -1,0 +1,21 @@
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: CNPG
+metadata:
+  name: cozy-default-cnpg
+spec:
+  template:
+    serverName: {{ printf "{{ .Application.metadata.namespace }}-{{ .Application.metadata.name }}" | quote }}
+    barmanObjectStore:
+      destinationPath: {{ printf "s3://%s/{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" $bucketName | quote }}
+      endpointURL: {{ .Values.backupStorage.endpoint | quote }}
+      retentionPolicy: "30d"
+      s3Credentials:
+        secretRef:
+          name: cozy-backups-creds
+      data:
+        compression: gzip
+      wal:
+        compression: gzip
+{{- end -}}
