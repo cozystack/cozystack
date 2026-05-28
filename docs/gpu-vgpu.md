@@ -23,10 +23,11 @@ This guide focuses on the **SR-IOV path**, which is the only model NVIDIA suppor
 
 ## Variants
 
-The `gpu-operator` package exposes two variants:
+The `gpu-operator` package exposes three variants. This document is vGPU-focused; the variant inventory is shared.
 
 - **`default`** — passthrough mode (`vfio-pci`). Whole GPU goes to a single VM. Talos is supported here; the kernel module is the open-source `vfio-pci`, no proprietary driver is needed on the host.
 - **`vgpu`** — SR-IOV vGPU mode. One physical GPU is sliced into multiple VFs, each VF bound to a vGPU profile that the guest sees as its own GPU.
+- **`container`** — containerized GPU workloads (CUDA pods, ML training) via the standard NVIDIA device plugin on hosts that already provide both the NVIDIA driver and `nvidia-container-toolkit` (the typical apt-installed Ubuntu/Debian shape). Sandbox workloads are off, `devicePlugin` is on, `driver` / `toolkit` / `vfioManager` / `cdi` are off so that the operator does not fight the host install. Orthogonal to the two VM variants — it does not pass GPUs to KubeVirt VMs. Note that `apt install nvidia-container-toolkit` installs binaries only — it does not configure containerd. Because this variant disables the operator's toolkit component (which would normally do that wiring), the host must additionally have run `nvidia-ctk runtime configure --runtime=containerd` (followed by a containerd restart) and exposed the `nvidia` runtime as the default or via a RuntimeClass before the device plugin can serve GPUs.
 
 ## Building the vGPU Manager image
 
@@ -231,10 +232,12 @@ Other GPU families have analogous tables in the [NVIDIA Virtual GPU Software Doc
 
 ## OS support summary
 
-| Host OS | passthrough (`default`) | vGPU (`vgpu`) |
-| --- | --- | --- |
-| Ubuntu 24.04 | ✅ supported upstream | ✅ supported upstream (`vgpu-manager/ubuntu24.04`) |
-| Ubuntu 22.04 | ✅ | ✅ |
-| Ubuntu 20.04 | ✅ | ✅ |
-| Ubuntu 26.04 | ⚠️ patch needed in `nvidia-driver` for usr-merge | ⚠️ same patch + own Dockerfile fork |
-| Talos Linux | ✅ (open `vfio-pci`) | ❌ NVIDIA does not grant redistribution rights for the proprietary `.run`; we tried and the path is blocked |
+The `container` variant column assumes the host already ships the NVIDIA driver and `nvidia-container-toolkit` via the distro package manager, with the `nvidia` runtime registered in containerd (`nvidia-ctk runtime configure --runtime=containerd`). With `driver.enabled=false` the operator uses the pre-installed host driver at its standard location, so a stock apt install needs no `hostPaths.driverInstallDir` override. Talos installs the driver under a non-standard prefix, so the operator does not find it at the default location — see `packages/system/gpu-operator/examples/` for the Talos-specific path with a compat DaemonSet and an explicit `hostPaths.driverInstallDir` override.
+
+| Host OS | passthrough (`default`) | vGPU (`vgpu`) | container (`container`) |
+| --- | --- | --- | --- |
+| Ubuntu 24.04 | ✅ supported upstream | ✅ supported upstream (`vgpu-manager/ubuntu24.04`) | ✅ apt-installed driver + nvidia-container-toolkit |
+| Ubuntu 22.04 | ✅ | ✅ | ✅ |
+| Ubuntu 20.04 | ✅ | ✅ | ✅ |
+| Ubuntu 26.04 | ⚠️ patch needed in `nvidia-driver` for usr-merge | ⚠️ same patch + own Dockerfile fork | ✅ |
+| Talos Linux | ✅ (open `vfio-pci`) | ❌ NVIDIA does not grant redistribution rights for the proprietary `.run`; we tried and the path is blocked | ⚠️ host driver lands in a non-standard prefix — use `examples/values-native-talos.yaml` (compat DaemonSet + `hostPaths.driverInstallDir` override) as a starting point instead |
