@@ -169,7 +169,7 @@ jobs:
   # kubeconfig working dir) to the registry as an image. The e2e job below
   # pulls that image on another runner and boots the cluster from it — so the
   # slow bring-up happens once here and the tests run against a restored state.
-  save-state:
+  save_state:
     name: "Save cluster state"
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-24cpu-96gb-x86-64' }}
     timeout-minutes: 180
@@ -339,10 +339,7 @@ jobs:
       contents: read
       packages: read
       checks: write
-    needs: ["save-state"]
-    # save-state has a hyphen, so it must be addressed with bracket notation —
-    # needs.save-state.result does not resolve in GitHub Actions expressions.
-    if: ${{ needs['save-state'].result == 'success' }}
+    needs: ["save_state"]
 
     steps:
       # ▸ Checkout and prepare the codebase
