@@ -2,6 +2,12 @@
 
 Harbor is an open-source trusted cloud-native registry project that stores, signs, and scans content.
 
+## Requirements
+
+Harbor stores its registry data in an S3 bucket provisioned through COSI from a SeaweedFS deployment. SeaweedFS must be enabled either in the tenant where Harbor is installed, or in any ancestor tenant — the bucket class is inherited down the tenant tree via the `namespace.cozystack.io/seaweedfs` annotation.
+
+Enable it by setting `seaweedfs: true` on the tenant (`packages/apps/tenant` values). If neither the current tenant nor any parent has SeaweedFS enabled, the Harbor `BucketClaim` will reference an empty `bucketClassName` and the release will fail to provision.
+
 ## Parameters
 
 ### Common parameters
