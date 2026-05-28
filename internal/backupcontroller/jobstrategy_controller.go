@@ -19,6 +19,7 @@ import (
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	"github.com/cozystack/cozystack/internal/template"
 )
 
 // ---------------------------------------------------------------------------
@@ -62,6 +63,53 @@ func jobStrategyParameters(b *backupsv1alpha1.Backup) map[string]string {
 		out[paramKey] = v
 	}
 	return out
+}
+
+// renderJobTemplate runs the strategy's PodTemplateSpec through the
+// repository's text/template engine with the same context shape as the
+// Altinity / CNPG drivers: every string field is templated against the
+// application object, the release shorthand, the run mode, and the resolved
+// parameters. Mirrors renderAltinityTemplate; the Job strategy carries the
+// same corev1.PodTemplateSpec shape and reuses the identical context, but
+// keeps its own per-driver render entrypoint so each strategy file owns its
+// rendering surface (matches the renderCNPGTemplate / renderEtcdTemplate /
+// renderFoundationDBTemplate convention).
+func renderJobTemplate(
+	tmpl corev1.PodTemplateSpec,
+	app map[string]interface{},
+	releaseName, releaseNamespace, mode string,
+	parameters map[string]string,
+	backup *backupsv1alpha1.Backup,
+) (*corev1.PodTemplateSpec, error) {
+	ctxMap := map[string]interface{}{
+		"Application": app,
+		"Release": map[string]string{
+			"Name":      releaseName,
+			"Namespace": releaseNamespace,
+		},
+		"Mode":       mode,
+		"Parameters": parameters,
+	}
+	if backup != nil {
+		// Expose ApplicationRef so restore strategies can reference the
+		// SOURCE release name even when restoring into a differently-named
+		// target. Mirrors the .Backup context exposed by the Altinity
+		// driver - see renderAltinityTemplate for the longer rationale.
+		sourceAPIGroup := ""
+		if backup.Spec.ApplicationRef.APIGroup != nil {
+			sourceAPIGroup = *backup.Spec.ApplicationRef.APIGroup
+		}
+		ctxMap["Backup"] = map[string]interface{}{
+			"Name":      backup.Name,
+			"Namespace": backup.Namespace,
+			"ApplicationRef": map[string]string{
+				"APIGroup": sourceAPIGroup,
+				"Kind":     backup.Spec.ApplicationRef.Kind,
+				"Name":     backup.Spec.ApplicationRef.Name,
+			},
+		}
+	}
+	return template.Template(&tmpl, ctxMap)
 }
 
 // ---------------------------------------------------------------------------
