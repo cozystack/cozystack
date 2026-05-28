@@ -21,6 +21,17 @@ spec:
       - CPUManager
       - GPU
       - VMExport
+      {{- range .Values.extraFeatureGates }}
+      - {{ . }}
+      {{- end }}
+    {{- with .Values.permittedHostDevices }}
+    permittedHostDevices:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.mediatedDevicesConfiguration }}
+    mediatedDevicesConfiguration:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
     evictionStrategy: LiveMigrate
     virtualMachineOptions:
       disableSerialConsoleLog: {}
