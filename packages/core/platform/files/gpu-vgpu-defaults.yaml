@@ -1,0 +1,55 @@
+# NVIDIA vGPU profiles commonly exposed by nvidia-vgpu-manager in vGPU
+# mode. Used by bundles/iaas.yaml when bundles.iaas.gpuOperatorVariant=vgpu
+# and cozystack.gpu-operator is in bundles.enabledPackages. Auto-injected
+# into the KubeVirt CR at spec.configuration.permittedHostDevices.mediatedDevices
+# and spec.configuration.mediatedDevicesConfiguration.
+#
+# The profiles below cover the 24Q (3D-optimised) and 48Q (datacenter
+# whole-card) splits on the GPU families cozystack supports for vGPU
+# (Ampere and earlier — Ada Lovelace and Blackwell use per-VF NVIDIA
+# sysfs and are out of scope for the chart's vGPU defaults; see
+# system/gpu-operator/values-vgpu.yaml).
+#
+# externalResourceProvider: true is mandatory — the mediated devices are
+# published by the vGPU Manager DaemonSet, not by KubeVirt itself.
+permittedHostDevices:
+  mediatedDevices:
+  - mdevNameSelector: NVIDIA A100-40C
+    resourceName: nvidia.com/A100-40C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A100-80C
+    resourceName: nvidia.com/A100-80C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A40-48Q
+    resourceName: nvidia.com/A40-48Q
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A40-24Q
+    resourceName: nvidia.com/A40-24Q
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A30-24C
+    resourceName: nvidia.com/A30-24C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A10-24Q
+    resourceName: nvidia.com/A10-24Q
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA V100D-32C
+    resourceName: nvidia.com/V100D-32C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA T4-16Q
+    resourceName: nvidia.com/T4-16Q
+    externalResourceProvider: true
+mediatedDevicesConfiguration:
+  # mediatedDeviceTypes lists the vGPU profile IDs the operator may
+  # auto-create per-node from the underlying physical GPUs. Numeric IDs
+  # are the NVIDIA-published vGPU type numbers (see GRID/vGPU release
+  # notes for the full mapping); listing one whole-card type per GPU
+  # family keeps the default deterministic.
+  mediatedDeviceTypes:
+  - nvidia-559    # A100-40C
+  - nvidia-560    # A100-80C
+  - nvidia-558    # A40-48Q
+  - nvidia-555    # A40-24Q
+  - nvidia-453    # A30-24C
+  - nvidia-471    # A10-24Q
+  - nvidia-413    # V100D-32C
+  - nvidia-232    # T4-16Q
