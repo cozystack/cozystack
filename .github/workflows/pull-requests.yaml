@@ -340,6 +340,11 @@ jobs:
       packages: read
       checks: write
     needs: ["save_state"]
+    # always() is required because resolve_assets is skipped on regular (non-
+    # release) PRs and GHA's default success() gate propagates that skip down
+    # the needs graph, skipping e2e too. The explicit check on save_state's
+    # result keeps the intended semantics: e2e runs iff save_state succeeded.
+    if: ${{ always() && needs.save_state.result == 'success' }}
 
     steps:
       # ▸ Checkout and prepare the codebase
