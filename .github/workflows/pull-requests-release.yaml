@@ -159,9 +159,30 @@ jobs:
               per_page: 100
             });
 
-            // Find draft release to publish
-            const draft = releases.data.find(r => r.tag_name === tag && r.draft);
-            if (!draft) throw new Error(`Draft release for ${tag} not found`);
+            // Find draft release to publish.
+            //
+            // Normally the draft was created by tags.yaml with tag_name === tag.
+            // But if the git tag was deleted and re-created between draft creation
+            // and merge (e.g. the release branch was force-updated), GitHub orphans
+            // the draft: tag_name becomes "untagged-<hash>" while `name` is kept.
+            // Fall back to matching by `name` and repair the draft's tag_name
+            // before publishing — otherwise the published release would not point
+            // at the real git tag.
+            let draft = releases.data.find(r => r.draft && r.tag_name === tag);
+            if (!draft) {
+              const orphan = releases.data.find(r =>
+                r.draft && r.name === tag && /^untagged-/.test(r.tag_name)
+              );
+              if (!orphan) throw new Error(`Draft release for ${tag} not found`);
+              console.log(`🔧 Repairing orphaned draft ${orphan.id}: tag_name '${orphan.tag_name}' -> '${tag}'`);
+              const repaired = await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: orphan.id,
+                tag_name: tag
+              });
+              draft = repaired.data;
+            }
 
             // Find max semver among published releases (excluding current draft)
             const publishedReleases = releases.data
