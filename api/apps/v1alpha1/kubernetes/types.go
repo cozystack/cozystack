@@ -43,6 +43,9 @@ type ConfigSpec struct {
 	// Talos worker image configuration.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
+	// MachineHealthCheck tuning for worker node groups.
+	// +kubebuilder:default:={}
+	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
 }
 
 type APIServer struct {
@@ -270,6 +273,15 @@ type NodeGroup struct {
 	Roles []string `json:"roles,omitempty"`
 	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 	StorageClass string `json:"storageClass,omitempty"`
+}
+
+type NodeHealthCheck struct {
+	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. Accepts an integer or a percentage like "50%". Steady-state default of 0 remediates any unhealthy node immediately. Raise this (or set a percentage) during the kubeadm-to-Talos rollover or large minor-version upgrades where transient unhealthy nodes are expected.
+	// +kubebuilder:default:="0"
+	MaxUnhealthy string `json:"maxUnhealthy"`
+	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow Talos image fetches (e.g. air-gapped mirrors of factory.talos.dev) or first-boot scenarios.
+	// +kubebuilder:default:="10m"
+	NodeStartupTimeout string `json:"nodeStartupTimeout"`
 }
 
 type OuroborosAddon struct {

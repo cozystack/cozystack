@@ -208,6 +208,15 @@ See the reference for components utilized in this service:
 | `talos.schematicID` | Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here. | `string` | `ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515` |
 
 
+### Node Health Check
+
+| Name                                 | Description                                                                                                                                                                                                                                                                                                                                                      | Type     | Value |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `nodeHealthCheck`                    | MachineHealthCheck tuning for worker node groups.                                                                                                                                                                                                                                                                                                                | `object` | `{}`  |
+| `nodeHealthCheck.maxUnhealthy`       | Maximum number of unhealthy nodes tolerated per node group before remediation is paused. Accepts an integer or a percentage like "50%". Steady-state default of 0 remediates any unhealthy node immediately. Raise this (or set a percentage) during the kubeadm-to-Talos rollover or large minor-version upgrades where transient unhealthy nodes are expected. | `string` | `0`   |
+| `nodeHealthCheck.nodeStartupTimeout` | Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow Talos image fetches (e.g. air-gapped mirrors of factory.talos.dev) or first-boot scenarios.                                                                                                                                                      | `string` | `10m` |
+
+
 ## Parameter examples and reference
 
 ### resources and resourcesPreset

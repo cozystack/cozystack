@@ -742,8 +742,8 @@ metadata:
   namespace: {{ $.Release.Namespace }}
 spec:
   clusterName: {{ $.Release.Name }}
-  maxUnhealthy: 0
-  nodeStartupTimeout: 10m
+  maxUnhealthy: {{ $.Values.nodeHealthCheck.maxUnhealthy | quote }}
+  nodeStartupTimeout: {{ $.Values.nodeHealthCheck.nodeStartupTimeout }}
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}

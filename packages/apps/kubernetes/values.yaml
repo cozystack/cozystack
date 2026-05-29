@@ -293,3 +293,16 @@ images:
 talos:
   version: "v1.13.0"
   schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+
+##
+## @section Node Health Check
+##
+
+## @typedef {struct} NodeHealthCheck - MachineHealthCheck configuration for worker node groups.
+## @field {string} maxUnhealthy="0" - Maximum number of unhealthy nodes tolerated per node group before remediation is paused. Accepts an integer or a percentage like "50%". Steady-state default of 0 remediates any unhealthy node immediately. Raise this (or set a percentage) during the kubeadm-to-Talos rollover or large minor-version upgrades where transient unhealthy nodes are expected.
+## @field {string} nodeStartupTimeout="10m" - Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow Talos image fetches (e.g. air-gapped mirrors of factory.talos.dev) or first-boot scenarios.
+
+## @param {NodeHealthCheck} nodeHealthCheck - MachineHealthCheck tuning for worker node groups.
+nodeHealthCheck:
+  maxUnhealthy: "0"
+  nodeStartupTimeout: "10m"
