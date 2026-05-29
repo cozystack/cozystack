@@ -21,8 +21,13 @@ if [ ! -f "$VALUES" ]; then
   exit 1
 fi
 
-MAX_N=$(ls -1 "$MDIR" | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
-if [ -z "$MAX_N" ]; then
+MAX_N=0
+for f in "$MDIR"/*; do
+  name=${f##*/}
+  [[ "$name" =~ ^[0-9]+$ ]] || continue
+  [ "$name" -gt "$MAX_N" ] && MAX_N=$name
+done
+if [ "$MAX_N" -eq 0 ]; then
   echo "ERROR: no numbered migrations found under $MDIR" >&2
   exit 1
 fi
