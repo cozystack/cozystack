@@ -588,6 +588,8 @@ metadata:
   name: {{ $.Release.Name }}-{{ $groupName }}
   namespace: {{ $.Release.Namespace }}
 spec:
+  template:
+    spec:
       generateType: none
       talosVersion: {{ $talosVersion | quote }}
       data: |
