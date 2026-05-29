@@ -10,17 +10,19 @@ Design: ONE combined leaf Certificate covers both the HTTP API (port 9200) and D
 IMPORTANT: The CA secret is named {{ .Release.Name }}-http-ca (NOT {{ .Release.Name }}-ca).
 The opensearch-operator hardcodes <clusterName>-ca as the name of its own internal transport
 CA secret (see ReadOrGenerateCaCert in
-https://github.com/Opster/opensearch-k8s-operator/blob/main/opensearch-operator/pkg/reconcilers/util/util.go).
+https://github.com/opensearch-project/opensearch-k8s-operator/blob/main/opensearch-operator/pkg/reconcilers/util/util.go).
 Using the same name would cause the operator to read our cert-manager CA and fail with
 "tls: failed to find any PEM data in key input" because it expects ca.key but the
 cert-manager secret stores the private key under tls.key.
 
-KNOWN ISSUE: The opensearch securityadmin job authenticates with an admin cert signed
-by the operator-managed transport CA, but it connects to the HTTP endpoint whose trust
-anchor is the chart's cert-manager CA. This cross-trust gap is not addressed by this
-chart yet — securityadmin currently relies on TLS verification being relaxed inside the
-job's environment. Resolution: either include the HTTP CA in the admin cert's trust
-bundle or run securityadmin against an internal endpoint trusted by transport CA.
+securityadmin trust: the securityadmin job connects to the HTTP endpoint (port 9200 for
+OpenSearch >= 2.0) and validates the server certificate against the admin certificate's
+ca.crt, authenticating with that same admin certificate. To make both anchor on this CA,
+the CR passes {{ .Release.Name }}-http-ca to spec.security.tls.http.caSecret: the operator
+then signs the admin certificate with this CA and sets the HTTP listener trust anchor to
+it (pemtrustedcas). The operator reads the cert-manager secret's tls.crt/tls.key as the
+CA via the cert-manager.io/issuer-kind annotation. As a result securityadmin verifies the
+server certificate, is accepted as admin, and the security config (users/roles) applies.
 
 NAME-LENGTH GUARD: Kubernetes object names are bounded at 63 characters. The longest
 suffix below is "-http-selfsigned" (16 chars), so the release name must be 47 chars

@@ -330,6 +330,9 @@ tests:
       - notExists:
           path: spec.security.tls.http.secret
         documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.caSecret
+        documentIndex: 0
 
   # --- HTTP TLS: case (b) — cert-manager secret when external true and tls.enabled unset ---
 
@@ -342,6 +345,10 @@ tests:
       - equal:
           path: spec.security.tls.http.secret.name
           value: os-test-http-cert
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.caSecret.name
+          value: os-test-http-ca
         documentIndex: 0
       - notExists:
           path: spec.security.tls.http.generate
@@ -364,6 +371,9 @@ tests:
       - notExists:
           path: spec.security.tls.http.secret
         documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.caSecret
+        documentIndex: 0
 
   # --- HTTP TLS: case (d) — cert-manager secret when tls.enabled explicitly true ---
 
@@ -375,6 +385,10 @@ tests:
       - equal:
           path: spec.security.tls.http.secret.name
           value: os-test-http-cert
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.caSecret.name
+          value: os-test-http-ca
         documentIndex: 0
       - notExists:
           path: spec.security.tls.http.generate

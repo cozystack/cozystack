@@ -33,6 +33,12 @@ spec:
         {{- if $tlsEnabled }}
         secret:
           name: {{ .Release.Name }}-http-cert
+        # Feed the cert-manager HTTP CA to the operator so it (a) signs the admin
+        # certificate with this CA and (b) sets the HTTP listener trust anchor to it.
+        # This lets the operator's securityadmin job validate the HTTP server cert and
+        # authenticate as admin, so the security config (users/roles) actually applies.
+        caSecret:
+          name: {{ .Release.Name }}-http-ca
         {{- else }}
         generate: true
         {{- end }}
