@@ -103,7 +103,7 @@ type Resources struct {
 }
 
 type TLS struct {
-	// Tri-state TLS switch. When omitted (null), TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
+	// Tri-state TLS switch. When unset, TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
 	Enabled *bool `json:"enabled,omitempty"`
 }
 

@@ -96,7 +96,7 @@ version: v2
 ##
 
 ## @typedef {struct} TLS - HTTP-layer TLS configuration for OpenSearch and Dashboards.
-## @field {*bool} enabled - Tri-state TLS switch. When omitted (null), TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
+## @field {*bool} enabled - Tri-state TLS switch. When unset, TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
 ##   NOTE: Transport mTLS between nodes is always active and is managed by the opster
 ##   operator (tls.transport.generate: true). Setting enabled: false here does NOT
 ##   disable transport mTLS — the OpenSearch security plugin requires it unconditionally.
@@ -108,7 +108,8 @@ version: v2
 ## securityadmin cannot verify the HTTP TLS chain. As a result, security configuration
 ## stored in the <release>-security-config Secret (users, roles, audit policies) may not
 ## apply or refresh automatically. Workaround: reconcile security configuration manually,
-## or keep tls.enabled unset (operator-managed mode) until upstream adds merged CA support.
+## or set tls.enabled: false (operator-managed HTTP TLS mode), especially when external: true,
+## until upstream adds merged CA support.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}
