@@ -212,6 +212,77 @@ func TestInstall_appliesAllCRDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
+
+	for _, name := range []string{"packages.cozystack.io", "packagesources.cozystack.io"} {
+		applied := &unstructured.Unstructured{}
+		applied.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+		if err := fakeClient.Get(ctx, client.ObjectKey{Name: name}, applied); err != nil {
+			t.Fatalf("failed to read back applied CRD %s: %v", name, err)
+		}
+		labels := applied.GetLabels()
+		if labels["platform.cozystack.io/no-delete"] != "true" {
+			t.Errorf("CRD %s missing platform.cozystack.io/no-delete=true label; got labels=%v", name, labels)
+		}
+	}
+}
+
+// testCRDWithLabels mirrors testCRD1 but already carries a non-cozystack label.
+// Exercises the merge path in Install: the existing label must survive, and the
+// deletion-protection label must be added alongside it.
+var testCRDWithLabels = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: packages.cozystack.io
+  labels:
+    app.kubernetes.io/managed-by: foo
+spec:
+  group: cozystack.io
+  names:
+    kind: Package
+    plural: packages
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+`
+
+func TestInstall_preservesExistingLabels(t *testing.T) {
+	log.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	scheme := runtime.NewScheme()
+	if err := apiextensionsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add apiextensions to scheme: %v", err)
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(establishedInterceptor()).
+		Build()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ctx = log.IntoContext(ctx, log.FromContext(context.Background()))
+
+	if err := Install(ctx, fakeClient, newCRDManifestWriter(testCRDWithLabels)); err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+
+	applied := &unstructured.Unstructured{}
+	applied.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+	if err := fakeClient.Get(ctx, client.ObjectKey{Name: "packages.cozystack.io"}, applied); err != nil {
+		t.Fatalf("failed to read back applied CRD: %v", err)
+	}
+	labels := applied.GetLabels()
+	if labels["app.kubernetes.io/managed-by"] != "foo" {
+		t.Errorf("existing label app.kubernetes.io/managed-by=foo was lost; got labels=%v", labels)
+	}
+	if labels["platform.cozystack.io/no-delete"] != "true" {
+		t.Errorf("deletion-protection label missing after merge; got labels=%v", labels)
+	}
 }
 
 func TestInstall_noManifests(t *testing.T) {

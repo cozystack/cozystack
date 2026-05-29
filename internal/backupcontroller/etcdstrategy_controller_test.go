@@ -11,7 +11,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1004,7 +1003,17 @@ func TestReconcileEtcd_RejectsWrongKind(t *testing.T) {
 	}
 }
 
-func TestReconcileEtcd_StrategyNotFoundIsTerminal(t *testing.T) {
+// TestReconcileEtcd_StrategyMissingIsTransient pins the bootstrap-window
+// contract: when the Strategy CR referenced by a (resolved) BackupClass
+// is not (yet) present, the driver must surface a transient
+// Ready=False/StrategyNotReady condition and requeue rather than
+// terminate the BackupJob. Strategy CRs are gated on a populated
+// BucketClaim.status.bucketName in the backupstrategy-controller chart;
+// during the platform bootstrap window (Bucket → BucketClaim → COSI
+// provisioning still in flight) BackupClass cozy-default exists but
+// its strategies do not. Terminal failure would force tenants to
+// recreate BackupJobs every time they raced the bootstrap.
+func TestReconcileEtcd_StrategyMissingIsTransient(t *testing.T) {
 	apps := etcdapp.GroupName
 	now := metav1.Now()
 	bj := &backupsv1alpha1.BackupJob{
@@ -1024,15 +1033,26 @@ func TestReconcileEtcd_StrategyNotFoundIsTerminal(t *testing.T) {
 		APIGroup: &apiGroup,
 	}
 	resolved := &ResolvedBackupConfig{StrategyRef: strategyRef}
-	if _, err := r.reconcileEtcd(context.Background(), bj, resolved); err != nil && !apierrors.IsNotFound(err) {
+	res, err := r.reconcileEtcd(context.Background(), bj, resolved)
+	if err != nil {
 		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("expected RequeueAfter > 0, got %v", res.RequeueAfter)
 	}
 	got := &backupsv1alpha1.BackupJob{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(bj), got); err != nil {
 		t.Fatalf("refetch: %v", err)
 	}
-	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
-		t.Errorf("expected Failed, got %q", got.Status.Phase)
+	if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("expected non-Failed phase, got %q", got.Status.Phase)
+	}
+	cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if cond == nil {
+		t.Fatalf("expected Ready condition, got none")
+	}
+	if cond.Status != metav1.ConditionFalse || cond.Reason != "StrategyNotReady" {
+		t.Errorf("expected Ready=False/StrategyNotReady, got %s/%s", cond.Status, cond.Reason)
 	}
 }
 

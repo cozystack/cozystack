@@ -34,6 +34,23 @@ tests:
       - hasDocuments:
           count: 0
 
+  - it: does not render under useSystemBucket even with schedule set
+    # In the platform useSystemBucket flow the Cluster's barmanObjectStore
+    # is left unset until the BackupClass driver SSA-patches it at first
+    # BackupJob time, so a chart-emitted ScheduledBackup would fire against
+    # an unconfigured Cluster and fail. Mirrors the ClickHouse gates.
+    release:
+      name: pg-test
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+        schedule: "0 2 * * * *"
+    asserts:
+      - hasDocuments:
+          count: 0
+
   - it: renders ScheduledBackup when both enabled and schedule are set
     release:
       name: pg-test

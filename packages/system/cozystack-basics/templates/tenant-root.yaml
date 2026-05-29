@@ -4,6 +4,7 @@ kind: Namespace
 metadata:
   name: tenant-root
   labels:
+    platform.cozystack.io/no-delete: "true"
     namespace.cozystack.io/host: {{ index .Values._cluster "root-host" | quote }}
     {{- /* Gateway attach label: when platform-level Gateway is on,
             tenant-root owns the publishing Gateway, and its own
@@ -23,6 +24,7 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
   labels:
+    platform.cozystack.io/no-delete: "true"
     sharding.fluxcd.io/key: tenants
     apps.cozystack.io/application.kind: Tenant
     apps.cozystack.io/application.group: apps.cozystack.io

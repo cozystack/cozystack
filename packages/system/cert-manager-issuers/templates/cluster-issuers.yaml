@@ -88,6 +88,8 @@ apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: letsencrypt-prod
+  labels:
+    platform.cozystack.io/no-delete: "true"
 spec:
   acme:
     privateKeySecretRef:
@@ -106,6 +108,8 @@ apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: letsencrypt-stage
+  labels:
+    platform.cozystack.io/no-delete: "true"
 spec:
   acme:
     privateKeySecretRef:
@@ -124,5 +128,7 @@ apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: selfsigned-cluster-issuer
+  labels:
+    platform.cozystack.io/no-delete: "true"
 spec:
   selfSigned: {}

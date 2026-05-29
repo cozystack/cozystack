@@ -17,6 +17,14 @@ reconcile: apply
 diff:
 	cozyhr diff --namespace $(NAMESPACE) $(NAME)
 
+# Strip the platform.cozystack.io/no-delete label from every guarded object so
+# `helm uninstall cozy-platform` (and ad-hoc deletes of protected resources)
+# is no longer denied by the deletion-protection VAP. After this runs, the
+# cluster has no guardrail until the next `helm upgrade` re-stamps the label.
+# Intended for teardown / disaster-recovery, not routine use.
+unprotect:
+	hack/unprotect.sh
+
 image: image-migrations
 
 image-migrations:

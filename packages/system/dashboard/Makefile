@@ -4,12 +4,17 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-.PHONY: image image-console image-token-proxy
+.PHONY: image image-console image-token-proxy test test-go test-helm
 .PHONY: clone-console build-console update-values-console clean-console
 .NOTPARALLEL: image
 
-test:
+test: test-helm test-go
+
+test-helm:
 	helm unittest .
+
+test-go:
+	cd images/token-proxy && go test ./...
 
 image: image-console image-token-proxy
 

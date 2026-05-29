@@ -1,0 +1,18 @@
+{{- if not (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+
+WARNING: deletion-protection guardrail is NOT active on this cluster.
+
+  The cozystack-no-delete-guardrail ValidatingAdmissionPolicy requires
+  Kubernetes 1.30+ (admissionregistration.k8s.io/v1 GA). The capability
+  gate in templates/deletion-protection.yaml detected the API is absent
+  on this cluster, so the policy and its Binding were not rendered.
+  Objects carrying platform.cozystack.io/no-delete=true CAN BE DELETED
+  on this cluster — `kubectl delete configmap cozystack-version -n
+  cozy-system` will succeed, with no admission denial.
+
+  Upgrade the cluster to 1.30+ and re-run `helm upgrade` to render the
+  policy. The label is already stamped on every protected object by
+  this chart and by migration 42, so the guardrail becomes active on
+  the next upgrade with no further migration step required.
+
+{{- end }}

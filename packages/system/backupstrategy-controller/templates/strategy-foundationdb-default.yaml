@@ -1,0 +1,57 @@
+{{- $endpointHost := .Values.backupStorage.endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- $secureConn := ternary "1" "0" (hasPrefix "https://" .Values.backupStorage.endpoint) -}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: FoundationDB
+metadata:
+  name: cozy-default-foundationdb
+spec:
+  template:
+    blobStoreConfiguration:
+      # accountName carries the bare host:port — backup_agent looks up the
+      # API key + secret in the JSON file referenced by --blob_credentials
+      # (see CredentialsProjector / blob_credentials.json key). The api_key
+      # therefore never lands in Strategy spec or Backup.status.
+      accountName: {{ $endpointHost | quote }}
+      bucket: {{ $bucketName | quote }}
+      # BackupName is left to the driver — it picks the BackupJob name so
+      # each Cozystack BackupJob writes to a discrete S3 directory.
+      # secure_connection is computed from the endpoint scheme so an admin
+      # switching backupStorage.endpoint to https:// does NOT silently
+      # downgrade FDB to plaintext. CA trust for self-signed S3 endpoints
+      # still has to be plumbed to the operator pod separately — see the
+      # FoundationDB caveat in backupclass-default.yaml.
+      urlParameters:
+        - {{ printf "secure_connection=%s" $secureConn | quote }}
+        - {{ printf "region=%s" .Values.backupStorage.region | quote }}
+        - {{ printf "bucket_path={{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}" | quote }}
+    snapshotPeriodSeconds: 3600
+    customParameters:
+      - "--blob_credentials=/var/fdb-blob-credentials/blob_credentials.json"
+    backupDeploymentPodTemplateSpec:
+      spec:
+        containers:
+          - name: foundationdb
+            volumeMounts:
+              - name: blob-credentials
+                mountPath: /var/fdb-blob-credentials
+                readOnly: true
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+            securityContext:
+              runAsUser: 4059
+              runAsGroup: 4059
+        volumes:
+          - name: blob-credentials
+            secret:
+              secretName: cozy-backups-creds
+              items:
+                - key: blob_credentials.json
+                  path: blob_credentials.json
+{{- end -}}

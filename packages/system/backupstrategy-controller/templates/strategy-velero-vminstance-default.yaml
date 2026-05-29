@@ -1,0 +1,56 @@
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if and .Values.velero.bslEnabled $bucketName -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: Velero
+metadata:
+  name: cozy-default-velero-vminstance
+spec:
+  template:
+    restoreSpec:
+      existingResourcePolicy: update
+      includedNamespaces:
+        - {{ printf "{{ .Application.metadata.namespace }}" | quote }}
+      orLabelSelectors:
+        - matchLabels:
+            app.kubernetes.io/instance: {{ printf "vm-instance-{{ .Application.metadata.name }}" | quote }}
+        - matchLabels:
+            apps.cozystack.io/application.kind: {{ printf "{{ .Application.kind }}" | quote }}
+            apps.cozystack.io/application.name: {{ printf "{{ .Application.metadata.name }}" | quote }}
+      includedResources:
+        - helmreleases.helm.toolkit.fluxcd.io
+        - virtualmachines.kubevirt.io
+        - virtualmachineinstances.kubevirt.io
+        - pods
+        - persistentvolumeclaims
+        - configmaps
+        - secrets
+        - controllerrevisions.apps
+      includeClusterResources: false
+      excludedResources:
+        - datavolumes.cdi.kubevirt.io
+    spec:
+      includedNamespaces:
+        - {{ printf "{{ .Application.metadata.namespace }}" | quote }}
+      orLabelSelectors:
+        - matchLabels:
+            app.kubernetes.io/instance: {{ printf "vm-instance-{{ .Application.metadata.name }}" | quote }}
+        - matchLabels:
+            apps.cozystack.io/application.kind: {{ printf "{{ .Application.kind }}" | quote }}
+            apps.cozystack.io/application.name: {{ printf "{{ .Application.metadata.name }}" | quote }}
+      includedResources:
+        - helmreleases.helm.toolkit.fluxcd.io
+        - virtualmachines.kubevirt.io
+        - virtualmachineinstances.kubevirt.io
+        - pods
+        - datavolumes.cdi.kubevirt.io
+        - persistentvolumeclaims
+        - configmaps
+        - secrets
+        - controllerrevisions.apps
+      includeClusterResources: false
+      storageLocation: cozy-default
+      snapshotVolumes: true
+      snapshotMoveData: true
+      ttl: 720h0m0s
+      itemOperationTimeout: 24h0m0s
+{{- end -}}

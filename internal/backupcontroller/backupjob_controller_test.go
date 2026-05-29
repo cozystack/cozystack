@@ -4,14 +4,19 @@ package backupcontroller
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -124,4 +129,401 @@ func newBackupJobTestClient(t *testing.T, objs ...client.Object) client.Client {
 		WithObjects(objs...).
 		WithStatusSubresource(&backupsv1alpha1.BackupJob{}).
 		Build()
+}
+
+// TestReconcile_SkipsProjection_TerminalPhase covers review finding #2:
+// a Succeeded/Failed BackupJob must not keep projecting Secrets on every
+// requeue. Before the fix the controller would Get the source Secret and
+// Get/Update the target on each reconcile of a terminal job.
+func TestReconcile_SkipsProjection_TerminalPhase(t *testing.T) {
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-acme", Name: "bj"},
+		Status:     backupsv1alpha1.BackupJobStatus{Phase: backupsv1alpha1.BackupJobPhaseSucceeded},
+	}
+	c := newBackupJobTestClient(t, bj, flatSourceSecret())
+	r := &BackupJobReconciler{Client: c, CredentialsConfig: defaultCfg()}
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-acme", Name: "bj"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != 0 || res.Requeue {
+		t.Fatalf("terminal BackupJob must not requeue, got %+v", res)
+	}
+	// Projection must NOT have created the target Secret.
+	got := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, got); err == nil {
+		t.Fatalf("terminal BackupJob triggered projection; target Secret should be absent")
+	}
+}
+
+// TestReconcile_SkipsProjection_ForeignAPIGroup covers review finding #2
+// + #7: a BackupJob whose BackupClass resolves to a strategy outside
+// strategy.backups.cozystack.io must not project cozy-backups-creds (so
+// third-party drivers and clusters with a manually-managed
+// cozy-backups-creds Secret are unaffected). Before the fix projection
+// ran before APIGroup filtering and could terminally fail unrelated
+// BackupJobs via the ownership guard.
+func TestReconcile_SkipsProjection_ForeignAPIGroup(t *testing.T) {
+	foreignGroup := "third-party.example.com"
+	bc := &backupsv1alpha1.BackupClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "foreign-class"},
+		Spec: backupsv1alpha1.BackupClassSpec{
+			Strategies: []backupsv1alpha1.BackupClassStrategy{
+				{
+					Application: backupsv1alpha1.ApplicationSelector{
+						APIGroup: stringPtr("apps.cozystack.io"),
+						Kind:     "Postgres",
+					},
+					StrategyRef: corev1.TypedLocalObjectReference{
+						APIGroup: &foreignGroup,
+						Kind:     "CustomDriver",
+						Name:     "custom",
+					},
+				},
+			},
+		},
+	}
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-acme", Name: "bj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			BackupClassName: "foreign-class",
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "Postgres",
+				Name:     "pg",
+			},
+		},
+	}
+	// Plant an unowned cozy-backups-creds: the guard would terminally
+	// fail the BackupJob if projection ran. With the fix in place,
+	// projection is gated on the platform APIGroup and the unowned
+	// Secret is left alone.
+	unowned := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-acme", Name: "cozy-backups-creds"},
+		Data:       map[string][]byte{"user-data": []byte("x")},
+	}
+	c := newBackupJobTestClient(t, bj, bc, flatSourceSecret(), unowned)
+	r := &BackupJobReconciler{Client: c, CredentialsConfig: defaultCfg()}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-acme", Name: "bj"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// BackupJob must remain non-terminal: foreign APIGroup short-circuits
+	// without any phase transition.
+	got := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-acme", Name: "bj"}, got); err != nil {
+		t.Fatalf("fetch BackupJob: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("foreign-APIGroup BackupJob was terminally failed: %+v", got.Status)
+	}
+	// The pre-existing unowned Secret must be untouched.
+	gotSec := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, gotSec); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(gotSec.Data["user-data"]) != "x" {
+		t.Fatalf("unowned Secret mutated by foreign-APIGroup reconcile: %v", gotSec.Data)
+	}
+	if _, leaked := gotSec.Data["AWS_ACCESS_KEY_ID"]; leaked {
+		t.Fatalf("projector ran for foreign-APIGroup BackupJob; AWS creds leaked into unowned Secret")
+	}
+}
+
+// TestReconcile_NoMatchingStrategy_IsTerminal covers round-8 blocker #2:
+// a BackupJob whose BackupClass does not bind a strategy for the
+// applicationRef Kind (the documented FoundationDB-vs-cozy-default case)
+// must transition to Phase=Failed with a clear message instead of being
+// requeued forever by controller-runtime's default error-handling.
+func TestReconcile_NoMatchingStrategy_IsTerminal(t *testing.T) {
+	appsGroup := "apps.cozystack.io"
+	bc := &backupsv1alpha1.BackupClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default"},
+		Spec: backupsv1alpha1.BackupClassSpec{
+			Strategies: []backupsv1alpha1.BackupClassStrategy{
+				// Only Postgres is bound — FoundationDB intentionally omitted.
+				{
+					Application: backupsv1alpha1.ApplicationSelector{APIGroup: &appsGroup, Kind: "Postgres"},
+					StrategyRef: corev1.TypedLocalObjectReference{
+						APIGroup: stringRef(strategyv1alpha1.GroupVersion.Group), Kind: "CNPG", Name: "cozy-default-cnpg",
+					},
+				},
+			},
+		},
+	}
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-acme", Name: "fdb-bj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			BackupClassName: "cozy-default",
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: &appsGroup, Kind: "FoundationDB", Name: "fdb",
+			},
+		},
+	}
+	c := newBackupJobTestClient(t, bj, bc)
+	r := &BackupJobReconciler{Client: c}
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-acme", Name: "fdb-bj"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != 0 || res.Requeue {
+		t.Fatalf("expected terminal Failed with no requeue, got %+v", res)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-acme", Name: "fdb-bj"}, got); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("expected Phase=Failed, got %q", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.Message, "does not bind a strategy") {
+		t.Errorf("expected misbinding message, got %q", got.Status.Message)
+	}
+}
+
+func stringRef(s string) *string { return &s }
+
+// TestReconcile_BackupClassNotFound_IsTransient covers round-12 blocker
+// #3: a BackupJob referencing a BackupClass that does not exist must
+// requeue with Ready=False/BackupClassNotFound, not return a bare
+// apiserver error that controller-runtime will log at Error level on
+// every backoff cycle. The cozy-default BackupClass is gated on a
+// populated BucketClaim status, so on a fresh-cluster bootstrap the
+// BackupClass legitimately does not exist for a window — tenant
+// BackupJobs filed during that window need a clear status signal.
+func TestReconcile_BackupClassNotFound_IsTransient(t *testing.T) {
+	appsGroup := "apps.cozystack.io"
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-acme", Name: "bj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			BackupClassName: "cozy-default",
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: &appsGroup, Kind: "Postgres", Name: "pg",
+			},
+		},
+	}
+	// No BackupClass seeded — that's the point.
+	c := newBackupJobTestClient(t, bj)
+	r := &BackupJobReconciler{Client: c}
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-acme", Name: "bj"}})
+	if err != nil {
+		t.Fatalf("expected nil error (transient handled in-band), got %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("expected requeue, got %+v", res)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-acme", Name: "bj"}, got); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("BackupClassNotFound must NOT be terminal; got Phase=%q", got.Status.Phase)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	if cond == nil || cond.Reason != "BackupClassNotFound" {
+		t.Errorf("expected Ready=False/BackupClassNotFound, got %+v", cond)
+	}
+}
+
+// TestReconcile_UnsupportedKindInPlatformAPIGroup_IsTerminal covers
+// round-9 blocker #6: a BackupClass that resolves to
+// strategy.backups.cozystack.io/<unknown Kind> used to project
+// cozy-backups-creds and then silently no-op in the dispatch switch,
+// leaving the BackupJob phaseless and the tenant namespace polluted
+// with a leaked Secret. The fix rejects unsupported Kinds BEFORE
+// projection and marks the BackupJob terminally Failed.
+func TestReconcile_UnsupportedKindInPlatformAPIGroup_IsTerminal(t *testing.T) {
+	appsGroup := "apps.cozystack.io"
+	platformGroup := strategyv1alpha1.GroupVersion.Group
+	bc := &backupsv1alpha1.BackupClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default"},
+		Spec: backupsv1alpha1.BackupClassSpec{
+			Strategies: []backupsv1alpha1.BackupClassStrategy{
+				{
+					Application: backupsv1alpha1.ApplicationSelector{APIGroup: &appsGroup, Kind: "Postgres"},
+					StrategyRef: corev1.TypedLocalObjectReference{
+						APIGroup: &platformGroup, Kind: "MadeUpKind", Name: "cozy-default-madeup",
+					},
+				},
+			},
+		},
+	}
+	bj := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-acme", Name: "bj"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			BackupClassName: "cozy-default",
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: &appsGroup, Kind: "Postgres", Name: "pg",
+			},
+		},
+	}
+	c := newBackupJobTestClient(t, bj, bc)
+	r := &BackupJobReconciler{Client: c}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-acme", Name: "bj"}}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-acme", Name: "bj"}, got); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("expected Phase=Failed for unsupported Kind in platform APIGroup, got %q", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.Message, "not supported") {
+		t.Errorf("expected unsupported-Kind message, got %q", got.Status.Message)
+	}
+	// Critical: projection must NOT have leaked a Secret into the tenant ns.
+	leaked := &corev1.Secret{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, leaked); err == nil {
+		t.Fatalf("unsupported-Kind BackupJob leaked cozy-backups-creds into tenant namespace")
+	}
+}
+
+// TestHandleProjectionError pins the transient-vs-terminal split for
+// credentials-projection failures. SourceSecretMissing and APIError must
+// requeue (so the first BackupJob after a fresh install does not get
+// stuck terminally Failed before the Bucket controller produces the
+// source Secret); SourceSecretMalformed and TargetSecretNotOwned must
+// fail terminally (they are operator-visible misconfigurations that will
+// not self-heal).
+func TestHandleProjectionError(t *testing.T) {
+	cases := []struct {
+		name        string
+		err         error
+		wantRequeue bool
+		wantPhase   backupsv1alpha1.BackupJobPhase
+		wantReason  string
+	}{
+		{
+			name:        "source missing requeues",
+			err:         &ProjectionError{Reason: ReasonSourceMissing, Message: "src/x not found"},
+			wantRequeue: true,
+			wantReason:  "CredentialsProjectionPending",
+		},
+		{
+			name:        "api error requeues",
+			err:         &ProjectionError{Reason: ReasonAPIError, Message: "apiserver hiccup"},
+			wantRequeue: true,
+			wantReason:  "CredentialsProjectionPending",
+		},
+		{
+			name:       "malformed source is terminal",
+			err:        &ProjectionError{Reason: ReasonSourceMalformed, Message: "no accessKey"},
+			wantPhase:  backupsv1alpha1.BackupJobPhaseFailed,
+			wantReason: "BackupFailed",
+		},
+		{
+			name:       "unowned target is terminal",
+			err:        &ProjectionError{Reason: ReasonTargetNotOwned, Message: "tenant owns it"},
+			wantPhase:  backupsv1alpha1.BackupJobPhaseFailed,
+			wantReason: "BackupFailed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bj := &backupsv1alpha1.BackupJob{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "bj"}}
+			c := newBackupJobTestClient(t, bj)
+			r := &BackupJobReconciler{Client: c}
+			res, err := r.handleProjectionError(context.Background(), bj, tc.err)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantRequeue {
+				if res.RequeueAfter == 0 {
+					t.Fatalf("expected RequeueAfter > 0, got %+v", res)
+				}
+				if bj.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+					t.Fatalf("transient projection failure must not set Phase=Failed (got %q)", bj.Status.Phase)
+				}
+			} else {
+				if res.RequeueAfter != 0 {
+					t.Fatalf("expected terminal failure with no requeue, got %+v", res)
+				}
+				if bj.Status.Phase != tc.wantPhase {
+					t.Fatalf("expected Phase=%q, got %q", tc.wantPhase, bj.Status.Phase)
+				}
+			}
+			ready := meta.FindStatusCondition(bj.Status.Conditions, "Ready")
+			if ready == nil {
+				t.Fatalf("Ready condition not set: %+v", bj.Status.Conditions)
+			}
+			if ready.Reason != tc.wantReason {
+				t.Errorf("Ready.Reason: got %q want %q", ready.Reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestStrategyNotReadyDeadlineExceeded(t *testing.T) {
+	now := metav1.Now()
+	recent := metav1.NewTime(now.Add(-time.Minute))
+	stale := metav1.NewTime(now.Add(-StrategyNotReadyDeadline - time.Minute))
+
+	if strategyNotReadyDeadlineExceeded(nil) {
+		t.Error("nil StartedAt must not trip the deadline (first reconcile sets it)")
+	}
+	if strategyNotReadyDeadlineExceeded(&recent) {
+		t.Error("a job within the bootstrap-window grace period must stay transient")
+	}
+	if !strategyNotReadyDeadlineExceeded(&stale) {
+		t.Error("a job past StrategyNotReadyDeadline must trip the deadline")
+	}
+}
+
+// TestRequeueStrategyNotReady_BoundedByDeadline covers BLOCKER 3: a
+// strategyRef.name that never resolves (e.g. a typo in a custom BackupClass)
+// must fail closed once the bootstrap-window grace period elapses instead of
+// requeuing forever. Within the window it stays transient (Ready=False /
+// StrategyNotReady) and requeues; past the deadline it flips to terminal
+// Phase=Failed with a message naming the missing strategy.
+func TestRequeueStrategyNotReady_BoundedByDeadline(t *testing.T) {
+	t.Run("within grace period stays transient and requeues", func(t *testing.T) {
+		recent := metav1.NewTime(metav1.Now().Add(-time.Minute))
+		bj := &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "bj"},
+			Spec:       backupsv1alpha1.BackupJobSpec{BackupClassName: "cozy-default"},
+			Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &recent},
+		}
+		c := newBackupJobTestClient(t, bj)
+		r := &BackupJobReconciler{Client: c}
+
+		res, err := r.requeueStrategyNotReady(context.Background(), bj, "cozy-default-cnpg")
+		if err != nil {
+			t.Fatalf("requeueStrategyNotReady: %v", err)
+		}
+		if res.RequeueAfter != CredentialsProjectionRequeue {
+			t.Fatalf("expected requeue after %s, got %+v", CredentialsProjectionRequeue, res)
+		}
+		if bj.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("must not be terminal within the grace period")
+		}
+		ready := meta.FindStatusCondition(bj.Status.Conditions, "Ready")
+		if ready == nil || ready.Reason != "StrategyNotReady" {
+			t.Fatalf("expected Ready=False/StrategyNotReady, got %+v", ready)
+		}
+	})
+
+	t.Run("past deadline fails terminally naming the strategy", func(t *testing.T) {
+		stale := metav1.NewTime(metav1.Now().Add(-StrategyNotReadyDeadline - time.Minute))
+		bj := &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "bj"},
+			Spec:       backupsv1alpha1.BackupJobSpec{BackupClassName: "cozy-default"},
+			Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &stale},
+		}
+		c := newBackupJobTestClient(t, bj)
+		r := &BackupJobReconciler{Client: c}
+
+		res, err := r.requeueStrategyNotReady(context.Background(), bj, "cozy-default-cnpg")
+		if err != nil {
+			t.Fatalf("requeueStrategyNotReady: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("terminal failure must not requeue, got %+v", res)
+		}
+		if bj.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("expected Phase=Failed, got %q", bj.Status.Phase)
+		}
+		if !strings.Contains(bj.Status.Message, "cozy-default-cnpg") {
+			t.Errorf("failure message should name the missing strategy, got %q", bj.Status.Message)
+		}
+	})
 }
