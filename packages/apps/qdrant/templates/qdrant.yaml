@@ -1,3 +1,4 @@
+{{- $tlsEnabled := eq (include "qdrant.tls.enabled" .) "true" -}}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -40,4 +41,31 @@ spec:
       {{- if .Values.external }}
       service:
         type: LoadBalancer
+      {{- end }}
+      config:
+        service:
+          enable_tls: {{ $tlsEnabled }}
+        cluster:
+          p2p:
+            enable_tls: {{ $tlsEnabled }}
+        {{- if $tlsEnabled }}
+        tls:
+          cert: /qdrant/tls/tls.crt
+          key: /qdrant/tls/tls.key
+          ca_cert: /qdrant/tls/ca.crt
+        {{- end }}
+      {{- if $tlsEnabled }}
+      podAnnotations:
+        secret.reloader.stakater.com/reload: "{{ .Release.Name }}-tls"
+      additionalVolumes:
+        - name: tls
+          secret:
+            secretName: {{ .Release.Name }}-tls
+      additionalVolumeMounts:
+        - name: tls
+          mountPath: /qdrant/tls
+          readOnly: true
+      {{- else }}
+      additionalVolumes: []
+      additionalVolumeMounts: []
       {{- end }}
