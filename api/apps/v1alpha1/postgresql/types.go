@@ -40,6 +40,9 @@ type ConfigSpec struct {
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
+	// TLS configuration for server connections.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// PostgreSQL server configuration.
 	// +kubebuilder:default:={}
 	Postgresql PostgreSQL `json:"postgresql"`
@@ -163,6 +166,11 @@ type S3CredentialsSecret struct {
 	// Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
 	// +kubebuilder:default:=""
 	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
+}
+
+type TLS struct {
+	// Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type User struct {

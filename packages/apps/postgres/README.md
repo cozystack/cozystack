@@ -171,6 +171,38 @@ See:
 
 > `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
 
+### TLS for server connections
+
+CNPG manages the cert chain end-to-end. The operator auto-generates a self-signed CA, signs server, client, and replication leaf certs from it, and rotates them as needed. The chart does not render any cert-manager `Issuer`/`Certificate` objects — that path is mutually exclusive with the operator-managed chain on the CNPG admission webhook.
+
+What the chart contributes: when TLS is on and `external: true`, the chart sets `spec.certificates.serverAltDNSNames` on the CNPG Cluster CR to inject the external hostname `<release>.<_namespace.host>` into the auto-generated server certificate's SAN list. CNPG's default SAN coverage already includes the three built-in ClusterIP services (`-rw`, `-r`, `-ro`) across the four DNS forms (`<svc>`, `<svc>.<ns>`, `<svc>.<ns>.svc`, `<svc>.<ns>.svc.<cluster-domain>`); only the external hostname needs to be added.
+
+The tri-state `tls.enabled` controls whether the chart injects `serverAltDNSNames`:
+
+- `tls.enabled: null` (the default) — TLS posture inherits from `external`. When `external: true`, the chart injects the external hostname into the operator-managed cert.
+- `tls.enabled: true` with `external: true` — same effect as the default.
+- `tls.enabled: true` with `external: false` — no `serverAltDNSNames` injection is needed (there is no external hostname to add); CNPG's auto-generated cert covers internal services.
+- `tls.enabled: false` — the chart skips `serverAltDNSNames` injection. **Note:** CNPG keeps its built-in TLS on the wire regardless of this flag; this toggle only controls whether the external hostname is added to the cert. To force PostgreSQL to drop TLS entirely you would need to set `postgresql.parameters.ssl = "off"` at the CNPG layer, which is out of scope for this flag.
+
+**Retrieving the CA bundle** for client verification:
+
+CNPG bundles the CA certificate in every user-credentials Secret it creates under the key `ca.crt`. Retrieve it from the `<release>-credentials` Secret, which is already accessible to tenants via the dashboard RBAC:
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get secret <release>-credentials \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode
+```
+
+**Connecting with full verification** (psql example):
+
+```bash
+psql "host=<host> port=5432 dbname=app user=app \
+  sslmode=verify-full sslrootcert=ca.crt"
+```
+
+For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved to `ca.crt`. Without it, use `sslmode=require` (encrypts but does not verify the server certificate).
+
 ## Parameters
 
 ### Common parameters
@@ -186,6 +218,14 @@ See:
 | `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`       |
 | `external`         | Enable external access from outside the cluster.                                                                                     | `bool`     | `false`    |
 | `version`          | PostgreSQL major version to deploy                                                                                                   | `string`   | `v18`      |
+
+
+### TLS configuration
+
+| Name          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Type     | Value  |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`         | TLS configuration for server connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `object` | `{}`   |
+| `tls.enabled` | Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer. | `*bool`  | `null` |
 
 
 ### Application-specific parameters
