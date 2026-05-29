@@ -88,6 +88,12 @@ spec:
     {{- if .Values.external | default false }}
     - {{ printf "%s.%s" .Release.Name .Values._namespace.host | quote }}
     {{- end }}
+  ipAddresses:
+    # redis_exporter dials rediss://127.0.0.1 with CA verification; a DNS SAN
+    # for "localhost" does not match an IP literal, so the loopback IPs must be
+    # explicit SANs (mirrors the operator's own self-generated cert behavior).
+    - "127.0.0.1"
+    - "::1"
   privateKey:
     rotationPolicy: Always
     algorithm: ECDSA
