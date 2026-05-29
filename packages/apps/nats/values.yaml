@@ -71,6 +71,12 @@ storageClass: ""
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @typedef {struct} TLS - TLS configuration for NATS.
+## @field {*bool} enabled - Enable TLS. When omitted, TLS is enabled automatically when `external` is true.
+
+## @param {TLS} [tls] - TLS configuration. When omitted, TLS follows the `external` flag.
+tls: {}
+
 ##
 ## @section Application-specific parameters
 ##

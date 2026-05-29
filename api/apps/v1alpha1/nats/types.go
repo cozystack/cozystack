@@ -34,6 +34,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// TLS configuration. When omitted, TLS follows the `external` flag.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls,omitempty"`
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
@@ -68,6 +71,11 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type TLS struct {
+	// Enable TLS. When omitted, TLS is enabled automatically when `external` is true.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type User struct {

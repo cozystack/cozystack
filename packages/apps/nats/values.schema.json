@@ -110,6 +110,17 @@
       "type": "boolean",
       "default": false
     },
+    "tls": {
+      "description": "TLS configuration. When omitted, TLS follows the `external` flag.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Enable TLS. When omitted, TLS is enabled automatically when `external` is true.",
+          "type": "boolean"
+        }
+      }
+    },
     "users": {
       "description": "Users configuration map.",
       "type": "object",
