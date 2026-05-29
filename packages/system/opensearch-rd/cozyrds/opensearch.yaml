@@ -32,8 +32,6 @@ spec:
     include:
       - resourceNames:
           - opensearch-{{ .name }}-credentials
-      - resourceNames:
-          - opensearch-{{ .name }}-http-cert
   services:
     exclude: []
     include:
