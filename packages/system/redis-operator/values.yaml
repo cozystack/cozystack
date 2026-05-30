@@ -1,4 +1,4 @@
 redis-operator:
   image:
     repository: ghcr.io/cozystack/cozystack/redis-operator
-    tag: v1.4.0@sha256:32e7806324924de665c94c84d5f4cbe071c4e98a57c927bfc976b9ae51e566c4
+    tag: v1.4.1-rc1@sha256:404c84c23ef3df181a2eac974d5823f6664f75e9d6b4e4d944d0841ad0750edf

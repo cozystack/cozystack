@@ -1,6 +1,6 @@
 FROM golang:1.26.3-alpine3.23 AS builder
 
-ARG VERSION=v1.4.0
+ARG VERSION=v1.4.1-rc1
 
 ARG TARGETOS
 ARG TARGETARCH
