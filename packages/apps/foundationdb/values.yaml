@@ -147,8 +147,13 @@ customParameters: []
 ## @value unified
 ## @value split
 
-## @param {ImageType} imageType="unified" - Container image deployment type.
-imageType: "unified"
+## @param {ImageType} imageType="split" - Container image deployment type.
+# Defaults to "split" to match the operator default that existing clusters
+# already run: before the Flux v2.8 SSA fix this value was nested under
+# automationOptions and silently dropped, so the operator never saw "unified".
+# Setting it to "split" keeps upgrades non-disruptive; switch to "unified"
+# deliberately to migrate (triggers an in-place image-type change).
+imageType: "split"
 
 ## @typedef {struct} SecurityContext - Security context for containers.
 ## @field {int} runAsUser - User ID to run the container.

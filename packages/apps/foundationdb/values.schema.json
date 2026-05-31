@@ -299,7 +299,7 @@
     "imageType": {
       "description": "Container image deployment type.",
       "type": "string",
-      "default": "unified",
+      "default": "split",
       "enum": [
         "unified",
         "split"

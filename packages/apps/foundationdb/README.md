@@ -81,8 +81,8 @@ when it sees a chart-rendered Running backup against the same target.
 customParameters:
   - "knob_disable_posix_kernel_aio=1"
 
-# Image type (unified is default and recommended for new deployments)
-imageType: "unified"
+# Image type (split is the default; matches existing clusters' effective value)
+imageType: "split"
 
 # Enable automatic pod replacements
 automaticReplacements: true
@@ -194,7 +194,7 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 | Name                         | Description                                | Type       | Value     |
 | ---------------------------- | ------------------------------------------ | ---------- | --------- |
 | `customParameters`           | Custom parameters to pass to FoundationDB. | `[]string` | `[]`      |
-| `imageType`                  | Container image deployment type.           | `string`   | `unified` |
+| `imageType`                  | Container image deployment type.           | `string`   | `split` |
 | `securityContext`            | Security context for containers.           | `object`   | `{}`      |
 | `securityContext.runAsUser`  | User ID to run the container.              | `int`      | `4059`    |
 | `securityContext.runAsGroup` | Group ID to run the container.             | `int`      | `4059`    |
