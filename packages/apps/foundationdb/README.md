@@ -191,12 +191,12 @@ For Cozystack-specific issues, consult the Cozystack documentation or support ch
 
 ### FoundationDB configuration
 
-| Name                         | Description                                | Type       | Value     |
-| ---------------------------- | ------------------------------------------ | ---------- | --------- |
-| `customParameters`           | Custom parameters to pass to FoundationDB. | `[]string` | `[]`      |
+| Name                         | Description                                | Type       | Value   |
+| ---------------------------- | ------------------------------------------ | ---------- | ------- |
+| `customParameters`           | Custom parameters to pass to FoundationDB. | `[]string` | `[]`    |
 | `imageType`                  | Container image deployment type.           | `string`   | `split` |
-| `securityContext`            | Security context for containers.           | `object`   | `{}`      |
-| `securityContext.runAsUser`  | User ID to run the container.              | `int`      | `4059`    |
-| `securityContext.runAsGroup` | Group ID to run the container.             | `int`      | `4059`    |
-| `automaticReplacements`      | Enable automatic pod replacements.         | `bool`     | `true`    |
+| `securityContext`            | Security context for containers.           | `object`   | `{}`    |
+| `securityContext.runAsUser`  | User ID to run the container.              | `int`      | `4059`  |
+| `securityContext.runAsGroup` | Group ID to run the container.             | `int`      | `4059`  |
+| `automaticReplacements`      | Enable automatic pod replacements.         | `bool`     | `true`  |
 
