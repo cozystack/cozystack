@@ -1581,12 +1581,14 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	// Upgrade.Timeout populated from ReleaseConfig.HelmInstallTimeout
 	// (parsed at startup). Applications that leave it unset keep flux
 	// defaults so their failed installs remediate on the normal cadence.
-	// Today only kubernetes-rd carries the annotation because the
+	// kubernetes-rd and tenant-rd carry the annotation today: the
 	// Kubernetes Application's parent chart contains CAPI/Kamaji
 	// resources whose admin-kubeconfig Secret is provisioned
 	// asynchronously and Kamaji cold-start routinely exceeds flux's
-	// default wait budget; any future kind with the same shape can opt
-	// in by setting the same annotation.
+	// default wait budget, and the Tenant parent chart bootstraps the
+	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
+	// Any future kind with the same shape can opt in by setting the
+	// same annotation.
 	if r.releaseConfig.HelmInstallTimeout > 0 {
 		timeout := metav1.Duration{Duration: r.releaseConfig.HelmInstallTimeout}
 		helmRelease.Spec.Install.Timeout = &timeout
