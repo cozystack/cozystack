@@ -1,0 +1,69 @@
+suite: tenant HelmReleases carry no deprecated upgrade.force
+
+# Flux v2.8 / helm-controller v1.5 deprecates `upgrade.force: true` and rejects
+# it under Server-Side Apply. The flux-bump PR swept the flag off every tenant
+# HelmRelease; gateway.yaml was missed in the first pass. This suite pins the
+# invariant across all swept HRs so a stray `force: true` cannot creep back in.
+
+# Restrict rendering to the swept HelmRelease templates so the chart's
+# namespace.yaml `lookup` (which errors under helm-unittest) is not evaluated.
+templates:
+  - templates/etcd.yaml
+  - templates/info.yaml
+  - templates/ingress.yaml
+  - templates/monitoring.yaml
+  - templates/seaweedfs.yaml
+  - templates/gateway.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    expose-ingress: tenant-root
+    expose-external-ips: "192.0.2.10"
+    gateway-enabled: "true"
+  etcd: true
+  ingress: true
+  monitoring: true
+  seaweedfs: true
+  gateway: true
+  host: ""
+
+tests:
+  - it: etcd HR has no upgrade.force
+    asserts:
+      - template: templates/etcd.yaml
+        notExists:
+          path: spec.upgrade.force
+
+  - it: info HR has no upgrade.force
+    asserts:
+      - template: templates/info.yaml
+        notExists:
+          path: spec.upgrade.force
+
+  - it: ingress HR has no upgrade.force
+    asserts:
+      - template: templates/ingress.yaml
+        notExists:
+          path: spec.upgrade.force
+
+  - it: monitoring HR has no upgrade.force
+    asserts:
+      - template: templates/monitoring.yaml
+        notExists:
+          path: spec.upgrade.force
+
+  - it: seaweedfs HR has no upgrade.force
+    asserts:
+      - template: templates/seaweedfs.yaml
+        notExists:
+          path: spec.upgrade.force
+
+  - it: gateway HR has no upgrade.force
+    asserts:
+      - template: templates/gateway.yaml
+        notExists:
+          path: spec.upgrade.force

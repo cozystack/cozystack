@@ -1,0 +1,70 @@
+suite: Kafka WorkloadMonitor replica paths
+
+# Regression cover for the fix that split the WorkloadMonitor replica
+# source from a single phantom `.Values.replicas` (which does not exist in
+# this chart's values — kafka and zookeeper carry their own counts) into the
+# correct `.Values.kafka.replicas` and `.Values.zookeeper.replicas`. Before
+# the fix both monitors rendered `replicas:` empty, so the workload-monitor
+# controller never knew the expected replica count.
+
+templates:
+  - templates/workloadmonitor.yaml
+
+tests:
+  - it: kafka and zookeeper monitors read their own replica counts
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 5
+      zookeeper:
+        replicas: 2
+    asserts:
+      - hasDocuments:
+          count: 2
+      # doc 0 — kafka monitor
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: test-kafka
+      - documentIndex: 0
+        equal:
+          path: spec.type
+          value: kafka
+      - documentIndex: 0
+        equal:
+          path: spec.replicas
+          value: 5
+      # doc 1 — zookeeper monitor
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: test-kafka-zookeeper
+      - documentIndex: 1
+        equal:
+          path: spec.type
+          value: zookeeper
+      - documentIndex: 1
+        equal:
+          path: spec.replicas
+          value: 2
+
+  - it: replica counts stay independent (kafka != zookeeper)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 7
+      zookeeper:
+        replicas: 3
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.replicas
+          value: 7
+      - documentIndex: 1
+        equal:
+          path: spec.replicas
+          value: 3
