@@ -1,0 +1,153 @@
+# Cozystack-local instancetypes retained on top of the pinned upstream
+# common-instancetypes catalog (see Makefile `update`).
+#
+# The gn1.* (GPU NVIDIA) series was removed upstream in common-instancetypes
+# v1.3.0, but existing GPU VMs and tenant Kubernetes GPU worker pools still
+# reference these names, and packages/apps/vm-instance/templates/vm.yaml fails
+# the Helm render when a referenced VirtualMachineClusterInstancetype is absent.
+# These objects are appended to templates/ verbatim from the pre-v1.3.0 catalog
+# to keep those workloads renderable. They are marked deprecated upstream; new
+# GPU instancetypes should be defined explicitly rather than extending this set.
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  annotations:
+    instancetype.kubevirt.io/description: |-
+      The GN Series provides instances types intended for VMs with
+      NVIDIA GPU resources attached.
+
+      *GN* is the abbreviation of "GPU NVIDIA".
+
+      This series is intended to be used with VMs consuming GPUs
+      provided by the
+      [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator)
+      which can be installed on Kubernetes and also is made available
+      on OpenShift via OperatorHub.
+    instancetype.kubevirt.io/displayName: GPU NVIDIA
+  labels:
+    instancetype.kubevirt.io/class: gpu.nvidia
+    instancetype.kubevirt.io/cpu: "8"
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/gpus: "true"
+    instancetype.kubevirt.io/icon-pf: fa-microchip
+    instancetype.kubevirt.io/memory: 32Gi
+    instancetype.kubevirt.io/size: 2xlarge
+    instancetype.kubevirt.io/vendor: kubevirt.io
+    instancetype.kubevirt.io/version: "1"
+  name: gn1.2xlarge
+spec:
+  cpu:
+    guest: 8
+  gpus:
+    - deviceName: nvidia.com/A400
+      name: gpu1
+  memory:
+    guest: 32Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  annotations:
+    instancetype.kubevirt.io/description: |-
+      The GN Series provides instances types intended for VMs with
+      NVIDIA GPU resources attached.
+
+      *GN* is the abbreviation of "GPU NVIDIA".
+
+      This series is intended to be used with VMs consuming GPUs
+      provided by the
+      [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator)
+      which can be installed on Kubernetes and also is made available
+      on OpenShift via OperatorHub.
+    instancetype.kubevirt.io/displayName: GPU NVIDIA
+  labels:
+    instancetype.kubevirt.io/class: gpu.nvidia
+    instancetype.kubevirt.io/cpu: "16"
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/gpus: "true"
+    instancetype.kubevirt.io/icon-pf: fa-microchip
+    instancetype.kubevirt.io/memory: 64Gi
+    instancetype.kubevirt.io/size: 4xlarge
+    instancetype.kubevirt.io/vendor: kubevirt.io
+    instancetype.kubevirt.io/version: "1"
+  name: gn1.4xlarge
+spec:
+  cpu:
+    guest: 16
+  gpus:
+    - deviceName: nvidia.com/A400
+      name: gpu1
+  memory:
+    guest: 64Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  annotations:
+    instancetype.kubevirt.io/description: |-
+      The GN Series provides instances types intended for VMs with
+      NVIDIA GPU resources attached.
+
+      *GN* is the abbreviation of "GPU NVIDIA".
+
+      This series is intended to be used with VMs consuming GPUs
+      provided by the
+      [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator)
+      which can be installed on Kubernetes and also is made available
+      on OpenShift via OperatorHub.
+    instancetype.kubevirt.io/displayName: GPU NVIDIA
+  labels:
+    instancetype.kubevirt.io/class: gpu.nvidia
+    instancetype.kubevirt.io/cpu: "32"
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/gpus: "true"
+    instancetype.kubevirt.io/icon-pf: fa-microchip
+    instancetype.kubevirt.io/memory: 128Gi
+    instancetype.kubevirt.io/size: 8xlarge
+    instancetype.kubevirt.io/vendor: kubevirt.io
+    instancetype.kubevirt.io/version: "1"
+  name: gn1.8xlarge
+spec:
+  cpu:
+    guest: 32
+  gpus:
+    - deviceName: nvidia.com/A400
+      name: gpu1
+  memory:
+    guest: 128Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterInstancetype
+metadata:
+  annotations:
+    instancetype.kubevirt.io/description: |-
+      The GN Series provides instances types intended for VMs with
+      NVIDIA GPU resources attached.
+
+      *GN* is the abbreviation of "GPU NVIDIA".
+
+      This series is intended to be used with VMs consuming GPUs
+      provided by the
+      [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator)
+      which can be installed on Kubernetes and also is made available
+      on OpenShift via OperatorHub.
+    instancetype.kubevirt.io/displayName: GPU NVIDIA
+  labels:
+    instancetype.kubevirt.io/class: gpu.nvidia
+    instancetype.kubevirt.io/cpu: "4"
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/gpus: "true"
+    instancetype.kubevirt.io/icon-pf: fa-microchip
+    instancetype.kubevirt.io/memory: 16Gi
+    instancetype.kubevirt.io/size: xlarge
+    instancetype.kubevirt.io/vendor: kubevirt.io
+    instancetype.kubevirt.io/version: "1"
+  name: gn1.xlarge
+spec:
+  cpu:
+    guest: 4
+  gpus:
+    - deviceName: nvidia.com/A400
+      name: gpu1
+  memory:
+    guest: 16Gi
