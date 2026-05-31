@@ -1,6 +1,6 @@
 # flux-operator
 
-![Version: 0.48.0](https://img.shields.io/badge/Version-0.48.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.48.0](https://img.shields.io/badge/AppVersion-v0.48.0-informational?style=flat-square)
+![Version: 0.50.0](https://img.shields.io/badge/Version-0.50.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.50.0](https://img.shields.io/badge/AppVersion-v0.50.0-informational?style=flat-square)
 
 The [Flux Operator](https://github.com/controlplaneio-fluxcd/flux-operator) provides a
 declarative API for the installation and upgrade of CNCF [Flux](https://fluxcd.io) and the
@@ -75,6 +75,7 @@ see the Flux Operator [documentation](https://fluxoperator.dev/docs/).
 | reporting | object | `{"interval":"5m"}` | Flux [reporting](https://fluxoperator.dev/docs/crd/fluxreport/) settings. |
 | resources | object | `{"limits":{"cpu":"2000m","memory":"1Gi"},"requests":{"cpu":"100m","memory":"64Mi"}}` | Container resources requests and limits settings. |
 | securityContext | object | `{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true,"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Container security context settings. The default is compliant with the pod security restricted profile. |
+| service.ipFamilyPolicy | string | `""` | Sets the IP family policy on all Service resources. Uses Kubernetes defaults if unset |
 | serviceAccount | object | `{"automount":true,"create":true,"name":""}` | Pod service account settings. The name of the service account defaults to the release name. |
 | serviceMonitor | object | `{"create":false,"interval":"60s","labels":{},"scrapeTimeout":"30s"}` | Prometheus Operator scraping settings. |
 | tolerations | list | `[]` | Pod tolerations settings. |

@@ -378,6 +378,20 @@
                 }
             }
         },
+        "service": {
+            "type": "object",
+            "properties": {
+                "ipFamilyPolicy": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "SingleStack",
+                        "PreferDualStack",
+                        "RequireDualStack"
+                    ]
+                }
+            }
+        },
         "serviceAccount": {
             "default": {
                 "automount": true,

@@ -183,6 +183,10 @@ serviceMonitor: # @schema default: {"create":false,"interval":"60s","scrapeTimeo
   scrapeTimeout: 30s
   labels: { }
 
+service:
+  # -- Sets the IP family policy on all Service resources. Uses Kubernetes defaults if unset
+  ipFamilyPolicy: '' # @schema type: string; enum:['', SingleStack, PreferDualStack, RequireDualStack]
+
 # -- Marketplace settings.
 marketplace:
   type: ""

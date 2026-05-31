@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.0
+    controller-gen.kubebuilder.io/version: v0.21.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -375,7 +375,8 @@ spec:
                     description: |-
                       Provider specifies OIDC provider for source authentication.
                       For OCIRepository and Bucket the provider can be set to 'aws', 'azure' or 'gcp'.
-                      for GitRepository the accepted value can be set to 'azure' or 'github'.
+                      For GitRepository the provider can be set to 'aws' (requires Flux 2.9 or later),
+                      'azure' or 'github'.
                       To disable OIDC authentication the provider can be set to 'generic' or left empty.
                     enum:
                     - generic
@@ -409,6 +410,14 @@ spec:
                 - ref
                 - url
                 type: object
+                x-kubernetes-validations:
+                - message: sync.provider 'gcp' is only supported for OCIRepository
+                    and Bucket
+                  rule: '!has(self.provider) || self.provider != ''gcp'' || self.kind
+                    == ''OCIRepository'' || self.kind == ''Bucket'''
+                - message: sync.provider 'github' is only supported for GitRepository
+                  rule: '!has(self.provider) || self.provider != ''github'' || self.kind
+                    == ''GitRepository'''
               wait:
                 default: true
                 description: |-
@@ -623,7 +632,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.0
+    controller-gen.kubebuilder.io/version: v0.21.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -926,7 +935,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.0
+    controller-gen.kubebuilder.io/version: v0.21.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
@@ -1146,6 +1155,9 @@ spec:
                 - AzureDevOpsBranch
                 - AzureDevOpsTag
                 - AzureDevOpsPullRequest
+                - AWSCodeCommitBranch
+                - AWSCodeCommitTag
+                - AWSCodeCommitPullRequest
                 - GiteaBranch
                 - GiteaTag
                 - GiteaPullRequest
@@ -1174,8 +1186,12 @@ spec:
                 is a Git provider
               rule: '!self.type.startsWith(''Git'') || self.url.startsWith(''http'')'
             - message: spec.url must start with 'http://' or 'https://' when spec.type
-                is a Git provider
-              rule: '!self.type.startsWith(''AzureDevOps'') || self.url.startsWith(''http'')'
+                is an AzureDevOps provider
+              rule: '!self.type.startsWith(''AzureDevOps'') || self.url.startsWith(''http://'')
+                || self.url.startsWith(''https://'')'
+            - message: spec.url must start with 'https://' when spec.type is a AWSCodeCommit
+                provider
+              rule: '!self.type.startsWith(''AWSCodeCommit'') || self.url.startsWith(''https://'')'
             - message: spec.url must start with 'oci://' when spec.type is an OCI
                 provider
               rule: '!self.type.endsWith(''ArtifactTag'') || self.url.startsWith(''oci'')'
@@ -1190,17 +1206,19 @@ spec:
               rule: self.type != 'ExternalService' || !self.url.startsWith('http://')
                 || (has(self.insecure) && self.insecure)
             - message: cannot specify spec.serviceAccountName when spec.type is not
-                one of AzureDevOps* or *ArtifactTag
+                one of AzureDevOps*, AWSCodeCommit* or *ArtifactTag
               rule: '!has(self.serviceAccountName) || self.type.startsWith(''AzureDevOps'')
-                || self.type.endsWith(''ArtifactTag'')'
+                || self.type.startsWith(''AWSCodeCommit'') || self.type.endsWith(''ArtifactTag'')'
             - message: cannot specify spec.certSecretRef when spec.type is one of
-                Static, AzureDevOps*, ACRArtifactTag, ECRArtifactTag or GARArtifactTag
+                Static, AzureDevOps*, AWSCodeCommit*, ACRArtifactTag, ECRArtifactTag
+                or GARArtifactTag
               rule: '!has(self.certSecretRef) || !(self.url == ''Static'' || self.type.startsWith(''AzureDevOps'')
-                || (self.type.endsWith(''ArtifactTag'') && self.type != ''OCIArtifactTag''))'
-            - message: cannot specify spec.secretRef when spec.type is one of Static,
-                ACRArtifactTag, ECRArtifactTag or GARArtifactTag
-              rule: '!has(self.secretRef) || !(self.url == ''Static'' || (self.type.endsWith(''ArtifactTag'')
+                || self.type.startsWith(''AWSCodeCommit'') || (self.type.endsWith(''ArtifactTag'')
                 && self.type != ''OCIArtifactTag''))'
+            - message: cannot specify spec.secretRef when spec.type is one of Static,
+                AWSCodeCommit*, ACRArtifactTag, ECRArtifactTag or GARArtifactTag
+              rule: '!has(self.secretRef) || !(self.url == ''Static'' || self.type.startsWith(''AWSCodeCommit'')
+                || (self.type.endsWith(''ArtifactTag'') && self.type != ''OCIArtifactTag''))'
           status:
             description: ResourceSetInputProviderStatus defines the observed state
               of ResourceSetInputProvider.
@@ -1327,7 +1345,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.0
+    controller-gen.kubebuilder.io/version: v0.21.0
     helm.sh/resource-policy: keep
   labels:
     app.kubernetes.io/instance: '{{ .Release.Name }}'
