@@ -156,6 +156,17 @@ rules:
   verbs:
   - get
   - update
+# Power controls (start/stop/restart) for VMs owned by the tenant.
+# Operational, like console/vnc above, so granted at the "use" level
+# (aggregates into admin and super-admin). Without these the dashboard
+# power buttons return 403 even for tenant admins.
+- apiGroups: ["subresources.kubevirt.io"]
+  resources:
+  - virtualmachines/start
+  - virtualmachines/stop
+  - virtualmachines/restart
+  verbs:
+  - update
 - apiGroups:
   - core.cozystack.io
   resources:
