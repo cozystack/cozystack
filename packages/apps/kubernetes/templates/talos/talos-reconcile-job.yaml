@@ -80,6 +80,42 @@ rules:
     resources: ["talosconfigtemplates"]
     verbs: ["get", "create", "patch", "update"]
 ---
+{{- /* The tenant-root chart installs a default-deny egress policy on every
+       pod in the tenant namespace; without an explicit allow, this hook Job
+       cannot reach the management-cluster apiserver to read the Service
+       ClusterIP / Secrets / KamajiControlPlane it has to reconcile. Cilium
+       policies are additive, so this rule layers on top of the tenant
+       default-deny without weakening it for anything else. Endpoint
+       selector is scoped to pods carrying the hook label only. */}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-talos-reconcile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  endpointSelector:
+    matchLabels:
+      cozystack.io/talos-reconcile: "{{ .Release.Name }}"
+  egress:
+    - toEntities:
+        - kube-apiserver
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            "k8s:k8s-app": kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -106,20 +142,52 @@ subjects:
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
 {{- range $groupName, $group := .Values.nodeGroups }}
-{{- /* Resolve per-nodeGroup kubelet reservations the same way cluster.yaml
-       does, so the generated machineconfig matches what the chart would
-       have rendered before this hook took over TalosConfigTemplate
-       authorship. */}}
-{{- $instancePreset := include "cozy-lib.resources.unsanitizedPreset" $group.instanceType | fromYaml }}
-{{- $effectiveCpu := default $instancePreset.cpu (default "" (get ($group.resources | default dict) "cpu")) }}
-{{- $effectiveMemory := default $instancePreset.memory (default "" (get ($group.resources | default dict) "memory")) }}
+{{- /* Mirror the kubelet-reservation computation from cluster.yaml so the
+       worker machineconfig the hook applies carries the same numbers the
+       MachineDeployment validator was happy with. Auto-computed
+       system/kube reserved memory = 5% of effective memory clamped to
+       [256Mi, 1Gi]; auto-computed system/kube reserved CPU = 5% of
+       effective CPU clamped to [50m, 500m]. instanceType lookup is
+       optional — operators that override resources.cpu / resources.memory
+       on the nodeGroup get those, otherwise the chart falls back to the
+       same static-defaults pair the cluster.yaml validator uses on a
+       no-instanceType setup. */}}
+{{- $instanceType := dict }}
+{{- if $group.instanceType }}
+{{-   $instanceType = lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType }}
+{{-   $instanceType = $instanceType | default dict }}
+{{- end }}
+{{- $effectiveMemory := "" }}
+{{- if and $group.resources $group.resources.memory }}
+{{-   $effectiveMemory = $group.resources.memory | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
+{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
+{{- end }}
+{{- $effectiveCpu := "" }}
+{{- if and $group.resources $group.resources.cpu }}
+{{-   $effectiveCpu = $group.resources.cpu | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
+{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
+{{- end }}
+{{- $autoReservedMi := 256 }}
+{{- if $effectiveMemory }}
+{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
+{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
+{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
+{{- end }}
+{{- $autoReservedMillicores := 50 }}
+{{- if $effectiveCpu }}
+{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
+{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
+{{- end }}
 {{- $kubeletOverride := $group.kubelet | default dict }}
-{{- $systemReservedMemory := default (include "kubernetes.defaultSystemReservedMemory" (dict "effectiveMemory" $effectiveMemory)) (get $kubeletOverride "systemReservedMemory") }}
-{{- $kubeReservedMemory := default (include "kubernetes.defaultKubeReservedMemory" (dict "effectiveMemory" $effectiveMemory)) (get $kubeletOverride "kubeReservedMemory") }}
-{{- $systemReservedCpu := default (include "kubernetes.defaultSystemReservedCpu" (dict "effectiveCpu" $effectiveCpu)) (get $kubeletOverride "systemReservedCpu") }}
-{{- $kubeReservedCpu := default (include "kubernetes.defaultKubeReservedCpu" (dict "effectiveCpu" $effectiveCpu)) (get $kubeletOverride "kubeReservedCpu") }}
-{{- $evictionHardMemory := default "7%" (get $kubeletOverride "evictionHardMemory") }}
-{{- $evictionSoftMemory := default "10%" (get $kubeletOverride "evictionSoftMemory") }}
+{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
+{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -135,6 +203,9 @@ spec:
   backoffLimit: 5
   ttlSecondsAfterFinished: 600
   template:
+    metadata:
+      labels:
+        cozystack.io/talos-reconcile: {{ $.Release.Name | quote }}
     spec:
       restartPolicy: OnFailure
       serviceAccountName: {{ $.Release.Name }}-talos-reconcile
