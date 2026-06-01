@@ -37,38 +37,18 @@
   Gated on $etcd so the awaiting-etcd short-circuit below does not pay for
   reads it would only throw away.
 */}}
-{{- $apiSvc := dict }}
-{{- $apiSvcIP := "" }}
-{{- $talosSecrets := dict }}
-{{- $talosCA := dict }}
-{{- $k8sCA := dict }}
-{{- $talosReady := false }}
-{{- $talosToken := "" }}
-{{- $clusterId := "" }}
-{{- $clusterSecret := "" }}
-{{- $bootstrapToken := "" }}
-{{- $talosCACrt := "" }}
-{{- $k8sCACrt := "" }}
-{{- if $etcd }}
-{{-   $apiSvc = lookup "v1" "Service" $.Release.Namespace $.Release.Name }}
-{{-   if $apiSvc }}
-{{-     $apiSvcIP = $apiSvc.spec.clusterIP }}
-{{-   end }}
-{{-   $talosSecrets = lookup "v1" "Secret" $.Release.Namespace (printf "%s-talos-secrets" $.Release.Name) }}
-{{-   $talosCA = lookup "v1" "Secret" $.Release.Namespace (printf "%s-talos-ca" $.Release.Name) }}
-{{-   $k8sCA = lookup "v1" "Secret" $.Release.Namespace (printf "%s-ca" $.Release.Name) }}
-{{-   $talosReady = and (and $talosSecrets $talosCA) (and (index ($talosCA.data | default dict) "tls.crt" | default "") (and $k8sCA (index ($k8sCA.data | default dict) "ca.crt" | default ""))) }}
-{{-   $talosReady = and $talosReady $apiSvcIP }}
-{{-   if $talosReady }}
-{{-     $talosToken = index $talosSecrets.data "token" | b64dec }}
-{{-     $clusterId = index $talosSecrets.data "clusterId" | b64dec }}
-{{-     $clusterSecret = index $talosSecrets.data "clusterSecret" | b64dec }}
-{{-     $bootstrapToken = index $talosSecrets.data "bootstrapToken" | b64dec }}
-{{-     $talosCACrt = index $talosCA.data "tls.crt" }}
-{{-     $k8sCACrt = index $k8sCA.data "ca.crt" }}
-{{-   end }}
-{{- end }}
-{{- $apiEndpoint := printf "%s:6443" $apiSvcIP }}
+{{- /* The TalosConfigTemplate and the apiserver-Service ClusterIP-SAN
+       used to be rendered in this template behind a lookup gate that
+       races every fresh install: Service / Talos CA / K8s CA do not
+       exist on first Helm render, so the gate fails, the TCT is
+       skipped, and Helm's release-storage three-way merge then refuses
+       to upgrade because no values changed. Both objects are now
+       produced by the post-install/post-upgrade Helm hook Job in
+       templates/talos/talos-reconcile-job.yaml, which blocks until the
+       four dependencies exist and then `kubectl apply`s deterministic
+       results. The Job owns the TCT through an ownerReference to the
+       KamajiControlPlane so K8s garbage-collects it naturally on
+       release uninstall. */}}
 {{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
 {{- $talosVersion := $.Values.talos.version }}
 {{- $talosSchematic := $.Values.talos.schematicID }}
@@ -287,16 +267,15 @@ spec:
         port: 50001
         targetPort: 50001
         protocol: TCP
-    {{- /* Talos workers point at the apiserver Service ClusterIP (see
-           controlPlane.endpoint in the worker machineconfig); include
-           that IP and the short/long Service FQDNs in the apiserver
-           cert so Talos's internal controllers don't trip on TLS. */}}
+    {{- /* Initial render lists only the DNS SANs because the apiserver
+           Service ClusterIP is not yet allocated when Helm executes the
+           template. The talos-reconcile post-install/post-upgrade hook
+           re-patches certSANs with the live ClusterIP once Kamaji emits
+           the Service, and Kamaji then re-issues the apiserver TLS cert
+           to cover it. */}}
     certSANs:
       - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
-      {{- if $apiSvcIP }}
-      - {{ $apiSvcIP }}
-      {{- end }}
   deployment:
     podAdditionalMetadata:
       labels:
@@ -540,126 +519,18 @@ metadata:
 {{-   end }}
 {{- end }}
 ---
-{{- /*
-  TalosConfigTemplate produces the raw Talos worker machineconfig as
-  spec.template.spec.data, with generateType=none so that CABPT only
-  packages it as bootstrap data (no Talos PKI generation on the CABPT
-  side — Cozystack owns the PKI via cert-manager and the
-  <release>-talos-secrets Secret).
-
-  Values come from three Secrets reconciled by other parts of this chart:
-    <release>-talos-secrets     - random tokens + cluster id/secret
-    <release>-talos-ca          - cert-manager-issued Ed25519 Talos CA
-    <release>-ca                - Kamaji-issued k8s CA
-
-  If any dependency Secret is not ready yet (cert-manager and Kamaji are
-  async), the template fails. Flux retries the HelmRelease on its own
-  cadence until everything is in place.
-*/}}
-{{- /*
-  Render this nodeGroup's TalosConfigTemplate only when all of its
-  dependency Secrets exist. On a first install of the chart these
-  Secrets become available asynchronously:
-    <release>-talos-secrets - rendered by this chart (always present)
-    <release>-talos-ca      - issued by cert-manager (seconds after
-                              the Certificate resource lands)
-    <release>-ca            - generated by Kamaji once the
-                              KamajiControlPlane is up
-
-  If any of them is missing we skip the TalosConfigTemplate document.
-  CAPI's Machine controller does not create new Machines until the
-  bootstrap configRef resolves, so the MachineDeployment below is safe
-  to keep referencing the eventual TCT name; once the chart is
-  re-reconciled and all Secrets are ready, TCT is created and CAPI
-  picks up. Flux re-reconciles every interval.
-*/}}
-{{- /* All lookup-derived variables ($apiSvc, $apiSvcIP, $apiEndpoint,
-       $talosSecrets, $talosCA, $k8sCA, $talosReady, $talosToken,
-       $clusterId, $clusterSecret, $bootstrapToken, $talosCACrt,
-       $k8sCACrt, $kubeletVersion, $talosVersion, $talosSchematic) are
-       hoisted to the top of this template, above the nodeGroups loop.
-       The Talos boot order means the worker machineconfig's
-       controlPlane.endpoint must be the apiserver Service ClusterIP,
-       not a DNS name — Talos comes up before any cluster DNS exists. */}}
-{{- if $talosReady }}
-apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
-kind: TalosConfigTemplate
-metadata:
-  name: {{ $.Release.Name }}-{{ $groupName }}
-  namespace: {{ $.Release.Namespace }}
-spec:
-  template:
-    spec:
-      generateType: none
-      talosVersion: {{ $talosVersion | quote }}
-      data: |
-        version: v1alpha1
-        persist: true
-        machine:
-          type: worker
-          token: {{ $talosToken | quote }}
-          ca:
-            crt: {{ $talosCACrt | quote }}
-          kubelet:
-            image: ghcr.io/siderolabs/kubelet:{{ $kubeletVersion }}
-            extraConfig:
-              systemReserved:
-                cpu: "{{ $systemReservedCpu }}"
-                memory: "{{ $systemReservedMemory }}"
-              kubeReserved:
-                cpu: "{{ $kubeReservedCpu }}"
-                memory: "{{ $kubeReservedMemory }}"
-              evictionHard:
-                memory.available: "{{ $evictionHardMemory }}"
-                nodefs.available: "10%"
-                imagefs.available: "15%"
-                nodefs.inodesFree: "5%"
-              evictionSoft:
-                memory.available: "{{ $evictionSoftMemory }}"
-                nodefs.available: "15%"
-                imagefs.available: "20%"
-              evictionSoftGracePeriod:
-                memory.available: "1m30s"
-                nodefs.available: "1m30s"
-                imagefs.available: "1m30s"
-              evictionMinimumReclaim:
-                memory.available: "256Mi"
-          install:
-            disk: /dev/vda
-            image: factory.talos.dev/installer/{{ $talosSchematic }}:{{ $talosVersion }}
-            {{- /* Workers boot from the openstack raw image (see the
-                  dataVolumeTemplates url above) which already lays down a
-                  running Talos system on /dev/vda. wipe:false keeps that
-                  disk intact so the installer just records its presence
-                  instead of reformatting and re-imaging on every boot. */}}
-            wipe: false
-          features:
-            rbac: true
-            kubePrism:
-              enabled: false
-        cluster:
-          id: {{ $clusterId | quote }}
-          secret: {{ $clusterSecret | quote }}
-          controlPlane:
-            endpoint: https://{{ $apiEndpoint }}
-          clusterName: {{ $.Release.Name | quote }}
-          network:
-            dnsDomain: {{ include "kubernetes.tenantClusterDomain" $ }}
-            podSubnets:
-              - {{ $podCIDR }}
-            serviceSubnets:
-              - {{ $serviceCIDR }}
-          token: {{ $bootstrapToken | quote }}
-          ca:
-            crt: {{ $k8sCACrt | quote }}
-          discovery:
-            enabled: true
-            registries:
-              kubernetes:
-                disabled: true
-              service:
-                disabled: true
-{{- end }}{{/* if $talosReady */}}
+{{- /* TalosConfigTemplate is no longer rendered here — the chart cannot
+       produce a valid Talos worker machineconfig at Helm template time
+       because three of the inputs (apiserver Service ClusterIP, Talos
+       CA from cert-manager, Kamaji-issued tenant CA) are created
+       asynchronously after Helm applies this manifest. The
+       talos-reconcile-job hook (templates/talos/talos-reconcile-job.yaml)
+       waits for those inputs and produces the TalosConfigTemplate with
+       a KamajiControlPlane ownerReference for natural GC. The
+       MachineDeployment below still references the TCT name; CAPI's
+       Machine controller blocks on its absence and unblocks the moment
+       the hook applies it, which happens in the same post-install/
+       post-upgrade cycle. */}}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}

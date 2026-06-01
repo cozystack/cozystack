@@ -120,8 +120,15 @@ EOF
   # Wait for all required deployments to be available (timeout after 4 minutes)
   kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
 
-  # Wait for the machine deployment to scale to 2 replicas (timeout after 1 minute)
-  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
+  # Wait for the machine deployment to scale to 2 replicas. Pre-Talos this
+  # was effectively instant because KubeadmConfigTemplate had no async
+  # dependencies and CAPI/CAPK could create Machine + KubevirtMachine
+  # immediately. Post-Talos the MD bootstrap.configRef gates on the
+  # TalosConfigTemplate, which only renders once the lookup-gated Talos PKI
+  # Secrets (talos-secrets, talos-ca, k8s ca, apiserver Service ClusterIP)
+  # all exist; cold-start in a fresh CI sandbox pushes the time to first
+  # MachineSet scale-up past the old 1m budget.
+  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
