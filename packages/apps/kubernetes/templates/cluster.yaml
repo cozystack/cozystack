@@ -55,6 +55,9 @@ spec:
           annotations:
             kubevirt.io/allow-pod-bridge-network-live-migration: "true"
           labels:
+            apps.cozystack.io/application.group: apps.cozystack.io
+            apps.cozystack.io/application.kind: Kubernetes
+            apps.cozystack.io/application.name: {{ $.Release.Name | trimPrefix "kubernetes-" }}
             {{- range .group.roles }}
             node-role.kubernetes.io/{{ . }}: ""
             {{- end }}
