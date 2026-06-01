@@ -16,7 +16,10 @@
           "rule": "self == oldSelf",
           "message": "storageClass is immutable"
         }
-      ]
+      ],
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
     },
     "core": {
       "description": "Core API server configuration.",
