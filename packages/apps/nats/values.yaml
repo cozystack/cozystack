@@ -66,6 +66,7 @@ resourcesPreset: "t1.nano"
 
 ## @param {string} storageClass - StorageClass used to store the data.
 ## @immutable
+## @x-cozystack-options {source: storageclass}
 storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
