@@ -14,6 +14,18 @@ rbac:
   # create specifies whether to install and use RBAC rules.
   create: true
 
+tls:
+  # -- Comma-separated list of TLS cipher suites. If empty, uses Go defaults. Only applies to TLS 1.2.
+  cipherSuites: ""
+  # -- Comma-separated list of numeric CurveID values (e.g. 29,4588). See https://pkg.go.dev/crypto/tls#CurveID. If empty, uses Go defaults.
+  curvePreferences: ""
+  # -- Minimum TLS version (VersionTLS12 or VersionTLS13). Defaults to VersionTLS13.
+  minVersion: ""
+  # -- The name of the secret to be mounted in the controller pod to provide TLS certificates for metrics endpoints. If not present, a self-signed certificate is auto-generated.
+  controllerMetricsTLSSecret: ""
+  # -- The name of the secret to be mounted in the speaker pod to provide TLS certificates for metrics endpoints. If not present, a self-signed certificate is auto-generated.
+  speakerMetricsTLSSecret: ""
+
 prometheus:
   # scrape annotations specifies whether to add Prometheus metric
   # auto-collection annotations to pods. See
@@ -25,22 +37,9 @@ prometheus:
   # can be left at false.
   scrapeAnnotations: false
 
-  # port both controller and speaker will listen on for metrics
-  metricsPort: 7472
-
-  # if set, enables rbac proxy on the controller and speaker to expose
-  # the metrics via tls.
-  # secureMetricsPort: 9120
-
-  # the name of the secret to be mounted in the speaker pod
-  # to expose the metrics securely. If not present, a self signed
-  # certificate to be used.
-  speakerMetricsTLSSecret: ""
-
-  # the name of the secret to be mounted in the controller pod
-  # to expose the metrics securely. If not present, a self signed
-  # certificate to be used.
-  controllerMetricsTLSSecret: ""
+  # port both controller and speaker will listen on for metrics (always HTTPS).
+  # Matches the port kube-rbac-proxy previously served on.
+  metricsPort: 9120
 
   # prometheus doesn't have the permission to scrape all namespaces so we give it permission to scrape metallb's one
   rbacPrometheus: true
@@ -52,12 +51,6 @@ prometheus:
   # the namespace where prometheus is deployed
   # required when " .Values.prometheus.rbacPrometheus == true " and " .Values.prometheus.podMonitor.enabled=true or prometheus.serviceMonitor.enabled=true "
   namespace: ""
-
-  # the image to be used for the kuberbacproxy container
-  rbacProxy:
-    repository: gcr.io/kubebuilder/kube-rbac-proxy
-    tag: v0.12.0
-    pullPolicy:
 
   # Prometheus Operator PodMonitors
   podMonitor:
@@ -199,7 +192,7 @@ controller:
   # -- Controller log level. Must be one of: `all`, `debug`, `info`, `warn`, `error` or `none`
   logLevel: info
   # command: /controller
-  # webhookMode: enabled
+  webhookMode: enabled
   image:
     repository: quay.io/metallb/controller
     tag:
@@ -240,6 +233,7 @@ controller:
   labels: {}
   livenessProbe:
     enabled: true
+    port: 17472
     failureThreshold: 3
     initialDelaySeconds: 10
     periodSeconds: 10
@@ -247,13 +241,12 @@ controller:
     timeoutSeconds: 1
   readinessProbe:
     enabled: true
+    port: 17472
     failureThreshold: 3
     initialDelaySeconds: 10
     periodSeconds: 10
     successThreshold: 1
     timeoutSeconds: 1
-  tlsMinVersion: "VersionTLS12"
-  tlsCipherSuites: ""
 
   extraContainers: []
 
@@ -275,6 +268,8 @@ speaker:
     enabled: true
   # ignore the exclude-from-external-loadbalancer label
   ignoreExcludeLB: false
+  # --  BGP debounce timeout for FRR configuration reloads, in milliseconds. Only applies when BGP type is frr. Default (when unset) is 3000 ms. This feature is experimental
+  bgpDebounceTimeout: null
 
   image:
     repository: quay.io/metallb/speaker
@@ -314,6 +309,7 @@ speaker:
   labels: {}
   livenessProbe:
     enabled: true
+    port: 17472
     failureThreshold: 3
     initialDelaySeconds: 10
     periodSeconds: 10
@@ -321,6 +317,7 @@ speaker:
     timeoutSeconds: 1
   readinessProbe:
     enabled: true
+    port: 17472
     failureThreshold: 3
     initialDelaySeconds: 10
     periodSeconds: 10
@@ -332,25 +329,31 @@ speaker:
     periodSeconds: 5
   # frr contains configuration specific to the MetalLB FRR container,
   # for speaker running alongside FRR.
+  # DEPRECATED: The FRR mode is deprecated and will be removed in a future
+  # release. Use the frr-k8s mode (frrk8s.enabled) instead, which is now
+  # the default BGP backend.
   frr:
-    enabled: true
+    enabled: false
     image:
       repository: quay.io/frrouting/frr
-      tag: 9.1.0
+      tag: 10.5.3
       pullPolicy:
-    metricsPort: 7473
+    metricsPort: 9121
     resources: {}
-
-    # if set, enables a rbac proxy sidecar container on the speaker to
-    # expose the frr metrics via tls.
-    # secureMetricsPort: 9121
-
 
   reloader:
     resources: {}
 
   frrMetrics:
     resources: {}
+
+  initContainers:
+    cpFrrFiles:
+      resources: {}
+    cpReloader:
+      resources: {}
+    cpMetrics:
+      resources: {}
 
   extraContainers: []
 
@@ -363,8 +366,40 @@ crds:
 # This allows configuring additional frr parameters in combination to those
 # applied by MetalLB.
 frrk8s:
-  # if set, enables frrk8s as a backend. This is mutually exclusive to frr
-  # mode.
-  enabled: false
+  # -- If set, enables frrk8s as a backend. This is mutually exclusive to frr mode.
+  enabled: true
+  # -- If true, uses an external frr-k8s installation instead of the bundled subchart.
   external: false
+  # -- Namespace where external frr-k8s is installed (only used when external=true).
   namespace: ""
+
+# Values passed to the frr-k8s subchart (note the hyphen in "frr-k8s").
+# For all available options, see:
+# https://github.com/metallb/frr-k8s/blob/main/charts/frr-k8s/values.yaml
+frr-k8s:
+  prometheus:
+    serviceMonitor:
+      # -- Enable Prometheus ServiceMonitor for frr-k8s metrics.
+      enabled: false
+      # The FRR-K8s BGP/BFD metrics are exposed with the "frrk8s_" prefix
+      # (e.g. frrk8s_bgp_session_up, frrk8s_bfd_session_up).
+      # To rename them to the legacy "metallb_" prefix for backward compatibility
+      # with existing dashboards or alerts, enable and configure metric relabelings:
+      # metricRelabelings:
+      # - sourceLabels: [__name__]
+      #   regex: "frrk8s_bgp_(.*)"
+      #   targetLabel: "__name__"
+      #   replacement: "metallb_bgp_$1"
+      # - sourceLabels: [__name__]
+      #   regex: "frrk8s_bfd_(.*)"
+      #   targetLabel: "__name__"
+      #   replacement: "metallb_bfd_$1"
+
+# networkpolicies
+networkpolicies:
+  # if set, networkpolicies for metallb components will be installed in the metallb namespace
+  enabled: false
+  # if set, a default deny network policy will be installed in the metallb namespace
+  defaultDeny: false
+  # to override internal k8s api targetPort
+  apiPort: 6443

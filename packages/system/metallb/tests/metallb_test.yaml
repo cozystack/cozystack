@@ -1,0 +1,185 @@
+suite: cozy-metallb chart rendering invariants
+release:
+  name: metallb
+  namespace: cozy-metallb
+set:
+  # The upstream metallb chart leaves `frr-k8s.prometheus:` as a YAML null
+  # with only commented examples beneath it. Helm merges that null on top of
+  # the frr-k8s subchart's own `prometheus:` map and `helm template` happens
+  # to short-circuit the missing `serviceMonitor.enabled` lookup, but
+  # helm-unittest's value-merge dereferences the nil and panics. Pin the
+  # subchart's prometheus block here so all templates render cleanly inside
+  # the suite — this does not change the production rendering path.
+  metallb.frr-k8s.prometheus.serviceMonitor.enabled: false
+  metallb.frr-k8s.prometheus.podMonitor.enabled: false
+tests:
+  - it: renders the speaker DaemonSet with a single speaker container
+    template: charts/metallb/templates/speaker.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: metadata.name
+          value: metallb-speaker
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: speaker
+
+  - it: drives the speaker into frr-k8s BGP mode
+    template: charts/metallb/templates/speaker.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: METALLB_BGP_TYPE
+            value: frr-k8s
+
+  - it: ships the frr-k8s DaemonSet alongside the speaker
+    template: charts/metallb/charts/frr-k8s/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: metadata.name
+          value: metallb-frr-k8s
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 5
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: controller
+
+  - it: keeps the controller Deployment in the release namespace
+    template: charts/metallb/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: metallb-controller
+      - equal:
+          path: metadata.namespace
+          value: cozy-metallb
+
+  - it: installs the configuration-state CRD added in 0.15.3
+    template: charts/metallb/charts/crds/templates/crds.yaml
+    documentSelector:
+      path: metadata.name
+      value: configurationstates.metallb.io
+    asserts:
+      - isKind:
+          of: CustomResourceDefinition
+
+  - it: installs the frr-k8s FRRConfiguration CRD
+    template: charts/metallb/charts/frr-k8s/charts/crds/templates/frrk8s.metallb.io_frrconfigurations.yaml
+    asserts:
+      - isKind:
+          of: CustomResourceDefinition
+      - equal:
+          path: metadata.name
+          value: frrconfigurations.frrk8s.metallb.io
+
+  - it: leaves NetworkPolicies off by default (opt-in via networkpolicies.enabled)
+    template: charts/metallb/templates/networkpolicy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The cozystack outer values.yaml pins .metallb.controller.image.tag and
+  # .metallb.speaker.image.tag to a ghcr.io/cozystack/cozystack build that
+  # MUST match the appVersion of the vendored chart. v0.16.0 introduced a
+  # new probe contract (/healthz on port 17472) that earlier binaries don't
+  # serve — a bump that lets these two drift produces CrashLoopBackOff pods
+  # on the default branch between merge and the next release-prep commit.
+  # The two assertions below pin the rendered image tag to the exact string
+  # captured at chart appVersion v0.16.1; any in-place edit to values.yaml
+  # (intentional or otherwise) without a matching test fixture refresh fails
+  # CI before the change lands. Treat a failure here as "you edited
+  # values.yaml; if the edit was intentional, run `make image` to push fresh
+  # digests and update this fixture in the same commit". A future appVersion
+  # bump in Chart.yaml requires updating both halves: `make image` writes
+  # the new digest to values.yaml, then the fixture below is regenerated to
+  # match — the test catches a forgotten regeneration as part of the bump.
+  - it: pins controller image tag to the chart appVersion
+    template: charts/metallb/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/cozystack/cozystack/metallb-controller:v0.16.1@sha256:0d8d567780c0f1d487e15a5df2377c40f9c608a55f1a24581052c7c69eb4ccfd
+
+  - it: pins speaker image tag to the chart appVersion
+    template: charts/metallb/templates/speaker.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/cozystack/cozystack/metallb-speaker:v0.16.1@sha256:aa16cee1c88923b67dbfcf69fe3e4dcb9a4ded95125a7f078752b4be240b5690
+
+  # The values.yaml header comment documents that operators can revert the
+  # speaker to legacy FRR mode by flipping these two keys. Pin both halves
+  # of the documented behavior so an upstream chart restructure that renames
+  # frr.enabled / frrk8s.enabled fails the suite before silently breaking
+  # an operator's downgrade path.
+  #
+  # IMPORTANT: this escape hatch is partial. It switches the speaker BGP
+  # backend but does NOT suppress the frr-k8s subchart — the dep condition
+  # in the vendored metallb chart does not propagate from the cozy-metallb
+  # umbrella, so the metallb-frr-k8s DaemonSet remains rendered (idle).
+  # The companion test below pins that limitation so a future fix changes
+  # the documented behavior and this expected-but-unfortunate render at
+  # the same time.
+  - it: switches speaker into legacy FRR mode under the escape hatch
+    template: charts/metallb/templates/speaker.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    set:
+      metallb.frrk8s.enabled: false
+      metallb.speaker.frr.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 4
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: speaker
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: frr
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: METALLB_BGP_TYPE
+            value: frr
+
+  - it: leaves the idle frr-k8s subchart in place under the escape hatch
+    template: charts/metallb/charts/frr-k8s/templates/controller.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    set:
+      metallb.frrk8s.enabled: false
+      metallb.speaker.frr.enabled: true
+    asserts:
+      # The subchart still renders metallb-frr-k8s. If/when the umbrella
+      # chart grows a way to fully suppress the dep (e.g. a top-level
+      # frrk8s.enabled wired into Chart.yaml.dependencies), flip this
+      # assertion to hasDocuments count: 0 and update the values.yaml
+      # header comment together.
+      - equal:
+          path: metadata.name
+          value: metallb-frr-k8s

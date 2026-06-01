@@ -1,0 +1,87 @@
+suite: cilium-networkpolicy port-deny invariants
+release:
+  name: cilium-networkpolicy
+  namespace: cozy-cilium-networkpolicy
+templates:
+  - templates/networkpolicy.yaml
+tests:
+  - it: denies world ingress to every metallb v0.16 host-network listener
+    # These ports are opened on host-network by metallb v0.16:
+    #   7946  — speaker memberlist gossip (TCP/UDP). Cluster peers still
+    #           reach it via the ingress fromEntities[cluster,host] clause
+    #           on the same policy; the deny only blocks `world`.
+    #   9120  — speaker metrics (HTTPS).
+    #   9121  — legacy FRR metrics (HTTPS, only bound when the escape hatch
+    #           speaker.frr.enabled=true is engaged; kept in the denylist
+    #           defensively so the escape hatch stays safe).
+    #   9140  — frr-k8s controller metrics (HTTPS, DaemonSet).
+    #   9141  — frr-k8s FRR metrics (HTTPS, DaemonSet).
+    #   19443 — frr-k8s statuscleaner webhook (HTTPS, Deployment with
+    #           hostNetwork: true and master+control-plane tolerations).
+    # The deny list MUST cover all six; missing any one leaks the
+    # corresponding endpoint to world on any node that schedules the pod.
+    # Port 9443 is bound on host-network by the cozy-monitoring etcd
+    # kube-rbac-proxy DaemonSet — asserted separately below; metallb
+    # controller webhook collides on the same port number but on pod-IP,
+    # out of scope for this world-deny.
+    asserts:
+      # 7946 carries memberlist gossip on both TCP and UDP. Cilium's
+      # PortProtocol matches all transport protocols when "ANY", omitted,
+      # or empty, so this entry would be a functional no-op without
+      # `protocol: ANY` too — the assertion pins the explicit-intent
+      # marker as the contract for the one multi-protocol listener, so a
+      # future edit that drops `protocol: ANY` (and silently relies on
+      # the implicit match) fails this test.
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "7946"
+            protocol: ANY
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "9120"
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "9121"
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "9140"
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "9141"
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "19443"
+
+  - it: denies world ingress to the host-network 9443 listener (etcd kube-rbac-proxy)
+    # The host-network bind on port 9443 belongs to the cozy-monitoring
+    # kube-rbac-proxy DaemonSet
+    # (packages/system/monitoring-agents/templates/etcd-proxy-scrape.yaml,
+    # --secure-listen-address=$(NODE_IP):9443). Port 9443 is ALSO bound by
+    # the metallb controller Deployment as its webhook server, but on pod-IP
+    # (non-host-network), which is out of scope for this world-deny. Pin the
+    # entry here so a future PR that drops the cozy-monitoring stack does
+    # not silently remove this deny — the port-number collision with the
+    # metallb controller webhook does not give that webhook any protection
+    # under this policy regardless.
+    asserts:
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "9443"
+
+  - it: drops the stale frr-mode metrics port now that frrk8s is the default
+    # Port 7473 was metallb's legacy FRR-mode metrics endpoint. v0.16 disables
+    # FRR mode by default and migrates BGP to frr-k8s; the port is no longer
+    # bound by anything cozystack ships, so listing it in the deny rule is
+    # misleading.
+    asserts:
+      - notContains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "7473"

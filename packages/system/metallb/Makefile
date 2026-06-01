@@ -8,13 +8,16 @@ update:
 	rm -rf charts
 	helm repo add metallb https://metallb.github.io/metallb
 	helm repo update metallb
-	helm pull metallb/metallb --untar --untardir charts
-	rm -rf charts/metallb/charts/frr-k8s
+	helm pull metallb/metallb --version 0.16.1 --untar --untardir charts
+
+test:
+	helm unittest .
 
 image-controller image-speaker:
 	$(eval TARGET := $(subst image-,,$@))
 	$(eval VERSION := $(shell yq '.appVersion' charts/metallb/Chart.yaml))
 	docker buildx build images/metallb \
+		--platform=linux/amd64 \
 		--target $(TARGET) \
 		--build-arg VERSION=$(VERSION) \
 		$(call image-tags,metallb-$(TARGET),$(VERSION)) \

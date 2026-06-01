@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "frrk8s.fullname" . }}-statuscleaner
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "frrk8s.labels" . | nindent 4 }}
+    app.kubernetes.io/component: statuscleaner
+    {{- range $key, $value := .Values.frrk8s.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: statuscleaner
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: frr-k8s-statuscleaner
+      labels:
+        app.kubernetes.io/component: statuscleaner
+    spec:
+      {{- if .Values.frrk8s.runtimeClassName }}
+      runtimeClassName: {{ .Values.frrk8s.runtimeClassName }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - command:
+        - /statuscleaner
+        args:
+        - --webhook-port={{ .Values.frrk8s.webhookPort }}
+        {{- with .Values.frrk8s.logLevel }}
+        - --log-level={{ . }}
+        {{- end }}
+        {{- if .Values.frrk8s.disableCertRotation }}
+        - "--disable-cert-rotation=true"
+        {{- end }}
+        {{- if .Values.frrk8s.restartOnRotatorSecretRefresh }}
+        - "--restart-on-rotator-secret-refresh=true"
+        {{- end }}
+        - "--namespace=$(NAMESPACE)"
+        {{- if .Values.tls.cipherSuites }}
+        - --tls-cipher-suites={{ .Values.tls.cipherSuites }}
+        {{- end }}
+        {{- if .Values.tls.curvePreferences }}
+        - --tls-curve-preferences={{ .Values.tls.curvePreferences }}
+        {{- end }}
+        {{- if .Values.tls.minVersion }}
+        - --tls-min-version={{ .Values.tls.minVersion }}
+        {{- end }}
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        image: {{ .Values.frrk8s.image.repository }}:{{ .Values.frrk8s.image.tag | default .Chart.AppVersion }}
+        {{- if .Values.frrk8s.image.pullPolicy }}
+        imagePullPolicy: {{ .Values.frrk8s.image.pullPolicy }}
+        {{- end }}
+        name: frr-k8s-statuscleaner
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          readOnlyRootFilesystem: true
+        ports:
+        - containerPort: {{ .Values.frrk8s.webhookPort }}
+          name: webhook
+        {{- if .Values.frrk8s.livenessProbe.enabled }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+          initialDelaySeconds: {{ .Values.frrk8s.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.frrk8s.livenessProbe.periodSeconds }}
+          failureThreshold: {{ .Values.frrk8s.livenessProbe.failureThreshold }}
+        {{- end }}
+        {{- if .Values.frrk8s.readinessProbe.enabled }}
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+          initialDelaySeconds: {{ .Values.frrk8s.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.frrk8s.readinessProbe.periodSeconds }}
+          failureThreshold: {{ .Values.frrk8s.readinessProbe.failureThreshold }}
+        {{- end }}
+        {{- with .Values.frrk8s.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: cert
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+      {{- with .Values.frrk8s.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.frrk8s.tolerateMaster .Values.frrk8s.tolerations }}
+      tolerations:
+      {{- if .Values.frrk8s.tolerateMaster }}
+      - key: node-role.kubernetes.io/master
+        effect: NoSchedule
+        operator: Exists
+      - key: node-role.kubernetes.io/control-plane
+        effect: NoSchedule
+        operator: Exists
+      {{- end }}
+      {{- with .Values.frrk8s.tolerations }}
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.frrk8s.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      volumes:
+        - name: cert
+          secret:
+            defaultMode: 420
+            secretName: frr-k8s-webhook-server-cert
+      serviceAccountName: {{ template "frrk8s.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 10
+      hostNetwork: true

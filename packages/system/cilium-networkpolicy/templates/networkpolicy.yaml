@@ -12,12 +12,27 @@ spec:
       - port: "2379"  # etcd
       - port: "2380"  # etcd
       - port: "3367"  # linstor
-      - port: "7473"  # frr-metrics (metallb)
+      # metallb speaker memberlist gossip is bound on both TCP and UDP on
+      # host-network. Cilium PortProtocol matches all transport protocols
+      # (TCP+UDP+SCTP) when `protocol:` is "ANY", omitted, or empty — so the
+      # other entries in this list already cover their (single-protocol)
+      # listeners. The explicit `protocol: ANY` on 7946 is documentation of
+      # intent for the one multi-protocol listener in the set; it is not a
+      # behavior change vs. omitting the field. Cluster peers still reach
+      # 7946 via the ingress fromEntities[cluster,host] clause below
+      # regardless of the deny.
+      - port: "7946"
+        protocol: ANY
       - port: "8123"  # cozy assets server
-      - port: "9443"  # kube-rbac-proxy
+      - port: "9120"  # metallb speaker metrics (HTTPS, host-network)
+      - port: "9121"  # metallb legacy FRR metrics (HTTPS, host-network; only bound when speaker.frr.enabled=true escape hatch is engaged)
+      - port: "9140"  # metallb frr-k8s controller metrics (HTTPS, host-network)
+      - port: "9141"  # metallb frr-k8s FRR metrics (HTTPS, host-network)
+      - port: "9443"  # etcd kube-rbac-proxy host-network bind (cozy-monitoring DaemonSet); metallb controller also binds 9443 on pod-IP for its webhook — pod-IP is out of scope for this world-deny but the port number collides
       - port: "10250" # kubelet
       - port: "10257" # kube-controller-manager
       - port: "10259" # kube-scheduler
+      - port: "19443" # metallb frr-k8s statuscleaner webhook (HTTPS, host-network)
   ingress:
   - fromEntities:
     - world

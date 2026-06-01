@@ -1,0 +1,128 @@
+{{- if .Values.prometheus.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ template "frrk8s.fullname" . }}-frr-k8s-monitor
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "frrk8s.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frr-k8s
+    {{- if .Values.prometheus.serviceMonitor.additionalLabels }}
+{{ toYaml .Values.prometheus.serviceMonitor.additionalLabels | indent 4 }}
+    {{- end }}
+  {{- if .Values.prometheus.serviceMonitor.annotations }}
+  annotations:
+{{ toYaml .Values.prometheus.serviceMonitor.annotations | indent 4 }}
+  {{- end }}
+spec:
+  endpoints:
+    - port: "metricshttps"
+      honorLabels: true
+      {{- if .Values.prometheus.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+      {{- toYaml .Values.prometheus.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end -}}
+      {{- if .Values.prometheus.serviceMonitor.relabelings }}
+      relabelings:
+      {{- toYaml .Values.prometheus.serviceMonitor.relabelings | nindent 8 }}
+      {{- end }}
+      {{- if .Values.prometheus.serviceMonitor.interval }}
+      interval: {{ .Values.prometheus.serviceMonitor.interval }}
+      {{- end -}}
+{{ if .Values.prometheus.secureMetricsPort }}
+      bearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      scheme: "https"
+{{- if .Values.prometheus.serviceMonitor.tlsConfig }}
+      tlsConfig:
+{{ toYaml .Values.prometheus.serviceMonitor.tlsConfig | indent 8 }}      
+{{- end }}
+{{ end }}
+{{ if .Values.frrk8s.frr.secureMetricsPort }}
+    - port: "frrmetricshttps"
+      honorLabels: true
+      {{- if .Values.prometheus.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+      {{- toYaml .Values.prometheus.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end -}}
+      {{- if .Values.prometheus.serviceMonitor.relabelings }}
+      relabelings:
+      {{- toYaml .Values.prometheus.serviceMonitor.relabelings | nindent 8 }}
+      {{- end }}
+      {{- if .Values.prometheus.serviceMonitor.interval }}
+      interval: {{ .Values.prometheus.serviceMonitor.interval }}
+      {{- end }}
+      bearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      scheme: "https"
+{{- if .Values.prometheus.serviceMonitor.tlsConfig }}
+      tlsConfig:
+{{ toYaml .Values.prometheus.serviceMonitor.tlsConfig | indent 8 }}      
+{{- end }}
+{{- end }}
+  jobLabel: {{ .Values.prometheus.serviceMonitor.jobLabel | quote }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      name: {{ template "frrk8s.fullname" . }}-frr-k8s-monitor-service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/scrape: "true"
+  {{- if .Values.prometheus.serviceMonitor.annotations }}
+{{ toYaml .Values.prometheus.serviceMonitor.annotations | indent 4 }}
+  {{- end }}
+  labels:
+    name: {{ template "frrk8s.fullname" . }}-frr-k8s-monitor-service
+  name: {{ template "frrk8s.fullname" . }}-frr-k8s-monitor-service
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  selector:
+    {{- include "frrk8s.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: frr-k8s
+  clusterIP: None
+  ports:
+    - name: "metricshttps"
+      port: {{ .Values.prometheus.secureMetricsPort }}
+      targetPort: {{ .Values.prometheus.secureMetricsPort }}
+    - name: frrmetricshttps
+      port: {{ .Values.frrk8s.frr.secureMetricsPort }}
+      targetPort: {{ .Values.frrk8s.frr.secureMetricsPort }}
+  sessionAffinity: None
+  type: ClusterIP
+---
+{{- if .Values.prometheus.rbacPrometheus }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ template "frrk8s.fullname" . }}-prometheus
+  namespace: {{ .Release.Namespace | quote }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - services
+      - endpoints
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ template "frrk8s.fullname" . }}-prometheus
+  namespace: {{ .Release.Namespace | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ template "frrk8s.fullname" . }}-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: {{ required ".Values.prometheus.serviceAccount must be defined when .Values.prometheus.serviceMonitor.enabled == true" .Values.prometheus.serviceAccount }}
+    namespace: {{ required ".Values.prometheus.namespace must be defined when .Values.prometheus.serviceMonitor.enabled == true" .Values.prometheus.namespace }}
+{{- end }}
+{{- end }}
