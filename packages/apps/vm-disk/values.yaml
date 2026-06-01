@@ -4,6 +4,7 @@
 
 ## @typedef {struct} SourceImage - Use image by name.
 ## @field {string} name - Name of the image to use.
+## @x-cozystack-options {source: image}
 
 ## @typedef {struct} SourceUpload - Upload local image.
 
@@ -30,4 +31,5 @@ storage: 5Gi
 
 ## @param {string} storageClass - StorageClass used to store the data.
 ## @immutable
+## @x-cozystack-options {source: storageclass}
 storageClass: replicated

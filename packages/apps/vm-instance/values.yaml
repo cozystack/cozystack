@@ -8,13 +8,16 @@
 
 ## @typedef {struct} Disk - Disk configuration.
 ## @field {string} name - Disk name.
+## @x-cozystack-options {source: vmdisk}
 ## @field {string} [bus] - Disk bus type (e.g. "sata").
 
 ## @typedef {struct} Network - Network to attach the VM to.
 ## @field {string} [name] - Network attachment name.
+## @x-cozystack-options {source: network}
 
 ## @typedef {struct} GPU - GPU device configuration.
 ## @field {string} name - The name of the GPU resource to attach.
+## @x-cozystack-options {source: gpu}
 
 ## @typedef {struct} Resources - Resource configuration for the virtual machine.
 ## @field {quantity} [cpu] - Number of CPU cores allocated.
@@ -45,9 +48,11 @@ externalAllowICMP: true
 runStrategy: Always
 
 ## @param {string} instanceType - Virtual Machine instance type.
+## @x-cozystack-options {source: instancetype}
 instanceType: "u1.medium"
 
 ## @param {string} instanceProfile - Virtual Machine preferences profile.
+## @x-cozystack-options {source: instanceprofile}
 instanceProfile: ubuntu
 
 ## @param {[]Disk} disks - List of disks to attach.
