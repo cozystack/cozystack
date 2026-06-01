@@ -33,6 +33,10 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.Application":                          schema_pkg_apis_apps_v1alpha1_Application(ref),
 		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationList":                      schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
 		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationStatus":                    schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
+		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.Option":                               schema_pkg_apis_core_v1alpha1_Option(ref),
+		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionItem":                           schema_pkg_apis_core_v1alpha1_OptionItem(ref),
+		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionList":                           schema_pkg_apis_core_v1alpha1_OptionList(ref),
+		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionSpec":                           schema_pkg_apis_core_v1alpha1_OptionSpec(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModule":                         schema_pkg_apis_core_v1alpha1_TenantModule(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModuleList":                     schema_pkg_apis_core_v1alpha1_TenantModuleList(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantModuleStatus":                   schema_pkg_apis_core_v1alpha1_TenantModuleStatus(ref),
@@ -270,6 +274,166 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref common.ReferenceCallbac
 		},
 		Dependencies: []string{
 			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_Option(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Option is a read-only, virtual resource that serves a named list of dropdown options for the dashboard. metadata.name is the source name (e.g. \"gpu\", \"instancetype\"); the items are computed on read by the apiserver from cluster state, so tenants need no direct access to the underlying resources.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionSpec"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_OptionItem(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "OptionItem is a single selectable option.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"value": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Value is the string written into the target field.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"label": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Label is an optional human-friendly title; defaults to Value in the UI.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"description": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Description is optional helper text (e.g. availability counts or disk size).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"default": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Default marks the preselected option (e.g. the default StorageClass); the UI auto-selects it when the field has no value yet.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"value"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_OptionList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.Option"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.Option", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_core_v1alpha1_OptionSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "OptionSpec holds the computed option items for a source.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionItem"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionItem"},
 	}
 }
 

@@ -44,6 +44,7 @@ rules:
   resources:
   - tenantmodules
   - tenantsecrets
+  - options
   verbs: ["get", "list", "watch"]
 ---
 # == view cluster role ==
@@ -161,6 +162,7 @@ rules:
   resources:
   - tenantmodules
   - tenantsecrets
+  - options
   verbs: ["get", "list", "watch"]
 ---
 # == admin cluster role ==

@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -44,6 +45,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
+	optionstorage "github.com/cozystack/cozystack/pkg/registry/core/option"
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
@@ -194,6 +196,13 @@ func (c completedConfig) New() (*CozyServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build watch client: %w", err)
 	}
+	// Dynamic client for the Option resource's providers — direct (uncached)
+	// reads of arbitrary kinds (Nodes, KubeVirt, instancetypes, …) without
+	// registering an informer for each.
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build dynamic client: %w", err)
+	}
 	// --- static, cluster-scoped resource for core group ---
 	coreV1alpha1Storage := map[string]rest.Storage{}
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
@@ -204,6 +213,9 @@ func (c completedConfig) New() (*CozyServer, error) {
 	)
 	coreV1alpha1Storage["tenantmodules"] = cozyregistry.RESTInPeace(
 		tenantmodulestorage.NewREST(cli, watchCli),
+	)
+	coreV1alpha1Storage["options"] = cozyregistry.RESTInPeace(
+		optionstorage.NewREST(optionstorage.DefaultProviders(dyn)),
 	)
 
 	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
