@@ -73,14 +73,11 @@ spec:
   dnsNames:
     - {{ .Release.Name }}.{{ .Release.Namespace }}.svc
     - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "kubernetes.tenantClusterDomain" . }}
-  {{- /* Workers contact trustd via the Kamaji Service ClusterIP (the
-         same address used for the apiserver), so the cert must cover
-         that IP too. */}}
-  {{- $trustdSvc := lookup "v1" "Service" .Release.Namespace .Release.Name }}
-  {{- if and $trustdSvc $trustdSvc.spec.clusterIP }}
-  ipAddresses:
-    - {{ $trustdSvc.spec.clusterIP | quote }}
-  {{- end }}
+  {{- /* spec.ipAddresses (Service ClusterIP) is patched in by the
+         talos-reconcile post-install hook once the Service exists.
+         Workers contact trustd at https://<ClusterIP>:50001 so the cert
+         must cover that IP — but the ClusterIP only exists after the
+         first Helm install pass, so a lookup-and-reuse here would race. */}}
   issuerRef:
     name: {{ .Release.Name }}-talos-ca
     kind: Issuer
