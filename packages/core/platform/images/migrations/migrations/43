@@ -27,6 +27,21 @@ for ns in $(kubectl get cluster.postgresql.cnpg.io -A \
   fi
 done
 
-# Stamp version
-kubectl create configmap -n cozy-system cozystack-version \
-  --from-literal=version=44 --dry-run=client -o yaml | kubectl apply -f-
+# Stamp version.
+# Mirror migration 42's labeled manifest. A label-less apply by the same field
+# manager (kubectl create | kubectl apply) would strip the
+# platform.cozystack.io/no-delete label migration 42 added, dropping
+# cozystack-version out of the cozystack-no-delete-guardrail
+# ValidatingAdmissionPolicy. templates/cozystack-version.yaml only re-renders the
+# labeled ConfigMap on first install, so the label must be carried inline here.
+kubectl apply --filename - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+data:
+  version: "44"
+EOF
