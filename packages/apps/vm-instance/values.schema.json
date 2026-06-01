@@ -54,8 +54,13 @@
       "default": "ubuntu",
       "enum": [
         "alpine",
+        "centos.7",
+        "centos.7.desktop",
         "centos.stream10",
         "centos.stream10.desktop",
+        "centos.stream8",
+        "centos.stream8.desktop",
+        "centos.stream8.dpdk",
         "centos.stream9",
         "centos.stream9.desktop",
         "centos.stream9.dpdk",

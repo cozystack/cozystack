@@ -151,3 +151,158 @@ spec:
       name: gpu1
   memory:
     guest: 16Gi
+---
+# The centos.7* / centos.stream8* VirtualMachineClusterPreference objects below
+# reached end-of-life and were dropped from common-instancetypes upstream, but
+# existing VMInstance CRs still reference these instanceProfile names. vm.yaml
+# fails the Helm render when a referenced VirtualMachineClusterPreference is
+# absent (and the dynamic CRD enum would reject the stored value), so existing
+# VMs on these profiles would hard-break on upgrade. They are retained here
+# verbatim from the pre-removal catalog, marked deprecated, to keep those
+# workloads renderable. New VMs should use a supported centos.stream9/10 profile.
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterPreference
+metadata:
+  annotations:
+    iconClass: icon-centos
+    openshift.io/display-name: CentOS 7
+    openshift.io/documentation-url: https://github.com/kubevirt/common-instancetypes
+    openshift.io/provider-display-name: KubeVirt
+    openshift.io/support-url: https://github.com/kubevirt/common-instancetypes/issues
+    tags: hidden,kubevirt,linux,centos-stream
+  labels:
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/os-type: linux
+    instancetype.kubevirt.io/vendor: kubevirt.io
+  name: centos.7
+spec:
+  annotations:
+    vm.kubevirt.io/os: linux
+  devices:
+    preferredDiskBus: virtio
+    preferredInterfaceModel: virtio
+  requirements:
+    cpu:
+      guest: 1
+    memory:
+      guest: 1Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterPreference
+metadata:
+  annotations:
+    iconClass: icon-centos
+    openshift.io/display-name: CentOS 7
+    openshift.io/documentation-url: https://github.com/kubevirt/common-instancetypes
+    openshift.io/provider-display-name: KubeVirt
+    openshift.io/support-url: https://github.com/kubevirt/common-instancetypes/issues
+    tags: hidden,kubevirt,linux,centos-stream
+  labels:
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/os-type: linux
+    instancetype.kubevirt.io/vendor: kubevirt.io
+  name: centos.7.desktop
+spec:
+  annotations:
+    vm.kubevirt.io/os: linux
+  devices:
+    preferredAutoattachInputDevice: true
+    preferredDiskBus: virtio
+    preferredInputBus: virtio
+    preferredInputType: tablet
+    preferredInterfaceModel: virtio
+  requirements:
+    cpu:
+      guest: 1
+    memory:
+      guest: 1Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterPreference
+metadata:
+  annotations:
+    iconClass: icon-centos
+    openshift.io/display-name: CentOS Stream 8
+    openshift.io/documentation-url: https://github.com/kubevirt/common-instancetypes
+    openshift.io/provider-display-name: KubeVirt
+    openshift.io/support-url: https://github.com/kubevirt/common-instancetypes/issues
+    tags: hidden,kubevirt,linux,centos-stream
+  labels:
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/os-type: linux
+    instancetype.kubevirt.io/vendor: kubevirt.io
+  name: centos.stream8
+spec:
+  annotations:
+    vm.kubevirt.io/os: linux
+  devices:
+    preferredDiskBus: virtio
+    preferredInterfaceModel: virtio
+  requirements:
+    cpu:
+      guest: 1
+    memory:
+      guest: 1.5Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterPreference
+metadata:
+  annotations:
+    iconClass: icon-centos
+    openshift.io/display-name: CentOS Stream 8
+    openshift.io/documentation-url: https://github.com/kubevirt/common-instancetypes
+    openshift.io/provider-display-name: KubeVirt
+    openshift.io/support-url: https://github.com/kubevirt/common-instancetypes/issues
+    tags: hidden,kubevirt,linux,centos-stream
+  labels:
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/os-type: linux
+    instancetype.kubevirt.io/vendor: kubevirt.io
+  name: centos.stream8.desktop
+spec:
+  annotations:
+    vm.kubevirt.io/os: linux
+  devices:
+    preferredAutoattachInputDevice: true
+    preferredDiskBus: virtio
+    preferredInputBus: virtio
+    preferredInputType: tablet
+    preferredInterfaceModel: virtio
+  requirements:
+    cpu:
+      guest: 1
+    memory:
+      guest: 1.5Gi
+---
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterPreference
+metadata:
+  annotations:
+    iconClass: icon-centos
+    openshift.io/display-name: CentOS Stream 8
+    openshift.io/documentation-url: https://github.com/kubevirt/common-instancetypes
+    openshift.io/provider-display-name: KubeVirt
+    openshift.io/support-url: https://github.com/kubevirt/common-instancetypes/issues
+    tags: hidden,kubevirt,linux,centos-stream,dpdk
+  labels:
+    instancetype.kubevirt.io/deprecated: "true"
+    instancetype.kubevirt.io/os-type: linux
+    instancetype.kubevirt.io/vendor: kubevirt.io
+  name: centos.stream8.dpdk
+spec:
+  annotations:
+    vm.kubevirt.io/os: linux
+  cpu:
+    preferredCPUTopology: spread
+    spreadOptions:
+      across: SocketsCoresThreads
+      ratio: 4
+  devices:
+    preferredDiskBus: virtio
+    preferredInterfaceModel: virtio
+    preferredNetworkInterfaceMultiQueue: true
+  requirements:
+    cpu:
+      guest: 2
+    memory:
+      guest: 1.5Gi
