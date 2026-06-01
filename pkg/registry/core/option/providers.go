@@ -45,6 +45,9 @@ var (
 	gvrStorageClass = schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}
 	gvrBackupClass  = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backupclasses"}
 	gvrVMDisks      = schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "vmdisks"}
+	gvrPlans        = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "plans"}
+	gvrBackups      = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backups"}
+	gvrAppDefs      = schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
 )
 
 const defaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-class"
@@ -61,6 +64,36 @@ func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
 		"storageclass":    storageClassProvider(dyn),
 		"backupclass":     nameListProvider(dyn, gvrBackupClass),
 		"vmdisk":          vmDiskProvider(dyn),
+		"plan":            nameListNamespacedProvider(dyn, gvrPlans),
+		"backup":          nameListNamespacedProvider(dyn, gvrBackups),
+		"appkind":         appKindProvider(dyn),
+	}
+}
+
+// appKindProvider lists the application kinds known to the cluster from
+// ApplicationDefinitions (apps.cozystack.io). These are the kinds selectable
+// in the backup forms' applicationRef.kind / targetApplicationRef.kind fields.
+func appKindProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvrAppDefs).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+		seen := map[string]struct{}{}
+		for i := range list.Items {
+			kind, ok, _ := unstructured.NestedString(list.Items[i].Object, "spec", "application", "kind")
+			if !ok || kind == "" {
+				continue
+			}
+			if _, dup := seen[kind]; dup {
+				continue
+			}
+			seen[kind] = struct{}{}
+			items = append(items, corev1alpha1.OptionItem{Value: kind})
+		}
+		sortItems(items)
+		return items, nil
 	}
 }
 

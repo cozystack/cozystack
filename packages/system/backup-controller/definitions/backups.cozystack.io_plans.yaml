@@ -58,6 +58,8 @@ spec:
                   kind:
                     description: Kind is the type of resource being referenced
                     type: string
+                    x-cozystack-options:
+                      source: appkind
                   name:
                     description: Name is the name of resource being referenced
                     type: string
@@ -72,6 +74,8 @@ spec:
                   The BackupClass will be resolved to determine the appropriate strategy and storage
                   based on the ApplicationRef.
                 type: string
+                x-cozystack-options:
+                  source: backupclass
               schedule:
                 description: Schedule specifies when backup copies are created.
                 properties:
