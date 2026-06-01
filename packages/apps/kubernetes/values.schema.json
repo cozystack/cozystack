@@ -945,9 +945,9 @@
       ],
       "properties": {
         "maxUnhealthy": {
-          "description": "Maximum number of unhealthy nodes tolerated per node group before remediation is paused. Accepts an integer or a percentage like \"50%\". Steady-state default of 0 remediates any unhealthy node immediately. Raise this (or set a percentage) during the kubeadm-to-Talos rollover or large minor-version upgrades where transient unhealthy nodes are expected.",
+          "description": "Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer (\"0\", \"1\", ...) or a percentage (\"0%\", \"50%\"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. \"0%\" is semantically equivalent to zero — any unhealthy node triggers remediation immediately. Raise this (e.g. \"50%\") during the kubeadm-to-Talos rollover or large minor-version upgrades where transient unhealthy nodes are expected.",
           "type": "string",
-          "default": "0"
+          "default": "0%"
         },
         "nodeStartupTimeout": {
           "description": "Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow Talos image fetches (e.g. air-gapped mirrors of factory.talos.dev) or first-boot scenarios.",
