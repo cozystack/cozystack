@@ -744,7 +744,12 @@ metadata:
   namespace: {{ $.Release.Namespace }}
 spec:
   clusterName: {{ $.Release.Name }}
-  maxUnhealthy: {{ $.Values.nodeHealthCheck.maxUnhealthy | quote }}
+  {{- /* MHC spec.maxUnhealthy is an IntOrString. CAPI admission accepts a
+         bare integer (0, 1, ...) or a percentage string ("0%", "50%"), but
+         rejects a quoted plain integer ("0"). Quote only when the operator
+         supplied a percentage; otherwise render the value as a bare int so
+         the admission webhook is happy with the chart-default "0". */}}
+  maxUnhealthy: {{ if hasSuffix "%" (toString $.Values.nodeHealthCheck.maxUnhealthy) }}{{ $.Values.nodeHealthCheck.maxUnhealthy | quote }}{{ else }}{{ $.Values.nodeHealthCheck.maxUnhealthy | int }}{{ end }}
   nodeStartupTimeout: {{ $.Values.nodeHealthCheck.nodeStartupTimeout }}
   selector:
     matchLabels:
