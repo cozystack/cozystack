@@ -1,0 +1,25 @@
+kuberture:
+  image:
+    # Pulled directly from the upstream lexfrei/kuberture registry; this
+    # package is intentionally not mirrored under ghcr.io/cozystack/*.
+    # Air-gapped operators must mirror both this image and the OCI chart
+    # at oci://ghcr.io/lexfrei/kuberture/charts/kuberture separately. Bump
+    # the tag+digest here together with KUBERTURE_CHART_VERSION and
+    # KUBERTURE_CHART_DIGEST in the Makefile (resolve the new image digest
+    # with `crane digest ghcr.io/lexfrei/kuberture:<new-tag>`).
+    tag: 0.1.1@sha256:4f265331d65f6e5afc1bf6325e7ab62f2004fc75c0587978e41321f816105fbf
+
+  # Cozystack ships a Prometheus stack by default; surface kuberture's metrics.
+  serviceMonitor:
+    enabled: true
+
+  # Operators populate `config.outputs` per HelmRelease to bind the kubernetes
+  # control-plane EndpointSlice to one or more external-dns instances. Each
+  # output picks its target external-dns by `annotationPrefix`: omit the
+  # field entirely to inherit the controller default
+  # `external-dns.alpha.kubernetes.io/` (consumed by the platform external-dns),
+  # or set it to a non-empty value ending in `/` to match a custom-prefixed
+  # instance. The empty string `""` is rejected by the chart's values schema
+  # — omission and explicit value are the only two forms.
+  config:
+    outputs: []
