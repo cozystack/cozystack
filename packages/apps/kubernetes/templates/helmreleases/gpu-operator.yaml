@@ -1,6 +1,28 @@
 {{- define "cozystack.defaultGpuOperatorValues" -}}
-{{- if .Values.addons.hami.enabled }}
+{{- /*
+  GPU passthrough default: cozystack passes individual SXM GPUs (e.g.
+  H200) into tenant worker VMs WITHOUT the NVSwitches. The nvidia driver
+  then waits forever for an NVLink fabric that can never come up (no
+  NVSwitch / fabricmanager), leaving Fabric State: In Progress — every
+  CUDA call fails with "system not yet initialized" and the
+  nvidia-operator-validator crashloops. Loading the kernel module with
+  NVreg_NvLinkDisable=1 flips Fabric State to N/A so CUDA initializes.
+  This is correct for per-GPU passthrough since there is no in-VM
+  NVLink/NVSwitch peering anyway.
+
+  The upstream chart only references an existing ConfigMap by name; the
+  wrapper chart (packages/system/gpu-operator) renders that ConfigMap
+  when kernelModuleConfig.create is true. Overridable via
+  addons.gpuOperator.valuesOverride (mergeOverwrite below keeps user
+  values winning).
+*/}}
+kernelModuleConfig:
+  create: true
 gpu-operator:
+  driver:
+    kernelModuleConfig:
+      name: nvidia-kernel-module-params
+{{- if .Values.addons.hami.enabled }}
   devicePlugin:
     enabled: false
 {{- end }}

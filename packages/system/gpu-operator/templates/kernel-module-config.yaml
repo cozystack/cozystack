@@ -1,0 +1,13 @@
+{{- if .Values.kernelModuleConfig.create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.kernelModuleConfig.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: gpu-operator
+data:
+  nvidia.conf: |
+    {{- .Values.kernelModuleConfig.content | nindent 4 }}
+{{- end }}
