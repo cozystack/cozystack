@@ -458,3 +458,38 @@ tests:
                 if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
                 if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
         documentIndex: 4
+
+  ###############################################
+  # application lineage labels on worker VMs    #
+  ###############################################
+
+  - it: stamps application lineage labels on the worker VM template
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["apps.cozystack.io/application.group"]
+          value: apps.cozystack.io
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["apps.cozystack.io/application.kind"]
+          value: Kubernetes
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["apps.cozystack.io/application.name"]
+          value: test-k8s
+        documentIndex: 5
+
+  - it: derives application.name by trimming the kubernetes- release prefix
+    release:
+      name: kubernetes-foo
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["apps.cozystack.io/application.name"]
+          value: foo
+        documentIndex: 5
