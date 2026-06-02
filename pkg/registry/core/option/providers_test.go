@@ -4,8 +4,10 @@ package option
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -180,5 +182,56 @@ func TestRESTGetUnknownSourceNotFound(t *testing.T) {
 	r := NewREST(DefaultProviders(dyn))
 	if _, err := r.Get(context.Background(), "does-not-exist", &metav1.GetOptions{}); err == nil {
 		t.Fatal("expected NotFound for unknown source")
+	}
+}
+
+// A failing provider must not take down the whole list: List logs and skips it
+// (so a partial RBAC config silently drops one dropdown rather than breaking the
+// rest), while Get on that source surfaces the error as a 500.
+func okProvider(items ...string) providerFunc {
+	return func(context.Context, string) ([]corev1alpha1.OptionItem, error) {
+		out := make([]corev1alpha1.OptionItem, 0, len(items))
+		for _, v := range items {
+			out = append(out, corev1alpha1.OptionItem{Value: v})
+		}
+		return out, nil
+	}
+}
+
+func failingProvider() providerFunc {
+	return func(context.Context, string) ([]corev1alpha1.OptionItem, error) {
+		return nil, errors.New("forbidden: provider has no RBAC")
+	}
+}
+
+func TestRESTListToleratesFailingProvider(t *testing.T) {
+	r := NewREST(map[string]providerFunc{
+		"good": okProvider("a"),
+		"bad":  failingProvider(),
+	})
+	obj, err := r.List(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("List must not fail when a single provider errors: %v", err)
+	}
+	have := map[string]bool{}
+	for _, it := range obj.(*corev1alpha1.OptionList).Items {
+		have[it.Name] = true
+	}
+	if !have["good"] {
+		t.Error("List dropped the healthy source")
+	}
+	if have["bad"] {
+		t.Error("List included the failing source; it must be skipped")
+	}
+}
+
+func TestRESTGetSurfacesProviderError(t *testing.T) {
+	r := NewREST(map[string]providerFunc{"bad": failingProvider()})
+	_, err := r.Get(context.Background(), "bad", &metav1.GetOptions{})
+	if err == nil {
+		t.Fatal("Get must surface the provider error, not swallow it")
+	}
+	if !apierrors.IsInternalError(err) {
+		t.Errorf("Get should return an InternalError (500), got %v", err)
 	}
 }
