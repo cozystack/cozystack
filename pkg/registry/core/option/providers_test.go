@@ -154,6 +154,21 @@ func TestAppKindProviderUsesApplicationDefinitionCRDGroup(t *testing.T) {
 	}
 }
 
+func TestInstanceProviderGVRsMatchKubevirtInstancetypeAPI(t *testing.T) {
+	// instancetype/instanceprofile replaced the static vm-instance enum with
+	// live dropdowns; a wrong group/version here makes the dropdown silently
+	// empty in every cluster (List tolerates the error), the same failure mode
+	// the appkind guard above catches. Pin both GVRs to the served API.
+	if gvrInstancetype.Group != "instancetype.kubevirt.io" || gvrInstancetype.Version != "v1beta1" ||
+		gvrInstancetype.Resource != "virtualmachineclusterinstancetypes" {
+		t.Errorf("instancetype provider GVR = %v, want instancetype.kubevirt.io/v1beta1 virtualmachineclusterinstancetypes", gvrInstancetype)
+	}
+	if gvrPreference.Group != "instancetype.kubevirt.io" || gvrPreference.Version != "v1beta1" ||
+		gvrPreference.Resource != "virtualmachineclusterpreferences" {
+		t.Errorf("instanceprofile provider GVR = %v, want instancetype.kubevirt.io/v1beta1 virtualmachineclusterpreferences", gvrPreference)
+	}
+}
+
 func TestRESTListExposesNewSources(t *testing.T) {
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds())
 	r := NewREST(DefaultProviders(dyn))
