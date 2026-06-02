@@ -1,3 +1,13 @@
+{{/*
+Tri-state TLS resolution: explicit non-null tls.enabled wins; when absent or null,
+defaults to external. A null tls.enabled is treated as "inherit from external".
+kindIs "invalid" detects both the missing-key and explicit-null cases.
+*/}}
+{{- $tlsEnabled := .Values.external }}
+{{- if not (kindIs "invalid" .Values.tls.enabled) }}
+  {{- $tlsEnabled = .Values.tls.enabled }}
+{{- end }}
+
 apiVersion: rabbitmq.com/v1beta1
 kind: RabbitmqCluster
 metadata:
@@ -13,7 +23,36 @@ spec:
     type: LoadBalancer
   {{- end }}
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
+  {{- if $tlsEnabled }}
+  tls:
+    secretName: {{ .Release.Name }}-tls
+  rabbitmq:
+    additionalConfig: |
+      management.ssl.port = 15671
+      management.ssl.cacertfile = /etc/rabbitmq-tls/ca.crt
+      management.ssl.certfile = /etc/rabbitmq-tls/tls.crt
+      management.ssl.keyfile = /etc/rabbitmq-tls/tls.key
+  {{- end }}
   override:
+    {{- if and $tlsEnabled .Values.external }}
+    {{- /* When both TLS and LoadBalancer are active, expose only TLS ports on
+         the public LB. Plaintext amqp (5672) and management (15672) are
+         intentionally omitted to prevent unencrypted traffic exposure.
+         In-cluster ClusterIP listeners remain unchanged — do NOT set
+         spec.tls.disableNonTLSListeners, which would close them at the
+         broker level and break in-cluster clients during migration. */}}
+    service:
+      spec:
+        ports:
+          - name: amqps
+            port: 5671
+            targetPort: 5671
+            protocol: TCP
+          - name: management-tls
+            port: 15671
+            targetPort: 15671
+            protocol: TCP
+    {{- end }}
     statefulSet:
       spec:
         template:

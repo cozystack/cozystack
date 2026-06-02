@@ -1,0 +1,468 @@
+suite: RabbitMQ TLS cert-manager chain
+
+templates:
+  - templates/certmanager.yaml
+
+tests:
+  # -----------------------------------------------------------------------
+  # tls.enabled=false: no resources rendered
+  # -----------------------------------------------------------------------
+
+  - it: renders no documents when tls.enabled is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no documents when tls.enabled is false even if external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # -----------------------------------------------------------------------
+  # tls.enabled=true: full chain rendered (4 documents)
+  # -----------------------------------------------------------------------
+
+  - it: renders 4 documents when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: first document is selfsigned Issuer
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.name
+          value: myrabbitmq-selfsigned
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - exists:
+          path: spec.selfSigned
+
+  - it: second document is CA Certificate
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: myrabbitmq-ca
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec.secretName
+          value: myrabbitmq-ca
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.issuerRef.name
+          value: myrabbitmq-selfsigned
+
+  - it: third document is CA Issuer
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.name
+          value: myrabbitmq-ca
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec.ca.secretName
+          value: myrabbitmq-ca
+
+  - it: fourth document is leaf Certificate
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: myrabbitmq-tls
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec.secretName
+          value: myrabbitmq-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: myrabbitmq-ca
+
+  - it: CA cert has cert sign and crl sign usages and not server auth
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.usages
+          content: cert sign
+      - contains:
+          path: spec.usages
+          content: crl sign
+      - notContains:
+          path: spec.usages
+          content: server auth
+
+  # -----------------------------------------------------------------------
+  # SAN coverage: internal-only (external=false)
+  # -----------------------------------------------------------------------
+
+  - it: leaf Certificate contains three internal DNS SANs when external is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.cozy.local
+      - notContains:
+          path: spec.dnsNames
+          content: myrabbitmq.example.com
+
+  - it: leaf Certificate contains inter-node headless SANs when external is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"
+
+  - it: leaf Certificate contains inter-node headless SANs when external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"
+
+  - it: leaf Certificate uses custom cluster domain in FQDN SAN when _cluster.cluster-domain is set
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      _cluster.cluster-domain: custom.example
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.custom.example
+      - notContains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.custom.example
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc.custom.example"
+      - notContains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+
+  # -----------------------------------------------------------------------
+  # SAN coverage: external=true adds namespace.host SAN
+  # -----------------------------------------------------------------------
+
+  - it: renders 4 documents when external is true and tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: leaf Certificate contains external SAN when external is true and tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.example.com
+
+  # -----------------------------------------------------------------------
+  # Tri-state: tls.enabled not set (uses default from values.yaml: ~) +
+  # external=true => TLS enabled by default
+  # -----------------------------------------------------------------------
+
+  - it: renders TLS chain when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    asserts:
+      - hasDocuments:
+          count: 4
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.example.com
+        documentIndex: 3
+
+  - it: does not render TLS chain when tls.enabled is unset (default) and external is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # -----------------------------------------------------------------------
+  # Leaf certificate duration defaults
+  # -----------------------------------------------------------------------
+
+  - it: leaf Certificate has default duration 8760h
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 8760h
+
+  - it: leaf Certificate has default renewBefore 720h
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.renewBefore
+          value: 720h
+
+  # -----------------------------------------------------------------------
+  # B2: leaf cert must have explicit usages including server auth EKU
+  # -----------------------------------------------------------------------
+
+  - it: leaf Certificate has server auth EKU in usages
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: digital signature
+      - contains:
+          path: spec.usages
+          content: key encipherment
+      - notContains:
+          path: spec.usages
+          content: cert sign
+      - notContains:
+          path: spec.usages
+          content: signing
+
+  # -----------------------------------------------------------------------
+  # B3: tls schema must reject unknown keys
+  # -----------------------------------------------------------------------
+
+  - it: schema rejects unknown tls keys
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.bogus_key: true
+    asserts:
+      - failedTemplate: {}
+
+  # -----------------------------------------------------------------------
+  # ECDSA: CA and leaf certificates use ECDSA P-256 private keys
+  # -----------------------------------------------------------------------
+
+  - it: CA certificate uses ECDSA algorithm with key size 256
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: leaf certificate uses ECDSA algorithm with key size 256
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: CA certificate rotationPolicy is Never
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: leaf certificate rotationPolicy is Always
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always

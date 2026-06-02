@@ -1,0 +1,457 @@
+suite: RabbitMQ TLS spec wiring and management HTTPS
+
+templates:
+  - templates/rabbitmq.yaml
+
+tests:
+  # -----------------------------------------------------------------------
+  # No TLS: spec.tls absent, additionalConfig without management SSL block
+  # -----------------------------------------------------------------------
+
+  - it: does not set spec.tls when tls.enabled is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  - it: does not include management ssl config when tls.enabled is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.rabbitmq.additionalConfig
+
+  # -----------------------------------------------------------------------
+  # TLS enabled: spec.tls wired + management HTTPS block rendered
+  # -----------------------------------------------------------------------
+
+  - it: sets spec.tls.secretName to release-tls when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
+
+  - it: does not set disableNonTLSListeners when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  - it: includes management ssl port in additionalConfig when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - matchRegex:
+          path: spec.rabbitmq.additionalConfig
+          pattern: "management.ssl.port = 15671"
+
+  - it: includes management ssl cacertfile in additionalConfig when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - matchRegex:
+          path: spec.rabbitmq.additionalConfig
+          pattern: "management.ssl.cacertfile = /etc/rabbitmq-tls/ca.crt"
+
+  - it: includes management ssl certfile in additionalConfig when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - matchRegex:
+          path: spec.rabbitmq.additionalConfig
+          pattern: "management.ssl.certfile = /etc/rabbitmq-tls/tls.crt"
+
+  - it: includes management ssl keyfile in additionalConfig when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - matchRegex:
+          path: spec.rabbitmq.additionalConfig
+          pattern: "management.ssl.keyfile = /etc/rabbitmq-tls/tls.key"
+
+  # -----------------------------------------------------------------------
+  # Tri-state: external=true, tls.enabled not set (default ~) => TLS enabled
+  # -----------------------------------------------------------------------
+
+  - it: enables TLS when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
+
+  - it: renders management ssl config when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - matchRegex:
+          path: spec.rabbitmq.additionalConfig
+          pattern: "management.ssl.port = 15671"
+
+  - it: renders LoadBalancer override ports when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - contains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management-tls
+            port: 15671
+            targetPort: 15671
+            protocol: TCP
+
+  # -----------------------------------------------------------------------
+  # Tri-state: explicit tls.enabled=false beats external=true
+  # -----------------------------------------------------------------------
+
+  - it: disables TLS when tls.enabled is false even if external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls
+      - notExists:
+          path: spec.rabbitmq.additionalConfig
+
+  # -----------------------------------------------------------------------
+  # Ensure port 15672 (plain) stays when TLS enabled (disableNonTLSListeners absent)
+  # -----------------------------------------------------------------------
+
+  - it: RabbitmqCluster renders without disableNonTLSListeners even when TLS is on
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  # -----------------------------------------------------------------------
+  # B1: spec.override.service.spec.ports only when TLS+external (LoadBalancer)
+  #
+  # The operator applies spec.override.service.spec.ports via
+  # strategicpatch.StrategicMergePatch using patchMergeKey:"port"
+  # (corev1.ServiceSpec.Ports). This MERGES by port number rather than
+  # replacing the whole list; operator-generated defaults (amqp:5672,
+  # amqps:5671, management:15672) are unaffected.
+  #
+  # The override is only emitted for LoadBalancer (external=true) because:
+  #   - For ClusterIP the operator already adds management-tls:15671 itself
+  #     when spec.tls.secretName is set; no override is required.
+  #   - For LoadBalancer we include amqp, amqps, management, management-tls
+  #     so the intent is explicit and reviewable in the rendered manifest.
+  # -----------------------------------------------------------------------
+
+  - it: override.service is absent when TLS is on but external is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.override.service.spec.ports
+
+  - it: management HTTPS port 15671 is NOT added when TLS is disabled
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.override.service.spec.ports
+
+  # -----------------------------------------------------------------------
+  # F: LoadBalancer exposes only TLS ports when external+TLS enabled
+  #
+  # Plaintext AMQP (5672) and management (15672) MUST NOT be on the LB
+  # when TLS is active. Only amqps (5671) and management-tls (15671) are
+  # exposed. In-cluster ClusterIP plain listeners are not affected.
+  # -----------------------------------------------------------------------
+
+  - it: LoadBalancer override contains amqps port when TLS and external are true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - contains:
+          path: spec.override.service.spec.ports
+          content:
+            name: amqps
+            port: 5671
+            targetPort: 5671
+            protocol: TCP
+
+  - it: LoadBalancer override contains management-tls port when TLS and external are true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - contains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management-tls
+            port: 15671
+            targetPort: 15671
+            protocol: TCP
+
+  - it: LoadBalancer override does NOT contain plain amqp port when TLS and external are true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
+            name: amqp
+            port: 5672
+            targetPort: 5672
+            protocol: TCP
+
+  - it: LoadBalancer override does NOT contain plain management port when TLS and external are true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management
+            port: 15672
+            targetPort: 15672
+            protocol: TCP
+
+  - it: LoadBalancer override contains plain amqp port when external is true but TLS is disabled
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.override.service.spec.ports
+
+  - it: LoadBalancer override contains only TLS ports when tls.enabled is unset (default) and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - contains:
+          path: spec.override.service.spec.ports
+          content:
+            name: amqps
+            port: 5671
+            targetPort: 5671
+            protocol: TCP
+      - contains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management-tls
+            port: 15671
+            targetPort: 15671
+            protocol: TCP
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
+            name: amqp
+            port: 5672
+            targetPort: 5672
+            protocol: TCP
+      - notContains:
+          path: spec.override.service.spec.ports
+          content:
+            name: management
+            port: 15672
+            targetPort: 15672
+            protocol: TCP
+
+  # -----------------------------------------------------------------------
+  # Inter-node Erlang distribution TLS scope boundary
+  #
+  # This chart wires TLS for AMQP (5671), management HTTPS (15671), and the
+  # cert-manager chain. Inter-node Erlang distribution (port 25672) is NOT
+  # covered: spec.tls.disableNonTLSListeners and interNodeTLS are intentionally
+  # left unset. Enabling Erlang mTLS is tracked as a follow-up.
+  # -----------------------------------------------------------------------
+
+  - it: documents the inter-node TLS scope boundary
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  # -----------------------------------------------------------------------
+  # Baseline (no TLS): RabbitmqCluster always renders
+  # -----------------------------------------------------------------------
+
+  - it: always renders RabbitmqCluster
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - isKind:
+          of: RabbitmqCluster
