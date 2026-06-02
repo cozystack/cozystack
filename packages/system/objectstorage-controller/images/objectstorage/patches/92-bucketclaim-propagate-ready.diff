@@ -1,0 +1,29 @@
+diff --git a/controller/pkg/bucketclaim/bucketclaim.go b/controller/pkg/bucketclaim/bucketclaim.go
+index 2b55c49..038cf28 100644
+--- a/controller/pkg/bucketclaim/bucketclaim.go
++++ b/controller/pkg/bucketclaim/bucketclaim.go
+@@ -213,8 +213,23 @@ func (b *BucketClaimListener) provisionBucketClaimOperation(ctx context.Context,
+ 			return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.FailedCreateBucket, err)
+ 		}
+
++		// The Bucket for this claim may already exist from an earlier reconcile,
++		// in which case the sidecar may have provisioned the backend and flipped
++		// the Bucket to ready in the meantime. The controller does not watch
++		// Buckets, so re-read the live object and propagate its readiness here;
++		// otherwise the BucketClaim stays BucketReady=false forever (each resync
++		// re-enters this branch, Create returns AlreadyExists, and the readiness
++		// transition is never reflected), so BucketAccess can never be granted.
++		createdBucket, getErr := b.buckets().Get(ctx, bucketName, metav1.GetOptions{})
++		if getErr != nil {
++			klog.V(3).ErrorS(getErr, "Error reading bucket after create",
++				"bucket", bucketName,
++				"bucketClaim", bucketClaim.ObjectMeta.Name)
++			return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.FailedCreateBucket, getErr)
++		}
++
+ 		bucketClaim.Status.BucketName = bucketName
+-		bucketClaim.Status.BucketReady = false
++		bucketClaim.Status.BucketReady = createdBucket.Status.BucketReady
+ 	}
+
+ 	// Update status with retry logic for conflict errors
