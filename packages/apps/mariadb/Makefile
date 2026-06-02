@@ -21,3 +21,6 @@ image:
 	echo "$(REGISTRY)/mariadb-backup:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/mariadb-backup.json -o json -r)" \
 		> images/mariadb-backup.tag
 	rm -f images/mariadb-backup.json
+
+test:
+	helm unittest .

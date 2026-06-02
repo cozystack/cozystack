@@ -1,0 +1,92 @@
+{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
+{{- if $tlsEnabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cluster.local" }}
+---
+# Self-signed bootstrap Issuer — used only to sign the CA Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+# CA Certificate. rotationPolicy: Never keeps the CA stable so existing
+# client trust bundles remain valid across cert-manager renewals.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  isCA: true
+  commonName: {{ .Release.Name }}-ca
+  secretName: {{ .Release.Name }}-ca-tls
+  duration: 43800h
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+  privateKey:
+    rotationPolicy: Never
+    algorithm: ECDSA
+    size: 256
+  # CA usages: signing + cert sign (issuing leaf certs) + crl sign (RFC 5280)
+  usages:
+    - signing
+    - cert sign
+    - crl sign
+---
+# CA Issuer — used to sign the leaf server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca-tls
+---
+# Leaf server TLS Certificate passed to mariadb-operator via spec.tls.serverCertSecretRef.
+# The SAN list covers the base, primary, and secondary services plus, when external is
+# true, the external DNS name for the LoadBalancer service.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  isCA: false
+  usages:
+    - server auth
+    - client auth
+    - key encipherment
+    - digital signature
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $name := .Release.Name }}
+    - localhost
+    - {{ printf "*.%s-internal" $name | quote }}
+    - {{ printf "*.%s-internal.%s.svc" $name $ns | quote }}
+    - {{ printf "*.%s-internal.%s.svc.%s" $name $ns $clusterDomain | quote }}
+    {{- range $svc := list $name (printf "%s-primary" $name) (printf "%s-secondary" $name) }}
+    - {{ $svc }}
+    - {{ $svc }}.{{ $ns }}
+    - {{ $svc }}.{{ $ns }}.svc
+    - {{ $svc }}.{{ $ns }}.svc.{{ $clusterDomain }}
+    {{- end }}
+    {{- if .Values.external | default false }}
+    - {{ printf "%s.%s" .Release.Name .Values._namespace.host }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}

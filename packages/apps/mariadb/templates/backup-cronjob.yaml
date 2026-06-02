@@ -1,4 +1,5 @@
 {{- if .Values.backup.enabled }}
+{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" }}
 {{ $image := .Files.Get "images/backup.json" | fromJson }}
 
 apiVersion: batch/v1
@@ -66,6 +67,11 @@ spec:
               name: tmp
             - mountPath: /.cache
               name: cache
+            {{- if $tlsEnabled }}
+            - mountPath: /etc/mysql-ssl
+              name: tls-ca
+              readOnly: true
+            {{- end }}
             securityContext:
               allowPrivilegeEscalation: false
               capabilities:
@@ -82,6 +88,14 @@ spec:
             emptyDir: {}
           - name: cache
             emptyDir: {}
+          {{- if $tlsEnabled }}
+          - name: tls-ca
+            secret:
+              secretName: {{ .Release.Name }}-tls
+              items:
+              - key: ca.crt
+                path: ca.crt
+          {{- end }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 9000

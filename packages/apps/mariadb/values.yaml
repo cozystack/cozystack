@@ -75,6 +75,22 @@ storageClass: ""
 external: false
 
 ##
+## @section TLS parameters
+##
+
+## @typedef {struct} TLS - TLS configuration.
+## @field {*bool} enabled - Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.
+## @field {bool} [required] - Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet.
+
+## @param {TLS} [tls] - TLS configuration. When omitted, TLS is enabled automatically when `external` is true.
+tls:
+  required: true
+
+##
+## @section Version parameters
+##
+
+##
 ## @enum {string} Version
 ## @value v11.8
 ## @value v11.4

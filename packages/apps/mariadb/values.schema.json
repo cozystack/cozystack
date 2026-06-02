@@ -124,6 +124,22 @@
       "type": "boolean",
       "default": false
     },
+    "tls": {
+      "description": "TLS configuration. When omitted, TLS is enabled automatically when `external` is true.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.",
+          "type": "boolean"
+        },
+        "required": {
+          "description": "Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
     "version": {
       "description": "MariaDB major.minor version to deploy",
       "type": "string",

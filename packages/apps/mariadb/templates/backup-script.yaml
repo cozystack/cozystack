@@ -1,4 +1,5 @@
 {{- if .Values.backup.enabled }}
+{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
 ---
 apiVersion: v1
 kind: Secret
@@ -10,8 +11,13 @@ stringData:
     set -e
     set -o pipefail
 
+    {{- if $tlsEnabled }}
+    SSL_OPTS="--ssl-ca=/etc/mysql-ssl/ca.crt --ssl-mode=VERIFY_IDENTITY"
+    {{- else }}
+    SSL_OPTS=""
+    {{- end }}
     JOB_ID="job-$(uuidgen|cut -f1 -d-)"
-    DB_LIST=$(mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" -sNe 'SHOW DATABASES;' | grep -v '^\(#.*\|mysql\|sys\|information_schema\|performance_schema\)$')
+    DB_LIST=$(mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" $SSL_OPTS -sNe 'SHOW DATABASES;' | grep -v '^\(#.*\|mysql\|sys\|information_schema\|performance_schema\)$')
     echo DB_LIST=$(echo "$DB_LIST" | shuf) # shuffle list
     echo "Job ID: $JOB_ID"
     echo "Target repo: $REPO_PREFIX"
@@ -26,8 +32,8 @@ stringData:
         restic -r "s3:${REPO_PREFIX}/$db" cat config >/dev/null 2>&1 || \
           restic -r "s3:${REPO_PREFIX}/$db" init --repository-version 2
         restic -r "s3:${REPO_PREFIX}/$db" unlock --remove-all >/dev/null 2>&1 || true # no locks, k8s takes care of it
-        mysqldump -u "$MYSQL_USER" -h "$MYSQL_HOST" --single-transaction --databases $db | \
-          restic -r "s3:${REPO_PREFIX}/$db" backup --tag "$JOB_ID" --stdin --stdin-filename dump.sql 
+        mysqldump -u "$MYSQL_USER" -h "$MYSQL_HOST" $SSL_OPTS --single-transaction --databases $db | \
+          restic -r "s3:${REPO_PREFIX}/$db" backup --tag "$JOB_ID" --stdin --stdin-filename dump.sql
         restic -r "s3:${REPO_PREFIX}/$db" tag --tag "$JOB_ID" --set "completed"
       )
     done
