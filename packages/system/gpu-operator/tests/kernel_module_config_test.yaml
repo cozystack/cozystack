@@ -1,0 +1,48 @@
+suite: GPU operator kernel module ConfigMap tests
+
+templates:
+  - templates/kernel-module-config.yaml
+
+tests:
+  - it: does not render the ConfigMap when create is false (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the ConfigMap into the release namespace with the nvidia.conf key when create is true
+    release:
+      name: gpu-operator
+      namespace: cozy-gpu-operator
+    set:
+      kernelModuleConfig:
+        create: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: nvidia-kernel-module-params
+      - equal:
+          path: metadata.namespace
+          value: cozy-gpu-operator
+      - matchRegex:
+          path: data["nvidia.conf"]
+          pattern: NVreg_NvLinkDisable=1
+
+  - it: names the ConfigMap after the driver kernelModuleConfig reference so the two cannot diverge
+    release:
+      name: gpu-operator
+      namespace: cozy-gpu-operator
+    set:
+      kernelModuleConfig:
+        create: true
+      gpu-operator:
+        driver:
+          kernelModuleConfig:
+            name: my-custom-kmc
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-custom-kmc
