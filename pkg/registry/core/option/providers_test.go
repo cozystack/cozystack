@@ -235,3 +235,128 @@ func TestRESTGetSurfacesProviderError(t *testing.T) {
 		t.Errorf("Get should return an InternalError (500), got %v", err)
 	}
 }
+
+// The parsing-heavy providers below feed dropdowns that List drops silently on
+// any provider error, so a logic regression ships as an empty/wrong dropdown
+// rather than a failure. These exercise that logic against the fake client.
+
+func itemByValue(items []corev1alpha1.OptionItem, value string) (corev1alpha1.OptionItem, bool) {
+	for _, it := range items {
+		if it.Value == value {
+			return it, true
+		}
+	}
+	return corev1alpha1.OptionItem{}, false
+}
+
+func TestGPUProviderIntersectsWhitelistWithNodeAllocatable(t *testing.T) {
+	kv := newObj(gvrKubevirts.GroupVersion().WithKind("KubeVirt"), kubevirtNamespace, "kubevirt", map[string]interface{}{
+		"configuration": map[string]interface{}{
+			"permittedHostDevices": map[string]interface{}{
+				"pciHostDevices": []interface{}{
+					map[string]interface{}{"resourceName": "nvidia.com/GP100"},
+					map[string]interface{}{"resourceName": "nvidia.com/A100"},
+				},
+			},
+		},
+	})
+	node := &unstructured.Unstructured{}
+	node.SetGroupVersionKind(gvrNodes.GroupVersion().WithKind("Node"))
+	node.SetName("node-a")
+	_ = unstructured.SetNestedStringMap(node.Object, map[string]string{"nvidia.com/GP100": "2"}, "status", "allocatable")
+
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(), kv, node)
+	items, err := DefaultProviders(dyn)["gpu"](context.Background(), "")
+	if err != nil {
+		t.Fatalf("gpu provider: %v", err)
+	}
+	if got := values(items); len(got) != 2 || got[0] != "nvidia.com/A100" || got[1] != "nvidia.com/GP100" {
+		t.Fatalf("gpu: got %v, want sorted [A100 GP100]", got)
+	}
+	if it, _ := itemByValue(items, "nvidia.com/GP100"); it.Description != "2 available on node-a" {
+		t.Errorf("GP100 description = %q, want availability count", it.Description)
+	}
+	if it, _ := itemByValue(items, "nvidia.com/A100"); it.Description != "not currently available on any node" {
+		t.Errorf("A100 description = %q, want not-available", it.Description)
+	}
+}
+
+func TestImageProviderStripsPrefixAndFilters(t *testing.T) {
+	pvcGVK := gvrPVCs.GroupVersion().WithKind("PersistentVolumeClaim")
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+		newObj(pvcGVK, publicImagesNamespace, "vm-default-images-ubuntu", nil),
+		newObj(pvcGVK, publicImagesNamespace, "vm-default-images-fedora", nil),
+		newObj(pvcGVK, publicImagesNamespace, "some-other-pvc", nil),
+	)
+	items, err := DefaultProviders(dyn)["image"](context.Background(), "")
+	if err != nil {
+		t.Fatalf("image provider: %v", err)
+	}
+	if got := values(items); len(got) != 2 || got[0] != "fedora" || got[1] != "ubuntu" {
+		t.Fatalf("image: got %v, want [fedora ubuntu] (prefix stripped, non-prefixed dropped)", got)
+	}
+}
+
+func TestStorageClassProviderMarksDefault(t *testing.T) {
+	scGVK := gvrStorageClass.GroupVersion().WithKind("StorageClass")
+	def := newObj(scGVK, "", "fast", nil)
+	def.SetAnnotations(map[string]string{defaultStorageClassAnnotation: "true"})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+		def, newObj(scGVK, "", "slow", nil),
+	)
+	items, err := DefaultProviders(dyn)["storageclass"](context.Background(), "")
+	if err != nil {
+		t.Fatalf("storageclass provider: %v", err)
+	}
+	fast, ok := itemByValue(items, "fast")
+	if !ok || !fast.Default || fast.Label != "fast (default)" {
+		t.Errorf("fast = %+v, want Default=true Label=\"fast (default)\"", fast)
+	}
+	slow, ok := itemByValue(items, "slow")
+	if !ok || slow.Default || slow.Label != "" {
+		t.Errorf("slow = %+v, want no default mark", slow)
+	}
+}
+
+func TestStoragePoolProviderWalksPoolsAndZones(t *testing.T) {
+	hr := newObj(gvrHelmReleases.GroupVersion().WithKind("HelmRelease"), "tenant-x", "seaweedfs", map[string]interface{}{
+		"values": map[string]interface{}{
+			"volume": map[string]interface{}{
+				"pools": map[string]interface{}{"default": map[string]interface{}{}, "ssd": map[string]interface{}{}},
+				"zones": map[string]interface{}{
+					"zoneA": map[string]interface{}{"pools": map[string]interface{}{"archive": map[string]interface{}{}}},
+				},
+			},
+		},
+	})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(), hr)
+	items, err := DefaultProviders(dyn)["storagepool"](context.Background(), "tenant-x")
+	if err != nil {
+		t.Fatalf("storagepool provider: %v", err)
+	}
+	if got := values(items); len(got) != 3 || got[0] != "archive" || got[1] != "default" || got[2] != "ssd" {
+		t.Fatalf("storagepool: got %v, want [archive default ssd] (pools + zone pools)", got)
+	}
+	// Namespaced provider opts out without a namespace.
+	if empty, _ := DefaultProviders(dyn)["storagepool"](context.Background(), ""); len(empty) != 0 {
+		t.Fatalf("storagepool: expected no items without a namespace")
+	}
+}
+
+func TestVMDiskProviderShowsSizeInLabel(t *testing.T) {
+	vdGVK := gvrVMDisks.GroupVersion().WithKind("VMDisk")
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+		newObj(vdGVK, "tenant-x", "data", map[string]interface{}{"storage": "10Gi"}),
+		newObj(vdGVK, "tenant-x", "blank", nil),
+	)
+	items, err := DefaultProviders(dyn)["vmdisk"](context.Background(), "tenant-x")
+	if err != nil {
+		t.Fatalf("vmdisk provider: %v", err)
+	}
+	if data, _ := itemByValue(items, "data"); data.Label != "data (10Gi)" {
+		t.Errorf("data label = %q, want \"data (10Gi)\"", data.Label)
+	}
+	if blank, ok := itemByValue(items, "blank"); !ok || blank.Label != "" {
+		t.Errorf("blank = %+v, want bare value with no size label", blank)
+	}
+}
