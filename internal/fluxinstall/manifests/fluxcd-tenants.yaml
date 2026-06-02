@@ -5,7 +5,7 @@ metadata:
   labels:
     app.kubernetes.io/name: flux-tenants
     app.kubernetes.io/part-of: flux
-    app.kubernetes.io/version: v2.7.3
+    app.kubernetes.io/version: v2.8.0
     sharding.fluxcd.io/role: shard
   name: flux-tenants
   namespace: cozy-fluxcd
