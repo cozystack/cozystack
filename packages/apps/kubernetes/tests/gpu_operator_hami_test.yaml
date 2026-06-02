@@ -18,7 +18,7 @@ tests:
           path: spec.values.gpu-operator.devicePlugin.enabled
           value: false
 
-  - it: should not have values when hami is disabled and no overrides
+  - it: should default the NvLinkDisable kernel module config even when hami is disabled
     set:
       addons:
         gpuOperator:
@@ -28,8 +28,35 @@ tests:
           enabled: false
           valuesOverride: {}
     asserts:
+      - equal:
+          path: spec.values.kernelModuleConfig.create
+          value: true
+      - equal:
+          path: spec.values.gpu-operator.driver.kernelModuleConfig.name
+          value: nvidia-kernel-module-params
       - notExists:
-          path: spec.values
+          path: spec.values.gpu-operator.devicePlugin
+
+  - it: should let user override the kernel module config name
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride:
+            gpu-operator:
+              driver:
+                kernelModuleConfig:
+                  name: my-custom-kmc
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.driver.kernelModuleConfig.name
+          value: my-custom-kmc
+      - equal:
+          path: spec.values.kernelModuleConfig.create
+          value: true
 
   - it: should apply hami defaults when valuesOverride key is omitted
     set:

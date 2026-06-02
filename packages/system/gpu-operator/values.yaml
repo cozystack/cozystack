@@ -25,3 +25,19 @@ gpu-operator:
   # values-vgpu.yaml.
   vgpuDeviceManager:
     enabled: false
+
+# Optional ConfigMap holding extra nvidia kernel module parameters.
+# The upstream chart only references an existing ConfigMap by name via
+# driver.kernelModuleConfig.name — it never creates it. When create is
+# true this wrapper chart renders the ConfigMap into the release
+# namespace so the params actually land. The driver entrypoint reads
+# ${base}/nvidia.conf and appends each line to the nvidia modprobe
+# options. Used by tenant Kubernetes clusters to set
+# NVreg_NvLinkDisable=1 (see packages/apps/kubernetes gpu-operator
+# HelmRelease defaults); off by default for host-level passthrough/vgpu
+# variants where the in-host driver is disabled.
+kernelModuleConfig:
+  create: false
+  name: nvidia-kernel-module-params
+  content: |
+    NVreg_NvLinkDisable=1
